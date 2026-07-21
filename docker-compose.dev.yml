@@ -1,0 +1,38 @@
+# ============================================================
+# SmartSchool — Docker Compose LÉGER (développement)
+# Ne lance QUE les services essentiels (Postgres + Redis)
+# Usage : docker compose -f docker-compose.dev.yml up -d
+# ============================================================
+
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: smartschool_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: mydb
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  redis:
+    image: redis:7
+    container_name: smartschool_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+volumes:
+  postgres_data:

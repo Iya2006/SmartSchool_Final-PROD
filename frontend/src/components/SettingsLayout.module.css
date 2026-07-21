@@ -1,0 +1,144 @@
+.layoutContainer {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem 3rem;
+    min-height: 100vh;
+    background-color: #f8fafc;
+}
+
+.topNav {
+    margin-bottom: 2rem;
+}
+
+.backLink {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: #64748b;
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: color 0.2s;
+    padding: 0.5rem 1rem;
+    border-radius: 9999px;
+    background-color: transparent;
+}
+
+.backLink:hover {
+    color: #0f172a;
+    background-color: #f1f5f9;
+}
+
+.mainContent {
+    display: flex;
+    gap: 3rem;
+    align-items: flex-start;
+}
+
+.sidebar {
+    width: 250px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 2rem;
+}
+
+.navMenu {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.navItem {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 1rem;
+    border-radius: 8px;
+    color: #475569;
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.95rem;
+    transition: all 0.2s ease;
+}
+
+.navItem:hover {
+    background-color: var(--bg-surface-hover);
+    color: var(--brand-primary);
+}
+
+.navItem.active {
+    background-color: var(--brand-primary-light);
+    color: var(--brand-primary);
+    font-weight: 600;
+}
+
+.navIcon {
+    flex-shrink: 0;
+}
+
+.contentArea {
+    flex: 1;
+    min-width: 0;
+    background-color: #ffffff;
+    border-radius: 16px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+    border: 1px solid #e2e8f0;
+    padding: 2.5rem;
+}
+
+.pageHeader {
+    margin-bottom: 2.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid #f1f5f9;
+}
+
+.pageTitle {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 0.5rem;
+}
+
+.pageSubtitle {
+    color: #64748b;
+    font-size: 0.95rem;
+    margin: 0;
+}
+
+.pageBody {
+    position: relative;
+}
+
+/* Responsiveness */
+@media (max-width: 1024px) {
+    .mainContent {
+        flex-direction: column;
+        gap: 2rem;
+    }
+    
+    .sidebar {
+        width: 100%;
+        position: static;
+    }
+    
+    .navMenu {
+        flex-direction: row;
+        overflow-x: auto;
+        padding-bottom: 0.5rem;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    .navItem {
+        white-space: nowrap;
+    }
+}
+
+@media (max-width: 768px) {
+    .layoutContainer {
+        padding: 1.5rem;
+    }
+    
+    .contentArea {
+        padding: 1.5rem;
+    }
+}

@@ -1,0 +1,301 @@
+version: "3.9"
+
+services:
+  # ============================================
+  # PostgreSQL — Production-ready, sécurisé
+  # ============================================
+  smartschool_postgres:
+    image: postgres:16-alpine
+    container_name: smartschool_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: mydb
+    ports:
+      - "127.0.0.1:5432:5432"  # Localhost only
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres.conf:/etc/postgresql/postgresql.conf:ro
+    networks:
+      - smartschool_network
+    secrets:
+      - db_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d mydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # ============================================
+  # Redis — High-performance cache + broker
+  # ============================================
+  smartschool_redis:
+    image: redis:7-alpine
+    container_name: smartschool_redis
+    restart: always
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-change-me} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"  # Localhost only
+    volumes:
+      - redis_data:/data
+    networks:
+      - smartschool_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ============================================
+  # Elasticsearch — Full-text search (optionnel)
+  # ============================================
+  smartschool_elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2-alpine
+    container_name: smartschool_elasticsearch
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - logger.level=info
+    ports:
+      - "127.0.0.1:9200:9200"  # Localhost only
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - smartschool_network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # ============================================
+  # MinIO — Object storage (fichiers utilisateurs)
+  # ============================================
+  smartschool_minio:
+    image: minio/minio:latest
+    container_name: smartschool_minio
+    restart: always
+    command: server /data --console-address ":9001" --address ":9000"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
+      MINIO_BROWSER_REDIRECT_URL: http://localhost:9001
+    ports:
+      - "127.0.0.1:9000:9000"  # API
+      - "127.0.0.1:9001:9001"  # Console (localhost only)
+    volumes:
+      - minio_data:/data
+    networks:
+      - smartschool_network
+    secrets:
+      - minio_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ============================================
+  # Keycloak — IAM / SSO (optionnel)
+  # ============================================
+  smartschool_keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: smartschool_keycloak
+    restart: always
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/keycloak_password
+      JAVA_OPTS: -Xms512m -Xmx768m
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://smartschool_postgres:5432/keycloak
+      KC_DB_USERNAME: admin
+      KC_DB_PASSWORD_FILE: /run/secrets/db_password
+    ports:
+      - "127.0.0.1:8080:8080"  # Localhost only
+    depends_on:
+      smartschool_postgres:
+        condition: service_healthy
+    networks:
+      - smartschool_network
+    secrets:
+      - db_password
+      - keycloak_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # ============================================
+  # Tesseract — OCR (optionnel)
+  # ============================================
+  smartschool_tesseract:
+    image: tesseractshadow/tesseract4re
+    container_name: smartschool_tesseract
+    restart: always
+    tty: true
+    stdin_open: true
+    networks:
+      - smartschool_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ============================================
+  # FastAPI Backend — Production avec Uvicorn
+  # ============================================
+  smartschool_api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: smartschool_fastapi:prod
+    container_name: smartschool_api
+    restart: always
+    depends_on:
+      smartschool_postgres:
+        condition: service_healthy
+      smartschool_redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+pg8000://admin:${DB_PASSWORD:-change-me}@smartschool_postgres:5432/mydb
+      JWT_SECRET_KEY_FILE: /run/secrets/jwt_secret
+      JWT_ALGORITHM: HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: 480
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: 8500
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:3000}
+      ENVIRONMENT: production
+      LOG_LEVEL: info
+      WORKERS: 4
+      REDIS_URL: redis://:${REDIS_PASSWORD:-change-me}@smartschool_redis:6379/0
+    ports:
+      - "127.0.0.1:8500:8500"  # Localhost only (reverse proxy in production)
+    volumes:
+      - ./backend:/app
+      - smartschool_uploads:/app/uploads
+      - smartschool_logs:/app/logs
+    networks:
+      - smartschool_network
+    secrets:
+      - jwt_secret
+      - db_password
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+networks:
+  smartschool_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  es_data:
+    driver: local
+  minio_data:
+    driver: local
+  smartschool_uploads:
+    driver: local
+  smartschool_logs:
+    driver: local
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  minio_password:
+    file: ./secrets/minio_password.txt
+  keycloak_password:
+    file: ./secrets/keycloak_password.txt

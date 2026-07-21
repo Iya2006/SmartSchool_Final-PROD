@@ -1,0 +1,569 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* SkillPath Brand Colors */
+  --brand-primary: #3b82f6;
+  --brand-primary-light: #eff6ff;
+  --brand-secondary: #6366f1;
+  --brand-accent: #f59e0b;
+  --brand-orange: #e8861c;
+
+  /* Status Colors */
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --info: #3b82f6;
+
+  /* Background / Surface */
+  --bg-body: #f1f5f9;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f8fafc;
+
+  /* Typography */
+  --text-primary: #1e293b;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+
+  /* Borders */
+  --border-light: #e2e8f0;
+  --border-focus: #cbd5e1;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.06), 0 4px 6px -2px rgba(0, 0, 0, 0.03);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+body {
+  color: var(--text-primary);
+  background: var(--bg-body);
+  font-family: var(--font-family, 'Inter', sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: var(--font-family, 'Inter', sans-serif);
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+/* ============================================
+   SkillPath Card System
+   ============================================ */
+.card {
+  background: var(--bg-surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border-light);
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card-header h5 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.card-body {
+  padding: 24px;
+}
+
+/* ============================================
+   SkillPath Badge System
+   ============================================ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 50px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.badge-success {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.badge-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.badge-warning {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.badge-info {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.badge-primary {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.badge-subtle-success {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--success);
+}
+
+.badge-subtle-danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+}
+
+.badge-subtle-warning {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--warning);
+}
+
+.badge-subtle-info {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--info);
+}
+
+.badge-subtle-primary {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--brand-primary);
+}
+
+/* ============================================
+   SkillPath Button System
+   ============================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border: none;
+  text-decoration: none;
+}
+
+.btn-primary {
+  background: var(--brand-primary);
+  color: white;
+  box-shadow: 0 4px 10px rgba(59, 130, 246, 0.3);
+}
+
+.btn-primary:hover {
+  background: #2563eb;
+  box-shadow: 0 6px 14px rgba(59, 130, 246, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-success {
+  background: var(--success);
+  color: white;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: white;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+}
+
+.btn-outline:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--brand-primary);
+  color: var(--brand-primary);
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.btn-w100 {
+  width: 100%;
+}
+
+/* ============================================
+   SkillPath KPI Card
+   ============================================ */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.kpi-card {
+  background: var(--bg-surface);
+  border-radius: 12px;
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-card);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kpi-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.kpi-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+/* ============================================
+   SkillPath Layout Grids
+   ============================================ */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 20px;
+}
+
+.grid-60-40 {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 20px;
+}
+
+.grid-40-60 {
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  gap: 20px;
+}
+
+/* ============================================
+   SkillPath Breadcrumb
+   ============================================ */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+}
+
+.breadcrumb a {
+  color: var(--brand-primary);
+}
+
+.breadcrumb span {
+  color: var(--text-secondary);
+}
+
+/* ============================================
+   SkillPath Table
+   ============================================ */
+.sp-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sp-table thead th {
+  padding: 14px 16px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--bg-body);
+  border-bottom: 1px solid var(--border-light);
+  white-space: nowrap;
+}
+
+.sp-table tbody td {
+  padding: 14px 16px;
+  font-size: 14px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-light);
+  vertical-align: middle;
+}
+
+.sp-table tbody tr:hover {
+  background: rgba(59, 130, 246, 0.03);
+}
+
+.sp-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* ============================================
+   SkillPath Pagination
+   ============================================ */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+.pagination button {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+  background: var(--bg-surface);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pagination button:hover {
+  border-color: var(--brand-primary);
+  color: var(--brand-primary);
+}
+
+.pagination button.active {
+  background: var(--brand-primary);
+  color: white;
+  border-color: var(--brand-primary);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+/* ============================================
+   SkillPath Scrollbar
+   ============================================ */
+.scroll-250 {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.scroll-300 {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.scroll-250::-webkit-scrollbar,
+.scroll-300::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scroll-250::-webkit-scrollbar-thumb,
+.scroll-300::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: 4px;
+}
+
+/* ============================================
+   SkillPath Animation
+   ============================================ */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-in {
+  animation: fadeInUp 0.3s ease-out forwards;
+}
+
+/* Spinning animation */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ============================================
+   SkillPath Avatar
+   ============================================ */
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+  color: white;
+}
+
+.avatar-sm {
+  width: 32px;
+  height: 32px;
+  font-size: 12px;
+}
+
+.avatar-lg {
+  width: 48px;
+  height: 48px;
+  font-size: 18px;
+}
+
+/* ============================================
+   Event Date Box (SkillPath style)
+   ============================================ */
+.date-box {
+  background: var(--brand-primary-light);
+  color: var(--brand-primary);
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-align: center;
+  min-width: 50px;
+  flex-shrink: 0;
+}
+
+.date-box .day {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.date-box .month {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* ============================================
+   Progress Bar
+   ============================================ */
+.progress-bar {
+  height: 8px;
+  background: var(--bg-body);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-bar .fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+}
+
+/* ============================================
+   Print Styles — Hide everything except .print-area
+   ============================================ */
+@media print {
+  /* Hide sidebar, header/navbar, breadcrumbs, action buttons */
+  aside,
+  nav,
+  header,
+  .sidebar,
+  [class*="Sidebar"],
+  .breadcrumb,
+  [data-no-print],
+  button,
+  .no-print {
+    display: none !important;
+  }
+
+  /* Reset page layout */
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 11pt !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Main content takes full width */
+  main,
+  [role="main"],
+  .main-content {
+    margin: 0 !important;
+    padding: 10pt !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Cards print cleanly */
+  .card {
+    box-shadow: none !important;
+    border: 1px solid #ddd !important;
+    break-inside: avoid;
+  }
+
+  /* Print area specific */
+  .print-area {
+    display: block !important;
+    width: 100% !important;
+  }
+
+  /* Remove background gradients / colored headers for ink savings */
+  [style*="linear-gradient"] {
+    background: #f8f8f8 !important;
+    color: #333 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Page settings */
+  @page {
+    size: landscape;
+    margin: 1cm;
+  }
+}

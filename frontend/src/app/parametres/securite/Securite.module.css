@@ -1,0 +1,410 @@
+.page {
+  padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.tabsNav {
+  display: flex;
+  gap: 8px;
+  border-bottom: 2px solid var(--border-light, #e2e8f0);
+  margin-bottom: 24px;
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-secondary, #64748b);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-bottom: -2px;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: #4f46e5;
+}
+
+.tabActive {
+  color: #4f46e5;
+  border-bottom-color: #4f46e5;
+}
+
+.tabIcon {
+  flex-shrink: 0;
+}
+
+.section {
+  background: var(--bg-surface, #ffffff);
+  border-radius: 12px;
+  padding: 24px;
+  border: 1px solid var(--border-light, #e2e8f0);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  margin-bottom: 24px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.sectionIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #e0e7ff;
+  color: #4f46e5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sectionHeader h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary, #0f172a);
+}
+
+.sectionSubtitle {
+  font-size: 0.85rem;
+  color: var(--text-secondary, #64748b);
+  display: block;
+}
+
+.fieldsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.fieldRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fieldRow label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary, #475569);
+}
+
+.selectFancy,
+.inputFancy {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light, #cbd5e1);
+  background: var(--bg-body, #f8fafc);
+  font-size: 0.95rem;
+  color: var(--text-primary, #0f172a);
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.selectFancy:focus,
+.inputFancy:focus {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+.infoHint {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #64748b);
+}
+
+/* Toggles */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-body, #f8fafc);
+  border-radius: 8px;
+  border: 1px solid var(--border-light, #e2e8f0);
+}
+
+.toggleInfo h4 {
+  margin: 0 0 4px 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.toggleInfo p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #64748b);
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #cbd5e1;
+  transition: 0.3s;
+  border-radius: 24px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: #4f46e5;
+}
+
+input:checked + .slider:before {
+  transform: translateX(20px);
+}
+
+/* Role Selector Grid */
+.rolesGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.roleCard {
+  padding: 14px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--border-light, #e2e8f0);
+  background: var(--bg-body, #f8fafc);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.roleCard:hover {
+  border-color: #818cf8;
+}
+
+.roleCardActive {
+  background: #e0e7ff;
+  border-color: #4f46e5;
+  box-shadow: 0 2px 4px rgba(79, 70, 229, 0.15);
+}
+
+.roleCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.roleTitle {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text-primary, #0f172a);
+}
+
+.badgeSystem {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #312e81;
+  color: white;
+  text-transform: uppercase;
+}
+
+.roleDesc {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #64748b);
+  margin: 0;
+}
+
+/* Permissions Table */
+.matrixWrap {
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border-light, #e2e8f0);
+}
+
+.matrixTable {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.matrixTable th {
+  background: var(--bg-body, #f1f5f9);
+  padding: 12px 16px;
+  font-weight: 700;
+  color: var(--text-primary, #334155);
+  border-bottom: 1px solid var(--border-light, #cbd5e1);
+}
+
+.matrixTable td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-light, #e2e8f0);
+}
+
+.matrixTable tr:hover {
+  background: var(--bg-body, #f8fafc);
+}
+
+.checkboxCell {
+  text-align: center;
+}
+
+.checkboxCell input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #4f46e5;
+}
+
+/* Audit Log Table */
+.filterBar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filterBar input,
+.filterBar select {
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-light, #cbd5e1);
+  font-size: 0.85rem;
+}
+
+.auditTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.auditTable th {
+  background: var(--bg-body, #f1f5f9);
+  padding: 10px 14px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.auditTable td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-light, #e2e8f0);
+}
+
+.moduleTag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #e2e8f0;
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
+/* Sticky Save Bar */
+.stickyBar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #0f172a;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 40px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  z-index: 100;
+}
+
+.stickyDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fbbf24;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.cancelBtn {
+  background: transparent;
+  border: 1px solid #475569;
+  color: #cbd5e1;
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+}
+
+.saveBtn {
+  background: #4f46e5;
+  border: none;
+  color: white;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toast {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  background: #10b981;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 1000;
+}
+
+.toastError {
+  background: #ef4444;
+}

@@ -1,0 +1,3042 @@
+'use client';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
+import BadgeCarte from '@/components/BadgeCarte';
+import html2canvas from 'html2canvas';
+import api from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
+import { useApp } from '@/context/AppContext';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+    Phone, User, GraduationCap, BookOpen, Clock, Calendar, AlertCircle,
+    CheckCircle, Bell, Eye, EyeOff, ArrowRight, Shield, Loader2, Lock, Home,
+    Users, BarChart3, FileText, ClipboardList, Briefcase, MapPin, Award,
+    ChevronRight, ChevronLeft, X, Star, TrendingUp, Send, Plus, Trash2, Upload, FileUp,
+    Settings, LogOut, ChevronDown, Key, Mail as MailIcon, Save,
+    Camera, ImageIcon, Activity, PieChart, Target, Zap, Hash, Building2,
+    ExternalLink, Link as LinkIcon, Banknote, Download, UserCheck
+} from 'lucide-react';
+
+const DISPO_JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
+const DISPO_JOURS_L: Record<string, string> = { LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi' };
+const DISPO_HEURES = [
+    { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
+    { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
+    { debut: '14:00', fin: '15:00' }, { debut: '15:00', fin: '16:00' },
+    { debut: '16:00', fin: '17:00' },
+];
+
+/* ═══ TYPES ═══ */
+interface AffectationData {
+    affectation_id: number; classe_id: number; classe_code: string; classe: string;
+    niveau: string; matiere_id: number; matiere: string; coefficient: number;
+    heures_semaine: number; effectif: number; nb_notes: number;
+}
+interface EnseignantInfo {
+    enseignant_id: number; nom: string; prenom: string; matricule: string;
+    telephone: string; email: string; specialite: string; diplome: string;
+    type_contrat: string; date_embauche: string | null; statut: string;
+    photo_url: string | null; sexe: string;
+    date_naissance: string | null; lieu_naissance: string | null;
+    adresse: string | null; nom_urgence: string | null; telephone_urgence: string | null;
+}
+interface DashData {
+    enseignant: EnseignantInfo;
+    affectations: AffectationData[];
+    stats: { nb_classes: number; nb_matieres: number; total_heures: number; total_eleves: number; nb_creneaux: number; };
+}
+interface EdtSlot {
+    jour: string; heure_debut: string; heure_fin: string;
+    matiere: string; classe: string; classe_code: string; salle: string;
+}
+interface EleveItem {
+    eleve_id: number; inscription_id: number; nom: string; prenom: string;
+    matricule: string; sexe: string; notes: any[]; moyenne: number | null;
+    nb_notes: number; nb_absences: number;
+}
+
+/* ═══ CONSTANTS ═══ */
+const JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
+const HEURES = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
+const SLOT_COLORS: Record<string, {bg:string;border:string;text:string}> = {
+    'default': { bg: '#f1f5f9', border: '#94a3b8', text: '#475569' },
+};
+const CLASS_COLORS = ['#6366f1','#10b981','#f59e0b','#ec4899','#3b82f6','#ef4444','#8b5cf6','#14b8a6'];
+
+function getSlotColor(index: number) {
+    const colors = [
+        { bg: '#eff6ff', border: '#3b82f6', text: '#1e40af' },
+        { bg: '#f0fdf4', border: '#10b981', text: '#065f46' },
+        { bg: '#fef3c7', border: '#f59e0b', text: '#92400e' },
+        { bg: '#fce7f3', border: '#ec4899', text: '#9d174d' },
+        { bg: '#ede9fe', border: '#8b5cf6', text: '#5b21b6' },
+        { bg: '#fef2f2', border: '#ef4444', text: '#991b1b' },
+        { bg: '#ecfdf5', border: '#14b8a6', text: '#134e4a' },
+        { bg: '#fff7ed', border: '#f97316', text: '#9a3412' },
+    ];
+    return colors[index % colors.length];
+}
+
+export default function PortailEnseignant() {
+    const { user, logout } = useAuth();
+    const { etablissementNom, etablissementLogo, theme, applyTheme } = useApp();
+
+    const primaryColor = theme.couleurEnseignant || '#8b5cf6';
+    const accentColor = theme.couleurEnseignant ? theme.couleurEnseignant + 'cc' : '#6366f1';
+
+    // Initial load based on auth user
+    useEffect(() => {
+        if (user && user.role === 'ENSEIGNANT') {
+            const eid = user.id;
+            enseignantIdRef.current = eid;
+            api.get(`/api/portail-enseignant/${eid}/dashboard`)
+                .then(res => setData(res.data))
+                .catch(err => console.error(err));
+        }
+    }, [user]);
+    const [data, setData] = useState<DashData | null>(null);
+    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'>('overview');
+    const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
+    const [edtLoading, setEdtLoading] = useState(false);
+    const [selectedClass, setSelectedClass] = useState<AffectationData|null>(null);
+    const [classEleves, setClassEleves] = useState<EleveItem[]>([]);
+    const [elevesLoading, setElevesLoading] = useState(false);
+
+    // ── Notes state ──
+    const [notesData, setNotesData] = useState<Record<number, { valeur: string; absent: boolean }>>({});
+    const [notesLoading, setNotesLoading] = useState(false);
+    const [evalLibelle, setEvalLibelle] = useState('');
+    const [evalNoteSur, setEvalNoteSur] = useState('20');
+    const [notesSaved, setNotesSaved] = useState('');
+    const [trimestres, setTrimestres] = useState<any[]>([]);
+    const [typesEval, setTypesEval] = useState<any[]>([]);
+    const [selectedTrimestre, setSelectedTrimestre] = useState<number | null>(null);
+    const [selectedTypeEval, setSelectedTypeEval] = useState<number | null>(null);
+    const [evalHistory, setEvalHistory] = useState<any[]>([]);
+    const [showEvalHistory, setShowEvalHistory] = useState(false);
+
+    // ── Eval Detail Modal state ──
+    const [showEvalDetail, setShowEvalDetail] = useState(false);
+    const [evalDetailData, setEvalDetailData] = useState<any>(null);
+    const [evalDetailLoading, setEvalDetailLoading] = useState(false);
+    const [editingNotes, setEditingNotes] = useState<Record<number, { valeur: string; absent: boolean; observation: string }>>({});
+    const [savingNotes, setSavingNotes] = useState(false);
+    const [centralizingEval, setCentralizingEval] = useState(false);
+    const [showConfirmCentralize, setShowConfirmCentralize] = useState(false);
+
+    // ── Appel state ──
+    const [appelData, setAppelData] = useState<Record<number, string>>({});  // inscription_id -> P/A/R
+    const [appelLoading, setAppelLoading] = useState(false);
+    const [appelDemiJournee, setAppelDemiJournee] = useState('MATIN');
+    const [appelSaved, setAppelSaved] = useState('');
+    const [appelHistory, setAppelHistory] = useState<any[]>([]);
+    const [showAppelHistory, setShowAppelHistory] = useState(false);
+
+
+    // ── Messages state ──
+    const [messages, setMessages] = useState<any[]>([]);
+    const [messagesLoading, setMessagesLoading] = useState(false);
+    const [selectedMessage, setSelectedMessage] = useState<any>(null);
+    const [replyText, setReplyText] = useState('');
+    const [replySending, setReplySending] = useState(false);
+    const [msgFilter, setMsgFilter] = useState('TOUS');
+    const [showProfileDropdown, setShowProfileDropdown] = useState(false);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+                setShowProfileDropdown(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    // ── Disponibilité form state ──
+    const [showDispoForm, setShowDispoForm] = useState(false);
+    const [activeDemande, setActiveDemande] = useState<any>(null);
+    const [dispoSlots, setDispoSlots] = useState<{classe_id: number; jour: string; heure_debut: string; heure_fin: string}[]>([]);
+    const [dispoClasse, setDispoClasse] = useState<number | null>(null);
+    const [dispoJour, setDispoJour] = useState('LUNDI');
+    const [dispoHeure, setDispoHeure] = useState('08:00');
+    const [dispoSubmitting, setDispoSubmitting] = useState(false);
+
+    // ── Upload sujet exam state ──
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [showUploadForm, setShowUploadForm] = useState(false);
+    const [activeExamDemande, setActiveExamDemande] = useState<any>(null);
+
+    // ── Photo upload & Lightbox state ──
+    const [photoUploading, setPhotoUploading] = useState(false);
+    const [photoSuccess, setPhotoSuccess] = useState<string | null>(null);
+    const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+    const [uploadFile, setUploadFile] = useState<File | null>(null);
+    // Ref stable pour l'enseignant_id — évite les dépendances circulaires
+    const enseignantIdRef = useRef<number | null>(null);
+    const [uploadTitre, setUploadTitre] = useState('');
+    const [uploadMatiere, setUploadMatiere] = useState<number | null>(null);
+    const [uploadDuree, setUploadDuree] = useState(60);
+    const [uploadTrimestre, setUploadTrimestre] = useState(1);
+    const [uploading, setUploading] = useState(false);
+    const [mesSujets, setMesSujets] = useState<any[]>([]);
+    const [toastMsg, setToastMsg] = useState<{type: 'success'|'error'; text: string} | null>(null);
+    const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+
+    // ── Devoirs state ──
+    const [devoirs, setDevoirs] = useState<any[]>([]);
+    const [devoirsLoading, setDevoirsLoading] = useState(false);
+    const [showNewDevoir, setShowNewDevoir] = useState(false);
+    const [devoirForm, setDevoirForm] = useState<{titre: string; description: string; type_devoir: string; classe_id: number|null; matiere_id: number|null; date_limite: string}>({titre: '', description: '', type_devoir: 'EXERCICE', classe_id: null, matiere_id: null, date_limite: ''});
+    const [devoirFile, setDevoirFile] = useState<File|null>(null);
+    const [devoirSaving, setDevoirSaving] = useState(false);
+    const devoirFileRef = useRef<HTMLInputElement>(null);
+    const [showUserMenu, setShowUserMenu] = useState(false);
+    const [showPasswordModal, setShowPasswordModal] = useState(false);
+    const [oldPassword, setOldPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmNewPassword, setConfirmNewPassword] = useState('');
+    const [passwordChanging, setPasswordChanging] = useState(false);
+    const [passwordMsg, setPasswordMsg] = useState<{type: 'success'|'error'; text: string} | null>(null);
+
+
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
+
+    const handleTeacherPhotoUpload = async () => {
+        if (!data) return;
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/jpeg,image/png,image/webp';
+        input.onchange = async (e: any) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            setPhotoUploading(true);
+            try {
+                const fd = new FormData();
+                fd.append('fichier', file);
+                await api.post(`/api/photos/upload/enseignant/${data.enseignant.enseignant_id}`, fd,
+                    { headers: { 'Content-Type': 'multipart/form-data' } });
+                // Refresh dashboard data
+                const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/dashboard`);
+                setData(res.data);
+                setToastMsg({ type: 'success', text: 'Photo mise à jour avec succès !' });
+                setTimeout(() => setToastMsg(null), 3000);
+            } catch {
+                setToastMsg({ type: 'error', text: 'Erreur lors de l\'envoi de la photo' });
+                setTimeout(() => setToastMsg(null), 3000);
+            }
+            setPhotoUploading(false);
+        };
+        input.click();
+    };
+
+    // ── Load devoirs when tab is opened ──
+    useEffect(() => {
+        if (activeTab !== 'devoirs' || !data) return;
+        setDevoirsLoading(true);
+        api.get(`/api/devoirs/enseignant/${data.enseignant.enseignant_id}`)
+            .then(res => setDevoirs(res.data))
+            .catch(() => {})
+            .finally(() => setDevoirsLoading(false));
+    }, [activeTab, data]);
+
+    /* ═══ FETCH EDT ═══ */
+    useEffect(() => {
+        if (activeTab !== 'emploi' || !data) return;
+        const fetchEdt = async () => {
+            setEdtLoading(true);
+            try {
+                const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/emploi-du-temps`);
+                setEdtSlots(res.data);
+            } catch { setEdtSlots([]); }
+            finally { setEdtLoading(false); }
+        };
+        fetchEdt();
+    }, [ activeTab, data]);
+
+    /* ═══ FETCH REFERENTIELS (trimestres + types eval) ═══ */
+    useEffect(() => {
+        if (!data) return;
+        const fetchRefs = async () => {
+            try {
+                const [triRes, typeRes] = await Promise.all([
+                    api.get('/api/portail-enseignant/referentiels/trimestres'),
+                    api.get('/api/portail-enseignant/referentiels/types-evaluation'),
+                ]);
+                setTrimestres(triRes.data);
+                setTypesEval(typeRes.data);
+                if (triRes.data.length > 0 && !selectedTrimestre) setSelectedTrimestre(triRes.data[0].trimestre_id);
+                if (typeRes.data.length > 0 && !selectedTypeEval) setSelectedTypeEval(typeRes.data[0].type_eval_id);
+            } catch { /* silently fail */ }
+        };
+        fetchRefs();
+    }, [ data]);
+
+    /* ═══ FETCH EVAL HISTORY ═══ */
+    useEffect(() => {
+        if (activeTab !== 'notes' || !data) return;
+        const fetchHistory = async () => {
+            try {
+                const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations`);
+                setEvalHistory(res.data);
+            } catch { setEvalHistory([]); }
+        };
+        fetchHistory();
+    }, [ activeTab, data, notesSaved]);
+
+    /* ═══ FETCH APPEL HISTORY ═══ */
+    useEffect(() => {
+        if (activeTab !== 'appel' || !data) return;
+        const fetchAppelHist = async () => {
+            try {
+                const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/historique-appels`);
+                setAppelHistory(res.data);
+            } catch { setAppelHistory([]); }
+        };
+        fetchAppelHist();
+    }, [ activeTab, data, appelSaved]);
+
+    /* ═══ FETCH MESSAGES ═══ */
+    const loadMessages = useCallback(async () => {
+        if (!data) return;
+        setMessagesLoading(true);
+        try {
+            const res = await api.get(`/api/communication/messages`, {
+                params: { role: 'ENSEIGNANT', enseignant_id: data.enseignant.enseignant_id }
+            });
+            setMessages(res.data);
+        } catch { setMessages([]); }
+        finally { setMessagesLoading(false); }
+    }, [data]);
+
+    useEffect(() => {
+        if (data) {
+            loadMessages();
+        }
+    }, [ data, loadMessages]);
+
+    // ═══ REFRESH AUTOMATIQUE du tableau de bord ═══
+    const refreshDashboard = useCallback(async () => {
+        const eid = enseignantIdRef.current;
+        if (!eid) return;
+        try {
+            const dash = await api.get(`/api/portail-enseignant/${eid}/dashboard`);
+            setData(dash.data);
+        } catch { /* Silencieux */ }
+    }, []);
+
+    useEffect(() => {
+        if (!data) return;
+        // Refresh quand l'onglet redevient visible
+        const handleVisibility = () => {
+            if (!document.hidden) refreshDashboard();
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibility);
+        };
+    }, [ refreshDashboard]);
+
+    const sendReply = useCallback(async (parentMsg: any) => {
+        if (!data || !replyText.trim()) return;
+        setReplySending(true);
+        try {
+            await api.post('/api/communication/messages', {
+                expediteur_type: 'ENSEIGNANT',
+                expediteur_id: data.enseignant.enseignant_id,
+                destinataire_type: 'ADMIN',
+                objet_type: parentMsg.objet_type,
+                sujet: `RE: ${parentMsg.sujet}`,
+                contenu: replyText.trim(),
+                parent_message_id: parentMsg.message_id,
+                demande_id: parentMsg.demande_id,
+            });
+            setReplyText('');
+            setSelectedMessage(null);
+            loadMessages();
+        } catch { /* ignore */ }
+        finally { setReplySending(false); }
+    }, [data, replyText, loadMessages]);
+
+    const markAsRead = useCallback(async (msg: any) => {
+        if (msg.statut === 'ENVOYE') {
+            try { await api.put(`/api/communication/messages/${msg.message_id}/lire`); } catch { /* ignore */ }
+        }
+    }, []);
+
+    const showToast = (type: 'success'|'error', text: string) => {
+        setToastMsg({ type, text });
+        setTimeout(() => setToastMsg(null), 3500);
+    };
+
+    /* ═══ DISPONIBILITÉ FUNCTIONS ═══ */
+    const openDispoForm = (msg: any) => {
+        setActiveDemande(msg);
+        setDispoSlots([]);
+        if (data && data.affectations.length > 0) setDispoClasse(data.affectations[0].classe_id);
+        setShowDispoForm(true);
+    };
+
+    const addDispoSlot = () => {
+        if (!dispoClasse) return;
+        const h = DISPO_HEURES.find(x => x.debut === dispoHeure);
+        if (!h) return;
+        const dup = dispoSlots.find(s => s.classe_id === dispoClasse && s.jour === dispoJour && s.heure_debut === dispoHeure);
+        if (dup) { showToast('error', 'Ce créneau est déjà ajouté.'); return; }
+        setDispoSlots([...dispoSlots, { classe_id: dispoClasse, jour: dispoJour, heure_debut: h.debut, heure_fin: h.fin }]);
+    };
+
+    const removeDispoSlot = (idx: number) => setDispoSlots(dispoSlots.filter((_, i) => i !== idx));
+
+    const submitDispos = async () => {
+        if (!data || !activeDemande?.demande_id || dispoSlots.length === 0) {
+            showToast('error', 'Ajoutez au moins un créneau.'); return;
+        }
+        try {
+            setDispoSubmitting(true);
+            await api.post('/api/communication/disponibilites', {
+                demande_id: activeDemande.demande_id,
+                enseignant_id: data.enseignant.enseignant_id,
+                slots: dispoSlots,
+            });
+            showToast('success', `✅ ${dispoSlots.length} créneaux envoyés !`);
+            setShowDispoForm(false);
+            loadMessages();
+        } catch (err: any) { showToast('error', err.response?.data?.detail || "Erreur d'envoi"); }
+        finally { setDispoSubmitting(false); }
+    };
+
+    /* ═══ UPLOAD SUJET EXAM FUNCTIONS ═══ */
+    const openExamUpload = (msg: any) => {
+        setActiveExamDemande(msg);
+        setUploadFile(null);
+        setUploadTitre('');
+        setUploadDuree(60);
+        if (data && data.affectations.length > 0) setUploadMatiere(data.affectations[0].matiere_id);
+        setShowUploadForm(true);
+    };
+
+    const handleUploadSujet = async () => {
+        if (!data || !uploadFile) { showToast('error', 'Sélectionnez un fichier.'); return; }
+        if (!uploadTitre.trim()) { showToast('error', 'Le titre est requis.'); return; }
+        if (!uploadMatiere) { showToast('error', 'Sélectionnez une matière.'); return; }
+        try {
+            setUploading(true);
+            const formData = new FormData();
+            formData.append('fichier', uploadFile);
+            formData.append('enseignant_id', String(data.enseignant.enseignant_id));
+            formData.append('matiere_id', String(uploadMatiere));
+            formData.append('trimestre', String(uploadTrimestre));
+            formData.append('titre', uploadTitre);
+            formData.append('duree_minutes', String(uploadDuree));
+            if (activeExamDemande?.demande_id) formData.append('demande_id', String(activeExamDemande.demande_id));
+
+            await api.post('/api/examens/sujets/upload', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            showToast('success', '✅ Sujet téléversé avec succès !');
+            setShowUploadForm(false);
+            loadMessages();
+        } catch (err: any) { showToast('error', err.response?.data?.detail || 'Erreur lors du téléversement.'); }
+        finally { setUploading(false); }
+    };
+
+    const formatFileSize = (bytes: number) => {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    };
+
+    /* ═══ FETCH CLASS STUDENTS ═══ */
+    const loadClassEleves = useCallback(async (aff: AffectationData) => {
+        if (!data) return;
+        setSelectedClass(aff); setElevesLoading(true);
+        try {
+            const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/classe/${aff.classe_id}/eleves`);
+            setClassEleves(res.data);
+        } catch { setClassEleves([]); }
+        finally { setElevesLoading(false); }
+    }, [data]);
+
+    /* ═══ INIT NOTES/APPEL DATA WHEN LOADING CLASS ═══ */
+    const loadClassForNotes = useCallback(async (aff: AffectationData) => {
+        await loadClassEleves(aff);
+        setNotesData({});
+        setNotesSaved('');
+        setEvalLibelle('');
+    }, [loadClassEleves]);
+
+    const loadClassForAppel = useCallback(async (aff: AffectationData) => {
+        await loadClassEleves(aff);
+        setAppelSaved('');
+        // Init all students as PRESENT by default
+        const initAppel: Record<number, string> = {};
+        // We'll set this after classEleves is loaded via useEffect
+    }, [loadClassEleves]);
+
+    // When classEleves changes and we're on appel tab, init all as PRESENT
+    useEffect(() => {
+        if (activeTab === 'appel' && classEleves.length > 0) {
+            const init: Record<number, string> = {};
+            classEleves.forEach(e => { init[e.inscription_id] = 'PRESENT'; });
+            setAppelData(init);
+        }
+    }, [classEleves, activeTab]);
+
+    /* ═══ SAVE NOTES ═══ */
+    const saveNotes = useCallback(async () => {
+        if (!data || !selectedClass || !evalLibelle.trim()) return;
+        setNotesLoading(true);
+        setNotesSaved('');
+        try {
+            const notesPayload = classEleves.map(e => ({
+                inscription_id: e.inscription_id,
+                valeur: notesData[e.inscription_id]?.absent ? null
+                    : (notesData[e.inscription_id]?.valeur ? parseFloat(notesData[e.inscription_id].valeur) : null),
+                est_absent: notesData[e.inscription_id]?.absent || false,
+            }));
+            await api.post(`/api/portail-enseignant/${data.enseignant.enseignant_id}/notes`, {
+                classe_id: selectedClass.classe_id,
+                matiere_id: selectedClass.matiere_id,
+                trimestre_id: selectedTrimestre,
+                type_evaluation_id: selectedTypeEval,
+                libelle: evalLibelle.trim(),
+                note_sur: parseFloat(evalNoteSur) || 20,
+                coefficient: selectedClass.coefficient,
+                notes: notesPayload,
+            });
+            setNotesSaved(`✅ "${evalLibelle}" enregistrée avec succès`);
+            setNotesData({});
+            setEvalLibelle('');
+        } catch (err: any) {
+            setNotesSaved(`❌ ${err.response?.data?.detail || 'Erreur'}`);
+        } finally { setNotesLoading(false); }
+    }, [data, selectedClass, evalLibelle, evalNoteSur, classEleves, notesData, selectedTrimestre, selectedTypeEval]);
+
+    /* ═══ EVAL DETAIL: VIEW, EDIT, CENTRALIZE ═══ */
+    const openEvalDetail = useCallback(async (evalId: number) => {
+        if (!data) return;
+        setEvalDetailLoading(true);
+        setShowEvalDetail(true);
+        try {
+            const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations/${evalId}/notes`);
+            setEvalDetailData(res.data);
+            // Init editing state
+            const initEdit: Record<number, { valeur: string; absent: boolean; observation: string }> = {};
+            (res.data.notes || []).forEach((n: any) => {
+                initEdit[n.note_id] = {
+                    valeur: n.valeur !== null ? String(n.valeur) : '',
+                    absent: n.est_absent,
+                    observation: n.observation || '',
+                };
+            });
+            setEditingNotes(initEdit);
+        } catch (e: any) { console.error(e); setShowEvalDetail(false); }
+        finally { setEvalDetailLoading(false); }
+    }, [data]);
+
+    const saveEvalNotes = useCallback(async () => {
+        if (!data || !evalDetailData) return;
+        setSavingNotes(true);
+        try {
+            const payload = Object.entries(editingNotes).map(([noteId, v]) => ({
+                note_id: Number(noteId),
+                valeur: v.absent ? null : (v.valeur ? parseFloat(v.valeur) : null),
+                est_absent: v.absent,
+                observation: v.observation || null,
+            }));
+            const res = await api.put(
+                `/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations/${evalDetailData.evaluation.evaluation_id}/notes`,
+                { notes: payload }
+            );
+            showToast('success', `✅ ${res.data.nb_modifiees} notes modifiées (Moy: ${res.data.moyenne || '—'})`);
+            // Reload detail
+            await openEvalDetail(evalDetailData.evaluation.evaluation_id);
+            // Reload history
+            const histRes = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations`);
+            setEvalHistory(histRes.data);
+        } catch (e: any) { showToast('error', e.response?.data?.detail || 'Erreur de sauvegarde'); }
+        finally { setSavingNotes(false); }
+    }, [data, evalDetailData, editingNotes, openEvalDetail]);
+
+    const centralizeEval = useCallback(async () => {
+        if (!data || !evalDetailData) return;
+        if (!showConfirmCentralize) { setShowConfirmCentralize(true); return; }
+        setShowConfirmCentralize(false);
+        setCentralizingEval(true);
+        try {
+            const res = await api.put(
+                `/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations/${evalDetailData.evaluation.evaluation_id}/centraliser`
+            );
+            showToast('success', res.data.message);
+            setShowEvalDetail(false);
+            // Reload history
+            const histRes = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations`);
+            setEvalHistory(histRes.data);
+        } catch (e: any) { showToast('error', e.response?.data?.detail || 'Erreur de centralisation'); }
+        finally { setCentralizingEval(false); }
+    }, [data, evalDetailData, showConfirmCentralize]);
+
+
+    /* ═══ SAVE APPEL ═══ */
+    const saveAppel = useCallback(async () => {
+        if (!data || !selectedClass) return;
+        setAppelLoading(true);
+        setAppelSaved('');
+        try {
+            const presences = classEleves.map(e => ({
+                inscription_id: e.inscription_id,
+                statut: appelData[e.inscription_id] || 'PRESENT',
+            }));
+            const res = await api.post(`/api/portail-enseignant/${data.enseignant.enseignant_id}/presences`, {
+                classe_id: selectedClass.classe_id,
+                demi_journee: appelDemiJournee,
+                presences,
+            });
+            setAppelSaved(`✅ ${res.data.message}`);
+        } catch (err: any) {
+            setAppelSaved(`❌ ${err.response?.data?.detail || 'Erreur'}`);
+        } finally { setAppelLoading(false); }
+    }, [data, selectedClass, classEleves, appelData, appelDemiJournee]);
+
+    const inputStyle = {
+        width: '100%', padding: '14px 16px 14px 46px', borderRadius: '14px',
+        border: `2px solid #e2e8f0`, fontSize: '16px',
+        outline: 'none', transition: 'border-color 0.2s',
+        fontFamily: 'Inter, sans-serif', boxSizing: 'border-box' as const,
+    };
+
+    /* ═══════════ LOGIN PAGE ═══════════ */
+    if (!user || user.role !== 'ENSEIGNANT') return <div style={{padding: '50px', textAlign: 'center'}}>Chargement ou accès refusé...</div>;
+    if (!data) return null;
+    const { enseignant: ens, affectations, stats } = data;
+
+    // Map classes for unique display
+    const uniqueClasses = [...new Map(affectations.map(a => [a.classe_id, a])).values()];
+
+    return (
+        <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: "'Inter', sans-serif", background: '#f8fafc' }}>
+            <style>{`
+                @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+                @keyframes bellShake{0%,100%{transform:rotate(0)}15%{transform:rotate(14deg)}30%{transform:rotate(-14deg)}45%{transform:rotate(10deg)}60%{transform:rotate(-8deg)}75%{transform:rotate(4deg)}}
+                @keyframes badgePulse{0%,100%{transform:scale(1)}50%{transform:scale(1.25)}}
+                @keyframes notifSlideIn{from{opacity:0;transform:translateY(-8px) scale(0.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+            `}</style>
+
+            {/* SIDEBAR ENSEIGNANT (Ambre) */}
+            <div style={{ width: '240px', background: `linear-gradient(180deg, ${primaryColor} 0%, ${accentColor} 100%)`, display: 'flex', flexDirection: 'column', flexShrink: 0, boxShadow: '4px 0 24px rgba(0,0,0,0.2)' }}>
+                {/* Logo */}
+                <div style={{ padding: '24px 20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: `linear-gradient(135deg, ${primaryColor}, ${accentColor})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 900, color: 'white' }}>S</div>
+                        <div>
+                            <p style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: 'white', letterSpacing: '0.5px' }}>SMARTSCHOOL</p>
+                            <p style={{ margin: 0, fontSize: '10px', color: 'rgba(255,255,255,0.5)', fontWeight: 500 }}>Portail Enseignant</p>
+                        </div>
+                    </div>
+                </div>
+                {/* Avatar */}
+                <div style={{ padding: '20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '44px', height: '44px', borderRadius: '50%', flexShrink: 0, background: ens.photo_url ? `url(${API_BASE}${ens.photo_url}) center/cover no-repeat` : `linear-gradient(135deg, ${primaryColor}, ${accentColor})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px', fontWeight: 800, color: 'white', border: '2px solid rgba(255,255,255,0.2)', cursor: ens.photo_url ? 'zoom-in' : 'default' }}
+                            onClick={() => ens.photo_url && setLightboxUrl(`${API_BASE}${ens.photo_url}`)}>
+                            {!ens.photo_url && `${ens.prenom[0]}${ens.nom[0]}`}
+                        </div>
+                        <div style={{ overflow: 'hidden' }}>
+                            <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: 'white', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{ens.prenom} {ens.nom}</p>
+                            <p style={{ margin: 0, fontSize: '11px', color: 'rgba(255,255,255,0.5)' }}>{ens.specialite || ens.type_contrat}</p>
+                        </div>
+                    </div>
+                </div>
+                {/* Nav */}
+                <nav style={{ flex: 1, padding: '12px 10px', overflowY: 'auto' }}>
+                    {([
+                        { key: 'overview' as const, label: "Vue d'ensemble", icon: User },
+                        { key: 'dashboard' as const, label: 'Dashboard', icon: PieChart },
+                        { key: 'emploi' as const, label: 'Emploi du Temps', icon: Calendar },
+                        { key: 'classes' as const, label: 'Mes Classes', icon: Users },
+                        { key: 'notes' as const, label: 'Saisie Notes', icon: FileText },
+                        { key: 'appel' as const, label: 'Appel', icon: ClipboardList },
+                        { key: 'messages' as const, label: 'Messages', icon: MailIcon },
+                        { key: 'devoirs' as const, label: 'Devoirs', icon: BookOpen },
+                        { key: 'documents' as const, label: 'Documents & Partages', icon: FileText },
+                        { key: 'liens' as const, label: 'Liens Externes', icon: ExternalLink },
+                        { key: 'paiements' as const, label: 'Mes Paiements', icon: Banknote }
+                    ] as const).map(item => {
+                        const isActive = activeTab === item.key;
+                        const badge = item.key === 'messages' ? messages.filter(m => m.statut === 'ENVOYE' && m.expediteur_type === 'ADMIN').length : 0;
+                        return (
+                            <button key={item.key}
+                                onClick={() => { setActiveTab(item.key); setSelectedClass(null); }}
+                                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', border: 'none', cursor: 'pointer', marginBottom: '2px', transition: 'all 0.15s', background: isActive ? 'rgba(255,255,255,0.15)' : 'transparent', color: isActive ? 'white' : 'rgba(255,255,255,0.55)', fontWeight: isActive ? 700 : 500, fontSize: '13px', borderLeft: isActive ? `3px solid ${primaryColor}` : '3px solid transparent' }}>
+                                <item.icon size={16} />
+                                {item.label}
+                                {badge > 0 && <span style={{ marginLeft: 'auto', background: '#ef4444', color: 'white', borderRadius: '20px', fontSize: '10px', fontWeight: 700, padding: '1px 6px' }}>{badge}</span>}
+                            </button>
+                        );
+                    })}
+                </nav>
+                {/* Logout */}
+                <div style={{ padding: '16px' }}>
+                </div>
+            </div>
+
+            {/* CONTENU PRINCIPAL */}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                {/* ── HEADER ── */}
+                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 32px', flexShrink: 0, position: 'relative' }}>
+                    <div ref={dropdownRef} style={{ position: 'relative' }}>
+                        <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
+                            <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#f59e0b', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>
+                                {data?.enseignant?.prenom[0]}{data?.enseignant?.nom[0]}
+                            </div>
+                            <div style={{ textAlign: 'left' }}>
+                                <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{data?.enseignant?.prenom} {data?.enseignant?.nom}</p>
+                                <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>Enseignant</p>
+                            </div>
+                            <ChevronDown size={14} color="#64748b" />
+                        </button>
+                        <AnimatePresence>
+                            {showProfileDropdown && (
+                                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} style={{ position: 'absolute', top: 'calc(100% + 5px)', right: 0, width: '200px', background: 'white', borderRadius: '12px', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', border: '1px solid #e2e8f0', overflow: 'hidden', zIndex: 100 }}>
+                                    <button onClick={() => { setActiveTab('parametres'); setShowProfileDropdown(false); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155', borderBottom: '1px solid #f1f5f9' }}>
+                                        <Settings size={16} /> Mon Profil
+                                    </button>
+                                    <button onClick={() => { setActiveTab('carte'); setShowProfileDropdown(false); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155', borderBottom: '1px solid #f1f5f9' }}>
+                                        <UserCheck size={16} /> Ma Carte (Badge)
+                                    </button>
+                                    <button onClick={() => { logout(); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#ef4444' }}>
+                                        <LogOut size={16} /> Déconnexion
+                                    </button>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </div>
+                </div>
+
+                <div style={{ flex: 1, overflowY: 'auto', padding: '28px 24px' }}>
+                {!['parametres', 'carte'].includes(activeTab) && (
+                    <>
+                        {/* ═══ WELCOME ═══ */}
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                    <h1 style={{ fontSize: '26px', fontWeight: 800, color: '#1e293b', margin: '0 0 4px' }}>
+                        Bonjour, {ens.prenom} 👋
+                    </h1>
+                    <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>
+                        {ens.specialite || 'Enseignant'} • Matricule : {ens.matricule}
+                    </p>
+                </motion.div>
+
+                {/* ═══ KPI CARDS ═══ */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', margin: '24px 0' }}>
+                    {[
+                        { label: 'Classes gérées', value: stats.nb_classes, icon: <Users size={22} />, color: accentColor, bg: '#ede9fe' },
+                        { label: 'Matières enseignées', value: stats.nb_matieres, icon: <BookOpen size={22} />, color: '#10b981', bg: '#d1fae5' },
+                        { label: 'Heures / semaine', value: stats.total_heures, icon: <Clock size={22} />, color: '#f59e0b', bg: '#fef3c7' },
+                        { label: 'Élèves total', value: stats.total_eleves, icon: <GraduationCap size={22} />, color: '#ec4899', bg: '#fce7f3' },
+                    ].map((k, i) => (
+                        <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                            style={{ background: 'white', borderRadius: '16px', padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', border: '1px solid #f1f5f9' }}>
+                            <div>
+                                <p style={{ margin: 0, fontSize: '11px', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{k.label}</p>
+                                <p style={{ margin: '6px 0 0', fontSize: '28px', fontWeight: 800, color: '#1e293b' }}>{k.value}</p>
+                            </div>
+                            <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: k.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: k.color }}>{k.icon}</div>
+                        </motion.div>
+                    ))}
+                </div>
+
+                    </>
+                )}
+
+                {/* ═══ TAB CONTENT ═══ */}
+                <AnimatePresence mode="wait">
+                    {/* ──── OVERVIEW TAB (PREMIUM PROFILE) ──── */}
+                    {activeTab === 'overview' && (
+                        <motion.div key="overview" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            {/* Profile Hero Banner */}
+                            <div style={{ background: `linear-gradient(135deg, #1e1b4b, #4338ca, ${accentColor})`, borderRadius: '24px', padding: '32px', marginBottom: '20px', position: 'relative', overflow: 'hidden' }}>
+                                <div style={{ position: 'absolute', top: '-50px', right: '-30px', width: '220px', height: '220px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
+                                <div style={{ position: 'absolute', bottom: '-40px', left: '20%', width: '160px', height: '160px', borderRadius: '50%', background: 'rgba(255,255,255,0.03)' }} />
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '28px', position: 'relative', zIndex: 1 }}>
+                                    {/* Photo with upload */}
+                                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                                        <div onClick={() => ens.photo_url && setLightboxUrl(`${API_BASE}${ens.photo_url}`)}
+                                            style={{
+                                                width: '110px', height: '110px', borderRadius: '24px',
+                                                background: ens.photo_url
+                                                    ? `url(${API_BASE}${ens.photo_url}) center/cover no-repeat`
+                                                    : 'linear-gradient(135deg, #f59e0b, #d97706)',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                fontSize: '36px', fontWeight: 900, color: 'white',
+                                                border: '4px solid rgba(255,255,255,0.3)', boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                                                cursor: ens.photo_url ? 'zoom-in' : 'default', transition: 'transform 0.2s',
+                                            }}
+                                            onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
+                                            onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}>
+                                            {!ens.photo_url && `${ens.prenom[0]}${ens.nom[0]}`}
+                                        </div>
+                                        {!ens.photo_url && (
+                                            <button onClick={handleTeacherPhotoUpload} disabled={photoUploading}
+                                                style={{
+                                                    position: 'absolute', bottom: '-6px', right: '-6px',
+                                                    width: '36px', height: '36px', borderRadius: '50%', border: '3px solid #1e1b4b',
+                                                    background: 'linear-gradient(135deg, #f59e0b, #d97706)', cursor: 'pointer',
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white',
+                                                }}>
+                                                {photoUploading ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={14} />}
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div style={{ color: 'white', flex: 1 }}>
+                                        <h1 style={{ margin: '0 0 4px', fontSize: '28px', fontWeight: 900 }}>{ens.prenom} {ens.nom}</h1>
+                                        <p style={{ margin: '0 0 12px', fontSize: '15px', opacity: 0.8 }}>{ens.specialite || 'Enseignant'}</p>
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                            <span style={{ padding: '5px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.15)', fontSize: '12px', fontWeight: 700, backdropFilter: 'blur(4px)' }}>
+                                                <Hash size={11} style={{ marginRight: '4px', verticalAlign: '-1px' }} />{ens.matricule}
+                                            </span>
+                                            <span style={{ padding: '5px 14px', borderRadius: '10px', background: ens.statut === 'ACTIF' ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)', fontSize: '12px', fontWeight: 700 }}>
+                                                {ens.statut === 'ACTIF' ? '● Actif' : '○ Inactif'}
+                                            </span>
+                                            <span style={{ padding: '5px 14px', borderRadius: '10px', background: 'rgba(245,158,11,0.25)', fontSize: '12px', fontWeight: 700 }}>
+                                                <Briefcase size={11} style={{ marginRight: '4px', verticalAlign: '-1px' }} />{ens.type_contrat}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    {/* Quick stats in hero */}
+                                    <div style={{ display: 'flex', gap: '12px' }}>
+                                        {[
+                                            { val: stats.nb_classes, lbl: 'Classes', icon: <Building2 size={18} /> },
+                                            { val: stats.total_eleves, lbl: 'Élèves', icon: <Users size={18} /> },
+                                            { val: `${stats.total_heures}h`, lbl: '/sem', icon: <Clock size={18} /> },
+                                        ].map((s, i) => (
+                                            <div key={i} style={{
+                                                textAlign: 'center', padding: '14px 18px', borderRadius: '16px',
+                                                background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)',
+                                                minWidth: '80px',
+                                            }}>
+                                                <div style={{ marginBottom: '4px', opacity: 0.7 }}>{s.icon}</div>
+                                                <p style={{ margin: 0, fontSize: '22px', fontWeight: 900 }}>{s.val}</p>
+                                                <p style={{ margin: 0, fontSize: '10px', opacity: 0.6 }}>{s.lbl}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Profile Details Grid */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                                {/* Informations Personnelles */}
+                                <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#ede9fe', display: 'flex', alignItems: 'center', justifyContent: 'center', color: accentColor }}>
+                                            <User size={18} />
+                                        </div>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Informations Personnelles</h3>
+                                    </div>
+                                    <div style={{ padding: '16px 24px' }}>
+                                        {[
+                                            { icon: <User size={14} />, label: 'Nom complet', value: `${ens.prenom} ${ens.nom}` },
+                                            { icon: <Phone size={14} />, label: 'Téléphone', value: ens.telephone },
+                                            { icon: <MailIcon size={14} />, label: 'Email', value: ens.email || '—' },
+                                            { icon: <Calendar size={14} />, label: 'Date de naissance', value: ens.date_naissance || '—' },
+                                            { icon: <MapPin size={14} />, label: 'Lieu de naissance', value: ens.lieu_naissance || '—' },
+                                            { icon: <Home size={14} />, label: 'Adresse', value: ens.adresse || '—' },
+                                        ].map((item, i) => (
+                                            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderBottom: i < 5 ? '1px solid #f8fafc' : 'none' }}>
+                                                <span style={{ fontSize: '13px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '8px' }}>{item.icon} {item.label}</span>
+                                                <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b', maxWidth: '200px', textAlign: 'right' }}>{item.value}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Informations Professionnelles */}
+                                <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f59e0b' }}>
+                                            <Briefcase size={18} />
+                                        </div>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Informations Professionnelles</h3>
+                                    </div>
+                                    <div style={{ padding: '16px 24px' }}>
+                                        {[
+                                            { icon: <Award size={14} />, label: 'Diplôme', value: ens.diplome || '—' },
+                                            { icon: <Star size={14} />, label: 'Spécialité', value: ens.specialite || '—' },
+                                            { icon: <Briefcase size={14} />, label: 'Type de contrat', value: ens.type_contrat || '—' },
+                                            { icon: <Calendar size={14} />, label: 'Date d\'embauche', value: ens.date_embauche || '—' },
+                                            { icon: <Hash size={14} />, label: 'Matricule', value: ens.matricule },
+                                            { icon: <Shield size={14} />, label: 'Statut', value: ens.statut },
+                                        ].map((item, i) => (
+                                            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderBottom: i < 5 ? '1px solid #f8fafc' : 'none' }}>
+                                                <span style={{ fontSize: '13px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '8px' }}>{item.icon} {item.label}</span>
+                                                <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{item.value}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Affectations */}
+                                <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', gridColumn: '1 / -1' }}>
+                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981' }}>
+                                            <BookOpen size={18} />
+                                        </div>
+                                        <div>
+                                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Mes Affectations</h3>
+                                            <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{affectations.length} affectation(s) active(s) — {stats.nb_matieres} matière(s)</p>
+                                        </div>
+                                    </div>
+                                    <div style={{ padding: '16px 20px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '12px' }}>
+                                            {affectations.map((a, i) => {
+                                                const c = getSlotColor(i);
+                                                return (
+                                                    <div key={a.affectation_id} style={{
+                                                        padding: '18px', borderRadius: '16px', background: c.bg,
+                                                        borderLeft: `4px solid ${c.border}`, transition: 'all 0.2s',
+                                                    }}
+                                                    onMouseOver={e => e.currentTarget.style.transform = 'translateY(-2px)'}
+                                                    onMouseOut={e => e.currentTarget.style.transform = ''}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                            <div>
+                                                                <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: c.text }}>{a.matiere}</p>
+                                                                <p style={{ margin: '4px 0 0', fontSize: '12px', color: c.text, opacity: 0.7, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                                    <MapPin size={11} /> {a.classe} • {a.heures_semaine}h/sem • Coeff {a.coefficient}
+                                                                </p>
+                                                            </div>
+                                                            <div style={{ textAlign: 'right' }}>
+                                                                <p style={{ margin: 0, fontSize: '22px', fontWeight: 900, color: c.text }}>{a.effectif}</p>
+                                                                <p style={{ margin: 0, fontSize: '10px', color: c.text, opacity: 0.6 }}>élèves</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                            {affectations.length === 0 && (
+                                                <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
+                                                    <BookOpen size={36} style={{ marginBottom: '8px', opacity: 0.4 }} />
+                                                    <p style={{ fontSize: '13px', fontWeight: 600 }}>Aucune affectation pour le moment</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Contact Urgence */}
+                                {(ens.nom_urgence || ens.telephone_urgence) && (
+                                    <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', gridColumn: '1 / -1' }}>
+                                        <div style={{ padding: '16px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                            <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444' }}>
+                                                <Phone size={16} />
+                                            </div>
+                                            <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700 }}>Contact d'Urgence</h4>
+                                        </div>
+                                        <div style={{ padding: '14px 24px', display: 'flex', gap: '24px' }}>
+                                            {ens.nom_urgence && <span style={{ fontSize: '13px', color: '#64748b' }}><strong>Nom :</strong> {ens.nom_urgence}</span>}
+                                            {ens.telephone_urgence && <span style={{ fontSize: '13px', color: '#64748b' }}><strong>Tél :</strong> {ens.telephone_urgence}</span>}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {/* ──── DASHBOARD TAB (PREMIUM) ──── */}
+                    {activeTab === 'dashboard' && (
+                        <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            {/* Dashboard Header */}
+                            <div style={{ background: 'linear-gradient(135deg, #0f172a, #1e293b, #334155)', borderRadius: '24px', padding: '32px', marginBottom: '24px', color: 'white', position: 'relative', overflow: 'hidden' }}>
+                                <div style={{ position: 'absolute', top: '-40px', right: '-20px', width: '200px', height: '200px', borderRadius: '50%', background: 'rgba(245,158,11,0.08)' }} />
+                                <div style={{ position: 'absolute', bottom: '-50px', left: '30%', width: '150px', height: '150px', borderRadius: '50%', background: 'rgba(99,102,241,0.06)' }} />
+                                <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                    <div style={{ width: '56px', height: '56px', borderRadius: '16px', background: 'linear-gradient(135deg, #f59e0b, #d97706)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <Activity size={28} />
+                                    </div>
+                                    <div>
+                                        <h2 style={{ margin: 0, fontSize: '24px', fontWeight: 900 }}>Mon Dashboard</h2>
+                                        <p style={{ margin: '4px 0 0', fontSize: '14px', opacity: 0.7 }}>
+                                            {theme.msgEnseignant || `Bienvenue ${ens.prenom} — Synthèse de vos activités pédagogiques`}
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Stats Cards — Premium Lucide Icons */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                                {[
+                                    { label: 'Total Élèves', value: stats.total_eleves, icon: <GraduationCap size={24} />, color: '#3b82f6', bg: 'linear-gradient(135deg, #eff6ff, #dbeafe)', border: '#93c5fd' },
+                                    { label: 'Heures / Semaine', value: `${stats.total_heures}h`, icon: <Clock size={24} />, color: '#10b981', bg: 'linear-gradient(135deg, #f0fdf4, #d1fae5)', border: '#6ee7b7' },
+                                    { label: 'Mes Classes', value: stats.nb_classes, icon: <Building2 size={24} />, color: '#f59e0b', bg: 'linear-gradient(135deg, #fffbeb, #fef3c7)', border: '#fcd34d' },
+                                    { label: 'Mes Matières', value: stats.nb_matieres, icon: <BookOpen size={24} />, color: primaryColor, bg: 'linear-gradient(135deg, #f5f3ff, #ede9fe)', border: '#c4b5fd' },
+                                ].map((s, i) => (
+                                    <motion.div key={i} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }}
+                                        style={{
+                                            background: s.bg, borderRadius: '18px', padding: '24px',
+                                            border: `1px solid ${s.border}`, cursor: 'pointer',
+                                            transition: 'all 0.25s',
+                                        }}
+                                        onMouseOver={e => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = `0 12px 28px ${s.color}20`; }}
+                                        onMouseOut={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = ''; }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                            <div>
+                                                <p style={{ margin: 0, fontSize: '11px', fontWeight: 700, color: s.color, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{s.label}</p>
+                                                <p style={{ margin: '8px 0 0', fontSize: '32px', fontWeight: 900, color: '#0f172a' }}>{s.value}</p>
+                                            </div>
+                                            <div style={{ width: '52px', height: '52px', borderRadius: '16px', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', color: s.color, boxShadow: `0 4px 12px ${s.color}15` }}>
+                                                {s.icon}
+                                            </div>
+                                        </div>
+                                    </motion.div>
+                                ))}
+                            </div>
+
+                            {/* Charge horaire par niveau (Visual Progress) */}
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                                <div style={{ background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+                                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#ede9fe', display: 'flex', alignItems: 'center', justifyContent: 'center', color: accentColor }}>
+                                            <Target size={18} />
+                                        </div>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Répartition par Classe</h3>
+                                    </div>
+                                    {affectations.map((a, i) => {
+                                        const c = getSlotColor(i);
+                                        const pct = stats.total_heures > 0 ? Math.round((a.heures_semaine / stats.total_heures) * 100) : 0;
+                                        return (
+                                            <div key={a.affectation_id} style={{ marginBottom: '14px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                                                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{a.classe} — {a.matiere}</span>
+                                                    <span style={{ fontSize: '12px', fontWeight: 700, color: c.border }}>{a.heures_semaine}h ({pct}%)</span>
+                                                </div>
+                                                <div style={{ height: '8px', borderRadius: '4px', background: '#f1f5f9', overflow: 'hidden' }}>
+                                                    <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, delay: i * 0.1 }}
+                                                        style={{ height: '100%', borderRadius: '4px', background: `linear-gradient(135deg, ${c.border}, ${c.text})` }} />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* Notes Overview */}
+                                <div style={{ background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+                                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#d1fae5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981' }}>
+                                            <BarChart3 size={18} />
+                                        </div>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Notes Saisies</h3>
+                                    </div>
+                                    {affectations.map((a, i) => {
+                                        const c = getSlotColor(i);
+                                        return (
+                                            <div key={a.affectation_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 0', borderBottom: i < affectations.length - 1 ? '1px solid #f8fafc' : 'none' }}>
+                                                <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: c.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.border, fontWeight: 800, fontSize: '14px' }}>
+                                                    {a.nb_notes}
+                                                </div>
+                                                <div style={{ flex: 1 }}>
+                                                    <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{a.classe}</p>
+                                                    <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#94a3b8' }}>{a.matiere} • {a.effectif} élèves</p>
+                                                </div>
+                                                <span style={{
+                                                    padding: '4px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                                                    background: a.nb_notes > 0 ? '#d1fae5' : '#fee2e2',
+                                                    color: a.nb_notes > 0 ? '#059669' : '#dc2626',
+                                                }}>{a.nb_notes > 0 ? `${a.nb_notes} notes` : 'Aucune'}</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Performance Table */}
+                            <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: '24px' }}>
+                                <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f59e0b' }}>
+                                        <Zap size={18} />
+                                    </div>
+                                    <div>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Performance par Classe</h3>
+                                        <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>Détail des affectations et activités</p>
+                                    </div>
+                                </div>
+                                <div style={{ padding: '0' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                        <thead>
+                                            <tr style={{ background: '#f8fafc' }}>
+                                                <th style={{ padding: '14px 20px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Classe</th>
+                                                <th style={{ padding: '14px 20px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Matière</th>
+                                                <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Effectif</th>
+                                                <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Heures/sem</th>
+                                                <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Notes saisies</th>
+                                                <th style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Coef.</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {affectations.map((a, i) => {
+                                                const c = getSlotColor(i);
+                                                return (
+                                                    <tr key={a.affectation_id} style={{ borderBottom: '1px solid #f1f5f9' }}
+                                                        onMouseEnter={ev => ev.currentTarget.style.background = '#fafaff'}
+                                                        onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
+                                                        <td style={{ padding: '14px 20px' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: c.border, flexShrink: 0 }} />
+                                                                <span style={{ fontWeight: 700, color: '#1e293b' }}>{a.classe}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td style={{ padding: '14px 20px' }}>
+                                                            <span style={{ padding: '4px 12px', borderRadius: '8px', background: c.bg, color: c.text, fontSize: '12px', fontWeight: 600 }}>{a.matiere}</span>
+                                                        </td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#3b82f6' }}>{a.effectif}</td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 600 }}>{a.heures_semaine}h</td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                            <span style={{
+                                                                padding: '4px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                                                background: a.nb_notes > 0 ? '#f0fdf4' : '#fef2f2',
+                                                                color: a.nb_notes > 0 ? '#10b981' : '#ef4444',
+                                                            }}>{a.nb_notes}</span>
+                                                        </td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 600 }}>{a.coefficient}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            {/* Quick Actions — Premium with Lucide Icons */}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+                                {[
+                                    { label: 'Saisir des Notes', icon: <FileText size={22} color="white" />, desc: 'Évaluations & notes', tab: 'notes' as const, gradient: `linear-gradient(135deg, ${accentColor}, ${primaryColor})` },
+                                    { label: 'Faire l\'Appel', icon: <ClipboardList size={22} color="white" />, desc: 'Présences du jour', tab: 'appel' as const, gradient: 'linear-gradient(135deg, #10b981, #059669)' },
+                                    { label: 'Emploi du Temps', icon: <Calendar size={22} color="white" />, desc: 'Mon planning', tab: 'emploi' as const, gradient: 'linear-gradient(135deg, #f59e0b, #d97706)' },
+                                    { label: 'Messages', icon: <MailIcon size={22} color="white" />, desc: `${messages.filter(m => m.statut === 'ENVOYE' && m.expediteur_type === 'ADMIN').length} non lu(s)`, tab: 'messages' as const, gradient: 'linear-gradient(135deg, #ec4899, #db2777)' },
+                                ].map((action, i) => (
+                                    <motion.button key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 + i * 0.05 }}
+                                        onClick={() => setActiveTab(action.tab)}
+                                        style={{
+                                            background: 'white', borderRadius: '18px', padding: '24px', border: '1px solid #f1f5f9',
+                                            cursor: 'pointer', textAlign: 'left', boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+                                            transition: 'all 0.25s',
+                                        }}
+                                        onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-3px)'; ev.currentTarget.style.boxShadow = '0 12px 28px rgba(0,0,0,0.12)'; }}
+                                        onMouseLeave={ev => { ev.currentTarget.style.transform = ''; ev.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.06)'; }}>
+                                        <div style={{
+                                            width: '48px', height: '48px', borderRadius: '14px', background: action.gradient,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '14px',
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                        }}>{action.icon}</div>
+                                        <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>{action.label}</p>
+                                        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>{action.desc}</p>
+                                    </motion.button>
+                                ))}
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {/* ──── EMPLOI DU TEMPS TAB ──── */}
+                    {activeTab === 'emploi' && (
+                        <motion.div key="emploi" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                            style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                            <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📅 Mon Emploi du Temps</h3>
+                                    <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{edtSlots.length} créneaux programmés</p>
+                                </div>
+                                <span style={{ fontSize: '12px', color: '#f59e0b', fontWeight: 600 }}>Année en cours</span>
+                            </div>
+                            <div style={{ padding: '16px 20px', overflowX: 'auto' }}>
+                                {edtLoading ? (
+                                    <div style={{ padding: '40px', textAlign: 'center' }}>
+                                        <Loader2 size={32} style={{ color: '#f59e0b', animation: 'spin 1s linear infinite' }} />
+                                        <p style={{ fontSize: '13px', color: '#94a3b8', marginTop: '12px' }}>Chargement...</p>
+                                    </div>
+                                ) : edtSlots.length === 0 ? (
+                                    <div style={{ padding: '40px', textAlign: 'center' }}>
+                                        <Calendar size={40} style={{ color: '#cbd5e1', marginBottom: '12px' }} />
+                                        <p style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 600 }}>Aucun créneau programmé</p>
+                                    </div>
+                                ) : (
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
+                                        <thead>
+                                            <tr>
+                                                <th style={{ padding: '10px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'center', width: '70px', borderBottom: '2px solid #f1f5f9' }}>HEURE</th>
+                                                {JOURS.map(j => <th key={j} style={{ padding: '10px', fontSize: '12px', fontWeight: 700, color: '#475569', textAlign: 'center', borderBottom: '2px solid #f1f5f9' }}>{j}</th>)}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {HEURES.map(h => {
+                                                const endH = `${String(parseInt(h.split(':')[0]) + 1).padStart(2, '0')}:00`;
+                                                return (
+                                                    <tr key={h} style={{ borderBottom: '1px solid #f8fafc' }}>
+                                                        <td style={{ padding: '8px', fontSize: '11px', color: '#94a3b8', textAlign: 'center', fontWeight: 600, verticalAlign: 'top' }}>
+                                                            {h}<br /><span style={{ fontSize: '10px' }}>{endH}</span>
+                                                        </td>
+                                                        {JOURS.map(j => {
+                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut === h);
+                                                            if (!slot) return <td key={j} style={{ padding: '4px' }} />;
+                                                            const ci = Math.max(0, affectations.findIndex(a => a.classe === slot.classe && a.matiere === slot.matiere));
+                                                            const colors = getSlotColor(ci);
+                                                            return (
+                                                                <td key={j} style={{ padding: '4px' }}>
+                                                                    <div style={{
+                                                                        padding: '8px 10px', borderRadius: '10px', background: colors.bg,
+                                                                        borderLeft: `3px solid ${colors.border}`, minHeight: '50px',
+                                                                    }}>
+                                                                        <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: colors.text }}>{slot.matiere}</p>
+                                                                        <p style={{ margin: '2px 0 0', fontSize: '10px', color: colors.text, opacity: 0.7 }}>📍 {slot.classe}</p>
+                                                                        {slot.salle && <p style={{ margin: '2px 0 0', fontSize: '10px', color: colors.text, opacity: 0.5 }}>🏫 {slot.salle}</p>}
+                                                                    </div>
+                                                                </td>
+                                                            );
+                                                        })}
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {/* ──── MES CLASSES TAB ──── */}
+                    {activeTab === 'classes' && (
+                        <motion.div key="classes" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            {!selectedClass ? (
+                                /* Class selection grid */
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
+                                    {affectations.map((a, i) => {
+                                        const c = getSlotColor(i);
+                                        return (
+                                            <motion.div key={a.affectation_id} whileHover={{ scale: 1.02, y: -3 }}
+                                                onClick={() => loadClassEleves(a)}
+                                                style={{ background: 'white', borderRadius: '18px', overflow: 'hidden', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', border: '1px solid #f1f5f9', transition: 'all 0.2s' }}>
+                                                <div style={{ background: `linear-gradient(135deg, ${c.border}, ${c.text})`, padding: '20px', color: 'white' }}>
+                                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>{a.classe}</h3>
+                                                    <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.8 }}>{a.matiere}</p>
+                                                </div>
+                                                <div style={{ padding: '16px 20px' }}>
+                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center' }}>
+                                                        <div>
+                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{a.effectif}</p>
+                                                            <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>Élèves</p>
+                                                        </div>
+                                                        <div>
+                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{a.heures_semaine}</p>
+                                                            <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>h/sem</p>
+                                                        </div>
+                                                        <div>
+                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{a.coefficient}</p>
+                                                            <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>Coeff</p>
+                                                        </div>
+                                                    </div>
+                                                    <button style={{
+                                                        width: '100%', padding: '10px', marginTop: '12px', borderRadius: '10px',
+                                                        border: `1px solid ${c.border}`, background: c.bg, color: c.text,
+                                                        fontWeight: 700, fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                                    }}>
+                                                        <Users size={14} /> Voir les élèves <ChevronRight size={14} />
+                                                    </button>
+                                                </div>
+                                            </motion.div>
+                                        );
+                                    })}
+                                    {affectations.length === 0 && (
+                                        <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '60px', color: '#94a3b8' }}>
+                                            <Users size={48} style={{ marginBottom: '12px', opacity: 0.3 }} />
+                                            <p style={{ fontSize: '15px', fontWeight: 600 }}>Aucune classe affectée</p>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                /* Student list for selected class */
+                                <div>
+                                    <button onClick={() => setSelectedClass(null)}
+                                        style={{ padding: '8px 16px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', fontSize: '13px', fontWeight: 600, color: '#475569', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        ← Retour aux classes
+                                    </button>
+
+                                    <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div>
+                                                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>🎓 {selectedClass.classe} — {selectedClass.matiere}</h3>
+                                                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{classEleves.length} élèves inscrits</p>
+                                            </div>
+                                        </div>
+
+                                        {elevesLoading ? (
+                                            <div style={{ padding: '40px', textAlign: 'center' }}>
+                                                <Loader2 size={32} style={{ color: '#f59e0b', animation: 'spin 1s linear infinite' }} />
+                                            </div>
+                                        ) : (
+                                            <div style={{ overflowX: 'auto' }}>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                    <thead>
+                                                        <tr style={{ background: '#f8fafc' }}>
+                                                            <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'left' }}>#</th>
+                                                            <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'left' }}>ÉLÈVE</th>
+                                                            <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'left' }}>MATRICULE</th>
+                                                            <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'center' }}>SEXE</th>
+                                                            <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'center' }}>NOTES</th>
+                                                            <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'center' }}>MOYENNE</th>
+                                                            <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'center' }}>ABSENCES</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {classEleves.map((el, i) => (
+                                                            <tr key={el.eleve_id} style={{ borderBottom: '1px solid #f8fafc' }}>
+                                                                <td style={{ padding: '12px 16px', fontSize: '12px', color: '#94a3b8' }}>{i + 1}</td>
+                                                                <td style={{ padding: '12px 16px' }}>
+                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                                        <div style={{ width: '32px', height: '32px', borderRadius: '10px', background: el.sexe === 'F' ? '#fce7f3' : '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, color: el.sexe === 'F' ? '#ec4899' : '#3b82f6' }}>
+                                                                            {el.prenom[0]}{el.nom[0]}
+                                                                        </div>
+                                                                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{el.prenom} {el.nom}</span>
+                                                                    </div>
+                                                                </td>
+                                                                <td style={{ padding: '12px 16px', fontSize: '12px', color: '#64748b', fontFamily: 'monospace' }}>{el.matricule}</td>
+                                                                <td style={{ padding: '12px 16px', fontSize: '12px', textAlign: 'center' }}>
+                                                                    <span style={{ padding: '2px 8px', borderRadius: '6px', background: el.sexe === 'F' ? '#fce7f3' : '#eff6ff', color: el.sexe === 'F' ? '#ec4899' : '#3b82f6', fontSize: '11px', fontWeight: 600 }}>{el.sexe === 'F' ? '♀' : '♂'}</span>
+                                                                </td>
+                                                                <td style={{ padding: '12px 16px', fontSize: '13px', fontWeight: 700, textAlign: 'center', color: '#475569' }}>{el.nb_notes}</td>
+                                                                <td style={{ padding: '12px 16px', fontSize: '14px', fontWeight: 800, textAlign: 'center', color: el.moyenne === null ? '#94a3b8' : el.moyenne >= 10 ? '#10b981' : '#ef4444' }}>
+                                                                    {el.moyenne !== null ? `${el.moyenne}/20` : '—'}
+                                                                </td>
+                                                                <td style={{ padding: '12px 16px', textAlign: 'center' }}>
+                                                                    <span style={{ padding: '4px 10px', borderRadius: '8px', background: el.nb_absences > 3 ? '#fef2f2' : '#f0fdf4', color: el.nb_absences > 3 ? '#ef4444' : '#10b981', fontSize: '12px', fontWeight: 700 }}>{el.nb_absences}</span>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                                {classEleves.length === 0 && (
+                                                    <div style={{ padding: '40px', textAlign: 'center', color: '#94a3b8' }}>
+                                                        <GraduationCap size={36} style={{ marginBottom: '8px', opacity: 0.3 }} />
+                                                        <p style={{ fontSize: '13px', fontWeight: 600 }}>Aucun élève inscrit dans cette classe</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </motion.div>
+                    )}
+                    {/* ──── NOTES TAB ──── */}
+                    {activeTab === 'notes' && (
+                        <motion.div key="notes" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📝 Saisie des Notes</h3>
+                                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Sélectionnez une classe, nommez l&apos;évaluation, puis saisissez les notes</p>
+                                </div>
+                                <div style={{ padding: '20px 24px' }}>
+                                    {/* Choix de la classe */}
+                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                                        {affectations.map((a, i) => {
+                                            const c = getSlotColor(i);
+                                            const isSelected = selectedClass?.affectation_id === a.affectation_id;
+                                            return (
+                                                <button key={a.affectation_id} onClick={() => loadClassForNotes(a)}
+                                                    style={{
+                                                        padding: '10px 20px', borderRadius: '12px', border: 'none', cursor: 'pointer',
+                                                        background: isSelected ? `linear-gradient(135deg, ${c.border}, ${c.text})` : c.bg,
+                                                        color: isSelected ? 'white' : c.text, fontWeight: 700, fontSize: '13px',
+                                                        boxShadow: isSelected ? `0 4px 12px ${c.border}40` : 'none', transition: 'all 0.2s',
+                                                    }}>
+                                                    {a.classe} — {a.matiere}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {selectedClass ? (
+                                        <div>
+                                            {/* Eval config — enhanced */}
+                                            <div style={{ background: '#f8fafc', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
+                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '12px' }}>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>📅 Trimestre</label>
+                                                        <select value={selectedTrimestre || ''} onChange={e => setSelectedTrimestre(Number(e.target.value))}
+                                                            style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
+                                                            {trimestres.map(t => <option key={t.trimestre_id} value={t.trimestre_id}>{t.libelle}</option>)}
+                                                            {trimestres.length === 0 && <option value="">Aucun trimestre</option>}
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>📋 Type d&apos;évaluation</label>
+                                                        <select value={selectedTypeEval || ''} onChange={e => setSelectedTypeEval(Number(e.target.value))}
+                                                            style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
+                                                            {typesEval.map(t => <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle} ({t.poids_pourcentage}%)</option>)}
+                                                            {typesEval.length === 0 && <option value="">Aucun type</option>}
+                                                        </select>
+                                                    </div>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>📝 Nom de l&apos;évaluation</label>
+                                                        <input type="text" placeholder="Ex: Devoir 1, Interro 2..." value={evalLibelle}
+                                                            onChange={e => setEvalLibelle(e.target.value)}
+                                                            style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }} />
+                                                    </div>
+                                                    <div>
+                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>🎯 Note sur</label>
+                                                        <input type="number" value={evalNoteSur} onChange={e => setEvalNoteSur(e.target.value)}
+                                                            style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 700, outline: 'none', boxSizing: 'border-box', textAlign: 'center' }} />
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {elevesLoading ? (
+                                                <div style={{ textAlign: 'center', padding: '40px' }}><Loader2 size={28} className="animate-spin" color={accentColor} /></div>
+                                            ) : classEleves.length > 0 ? (
+                                                <div style={{ overflowX: 'auto' }}>
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                                        <thead>
+                                                            <tr style={{ background: '#f1f5f9' }}>
+                                                                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>#</th>
+                                                                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Élève</th>
+                                                                <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Matricule</th>
+                                                                <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Note /{evalNoteSur}</th>
+                                                                <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Absent</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {classEleves.map((e, i) => {
+                                                                const nd = notesData[e.inscription_id] || { valeur: '', absent: false };
+                                                                return (
+                                                                <tr key={e.eleve_id} style={{ borderBottom: '1px solid #f1f5f9', background: nd.absent ? '#fef2f2' : 'transparent' }}>
+                                                                    <td style={{ padding: '10px 16px', color: '#94a3b8', fontWeight: 600 }}>{i + 1}</td>
+                                                                    <td style={{ padding: '10px 16px', fontWeight: 600, color: nd.absent ? '#94a3b8' : '#1e293b' }}>{e.prenom} {e.nom}</td>
+                                                                    <td style={{ padding: '10px 16px' }}>
+                                                                        <code style={{ background: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', fontSize: '12px' }}>{e.matricule}</code>
+                                                                    </td>
+                                                                    <td style={{ padding: '10px 16px', textAlign: 'center' }}>
+                                                                        <input type="number" min="0" max={evalNoteSur} step="0.25" disabled={nd.absent}
+                                                                            value={nd.valeur} placeholder="—"
+                                                                            onChange={ev => setNotesData(prev => ({ ...prev, [e.inscription_id]: { ...nd, valeur: ev.target.value } }))}
+                                                                            style={{
+                                                                                width: '70px', padding: '8px 12px', borderRadius: '10px',
+                                                                                border: '1px solid #e2e8f0', textAlign: 'center',
+                                                                                fontSize: '14px', fontWeight: 700, outline: 'none', opacity: nd.absent ? 0.3 : 1,
+                                                                            }}
+                                                                        />
+                                                                    </td>
+                                                                    <td style={{ padding: '10px 16px', textAlign: 'center' }}>
+                                                                        <input type="checkbox" checked={nd.absent}
+                                                                            onChange={ev => setNotesData(prev => ({ ...prev, [e.inscription_id]: { valeur: '', absent: ev.target.checked } }))}
+                                                                            style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: '#ef4444' }} />
+                                                                    </td>
+                                                                </tr>
+                                                            );})}
+                                                        </tbody>
+                                                    </table>
+                                                    {notesSaved && (
+                                                        <div style={{ padding: '12px 16px', borderRadius: '12px', marginTop: '12px', fontSize: '13px', fontWeight: 600,
+                                                            background: notesSaved.startsWith('✅') ? '#f0fdf4' : '#fef2f2',
+                                                            color: notesSaved.startsWith('✅') ? '#065f46' : '#991b1b',
+                                                        }}>{notesSaved}</div>
+                                                    )}
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', gap: '10px' }}>
+                                                        {!evalLibelle.trim() && (
+                                                            <p style={{ margin: 0, fontSize: '12px', color: '#f59e0b', fontWeight: 600 }}>⚠️ Remplissez le nom de l&apos;évaluation pour activer le bouton</p>
+                                                        )}
+                                                        {evalLibelle.trim() && <div />}
+                                                        <button onClick={saveNotes} disabled={notesLoading || !evalLibelle.trim()}
+                                                            style={{
+                                                                padding: '12px 28px', borderRadius: '12px', border: 'none',
+                                                                background: !evalLibelle.trim() ? '#cbd5e1' : `linear-gradient(135deg, ${accentColor}, ${primaryColor})`,
+                                                                color: 'white', fontWeight: 700, fontSize: '14px', cursor: !evalLibelle.trim() ? 'not-allowed' : 'pointer',
+                                                                boxShadow: !evalLibelle.trim() ? 'none' : '0 4px 12px rgba(99,102,241,0.3)',
+                                                                opacity: notesLoading ? 0.6 : 1, transition: 'all 0.2s',
+                                                            }}>
+                                                            {notesLoading ? '⏳ Enregistrement...' : '💾 Enregistrer les notes'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
+                                                    <GraduationCap size={36} style={{ opacity: 0.3, marginBottom: '8px' }} />
+                                                    <p style={{ fontSize: '13px', fontWeight: 600 }}>Aucun élève dans cette classe</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>
+                                            <FileText size={48} style={{ opacity: 0.2, marginBottom: '12px' }} />
+                                            <p style={{ fontSize: '14px', fontWeight: 600 }}>Sélectionnez une classe ci-dessus</p>
+                                            <p style={{ fontSize: '12px' }}>pour commencer la saisie des notes</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            {/* ── Historique des évaluations ── */}
+                            <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginTop: '20px' }}>
+                                <div onClick={() => setShowEvalHistory(!showEvalHistory)}
+                                    style={{ padding: '16px 24px', borderBottom: showEvalHistory ? '1px solid #f1f5f9' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', transition: 'background 0.15s' }}
+                                    onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                                    <div>
+                                        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>📊 Historique des évaluations</h3>
+                                        <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{evalHistory.length} évaluation(s) enregistrée(s)</p>
+                                    </div>
+                                    <ChevronDown size={18} color="#94a3b8" style={{ transition: 'transform 0.2s', transform: showEvalHistory ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                                </div>
+                                {showEvalHistory && (
+                                    <div style={{ padding: '0 24px 16px' }}>
+                                        {evalHistory.length > 0 ? (
+                                            <div style={{ overflowX: 'auto' }}>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                                                    <thead>
+                                                        <tr style={{ background: '#f8fafc' }}>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Date</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Évaluation</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Classe</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Matière</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Notes</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Moyenne</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Statut</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Actions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {evalHistory.map((ev: any) => (
+                                                            <tr key={ev.evaluation_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                <td style={{ padding: '10px 12px', color: '#64748b' }}>{ev.date_evaluation ? new Date(ev.date_evaluation).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : '—'}</td>
+                                                                <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1e293b' }}>{ev.libelle}</td>
+                                                                <td style={{ padding: '10px 12px' }}><span style={{ background: '#eff6ff', color: '#3b82f6', padding: '2px 8px', borderRadius: '6px', fontWeight: 600, fontSize: '11px' }}>{ev.classe}</span></td>
+                                                                <td style={{ padding: '10px 12px', color: '#475569' }}>{ev.matiere}</td>
+                                                                <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600 }}>{ev.nb_notes}</td>
+                                                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                                                    {ev.moyenne != null ? (
+                                                                        <span style={{ background: ev.moyenne >= 10 ? '#f0fdf4' : '#fef2f2', color: ev.moyenne >= 10 ? '#10b981' : '#ef4444', padding: '3px 10px', borderRadius: '8px', fontWeight: 700, fontSize: '12px' }}>{ev.moyenne}/{ev.note_sur}</span>
+                                                                    ) : <span style={{ color: '#94a3b8' }}>—</span>}
+                                                                </td>
+                                                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                                                    <span style={{ padding: '3px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700,
+                                                                        background: ev.statut === 'CENTRALISEE' ? '#ecfdf5' : ev.statut === 'PUBLIEE' ? '#eff6ff' : '#f8fafc',
+                                                                        color: ev.statut === 'CENTRALISEE' ? '#059669' : ev.statut === 'PUBLIEE' ? '#3b82f6' : '#64748b',
+                                                                    }}>{ev.statut === 'CENTRALISEE' ? '✅ Centralisée' : ev.statut === 'PUBLIEE' ? '📝 Publiée' : ev.statut}</span>
+                                                                </td>
+                                                                <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                                                                    <button onClick={() => openEvalDetail(ev.evaluation_id)}
+                                                                        style={{ padding: '5px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', fontSize: '11px', fontWeight: 700, cursor: 'pointer', color: accentColor }}>
+                                                                        👁️ Détail
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        ) : (
+                                            <p style={{ textAlign: 'center', padding: '20px', color: '#94a3b8', fontSize: '13px' }}>Aucune évaluation pour le moment</p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* ═══ EVAL DETAIL MODAL ═══ */}
+                            {showEvalDetail && (
+                                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+                                    onClick={() => setShowEvalDetail(false)}>
+                                    <div style={{ background: 'white', borderRadius: '24px', width: '100%', maxWidth: '900px', maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+                                        onClick={e => e.stopPropagation()}>
+                                        {evalDetailLoading ? (
+                                            <div style={{ padding: '60px', textAlign: 'center' }}><Loader2 size={32} className="animate-spin" color={accentColor} /><p style={{ marginTop: '12px', color: '#64748b' }}>Chargement...</p></div>
+                                        ) : evalDetailData ? (
+                                            <>
+                                                {/* Header */}
+                                                <div style={{ padding: '20px 28px', background: `linear-gradient(135deg, ${accentColor}, ${primaryColor})`, color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <div>
+                                                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800 }}>{evalDetailData.evaluation.libelle}</h2>
+                                                <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>{evalDetailData.evaluation.classe} • {evalDetailData.evaluation.matiere} • {evalDetailData.evaluation.trimestre}</p>
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '11px', fontWeight: 700,
+                                                    background: evalDetailData.evaluation.statut === 'CENTRALISEE' ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.2)', color: 'white' }}>
+                                                    {evalDetailData.evaluation.statut === 'CENTRALISEE' ? '✅ Centralisée' : '📝 ' + evalDetailData.evaluation.statut}
+                                                </span>
+                                                <button onClick={() => setShowEvalDetail(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '8px', width: '32px', height: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                    <X size={16} color="white" />
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* Stats bar */}
+                                        <div style={{ padding: '12px 28px', background: '#f8fafc', display: 'flex', gap: '20px', borderBottom: '1px solid #e2e8f0' }}>
+                                            {[{ label: 'Élèves', value: evalDetailData.stats.total_eleves, color: accentColor },
+                                              { label: 'Notes saisies', value: evalDetailData.stats.nb_notes_saisies, color: '#10b981' },
+                                              { label: 'Absents', value: evalDetailData.stats.nb_absents, color: '#ef4444' },
+                                              { label: 'Moyenne', value: evalDetailData.stats.moyenne ? `${evalDetailData.stats.moyenne}/${evalDetailData.evaluation.note_sur}` : '—', color: '#f59e0b' },
+                                              { label: 'Min', value: evalDetailData.stats.note_min ?? '—', color: '#94a3b8' },
+                                              { label: 'Max', value: evalDetailData.stats.note_max ?? '—', color: '#059669' },
+                                            ].map((s, i) => (
+                                                <div key={i} style={{ textAlign: 'center' }}>
+                                                    <div style={{ fontSize: '16px', fontWeight: 800, color: s.color }}>{s.value}</div>
+                                                    <div style={{ fontSize: '10px', color: '#64748b', fontWeight: 600 }}>{s.label}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        {/* Notes table */}
+                                        <div style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                                <thead>
+                                                    <tr style={{ background: '#f8fafc', position: 'sticky', top: 0, zIndex: 1 }}>
+                                                        <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: '11px' }}>#</th>
+                                                        <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: '11px' }}>ÉLÈVE</th>
+                                                        <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: '11px' }}>MATRICULE</th>
+                                                        <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 700, color: '#475569', fontSize: '11px' }}>NOTE /{evalDetailData.evaluation.note_sur}</th>
+                                                        <th style={{ padding: '10px 16px', textAlign: 'center', fontWeight: 700, color: '#475569', fontSize: '11px' }}>ABSENT</th>
+                                                        <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: '11px' }}>OBSERVATION</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(evalDetailData.notes || []).map((n: any, idx: number) => {
+                                                        const ed = editingNotes[n.note_id] || { valeur: '', absent: false, observation: '' };
+                                                        const isCentralized = evalDetailData.evaluation.statut === 'CENTRALISEE';
+                                                        return (
+                                                            <tr key={n.note_id} style={{ borderBottom: '1px solid #f1f5f9', background: ed.absent ? '#fef2f2' : 'transparent' }}>
+                                                                <td style={{ padding: '8px 16px', color: '#94a3b8', fontWeight: 600 }}>{idx + 1}</td>
+                                                                <td style={{ padding: '8px 16px', fontWeight: 600, color: ed.absent ? '#94a3b8' : '#1e293b' }}>
+                                                                    {n.prenom} {n.nom}
+                                                                    <span style={{ fontSize: '10px', color: '#94a3b8', marginLeft: '6px' }}>{n.sexe === 'M' ? '♂' : '♀'}</span>
+                                                                </td>
+                                                                <td style={{ padding: '8px 16px' }}>
+                                                                    <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontSize: '11px' }}>{n.matricule}</code>
+                                                                </td>
+                                                                <td style={{ padding: '8px 16px', textAlign: 'center' }}>
+                                                                    {isCentralized ? (
+                                                                        <span style={{ fontWeight: 700, color: (n.valeur ?? 0) >= 10 ? '#10b981' : '#ef4444' }}>{n.valeur ?? '—'}</span>
+                                                                    ) : (
+                                                                        <input type="number" min="0" max={evalDetailData.evaluation.note_sur} step="0.25" disabled={ed.absent}
+                                                                            value={ed.valeur} placeholder="—"
+                                                                            onChange={ev => setEditingNotes(prev => ({ ...prev, [n.note_id]: { ...ed, valeur: ev.target.value } }))}
+                                                                            style={{ width: '65px', padding: '6px 8px', borderRadius: '8px', border: '1.5px solid #e2e8f0', textAlign: 'center', fontSize: '13px', fontWeight: 700, outline: 'none', opacity: ed.absent ? 0.3 : 1 }} />
+                                                                    )}
+                                                                </td>
+                                                                <td style={{ padding: '8px 16px', textAlign: 'center' }}>
+                                                                    {isCentralized ? (
+                                                                        <span>{ed.absent ? '❌' : '—'}</span>
+                                                                    ) : (
+                                                                        <input type="checkbox" checked={ed.absent}
+                                                                            onChange={ev => setEditingNotes(prev => ({ ...prev, [n.note_id]: { ...ed, absent: ev.target.checked, valeur: ev.target.checked ? '' : ed.valeur } }))}
+                                                                            style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: '#ef4444' }} />
+                                                                    )}
+                                                                </td>
+                                                                <td style={{ padding: '8px 16px' }}>
+                                                                    {isCentralized ? (
+                                                                        <span style={{ fontSize: '12px', color: '#64748b' }}>{n.observation || '—'}</span>
+                                                                    ) : (
+                                                                        <input type="text" value={ed.observation} placeholder="Optionnel..."
+                                                                            onChange={ev => setEditingNotes(prev => ({ ...prev, [n.note_id]: { ...ed, observation: ev.target.value } }))}
+                                                                            style={{ width: '100%', padding: '6px 10px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', outline: 'none', minWidth: '120px' }} />
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+
+                                        {/* Footer with action buttons */}
+                                        <div style={{ padding: '16px 28px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fafbff' }}>
+                                            <span style={{ fontSize: '12px', color: '#64748b' }}>Note sur {evalDetailData.evaluation.note_sur} • Coef {evalDetailData.evaluation.coefficient}</span>
+                                            <div style={{ display: 'flex', gap: '10px' }}>
+                                                {evalDetailData.evaluation.statut !== 'CENTRALISEE' && (
+                                                    <>
+                                                        <button onClick={saveEvalNotes} disabled={savingNotes}
+                                                            style={{ padding: '10px 20px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', color: '#1e293b' }}>
+                                                            <Save size={14} /> {savingNotes ? 'Sauvegarde...' : 'Enregistrer les Modifications'}
+                                                        </button>
+                                                        <button onClick={centralizeEval} disabled={centralizingEval}
+                                                            style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', background: showConfirmCentralize ? 'linear-gradient(135deg, #dc2626, #ef4444)' : 'linear-gradient(135deg, #059669, #10b981)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', boxShadow: showConfirmCentralize ? '0 4px 12px rgba(220,38,38,0.3)' : '0 4px 12px rgba(5,150,105,0.3)', transition: 'all 0.3s' }}>
+                                                            <Send size={14} /> {centralizingEval ? 'Centralisation...' : showConfirmCentralize ? '⚠️ Confirmer la centralisation ?' : 'Centraliser vers Admin'}
+                                                        </button>
+                                                        {showConfirmCentralize && (
+                                                            <button onClick={() => setShowConfirmCentralize(false)}
+                                                                style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', fontSize: '12px', fontWeight: 600, cursor: 'pointer', color: '#64748b' }}>
+                                                                Annuler
+                                                            </button>
+                                                        )}
+                                                    </>
+                                                )}
+                                                {evalDetailData.evaluation.statut === 'CENTRALISEE' && (
+                                                    <div style={{ padding: '10px 20px', borderRadius: '10px', background: '#ecfdf5', color: '#065f46', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <CheckCircle size={14} /> Notes envoyées à l&apos;administration
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </>
+                                ) : null}
+                                    </div>
+                                </div>
+                            )}
+
+                        </motion.div>
+                    )}
+
+                    {/* ──── APPEL TAB ──── */}
+                    {activeTab === 'appel' && (
+                        <motion.div key="appel" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>✅ Faire l&apos;Appel</h3>
+                                        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Sélectionnez une classe pour l&apos;appel</p>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <select value={appelDemiJournee} onChange={e => setAppelDemiJournee(e.target.value)}
+                                            style={{ padding: '8px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                                            <option value="MATIN">🌅 Matin</option>
+                                            <option value="APRES_MIDI">🌇 Après-midi</option>
+                                        </select>
+                                        <span style={{ fontSize: '12px', color: accentColor, fontWeight: 600 }}>
+                                            {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div style={{ padding: '20px 24px' }}>
+                                    {/* Choix de la classe */}
+                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                                        {affectations.map((a, i) => {
+                                            const c = getSlotColor(i);
+                                            const isSelected = selectedClass?.affectation_id === a.affectation_id;
+                                            return (
+                                                <button key={a.affectation_id} onClick={() => loadClassForAppel(a)}
+                                                    style={{
+                                                        padding: '10px 20px', borderRadius: '12px', border: 'none', cursor: 'pointer',
+                                                        background: isSelected ? `linear-gradient(135deg, ${c.border}, ${c.text})` : c.bg,
+                                                        color: isSelected ? 'white' : c.text, fontWeight: 700, fontSize: '13px',
+                                                        boxShadow: isSelected ? `0 4px 12px ${c.border}40` : 'none', transition: 'all 0.2s',
+                                                    }}>
+                                                    {a.classe}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {selectedClass ? (
+                                        <div>
+                                            {elevesLoading ? (
+                                                <div style={{ textAlign: 'center', padding: '40px' }}><Loader2 size={28} className="animate-spin" color="#10b981" /></div>
+                                            ) : classEleves.length > 0 ? (
+                                                <div>
+                                                    {/* Summary bar — dynamic */}
+                                                    <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
+                                                        <div style={{ flex: 1, background: '#f0fdf4', borderRadius: '12px', padding: '12px 16px', textAlign: 'center' }}>
+                                                            <p style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#10b981' }}>
+                                                                {Object.values(appelData).filter(s => s === 'PRESENT').length}
+                                                            </p>
+                                                            <p style={{ margin: 0, fontSize: '11px', fontWeight: 600, color: '#065f46' }}>Présents</p>
+                                                        </div>
+                                                        <div style={{ flex: 1, background: '#fef2f2', borderRadius: '12px', padding: '12px 16px', textAlign: 'center' }}>
+                                                            <p style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#ef4444' }}>
+                                                                {Object.values(appelData).filter(s => s === 'ABSENT').length}
+                                                            </p>
+                                                            <p style={{ margin: 0, fontSize: '11px', fontWeight: 600, color: '#991b1b' }}>Absents</p>
+                                                        </div>
+                                                        <div style={{ flex: 1, background: '#fffbeb', borderRadius: '12px', padding: '12px 16px', textAlign: 'center' }}>
+                                                            <p style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#f59e0b' }}>
+                                                                {Object.values(appelData).filter(s => s === 'RETARD').length}
+                                                            </p>
+                                                            <p style={{ margin: 0, fontSize: '11px', fontWeight: 600, color: '#92400e' }}>Retards</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div style={{ overflowX: 'auto' }}>
+                                                        {classEleves.map((e, i) => {
+                                                            const currentStatus = appelData[e.inscription_id] || 'PRESENT';
+                                                            return (
+                                                            <div key={e.eleve_id} style={{
+                                                                display: 'flex', alignItems: 'center', gap: '14px',
+                                                                padding: '12px 16px', borderBottom: '1px solid #f8fafc',
+                                                                borderRadius: '10px', transition: 'background 0.15s',
+                                                                background: currentStatus === 'ABSENT' ? '#fef2f208' : 'transparent',
+                                                            }}>
+                                                                <span style={{ fontWeight: 600, color: '#94a3b8', fontSize: '12px', minWidth: '24px' }}>{i + 1}</span>
+                                                                <div style={{
+                                                                    width: '36px', height: '36px', borderRadius: '50%',
+                                                                    background: `${CLASS_COLORS[i % CLASS_COLORS.length]}15`,
+                                                                    color: CLASS_COLORS[i % CLASS_COLORS.length],
+                                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                                    fontWeight: 700, fontSize: '13px', flexShrink: 0,
+                                                                }}>{e.prenom.charAt(0)}{e.nom.charAt(0)}</div>
+                                                                <div style={{ flex: 1 }}>
+                                                                    <p style={{ margin: 0, fontWeight: 600, fontSize: '13px', color: '#1e293b' }}>{e.prenom} {e.nom}</p>
+                                                                    <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>{e.matricule}</p>
+                                                                </div>
+                                                                <div style={{ display: 'flex', gap: '8px' }}>
+                                                                    {([
+                                                                        { label: 'P', value: 'PRESENT', color: '#10b981', bg: '#f0fdf4' },
+                                                                        { label: 'A', value: 'ABSENT', color: '#ef4444', bg: '#fef2f2' },
+                                                                        { label: 'R', value: 'RETARD', color: '#f59e0b', bg: '#fffbeb' },
+                                                                    ] as const).map(btn => {
+                                                                        const isActive = currentStatus === btn.value;
+                                                                        return (
+                                                                            <button key={btn.label} title={btn.value}
+                                                                                onClick={() => setAppelData(prev => ({ ...prev, [e.inscription_id]: btn.value }))}
+                                                                                style={{
+                                                                                    width: '34px', height: '34px', borderRadius: '10px',
+                                                                                    border: isActive ? 'none' : `1px solid ${btn.color}30`,
+                                                                                    background: isActive ? btn.color : btn.bg,
+                                                                                    color: isActive ? 'white' : btn.color,
+                                                                                    fontWeight: 800, fontSize: '13px',
+                                                                                    cursor: 'pointer', transition: 'all 0.15s',
+                                                                                    boxShadow: isActive ? `0 2px 8px ${btn.color}40` : 'none',
+                                                                                }}>{btn.label}</button>
+                                                                        );
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                        );})}
+                                                    </div>
+                                                    {appelSaved && (
+                                                        <div style={{ padding: '12px 16px', borderRadius: '12px', marginTop: '12px', fontSize: '13px', fontWeight: 600,
+                                                            background: appelSaved.startsWith('✅') ? '#f0fdf4' : '#fef2f2',
+                                                            color: appelSaved.startsWith('✅') ? '#065f46' : '#991b1b',
+                                                        }}>{appelSaved}</div>
+                                                    )}
+                                                    <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '16px 0', gap: '10px' }}>
+                                                        <button onClick={saveAppel} disabled={appelLoading}
+                                                            style={{
+                                                                padding: '12px 24px', borderRadius: '12px', border: 'none',
+                                                                background: 'linear-gradient(135deg, #10b981, #059669)',
+                                                                color: 'white', fontWeight: 700, fontSize: '14px', cursor: 'pointer',
+                                                                boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
+                                                                opacity: appelLoading ? 0.6 : 1,
+                                                            }}>
+                                                            {appelLoading ? '⏳ Enregistrement...' : '✅ Valider l\'appel'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
+                                                    <Users size={36} style={{ opacity: 0.3, marginBottom: '8px' }} />
+                                                    <p style={{ fontSize: '13px', fontWeight: 600 }}>Aucun élève dans cette classe</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>
+                                            <ClipboardList size={48} style={{ opacity: 0.2, marginBottom: '12px' }} />
+                                            <p style={{ fontSize: '14px', fontWeight: 600 }}>Sélectionnez une classe ci-dessus</p>
+                                            <p style={{ fontSize: '12px' }}>pour commencer l&apos;appel</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                            {/* ── Historique des appels ── */}
+                            <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginTop: '20px' }}>
+                                <div onClick={() => setShowAppelHistory(!showAppelHistory)}
+                                    style={{ padding: '16px 24px', borderBottom: showAppelHistory ? '1px solid #f1f5f9' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', transition: 'background 0.15s' }}
+                                    onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                                    <div>
+                                        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>📋 Historique des appels (30 derniers jours)</h3>
+                                        <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{appelHistory.length} appel(s) enregistré(s)</p>
+                                    </div>
+                                    <ChevronDown size={18} color="#94a3b8" style={{ transition: 'transform 0.2s', transform: showAppelHistory ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+                                </div>
+                                {showAppelHistory && (
+                                    <div style={{ padding: '0 24px 16px' }}>
+                                        {appelHistory.length > 0 ? (
+                                            <div style={{ overflowX: 'auto' }}>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                                                    <thead>
+                                                        <tr style={{ background: '#f8fafc' }}>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Date</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Classe</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Session</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#10b981' }}>✅ Présents</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#ef4444' }}>❌ Absents</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#f59e0b' }}>⏰ Retards</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Total</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {appelHistory.map((a: any, i: number) => (
+                                                            <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1e293b' }}>{new Date(a.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</td>
+                                                                <td style={{ padding: '10px 12px' }}><span style={{ background: '#eff6ff', color: '#3b82f6', padding: '2px 8px', borderRadius: '6px', fontWeight: 600, fontSize: '11px' }}>{a.classe}</span></td>
+                                                                <td style={{ padding: '10px 12px', color: '#64748b' }}>{a.demi_journee === 'MATIN' ? '🌅 Matin' : '🌇 Après-midi'}</td>
+                                                                <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: '#f0fdf4', color: '#10b981', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.presents}</span></td>
+                                                                <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: a.absents > 0 ? '#fef2f2' : '#f8fafc', color: a.absents > 0 ? '#ef4444' : '#94a3b8', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.absents}</span></td>
+                                                                <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: a.retards > 0 ? '#fffbeb' : '#f8fafc', color: a.retards > 0 ? '#f59e0b' : '#94a3b8', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.retards}</span></td>
+                                                                <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 600 }}>{a.total}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        ) : (
+                                            <p style={{ textAlign: 'center', padding: '20px', color: '#94a3b8', fontSize: '13px' }}>Aucun appel enregistré pour le moment</p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {/* ──── MESSAGES TAB ──── */}
+                    {activeTab === 'messages' && (
+                        <motion.div key="messages" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: selectedMessage ? '380px 1fr' : '1fr', gap: '20px' }}>
+                                {/* Message list */}
+                                <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📨 Centre de Communication</h3>
+                                        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                                            {messages.filter(m => m.statut === 'ENVOYE' && m.expediteur_type === 'ADMIN').length} message(s) non lu(s)
+                                        </p>
+                                        {/* Filters */}
+                                        <div style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' }}>
+                                            {['TOUS', 'EMPLOI', 'EXAMENS', 'GENERAL', 'REUNION', 'DISCIPLINE'].map(f => (
+                                                <button key={f} onClick={() => setMsgFilter(f)}
+                                                    style={{
+                                                        padding: '4px 12px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                                                        background: msgFilter === f ? '#6366f1' : '#f1f5f9',
+                                                        color: msgFilter === f ? 'white' : '#64748b',
+                                                        fontSize: '11px', fontWeight: 700, transition: 'all 0.15s',
+                                                    }}>{f}</button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div style={{ maxHeight: '600px', overflowY: 'auto' }}>
+                                        {messagesLoading ? (
+                                            <div style={{ textAlign: 'center', padding: '40px' }}>
+                                                <Loader2 size={24} className="animate-spin" color={accentColor} />
+                                            </div>
+                                        ) : (() => {
+                                            const filtered = msgFilter === 'TOUS' ? messages : messages.filter(m => m.objet_type === msgFilter);
+                                            return filtered.length === 0 ? (
+                                                <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>
+                                                    <FileText size={36} style={{ opacity: 0.3, marginBottom: '8px' }} />
+                                                    <p style={{ fontSize: '13px', fontWeight: 600 }}>Aucun message</p>
+                                                </div>
+                                            ) : filtered.map(msg => {
+                                                const isUnread = msg.statut === 'ENVOYE' && msg.expediteur_type === 'ADMIN';
+                                                const isSelected = selectedMessage?.message_id === msg.message_id;
+                                                const isFromMe = msg.expediteur_type === 'ENSEIGNANT';
+                                                const typeColors: Record<string, string> = { EMPLOI: '#0d9488', EXAMENS: '#f59e0b', GENERAL: '#3b82f6', REUNION: '#7c3aed', DISCIPLINE: '#dc2626' };
+                                                const typeColor = typeColors[msg.objet_type] || '#64748b';
+                                                return (
+                                                    <div key={msg.message_id} onClick={() => { setSelectedMessage(msg); setReplyText(''); markAsRead(msg); }}
+                                                        style={{
+                                                            padding: '14px 20px', borderBottom: '1px solid #f8fafc', cursor: 'pointer',
+                                                            background: isSelected ? '#f0f0ff' : isUnread ? '#fefce8' : 'transparent',
+                                                            borderLeft: isSelected ? `3px solid ${accentColor}` : '3px solid transparent',
+                                                            transition: 'all 0.15s',
+                                                        }}
+                                                        onMouseEnter={ev => { if (!isSelected) ev.currentTarget.style.background = '#f8fafc'; }}
+                                                        onMouseLeave={ev => { if (!isSelected) ev.currentTarget.style.background = isUnread ? '#fefce8' : 'transparent'; }}>
+                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                {isUnread && <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: accentColor, flexShrink: 0 }} />}
+                                                                <span style={{ fontSize: '13px', fontWeight: isUnread ? 800 : 600, color: '#1e293b' }}>
+                                                                    {isFromMe ? '→ Vous' : msg.expediteur_nom}
+                                                                </span>
+                                                            </div>
+                                                            <span style={{ padding: '2px 8px', borderRadius: '6px', background: `${typeColor}15`, color: typeColor, fontSize: '10px', fontWeight: 700, flexShrink: 0 }}>
+                                                                {msg.objet_type}
+                                                            </span>
+                                                        </div>
+                                                        <p style={{ margin: '0 0 4px', fontSize: '13px', fontWeight: isUnread ? 700 : 500, color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                            {msg.sujet}
+                                                        </p>
+                                                        <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
+                                                            {msg.date_envoi ? new Date(msg.date_envoi).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
+                                                        </p>
+                                                    </div>
+                                                );
+                                            });
+                                        })()}
+                                    </div>
+                                </div>
+
+                                {/* Message detail */}
+                                {selectedMessage && (
+                                    <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                        <div style={{ padding: '24px 28px', borderBottom: '1px solid #f1f5f9' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                                                <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 700, color: '#1e293b', flex: 1 }}>{selectedMessage.sujet}</h3>
+                                                <button onClick={() => setSelectedMessage(null)}
+                                                    style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: '#64748b' }}>
+                                                    ✕ Fermer
+                                                </button>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: '#64748b' }}>
+                                                <span>De: <strong style={{ color: '#1e293b' }}>{selectedMessage.expediteur_type === 'ADMIN' ? 'Administration' : 'Vous'}</strong></span>
+                                                <span>•</span>
+                                                <span>{selectedMessage.date_envoi ? new Date(selectedMessage.date_envoi).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                                                <span>•</span>
+                                                <span style={{
+                                                    padding: '2px 8px', borderRadius: '6px', fontWeight: 700,
+                                                    background: selectedMessage.statut === 'ENVOYE' ? '#fef3c7' : selectedMessage.statut === 'LU' ? '#dbeafe' : '#f0fdf4',
+                                                    color: selectedMessage.statut === 'ENVOYE' ? '#92400e' : selectedMessage.statut === 'LU' ? '#1e40af' : '#065f46',
+                                                }}>{selectedMessage.statut}</span>
+                                            </div>
+                                        </div>
+                                        <div style={{ padding: '24px 28px', minHeight: '200px' }}>
+                                            <div style={{ fontSize: '14px', lineHeight: 1.8, color: '#334155', whiteSpace: 'pre-wrap' }}>
+                                                {selectedMessage.contenu || '(Pas de contenu)'}
+                                            </div>
+                                        </div>
+                                        {/* Response section - specialized by message type */}
+                                        {selectedMessage.expediteur_type === 'ADMIN' && (
+                                            <div style={{ padding: '20px 28px', borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+                                                {/* Specialized action buttons */}
+                                                {selectedMessage.objet_type === 'EMPLOI' && selectedMessage.demande_id && (
+                                                    <button onClick={() => openDispoForm(selectedMessage)}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #0f766e, #14b8a6)', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer', marginBottom: '14px', width: '100%', justifyContent: 'center' }}>
+                                                        <Calendar size={16} /> 📅 Répondre — Soumettre mes Disponibilités
+                                                    </button>
+                                                )}
+                                                {selectedMessage.objet_type === 'EXAMENS' && selectedMessage.demande_id && (
+                                                    <button onClick={() => openExamUpload(selectedMessage)}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #d97706, #f59e0b)', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer', marginBottom: '14px', width: '100%', justifyContent: 'center' }}>
+                                                        <FileUp size={16} /> 📝 Répondre — Déposer un Sujet d&apos;Examen
+                                                    </button>
+                                                )}
+                                                {/* Text reply */}
+                                                <p style={{ margin: '0 0 10px', fontSize: '13px', fontWeight: 700, color: '#475569' }}>↩️ Réponse écrite</p>
+                                                <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
+                                                    placeholder="Écrivez votre réponse ici..."
+                                                    rows={3}
+                                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '13px', resize: 'vertical', outline: 'none', fontFamily: 'Inter, sans-serif', boxSizing: 'border-box' }}
+                                                    onFocus={ev => ev.target.style.borderColor = accentColor}
+                                                    onBlur={ev => ev.target.style.borderColor = '#e2e8f0'}
+                                                />
+                                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+                                                    <button onClick={() => sendReply(selectedMessage)} disabled={replySending || !replyText.trim()}
+                                                        style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', background: !replyText.trim() ? '#cbd5e1' : `linear-gradient(135deg, ${accentColor}, ${primaryColor})`, color: 'white', fontWeight: 700, fontSize: '13px', cursor: !replyText.trim() ? 'not-allowed' : 'pointer', opacity: replySending ? 0.6 : 1 }}>
+                                                        {replySending ? '⏳ Envoi...' : '📤 Envoyer la réponse'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {/* ──── DEVOIRS TAB ──── */}
+                    {activeTab === 'devoirs' && (() => {
+
+                        const handleCreateDevoir = async () => {
+                            if (!data || !devoirForm.titre || !devoirForm.classe_id || !devoirForm.matiere_id) return;
+                            setDevoirSaving(true);
+                            try {
+                                const fd = new FormData();
+                                fd.append('enseignant_id', String(data.enseignant.enseignant_id));
+                                fd.append('classe_id', String(devoirForm.classe_id));
+                                fd.append('matiere_id', String(devoirForm.matiere_id));
+                                fd.append('titre', devoirForm.titre);
+                                fd.append('description', devoirForm.description);
+                                fd.append('type_devoir', devoirForm.type_devoir);
+                                if (devoirForm.date_limite) fd.append('date_limite', devoirForm.date_limite);
+                                if (devoirFile) fd.append('fichier', devoirFile);
+                                await api.post('/api/devoirs/', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                                setToastMsg({ type: 'success', text: 'Devoir créé avec succès !' });
+                                setShowNewDevoir(false);
+                                setDevoirForm({titre: '', description: '', type_devoir: 'EXERCICE', classe_id: null, matiere_id: null, date_limite: ''});
+                                setDevoirFile(null);
+                                const res = await api.get(`/api/devoirs/enseignant/${data.enseignant.enseignant_id}`);
+                                setDevoirs(res.data);
+                            } catch { setToastMsg({ type: 'error', text: 'Erreur lors de la création' }); }
+                            finally { setDevoirSaving(false); }
+                        };
+
+                        const handleDeleteDevoir = async (id: number) => {
+                            if (!data || !confirm('Supprimer ce devoir ?')) return;
+                            try {
+                                await api.delete(`/api/devoirs/${id}`);
+                                setDevoirs(prev => prev.filter(d => d.devoir_id !== id));
+                                setToastMsg({ type: 'success', text: 'Devoir supprimé' });
+                            } catch {}
+                        };
+
+                        const typeColors: Record<string,{bg:string;color:string;icon:string}> = {
+                            EXERCICE: { bg: '#dbeafe', color: '#2563eb', icon: '📝' },
+                            RECHERCHE: { bg: '#fef3c7', color: '#d97706', icon: '🔍' },
+                            LECTURE: { bg: '#ede9fe', color: '#7c3aed', icon: '📖' },
+                            PROJET: { bg: '#d1fae5', color: '#059669', icon: '🚀' },
+                        };
+
+                        return (
+                            <motion.div key="devoirs" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                    <div>
+                                        <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                            <BookOpen size={22} color="#f59e0b" /> Devoirs
+                                        </h2>
+                                        <p style={{ margin: '4px 0 0', color: '#94a3b8', fontSize: '13px' }}>Assignez des devoirs à vos classes</p>
+                                    </div>
+                                    <button onClick={() => setShowNewDevoir(!showNewDevoir)}
+                                        style={{ padding: '12px 24px', borderRadius: '14px', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '13px', background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: 'white', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 15px rgba(245,158,11,0.3)' }}>
+                                        <Plus size={16} /> Nouveau Devoir
+                                    </button>
+                                </div>
+
+                                {/* Create Form */}
+                                <AnimatePresence>
+                                    {showNewDevoir && (
+                                        <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                                            style={{ background: 'white', borderRadius: '20px', padding: '28px', marginBottom: '20px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                                            <h3 style={{ margin: '0 0 20px', fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <Plus size={16} color="#f59e0b" /> Créer un devoir
+                                            </h3>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', gridColumn: '1/-1' }}>
+                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Titre du devoir *</label>
+                                                    <input value={devoirForm.titre} onChange={e => setDevoirForm({...devoirForm, titre: e.target.value})}
+                                                        placeholder="Ex: Exercices chapitre 5" style={{ padding: '12px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none' }}
+                                                        onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'} onBlur={e => e.currentTarget.style.borderColor = '#e2e8f0'} />
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Classe *</label>
+                                                    <select value={devoirForm.classe_id || ''} onChange={e => setDevoirForm({...devoirForm, classe_id: Number(e.target.value)})}
+                                                        style={{ padding: '12px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
+                                                        <option value="">Sélectionner...</option>
+                                                        {(() => {
+                                                            const seen = new Set<number>();
+                                                            return data?.affectations.filter(a => {
+                                                                if (seen.has(a.classe_id)) return false;
+                                                                seen.add(a.classe_id); return true;
+                                                            }).map(a => <option key={`cls-${a.affectation_id}`} value={a.classe_id}>{a.classe}</option>);
+                                                        })()}
+                                                    </select>
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Matière *</label>
+                                                    <select value={devoirForm.matiere_id || ''} onChange={e => setDevoirForm({...devoirForm, matiere_id: Number(e.target.value)})}
+                                                        style={{ padding: '12px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
+                                                        <option value="">Sélectionner...</option>
+                                                        {(() => {
+                                                            const seen = new Set<number>();
+                                                            return data?.affectations.filter(a => !devoirForm.classe_id || a.classe_id === devoirForm.classe_id).filter(a => {
+                                                                if (seen.has(a.matiere_id)) return false;
+                                                                seen.add(a.matiere_id); return true;
+                                                            }).map(a => <option key={`mat-${a.affectation_id}`} value={a.matiere_id}>{a.matiere}</option>);
+                                                        })()}
+                                                    </select>
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Type</label>
+                                                    <select value={devoirForm.type_devoir} onChange={e => setDevoirForm({...devoirForm, type_devoir: e.target.value})}
+                                                        style={{ padding: '12px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
+                                                        <option value="EXERCICE">📝 Exercice</option>
+                                                        <option value="RECHERCHE">🔍 Recherche</option>
+                                                        <option value="LECTURE">📖 Lecture</option>
+                                                        <option value="PROJET">🚀 Projet</option>
+                                                    </select>
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Date limite</label>
+                                                    <input type="date" value={devoirForm.date_limite} onChange={e => setDevoirForm({...devoirForm, date_limite: e.target.value})}
+                                                        style={{ padding: '12px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none' }} />
+                                                </div>
+                                                <div style={{ gridColumn: '1/-1', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Description / Consignes</label>
+                                                    <textarea value={devoirForm.description} onChange={e => setDevoirForm({...devoirForm, description: e.target.value})}
+                                                        placeholder="Décrivez le devoir... Ex: Page 45, exercices 1 à 5 du manuel de Mathématiques"
+                                                        rows={4} style={{ padding: '12px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', resize: 'vertical', fontFamily: 'inherit' }}
+                                                        onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'} onBlur={e => e.currentTarget.style.borderColor = '#e2e8f0'} />
+                                                </div>
+                                                <div style={{ gridColumn: '1/-1', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>📎 Fichier joint (optionnel)</label>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                        <input ref={devoirFileRef} type="file" accept=".pdf,.doc,.docx,.jpg,.png,.xlsx" style={{ display: 'none' }}
+                                                            onChange={e => setDevoirFile(e.target.files?.[0] || null)} />
+                                                        <button onClick={() => devoirFileRef.current?.click()} type="button"
+                                                            style={{ padding: '10px 20px', borderRadius: '10px', border: '2px dashed #e2e8f0', background: '#f8fafc', fontSize: '13px', fontWeight: 600, color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                            <Upload size={14} /> {devoirFile ? devoirFile.name : 'Choisir un fichier'}
+                                                        </button>
+                                                        {devoirFile && <button onClick={() => setDevoirFile(null)} style={{ border: 'none', background: '#fee2e2', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', color: '#dc2626', fontSize: '12px', fontWeight: 600 }}>✕ Retirer</button>}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px', borderTop: '1px solid #f1f5f9', paddingTop: '20px' }}>
+                                                <button onClick={() => setShowNewDevoir(false)}
+                                                    style={{ padding: '10px 20px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', fontSize: '13px', fontWeight: 600, cursor: 'pointer', color: '#64748b' }}>
+                                                    Annuler
+                                                </button>
+                                                <button onClick={handleCreateDevoir} disabled={devoirSaving || !devoirForm.titre || !devoirForm.classe_id || !devoirForm.matiere_id}
+                                                    style={{ padding: '10px 24px', borderRadius: '10px', border: 'none', background: devoirSaving ? '#fcd34d' : 'linear-gradient(135deg, #f59e0b, #d97706)', fontSize: '13px', fontWeight: 700, cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', gap: '8px', opacity: (!devoirForm.titre || !devoirForm.classe_id || !devoirForm.matiere_id) ? 0.5 : 1 }}>
+                                                    {devoirSaving ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={14} />}
+                                                    {devoirSaving ? 'Envoi...' : 'Publier le devoir'}
+                                                </button>
+                                            </div>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+
+                                {/* Devoirs List */}
+                                {devoirsLoading ? (
+                                    <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><Loader2 size={28} style={{ animation: 'spin 1s linear infinite', color: '#f59e0b' }} /></div>
+                                ) : devoirs.length === 0 ? (
+                                    <div style={{ background: 'white', borderRadius: '20px', padding: '60px', textAlign: 'center', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                        <BookOpen size={40} color="#e2e8f0" style={{ marginBottom: '12px' }} />
+                                        <p style={{ color: '#94a3b8', fontSize: '14px', fontWeight: 600 }}>Aucun devoir créé</p>
+                                        <p style={{ color: '#cbd5e1', fontSize: '12px' }}>Cliquez sur "Nouveau Devoir" pour commencer</p>
+                                    </div>
+                                ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                        {devoirs.map((d, i) => {
+                                            const tc = typeColors[d.type_devoir] || typeColors.EXERCICE;
+                                            return (
+                                                <motion.div key={d.devoir_id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+                                                    style={{ background: 'white', borderRadius: '16px', padding: '20px 24px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', borderLeft: `4px solid ${tc.color}` }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                        <div style={{ flex: 1 }}>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                                                                <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: tc.bg, color: tc.color }}>
+                                                                    {tc.icon} {d.type_devoir}
+                                                                </span>
+                                                                <span style={{ fontSize: '11px', color: '#94a3b8' }}>📅 {d.classe}</span>
+                                                                <span style={{ fontSize: '11px', color: '#94a3b8' }}>📘 {d.matiere}</span>
+                                                            </div>
+                                                            <h4 style={{ margin: '0 0 6px', fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>{d.titre}</h4>
+                                                            {d.description && <p style={{ margin: '0 0 8px', fontSize: '13px', color: '#64748b', lineHeight: 1.5 }}>{d.description.length > 150 ? d.description.slice(0, 150) + '...' : d.description}</p>}
+                                                            <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#94a3b8' }}>
+                                                                {d.date_limite && <span>⏰ Limite: {new Date(d.date_limite).toLocaleDateString('fr-FR')}</span>}
+                                                                {d.fichier_nom && <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><FileUp size={11} /> {d.fichier_nom}</span>}
+                                                                <span>Créé le {d.date_creation ? new Date(d.date_creation).toLocaleDateString('fr-FR') : '—'}</span>
+                                                            </div>
+                                                        </div>
+                                                        <button onClick={() => handleDeleteDevoir(d.devoir_id)}
+                                                            style={{ border: 'none', background: '#fef2f2', borderRadius: '10px', padding: '8px', cursor: 'pointer', color: '#ef4444' }}>
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    </div>
+                                                </motion.div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </motion.div>
+                        );
+                    })()}
+
+                    {/* ──── DOCUMENTS & PARTAGES TAB ──── */}
+                    {activeTab === 'documents' && <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}><FileText size={48} style={{ marginBottom: '12px', opacity: 0.3 }} /><p>Documents non implémentés</p></div>}
+
+                    {/* ──── LIENS EXTERNES TAB ──── */}
+                    {activeTab === 'liens' && <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}><LinkIcon size={48} style={{ marginBottom: '12px', opacity: 0.3 }} /><p>Liens non implémentés</p></div>}
+
+                    {/* ──── PARAMETRES TAB ──── */}
+                    {activeTab === 'parametres' && (
+                        <motion.div key="parametres" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ maxWidth: '700px' }}>
+                                <h2 style={{ fontSize: '22px', fontWeight: 800, color: '#1e293b', margin: '0 0 20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <Settings size={22} color={primaryColor} /> Paramètres
+                                </h2>
+
+                                {/* Profile Info Card */}
+                                <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: '20px' }}>
+                                    <div style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', padding: '28px', display: 'flex', alignItems: 'center', gap: '20px', color: 'white', position: 'relative', overflow: 'hidden' }}>
+                                        <div style={{ position: 'absolute', top: '-20px', right: '-20px', width: '120px', height: '120px', borderRadius: '50%', background: 'rgba(255,255,255,0.08)' }} />
+                                        <div onClick={() => { if (ens.photo_url) setLightboxUrl(`${API_BASE}${ens.photo_url}`); }} style={{ width: '72px', height: '72px', borderRadius: '20px', background: ens.photo_url ? `url(${API_BASE}${ens.photo_url}) center/cover no-repeat` : 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '28px', fontWeight: 800, backdropFilter: 'blur(10px)', border: '2px solid rgba(255,255,255,0.3)', flexShrink: 0, cursor: ens.photo_url ? 'pointer' : 'default' }}>
+                                            {!ens.photo_url && `${ens.prenom[0]}${ens.nom[0]}`}
+                                        </div>
+                                        <div>
+                                            <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 800 }}>{ens.prenom} {ens.nom}</h3>
+                                            <p style={{ margin: '4px 0 0', fontSize: '13px', opacity: 0.85 }}>{ens.specialite || 'Enseignant'}</p>
+                                            <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                                                <span style={{ padding: '3px 10px', borderRadius: '6px', background: 'rgba(255,255,255,0.15)', fontSize: '11px', fontWeight: 600 }}>{ens.matricule}</span>
+                                                <span style={{ padding: '3px 10px', borderRadius: '6px', background: 'rgba(255,255,255,0.15)', fontSize: '11px', fontWeight: 600 }}>{ens.type_contrat}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div style={{ padding: '20px 24px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                                            {[
+                                                { label: 'Téléphone', value: ens.telephone, icon: '📱' },
+                                                { label: 'Email', value: ens.email || '—', icon: '✉️' },
+                                                { label: 'Spécialité', value: ens.specialite || '—', icon: '📚' },
+                                                { label: 'Diplôme', value: ens.diplome || '—', icon: '🎓' },
+                                                { label: 'Type de contrat', value: ens.type_contrat || '—', icon: '📋' },
+                                                { label: 'Date d\'embauche', value: ens.date_embauche ? new Date(ens.date_embauche).toLocaleDateString('fr-FR') : '—', icon: '📅' },
+                                                { label: 'Statut', value: ens.statut, icon: '✅' },
+                                                { label: 'Classes', value: `${stats.nb_classes} classe(s)`, icon: '🏫' },
+                                            ].map((f, i) => (
+                                                <div key={i} style={{ padding: '14px 16px', borderRadius: '12px', background: '#f8fafc', border: '1px solid #f1f5f9' }}>
+                                                    <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>{f.icon} {f.label}</p>
+                                                    <p style={{ margin: '4px 0 0', fontSize: '14px', fontWeight: 600, color: '#1e293b' }}>{f.value}</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Photo Selection */}
+                                <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: '20px' }}>
+                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                                        <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Ma Photo de Profil
+                                        </h4>
+                                        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Envoyez ou modifiez votre photo de profil</p>
+                                    </div>
+                                    <div style={{ padding: '24px', display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                        <div onClick={() => { if (ens.photo_url) setLightboxUrl(`${API_BASE}${ens.photo_url}`); }} style={{ width: '80px', height: '80px', borderRadius: '50%', flexShrink: 0, background: ens.photo_url ? `url(${API_BASE}${ens.photo_url}) center/cover no-repeat` : 'linear-gradient(135deg, #f59e0b, #d97706)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '28px', fontWeight: 800, border: '3px solid #e2e8f0', cursor: ens.photo_url ? 'pointer' : 'default', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
+                                            {!ens.photo_url && `${ens.prenom[0]}${ens.nom[0]}`}
+                                        </div>
+                                        <div style={{ flex: 1 }}>
+                                            <p style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>{ens.prenom} {ens.nom}</p>
+                                            <p style={{ margin: '0 0 12px', fontSize: '12px', color: ens.photo_url ? '#10b981' : '#f59e0b' }}>{ens.photo_url ? '✅ Photo de profil définie' : '⚠️ Aucune photo de profil'}</p>
+                                            <button onClick={() => {
+                                                const input = document.createElement('input');
+                                                input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp';
+                                                input.onchange = async (e: any) => {
+                                                    const file = e.target.files?.[0]; if (!file) return;
+                                                    setPhotoUploading(true);
+                                                    try {
+                                                        const fd = new FormData(); fd.append('fichier', file);
+                                                        await api.post(`/api/photos/upload/enseignant/${ens.enseignant_id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+                                                        setPhotoSuccess('Photo enregistrée avec succès !');
+                                                        setTimeout(() => setPhotoSuccess(null), 4000);
+                                                        const dash = await api.get(`/api/portail-enseignant/${ens.enseignant_id}/dashboard`);
+                                                        if (dash.data?.enseignant?.photo_url) {
+                                                            dash.data.enseignant.photo_url += '?t=' + Date.now();
+                                                        }
+                                                        setData(dash.data);
+                                                    } catch { setPhotoSuccess('Erreur lors de l\'envoi'); }
+                                                    finally { setPhotoUploading(false); }
+                                                };
+                                                input.click();
+                                            }} disabled={photoUploading} style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 700, background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: 'white', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {photoUploading ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>}
+                                                {ens.photo_url ? 'Modifier ma photo' : 'Envoyer ma photo'}
+                                            </button>
+                                            {photoSuccess && <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#10b981', fontWeight: 600 }}>✅ {photoSuccess}</p>}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Password Change Section */}
+                                <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                                        <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <Lock size={18} color="#f59e0b" /> Modifier le mot de passe
+                                        </h4>
+                                        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Sécurisez votre compte en définissant un mot de passe fort</p>
+                                    </div>
+                                    <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                        {passwordMsg && (
+                                            <div style={{ padding: '10px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 600, background: passwordMsg.type === 'success' ? '#f0fdf4' : '#fef2f2', color: passwordMsg.type === 'success' ? '#166534' : '#b91c1c', border: `1px solid ${passwordMsg.type === 'success' ? '#bbf7d0' : '#fecaca'}` }}>
+                                                {passwordMsg.text}
+                                            </div>
+                                        )}
+                                        <div>
+                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔑 Ancien mot de passe</label>
+                                            <input type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} placeholder="Votre ancien mot de passe"
+                                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                                                onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'}
+                                                onBlur={e => e.currentTarget.style.borderColor = '#e2e8f0'} />
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔒 Nouveau mot de passe</label>
+                                            <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Minimum 6 caractères"
+                                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                                                onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'}
+                                                onBlur={e => e.currentTarget.style.borderColor = '#e2e8f0'} />
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔒 Confirmer le mot de passe</label>
+                                            <input type="password" value={confirmNewPassword} onChange={e => setConfirmNewPassword(e.target.value)} placeholder="Retapez le nouveau mot de passe"
+                                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                                                onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'}
+                                                onBlur={e => e.currentTarget.style.borderColor = '#e2e8f0'} />
+                                        </div>
+                                        <button disabled={passwordChanging || !newPassword || newPassword !== confirmNewPassword}
+                                            onClick={async () => {
+                                                if (!data) return;
+                                                if (newPassword.length < 6) { setPasswordMsg({ type: 'error', text: 'Le mot de passe doit avoir au moins 6 caractères.' }); return; }
+                                                if (newPassword !== confirmNewPassword) { setPasswordMsg({ type: 'error', text: 'Les mots de passe ne correspondent pas.' }); return; }
+                                                try {
+                                                    setPasswordChanging(true); setPasswordMsg(null);
+                                                    await api.put(`/api/portail-enseignant/${data.enseignant.enseignant_id}/changer-mot-de-passe`, {
+                                                        ancien_mdp: oldPassword || null,
+                                                        nouveau_mdp: newPassword,
+                                                    });
+                                                    setPasswordMsg({ type: 'success', text: '✅ Mot de passe modifié avec succès !' });
+                                                    setOldPassword(''); setNewPassword(''); setConfirmNewPassword('');
+                                                } catch (err: any) {
+                                                    setPasswordMsg({ type: 'error', text: err.response?.data?.detail || 'Erreur lors du changement.' });
+                                                } finally { setPasswordChanging(false); }
+                                            }}
+                                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '14px', borderRadius: '12px', fontSize: '14px', fontWeight: 700, background: (!newPassword || newPassword !== confirmNewPassword) ? '#e2e8f0' : 'linear-gradient(135deg, #f59e0b, #d97706)', color: (!newPassword || newPassword !== confirmNewPassword) ? '#94a3b8' : 'white', border: 'none', cursor: passwordChanging ? 'not-allowed' : 'pointer', width: '100%' }}>
+                                            {passwordChanging ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Shield size={16} />}
+                                            {passwordChanging ? 'Modification...' : 'Modifier le mot de passe'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+
+                    {/* ═══ CARTE (BADGE) ═══ */}
+                    {activeTab === 'carte' && (
+                        <motion.div key="carte" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '24px' }}>
+                                <div style={{ textAlign: 'center' }}>
+                                    <h2 style={{ fontSize: '24px', fontWeight: 800, color: '#1e293b', margin: '0 0 8px 0' }}>Ma Carte de Pointage</h2>
+                                    <p style={{ color: '#64748b', fontSize: '14px', maxWidth: '400px' }}>
+                                        Présentez cette carte au scanner à votre arrivée et à votre départ. Vous pouvez la télécharger sur votre téléphone.
+                                    </p>
+                                </div>
+                                {data?.enseignant && (
+                                    <BadgeCarte agent={data.enseignant} id="enseignant-badge-view" />
+                                )}
+                                <div style={{ display: 'flex', gap: '16px' }}>
+                                    <button 
+                                        className="btn btn-primary"
+                                        onClick={async () => {
+                                            const element = document.getElementById('enseignant-badge-view');
+                                            if (element) {
+                                                const canvas = await html2canvas(element, { scale: 3, backgroundColor: null });
+                                                const imgData = canvas.toDataURL('image/png');
+                                                const link = document.createElement('a');
+                                                link.href = imgData;
+                                                link.download = `Badge-${data?.enseignant?.matricule}.png`;
+                                                link.click();
+                                            }
+                                        }}
+                                        style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                                    >
+                                        <Download size={18} /> Télécharger Image
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+            </div>
+
+            {/* ─── LIGHTBOX MODAL ─── */}
+            {lightboxUrl && (
+                <div onClick={() => setLightboxUrl(null)}
+                    style={{
+                        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                        background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)',
+                        zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        cursor: 'zoom-out',
+                    }}>
+                    <button onClick={() => setLightboxUrl(null)}
+                        style={{
+                            position: 'absolute', top: '20px', right: '20px',
+                            width: '40px', height: '40px', borderRadius: '50%',
+                            background: 'rgba(255,255,255,0.15)', border: 'none',
+                            cursor: 'pointer', color: 'white', display: 'flex',
+                            alignItems: 'center', justifyContent: 'center',
+                        }}>
+                        <X size={20} />
+                    </button>
+                    <img src={lightboxUrl} alt="Photo" onClick={e => e.stopPropagation()}
+                        style={{
+                            maxWidth: '90vw', maxHeight: '90vh',
+                            borderRadius: '16px', objectFit: 'contain',
+                            boxShadow: '0 25px 50px rgba(0,0,0,0.5)', cursor: 'default',
+                        }} />
+                </div>
+            )}
+
+            {/* ═══ MODAL: CHANGER MOT DE PASSE ═══ */}
+            <AnimatePresence>
+                {showPasswordModal && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1500, padding: '24px' }}
+                        onClick={() => setShowPasswordModal(false)}>
+                        <motion.div initial={{ y: 30, scale: 0.95 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, scale: 0.95 }} transition={{ type: 'spring', damping: 25 }}
+                            style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '420px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }}
+                            onClick={e => e.stopPropagation()}>
+                            {/* Header */}
+                            <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: 'white' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <Key size={18} />
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Changer le mot de passe</h3>
+                                    </div>
+                                    <button onClick={() => setShowPasswordModal(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '8px', width: '30px', height: '30px', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} /></button>
+                                </div>
+                            </div>
+                            {/* Form */}
+                            <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                {passwordMsg && (
+                                    <div style={{ padding: '10px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 600, background: passwordMsg.type === 'success' ? '#f0fdf4' : '#fef2f2', color: passwordMsg.type === 'success' ? '#166534' : '#b91c1c', border: `1px solid ${passwordMsg.type === 'success' ? '#bbf7d0' : '#fecaca'}` }}>
+                                        {passwordMsg.text}
+                                    </div>
+                                )}
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>🔒 Ancien mot de passe</label>
+                                    <div style={{ position: 'relative' }}>
+                                        <Lock size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                                        <input type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} placeholder="Votre mot de passe actuel"
+                                            style={{ width: '100%', padding: '10px 12px 10px 38px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                                            onFocus={e => e.target.style.borderColor = '#f59e0b'} onBlur={e => e.target.style.borderColor = '#e2e8f0'} />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>🔑 Nouveau mot de passe</label>
+                                    <div style={{ position: 'relative' }}>
+                                        <Key size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                                        <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Min. 6 caractères"
+                                            style={{ width: '100%', padding: '10px 12px 10px 38px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                                            onFocus={e => e.target.style.borderColor = '#f59e0b'} onBlur={e => e.target.style.borderColor = '#e2e8f0'} />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>✅ Confirmer le nouveau mot de passe</label>
+                                    <div style={{ position: 'relative' }}>
+                                        <CheckCircle size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: newPassword && confirmNewPassword && newPassword === confirmNewPassword ? '#10b981' : '#94a3b8' }} />
+                                        <input type="password" value={confirmNewPassword} onChange={e => setConfirmNewPassword(e.target.value)} placeholder="Retapez le nouveau mot de passe"
+                                            style={{ width: '100%', padding: '10px 12px 10px 38px', borderRadius: '10px', border: `1.5px solid ${newPassword && confirmNewPassword ? (newPassword === confirmNewPassword ? '#10b981' : '#ef4444') : '#e2e8f0'}`, fontSize: '13px', outline: 'none', boxSizing: 'border-box' }}
+                                            onFocus={e => e.target.style.borderColor = '#f59e0b'} onBlur={e => e.target.style.borderColor = newPassword && confirmNewPassword ? (newPassword === confirmNewPassword ? '#10b981' : '#ef4444') : '#e2e8f0'} />
+                                    </div>
+                                    {newPassword && confirmNewPassword && newPassword !== confirmNewPassword && (
+                                        <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#ef4444', fontWeight: 600 }}>❌ Les mots de passe ne correspondent pas</p>
+                                    )}
+                                </div>
+                            </div>
+                            {/* Footer */}
+                            <div style={{ padding: '16px 24px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button onClick={() => { setShowPasswordModal(false); setOldPassword(''); setNewPassword(''); setConfirmNewPassword(''); setPasswordMsg(null); }}
+                                    style={{ padding: '10px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 600, background: 'white', color: '#64748b', border: '1px solid #e2e8f0', cursor: 'pointer' }}>
+                                    Annuler
+                                </button>
+                                <button disabled={passwordChanging || !newPassword || newPassword !== confirmNewPassword}
+                                    onClick={async () => {
+                                        if (!data) return;
+                                        if (newPassword.length < 6) { setPasswordMsg({ type: 'error', text: 'Le mot de passe doit avoir au moins 6 caractères.' }); return; }
+                                        if (newPassword !== confirmNewPassword) { setPasswordMsg({ type: 'error', text: 'Les mots de passe ne correspondent pas.' }); return; }
+                                        try {
+                                            setPasswordChanging(true); setPasswordMsg(null);
+                                            await api.put(`/api/portail-enseignant/${data.enseignant.enseignant_id}/changer-mot-de-passe`, {
+                                                ancien_mdp: oldPassword || null,
+                                                nouveau_mdp: newPassword,
+                                            });
+                                            setPasswordMsg({ type: 'success', text: '✅ Mot de passe modifié avec succès !' });
+                                            setOldPassword(''); setNewPassword(''); setConfirmNewPassword('');
+                                            setTimeout(() => setShowPasswordModal(false), 1500);
+                                        } catch (err: any) {
+                                            setPasswordMsg({ type: 'error', text: err.response?.data?.detail || 'Erreur lors du changement.' });
+                                        } finally { setPasswordChanging(false); }
+                                    }}
+                                    style={{ padding: '10px 24px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', background: (!newPassword || newPassword !== confirmNewPassword) ? '#e2e8f0' : 'linear-gradient(135deg, #f59e0b, #d97706)', color: (!newPassword || newPassword !== confirmNewPassword) ? '#94a3b8' : 'white', border: 'none', cursor: passwordChanging ? 'not-allowed' : 'pointer' }}>
+                                    {passwordChanging ? <Loader2 size={14} className="animate-spin" /> : <Key size={14} />}
+                                    Modifier
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ═══ TOAST NOTIFICATIONS ═══ */}
+            <AnimatePresence>
+                {toastMsg && (
+                    <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 30 }}
+                        style={{ position: 'fixed', bottom: '24px', right: '24px', padding: '14px 24px', borderRadius: '14px', fontSize: '13px', fontWeight: 600, zIndex: 2000, boxShadow: '0 8px 30px rgba(0,0,0,0.15)', background: toastMsg.type === 'success' ? '#f0fdf4' : '#fef2f2', color: toastMsg.type === 'success' ? '#166534' : '#b91c1c', border: `1px solid ${toastMsg.type === 'success' ? '#bbf7d0' : '#fecaca'}` }}>
+                        {toastMsg.text}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ═══ MODAL: DISPONIBILITÉ FORM ═══ */}
+            <AnimatePresence>
+                {showDispoForm && activeDemande && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1500, padding: '24px' }}
+                        onClick={() => setShowDispoForm(false)}>
+                        <motion.div initial={{ y: 30, scale: 0.95 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, scale: 0.95 }} transition={{ type: 'spring', damping: 25 }}
+                            style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '580px', maxHeight: '80vh', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+                            onClick={e => e.stopPropagation()}>
+                            {/* Header */}
+                            <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #0f766e, #14b8a6)', color: 'white', flexShrink: 0 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <Calendar size={18} />
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Soumettre vos Disponibilités</h3>
+                                    </div>
+                                    <button onClick={() => setShowDispoForm(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '8px', width: '30px', height: '30px', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} /></button>
+                                </div>
+                                <p style={{ margin: '6px 0 0', fontSize: '12px', opacity: 0.85 }}>📩 En réponse à : {activeDemande.sujet}</p>
+                            </div>
+                            {/* Add slot form */}
+                            <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', flexShrink: 0 }}>
+                                <p style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', marginBottom: '10px' }}>Ajouter un créneau :</p>
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                    <div style={{ flex: '1 1 120px' }}>
+                                        <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', display: 'block', marginBottom: '3px' }}>Classe</label>
+                                        <select value={dispoClasse || ''} onChange={e => setDispoClasse(Number(e.target.value))}
+                                            style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', outline: 'none' }}>
+                                            {(data?.affectations || []).map(a => <option key={a.classe_id} value={a.classe_id}>{a.classe}</option>)}
+                                        </select>
+                                    </div>
+                                    <div style={{ flex: '1 1 100px' }}>
+                                        <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', display: 'block', marginBottom: '3px' }}>Jour</label>
+                                        <select value={dispoJour} onChange={e => setDispoJour(e.target.value)}
+                                            style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', outline: 'none' }}>
+                                            {DISPO_JOURS.map(j => <option key={j} value={j}>{DISPO_JOURS_L[j]}</option>)}
+                                        </select>
+                                    </div>
+                                    <div style={{ flex: '1 1 100px' }}>
+                                        <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', display: 'block', marginBottom: '3px' }}>Heure</label>
+                                        <select value={dispoHeure} onChange={e => setDispoHeure(e.target.value)}
+                                            style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', outline: 'none' }}>
+                                            {DISPO_HEURES.map(h => <option key={h.debut} value={h.debut}>{h.debut} - {h.fin}</option>)}
+                                        </select>
+                                    </div>
+                                    <button onClick={addDispoSlot} style={{ padding: '8px 14px', borderRadius: '8px', background: '#0f766e', color: 'white', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}><Plus size={13} /> Ajouter</button>
+                                </div>
+                            </div>
+                            {/* Slots list */}
+                            <div style={{ padding: '16px 24px', overflow: 'auto', flex: 1 }}>
+                                {dispoSlots.length === 0 ? (
+                                    <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '20px' }}>Ajoutez vos créneaux de disponibilité ci-dessus.</p>
+                                ) : (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        <p style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>{dispoSlots.length} créneau(x) ajouté(s) :</p>
+                                        {dispoSlots.map((s, i) => {
+                                            const clsName = (data?.affectations || []).find(a => a.classe_id === s.classe_id)?.classe || '?';
+                                            return (
+                                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: '10px', background: '#f0fdfa', border: '1px solid #ccfbf1', fontSize: '12px' }}>
+                                                    <div style={{ display: 'flex', gap: '12px', fontWeight: 600, color: '#0f766e' }}>
+                                                        <span>📚 {clsName}</span>
+                                                        <span>{DISPO_JOURS_L[s.jour]}</span>
+                                                        <span>{s.heure_debut} - {s.heure_fin}</span>
+                                                    </div>
+                                                    <button onClick={() => removeDispoSlot(i)} style={{ width: '24px', height: '24px', borderRadius: '6px', background: '#fee2e2', color: '#ef4444', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Trash2 size={11} /></button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                            {/* Footer */}
+                            <div style={{ padding: '16px 24px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end', gap: '10px', flexShrink: 0 }}>
+                                <button onClick={() => setShowDispoForm(false)} style={{ padding: '10px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 600, background: 'white', color: '#64748b', border: '1px solid #e2e8f0', cursor: 'pointer' }}>Annuler</button>
+                                <button onClick={submitDispos} disabled={dispoSubmitting || dispoSlots.length === 0} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 24px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, background: dispoSlots.length > 0 ? 'linear-gradient(135deg, #0f766e, #14b8a6)' : '#e2e8f0', color: dispoSlots.length > 0 ? 'white' : '#94a3b8', border: 'none', cursor: dispoSubmitting ? 'not-allowed' : 'pointer' }}>
+                                    {dispoSubmitting ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                                    Envoyer ({dispoSlots.length})
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ═══ MODAL: UPLOAD SUJET EXAMEN ═══ */}
+            <AnimatePresence>
+                {showUploadForm && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1500, padding: '24px' }}
+                        onClick={() => setShowUploadForm(false)}>
+                        <motion.div initial={{ y: 30, scale: 0.95 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, scale: 0.95 }} transition={{ type: 'spring', damping: 25 }}
+                            style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '540px', maxHeight: '85vh', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+                            onClick={e => e.stopPropagation()}>
+                            {/* Header */}
+                            <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #d97706, #f59e0b)', color: 'white', flexShrink: 0 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <FileUp size={18} />
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Déposer un Sujet d&apos;Examen</h3>
+                                    </div>
+                                    <button onClick={() => setShowUploadForm(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '8px', width: '30px', height: '30px', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} /></button>
+                                </div>
+                                {activeExamDemande && <p style={{ margin: '6px 0 0', fontSize: '12px', opacity: 0.85 }}>📩 En réponse à : {activeExamDemande.sujet}</p>}
+                            </div>
+                            {/* Form */}
+                            <div style={{ padding: '24px', overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                {/* Trimestre */}
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>Trimestre *</label>
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        {[1, 2, 3].map(t => (
+                                            <button key={t} type="button" onClick={() => setUploadTrimestre(t)} style={{ flex: 1, padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, background: uploadTrimestre === t ? 'linear-gradient(135deg, #f59e0b, #d97706)' : '#f8fafc', color: uploadTrimestre === t ? 'white' : '#64748b', border: uploadTrimestre === t ? 'none' : '1px solid #e2e8f0', cursor: 'pointer' }}>T{t}</button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {/* Matière */}
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Matière *</label>
+                                    <select value={uploadMatiere || ''} onChange={e => setUploadMatiere(Number(e.target.value))}
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none' }}>
+                                        {(data?.affectations || []).map(a => <option key={a.matiere_id} value={a.matiere_id}>{a.matiere}</option>)}
+                                    </select>
+                                </div>
+                                {/* Titre */}
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Titre du sujet *</label>
+                                    <input value={uploadTitre} onChange={e => setUploadTitre(e.target.value)}
+                                        placeholder="Ex: Devoir de Mathématiques — Chapitre 5"
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                                </div>
+                                {/* Durée */}
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Durée de l&apos;évaluation *</label>
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        {[30, 45, 60, 90, 120, 180].map(d => (
+                                            <button key={d} type="button" onClick={() => setUploadDuree(d)} style={{ padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 600, background: uploadDuree === d ? '#4f46e5' : '#f1f5f9', color: uploadDuree === d ? 'white' : '#64748b', border: 'none', cursor: 'pointer' }}>
+                                                {d < 60 ? `${d}min` : `${d / 60}h`}{d === 90 ? '30' : ''}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {/* File Drop Zone */}
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Fichier du sujet * (PDF, Word)</label>
+                                    <input type="file" ref={fileInputRef} accept=".pdf,.doc,.docx,.xls,.xlsx,.jpg,.png,.webp" style={{ display: 'none' }}
+                                        onChange={e => { if (e.target.files?.[0]) setUploadFile(e.target.files[0]); }} />
+                                    <div onClick={() => fileInputRef.current?.click()}
+                                        style={{ padding: '28px', borderRadius: '14px', border: uploadFile ? '2px solid #10b981' : '2px dashed #cbd5e1', background: uploadFile ? '#f0fdf4' : '#f8fafc', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s' }}>
+                                        {uploadFile ? (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'center' }}>
+                                                <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: '#dcfce7', color: '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileText size={20} /></div>
+                                                <div style={{ textAlign: 'left' }}>
+                                                    <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#166534' }}>{uploadFile.name}</p>
+                                                    <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#16a34a' }}>{formatFileSize(uploadFile.size)} • Cliquez pour changer</p>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <Upload size={28} color="#94a3b8" style={{ margin: '0 auto 8px' }} />
+                                                <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#64748b' }}>Cliquez pour sélectionner un fichier</p>
+                                                <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#94a3b8' }}>PDF, Word, Excel, Image • Max 20 MB</p>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                            {/* Footer */}
+                            <div style={{ padding: '16px 24px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end', gap: '10px', flexShrink: 0 }}>
+                                <button onClick={() => setShowUploadForm(false)} style={{ padding: '10px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 600, background: 'white', color: '#64748b', border: '1px solid #e2e8f0', cursor: 'pointer' }}>Annuler</button>
+                                <button onClick={handleUploadSujet} disabled={uploading || !uploadFile} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 24px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, background: uploadFile ? 'linear-gradient(135deg, #d97706, #f59e0b)' : '#e2e8f0', color: uploadFile ? 'white' : '#94a3b8', border: 'none', cursor: uploading ? 'not-allowed' : 'pointer' }}>
+                                    {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                                    Téléverser
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ═══ LIGHTBOX ═══ */}
+            <AnimatePresence>
+                {lightboxUrl && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={() => setLightboxUrl(null)}
+                        style={{
+                            position: 'fixed', inset: 0, zIndex: 9999,
+                            background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(16px)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            flexDirection: 'column', gap: '16px', padding: '40px',
+                        }}>
+                        <button onClick={() => setLightboxUrl(null)} style={{
+                            position: 'absolute', top: '20px', right: '20px', zIndex: 10,
+                            width: '44px', height: '44px', borderRadius: '50%', border: 'none',
+                            background: 'rgba(255,255,255,0.1)', cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}>
+                            <X size={22} color="white" />
+                        </button>
+                        <motion.img initial={{ scale: 0.85, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                            transition={{ type: 'spring', damping: 20 }}
+                            src={lightboxUrl} alt="Photo"
+                            onClick={e => e.stopPropagation()}
+                            style={{
+                                maxWidth: '90vw', maxHeight: '80vh', objectFit: 'contain',
+                                borderRadius: '16px', boxShadow: '0 30px 80px rgba(0,0,0,0.5)',
+                            }} />
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+        </div>
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPOSANT : DOCUMENTS & PARTAGES
+// ══════════════════════════════════════════════════════════════════════════════
+
+const DOC_TYPES = [
+  { key: 'YOUTUBE', label: 'YouTube',     color: '#ef4444', icon: '▶️' },
+  { key: 'GFORM',   label: 'Google Form', color: '#7c3aed', icon: '📋' },
+  { key: 'GDOC',    label: 'Google Doc',  color: '#2563eb', icon: '📄' },
+  { key: 'PDF',     label: 'PDF',         color: '#dc2626', icon: '📕' },
+  { key: 'LIEN',    label: 'Lien',        color: '#0891b2', icon: '🔗' },
+];
+
+function DocumentsTab({ enseignantId }: { enseignantId?: number }) {
+  const [docs, setDocs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ titre: '', url: '', type: 'DOCUMENT', description: '' });
+
+  const loadDocs = async () => {
+    if (!enseignantId) return;
+    setLoading(true);
+    try {
+      const res = await api.get(`/api/portail-enseignant/${enseignantId}/ressources`);
+      setDocs(res.data.filter((d: any) => d.type !== 'LIEN'));
+    } catch {} finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadDocs(); }, [enseignantId]);
+
+  const addDoc = async () => {
+    if (!form.titre.trim() || !form.url.trim() || !enseignantId) return;
+    try {
+      await api.post(`/api/portail-enseignant/${enseignantId}/ressources`, { ...form, type_ressource: form.type, categorie: 'RESSOURCE' });
+      setForm({ titre: '', url: '', type: 'DOCUMENT', description: '' });
+      setShowForm(false);
+      loadDocs();
+    } catch { alert('Erreur'); }
+  };
+  const removeDoc = async (id: number) => {
+    if (!enseignantId) return;
+    try {
+      await api.delete(`/api/portail-enseignant/${enseignantId}/ressources/${id}`);
+      loadDocs();
+    } catch { alert('Erreur'); }
+  };
+
+  return (
+    <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ maxWidth: '900px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <FileText size={22} color="#d97706" /> Documents &amp; Partages
+          </h2>
+          <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>Partagez des ressources YouTube, Google Forms, PDFs…</p>
+        </div>
+        <button onClick={() => setShowForm(v => !v)}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg,#d97706,#f59e0b)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+          <Plus size={16} /> Ajouter
+        </button>
+      </div>
+
+      <AnimatePresence>
+        {showForm && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            style={{ background: 'white', borderRadius: '14px', border: '1.5px solid #fde68a', padding: '20px', marginBottom: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>Titre *</label>
+                <input value={form.titre} onChange={e => setForm(p => ({ ...p, titre: e.target.value }))} placeholder="Ex: Cours Mathématiques T1"
+                  style={{ width: '100%', marginTop: '6px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', boxSizing: 'border-box' as const }} />
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>Type</label>
+                <select value={form.type} onChange={e => setForm(p => ({ ...p, type: e.target.value }))}
+                  style={{ width: '100%', marginTop: '6px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', background: 'white' }}>
+                  <option value="DOCUMENT">Document</option>
+                  <option value="FORM">Formulaire</option>
+                  <option value="LIEN">Lien</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>URL *</label>
+              <input value={form.url} onChange={e => setForm(p => ({ ...p, url: e.target.value }))} placeholder="https://..."
+                style={{ width: '100%', marginTop: '6px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', boxSizing: 'border-box' as const }} />
+            </div>
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>Description</label>
+              <input value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} placeholder="Facultatif"
+                style={{ width: '100%', marginTop: '6px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', boxSizing: 'border-box' as const }} />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowForm(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1.5px solid #e2e8f0', background: 'white', fontSize: '13px', cursor: 'pointer' }}>Annuler</button>
+              <button onClick={addDoc} disabled={!form.titre.trim() || !form.url.trim()}
+                style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: form.titre.trim() && form.url.trim() ? 'linear-gradient(135deg,#d97706,#f59e0b)' : '#e2e8f0', color: form.titre.trim() && form.url.trim() ? 'white' : '#94a3b8', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                Ajouter
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {loading ? (
+        <div style={{ padding: '40px', textAlign: 'center' }}><Loader2 size={24} style={{ animation: 'spin 1s linear infinite' }} /></div>
+      ) : docs.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px', background: 'white', borderRadius: '16px', border: '1px dashed #e2e8f0', color: '#94a3b8' }}>
+          <FileText size={44} style={{ opacity: 0.3, marginBottom: '12px' }} />
+          <p style={{ margin: 0, fontWeight: 600 }}>Aucun document partagé</p>
+          <p style={{ fontSize: '13px', margin: '4px 0 0' }}>Vidéos YouTube, Google Forms, PDFs…</p>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
+          {docs.map((d: any) => {
+            const tp = DOC_TYPES.find(t => t.key === d.type) || DOC_TYPES[4];
+            return (
+              <motion.div key={d.id} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+                style={{ background: 'white', borderRadius: '14px', border: `1.5px solid ${tp.color}30`, overflow: 'hidden' }}>
+                <div style={{ padding: '4px 14px', background: `${tp.color}15`, fontSize: '10px', fontWeight: 700, color: tp.color, letterSpacing: '1px' }}>
+                  {tp.icon} {tp.label}
+                </div>
+                <div style={{ padding: '14px 16px' }}>
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a', marginBottom: '4px' }}>{d.titre}</div>
+                  {d.description && <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '8px' }}>{d.description}</div>}
+                  <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '10px' }}>{d.date}</div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <a href={d.url} target="_blank" rel="noreferrer"
+                      style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px 12px', borderRadius: '8px', background: `${tp.color}15`, color: tp.color, fontSize: '12px', fontWeight: 700, textDecoration: 'none' }}>
+                      <ExternalLink size={12} /> Ouvrir
+                    </a>
+                    <button onClick={() => removeDoc(d.id)} style={{ padding: '8px 10px', borderRadius: '8px', border: 'none', background: '#fef2f2', color: '#dc2626', cursor: 'pointer' }}>
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPOSANT : LIENS EXTERNES
+// ══════════════════════════════════════════════════════════════════════════════
+
+const LINK_CATS = [
+  { key: 'PEDAGOGIE', label: 'Pédagogie',  color: '#8b5cf6', icon: '🎓' },
+  { key: 'RESSOURCE', label: 'Ressources', color: '#059669', icon: '📚' },
+  { key: 'OUTIL',     label: 'Outils',     color: '#0891b2', icon: '🛠️' },
+  { key: 'AUTRE',     label: 'Autre',      color: '#64748b', icon: '🔗' },
+];
+
+function LiensExternesTab({ enseignantId }: { enseignantId?: number }) {
+  const [liens, setLiens] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ titre: '', url: '', categorie: 'AUTRE', description: '' });
+
+  const loadLiens = async () => {
+    if (!enseignantId) return;
+    setLoading(true);
+    try {
+      const res = await api.get(`/api/portail-enseignant/${enseignantId}/ressources`);
+      setLiens(res.data.filter((d: any) => d.type === 'LIEN'));
+    } catch {} finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadLiens(); }, [enseignantId]);
+
+  const addLien = async () => {
+    if (!form.titre.trim() || !form.url.trim() || !enseignantId) return;
+    try {
+      await api.post(`/api/portail-enseignant/${enseignantId}/ressources`, { ...form, type_ressource: 'LIEN' });
+      setForm({ titre: '', url: '', categorie: 'AUTRE', description: '' });
+      setShowForm(false);
+      loadLiens();
+    } catch { alert('Erreur'); }
+  };
+  const removeLien = async (id: number) => {
+    if (!enseignantId) return;
+    try {
+      await api.delete(`/api/portail-enseignant/${enseignantId}/ressources/${id}`);
+      loadLiens();
+    } catch { alert('Erreur'); }
+  };
+  const grouped = LINK_CATS.map(c => ({ ...c, items: liens.filter((l: any) => l.categorie === c.key) })).filter(g => g.items.length > 0);
+
+  return (
+    <motion.div key="liens" initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ maxWidth: '900px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <ExternalLink size={22} color="#d97706" /> Liens Externes
+          </h2>
+          <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '13px' }}>Vos favoris et ressources en ligne</p>
+        </div>
+        <button onClick={() => setShowForm(v => !v)}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg,#d97706,#f59e0b)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+          <Plus size={16} /> Ajouter
+        </button>
+      </div>
+
+      <AnimatePresence>
+        {showForm && (
+          <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            style={{ background: 'white', borderRadius: '14px', border: '1.5px solid #fde68a', padding: '20px', marginBottom: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>Titre *</label>
+                <input value={form.titre} onChange={e => setForm(p => ({ ...p, titre: e.target.value }))} placeholder="Ex: Khan Academy"
+                  style={{ width: '100%', marginTop: '6px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', boxSizing: 'border-box' as const }} />
+              </div>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>Catégorie</label>
+                <select value={form.categorie} onChange={e => setForm(p => ({ ...p, categorie: e.target.value }))}
+                  style={{ width: '100%', marginTop: '6px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', background: 'white' }}>
+                  {LINK_CATS.map(c => <option key={c.key} value={c.key}>{c.icon} {c.label}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>URL *</label>
+              <input value={form.url} onChange={e => setForm(p => ({ ...p, url: e.target.value }))} placeholder="https://..."
+                style={{ width: '100%', marginTop: '6px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', boxSizing: 'border-box' as const }} />
+            </div>
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>Description</label>
+              <input value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))} placeholder="Facultatif"
+                style={{ width: '100%', marginTop: '6px', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', boxSizing: 'border-box' as const }} />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowForm(false)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1.5px solid #e2e8f0', background: 'white', fontSize: '13px', cursor: 'pointer' }}>Annuler</button>
+              <button onClick={addLien} disabled={!form.titre.trim() || !form.url.trim()}
+                style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: form.titre.trim() && form.url.trim() ? 'linear-gradient(135deg,#d97706,#f59e0b)' : '#e2e8f0', color: form.titre.trim() && form.url.trim() ? 'white' : '#94a3b8', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                Ajouter
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {loading ? (
+        <div style={{ padding: '40px', textAlign: 'center' }}><Loader2 size={24} style={{ animation: 'spin 1s linear infinite' }} /></div>
+      ) : liens.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '60px', background: 'white', borderRadius: '16px', border: '1px dashed #e2e8f0', color: '#94a3b8' }}>
+          <ExternalLink size={44} style={{ opacity: 0.3, marginBottom: '12px' }} />
+          <p style={{ margin: 0, fontWeight: 600 }}>Aucun lien enregistré</p>
+          <p style={{ fontSize: '13px', margin: '4px 0 0' }}>Ajoutez vos sites préférés</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {grouped.map(g => (
+            <div key={g.key}>
+              <div style={{ fontSize: '12px', fontWeight: 700, color: g.color, textTransform: 'uppercase' as const, letterSpacing: '1px', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {g.icon} {g.label}
+                <span style={{ background: `${g.color}15`, color: g.color, borderRadius: '20px', padding: '1px 8px', fontSize: '10px' }}>{g.items.length}</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '12px' }}>
+                {g.items.map((l: any) => (
+                  <motion.div key={l.ressource_id} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                    style={{ background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', padding: '14px 16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                      <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>{l.titre}</div>
+                      <button onClick={() => removeLien(l.ressource_id)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', padding: '2px' }}><X size={14} /></button>
+                    </div>
+                    {l.description && <div style={{ fontSize: '12px', color: '#64748b', marginBottom: '6px' }}>{l.description}</div>}
+                    <a href={l.url} target="_blank" rel="noreferrer"
+                      style={{ fontSize: '11px', color: g.color, textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <ExternalLink size={11} /> {l.url}
+                    </a>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </motion.div>
+  );
+}

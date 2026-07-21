@@ -1,0 +1,84 @@
+# ============================================
+# .gitignore — SMARTSCHOOL ERP
+# ============================================
+
+# Secrets — CRITIQUE (NE JAMAIS POUSSER SUR GITHUB)
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+backend/.env
+secrets/
+
+# Fichiers volumineux
+*.pdf
+
+# AI / Agents
+.agents/
+.gemini/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+backend/venv/
+backend/.venv/
+
+# Base de données locale
+*.db
+*.sqlite3
+smartschool.db
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+.nuxt/
+.output/
+*.tsbuildinfo
+next-env.d.ts
+
+# Build
+dist/
+build/
+
+# Cache
+.cache/
+.turbo/
+.vercel/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Uploads (fichiers utilisateurs, pas dans le repo)
+backend/uploads/photos/eleves/*
+backend/uploads/photos/enseignants/*
+backend/uploads/photos/parents/*
+!backend/uploads/photos/eleves/.gitkeep
+!backend/uploads/photos/enseignants/.gitkeep
+!backend/uploads/photos/parents/.gitkeep
+backend/uploads/etablissements/*
+backend/uploads/devoirs/*
+backend/uploads/sujets/*
+!backend/uploads/etablissements/.gitkeep
+!backend/uploads/devoirs/.gitkeep
+!backend/uploads/sujets/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo

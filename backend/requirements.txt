@@ -1,0 +1,38 @@
+# ============================================
+# SMARTSCHOOL ERP — Dépendances Python
+# ============================================
+
+# Framework API
+fastapi
+uvicorn[standard]
+
+# ORM & Base de données
+sqlalchemy
+pg8000
+alembic
+
+# Validation
+pydantic
+pydantic-settings
+
+# Authentification & Sécurité
+PyJWT
+passlib
+bcrypt==3.2.2
+
+# Environnement
+python-dotenv
+
+# Upload fichiers
+python-multipart
+
+# Rate limiting
+slowapi
+
+# Tests
+pytest
+httpx
+pytest-asyncio
+
+# Generation PDF
+reportlab

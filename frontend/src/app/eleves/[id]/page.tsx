@@ -1,0 +1,390 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useParams } from 'next/navigation';
+import { motion } from 'framer-motion';
+import { ArrowLeft, Phone, Mail, MapPin, Calendar, Activity, BookOpen, Clock, Award, Loader2, MessageSquare, Edit, Droplet, Users, CheckCircle, UserCheck, Scan, X } from 'lucide-react';
+import api from '@/lib/api';
+import Link from 'next/link';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import BadgeCarte from '@/components/BadgeCarte';
+import { QRCodeSVG } from 'qrcode.react';
+import { AnimatePresence } from 'framer-motion';
+
+export default function ProfilEleve() {
+    const { id } = useParams();
+    const [eleve, setEleve] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+    const [badgeEleve, setBadgeEleve] = useState<any>(null);
+    const [qrEleve, setQrEleve] = useState<any>(null);
+
+    useEffect(() => {
+        if (!id) return;
+
+        const fetchEleve = async () => {
+            try {
+                const res = await api.get(`/api/eleves/${id}`);
+                setEleve(res.data);
+            } catch (error) {
+                console.error("Erreur lors du chargement:", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchEleve();
+    }, [id]);
+
+    const calculateAge = (dob: string) => {
+        const birthDate = new Date(dob);
+        const today = new Date();
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const m = today.getMonth() - birthDate.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+            age--;
+        }
+        return age;
+    };
+
+    if (loading) {
+        return (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
+                <Loader2 size={40} className="animate-spin" color="var(--brand-primary)" />
+            </div>
+        );
+    }
+
+    if (!eleve) {
+        return (
+            <div style={{ textAlign: 'center', marginTop: '60px' }}>
+                <h3>Élève non trouvé</h3>
+                <Link href="/eleves" className="btn btn-outline" style={{ marginTop: '16px' }}>Retour à la liste</Link>
+            </div>
+        );
+    }
+
+    const scheduleData = [
+        { heure: '08:00 - 10:00', matiere: 'Mathématiques', prof: 'M. Diallo', salle: 'Salle 101', statut: 'Terminé' },
+        { heure: '10:15 - 12:15', matiere: 'Physique', prof: 'Mme Camara', salle: 'Salle 102', statut: 'En cours' },
+        { heure: '13:00 - 15:00', matiere: 'Français', prof: 'M. Sylla', salle: 'Salle 204', statut: 'À venir' },
+    ];
+
+    const activitiesData = [
+        { date: '10 Mars 2026', type: 'Devoir', titre: 'Exposé d\'Histoire', statut: 'En attente', color: 'warning' },
+        { date: '12 Mars 2026', type: 'Quiz', titre: 'Évaluation Continue - SVT', statut: 'À venir', color: 'info' },
+        { date: '05 Mars 2026', type: 'Réunion', titre: 'Rencontre Parents-Profs', statut: 'Terminé', color: 'success' },
+    ];
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* ─── BADGE MODAL ─── */}
+            <AnimatePresence>
+                {badgeEleve && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        onClick={() => setBadgeEleve(null)}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: 'transparent', padding: '20px', borderRadius: '16px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
+                            <BadgeCarte 
+                                agent={{
+                                    nom: badgeEleve.nom,
+                                    prenom: badgeEleve.prenom,
+                                    matricule: badgeEleve.matricule,
+                                    photo_url: badgeEleve.photo_url,
+                                    role: 'ÉLÈVE',
+                                    classe: badgeEleve.classe?.libelle || badgeEleve.classe_code || undefined,
+                                    date_naissance: badgeEleve.date_naissance,
+                                    adresse: badgeEleve.adresse,
+                                    groupe_sanguin: badgeEleve.groupe_sanguin
+                                }} 
+                                id="admin-badge-view" 
+                            />
+                            <button onClick={() => setBadgeEleve(null)} className="btn btn-outline" style={{ color: 'white', borderColor: 'rgba(255,255,255,0.3)' }}>Fermer</button>
+                        </div>
+                    </motion.div>
+                )}
+                {/* ─── QR CODE MODAL ─── */}
+                {qrEleve && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        onClick={() => setQrEleve(null)}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: 'white', padding: '40px', borderRadius: '24px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '24px', boxShadow: '0 20px 50px rgba(0,0,0,0.3)', position: 'relative' }}>
+                            <button onClick={() => setQrEleve(null)} style={{ position: 'absolute', top: '16px', right: '16px', border: 'none', background: '#f1f5f9', borderRadius: '50%', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                                <X size={20} color="#475569" />
+                            </button>
+                            <div style={{ textAlign: 'center' }}>
+                                <h3 style={{ margin: '0 0 8px 0', fontSize: '20px', fontWeight: 800 }}>Code QR de Pointage</h3>
+                                <p style={{ margin: 0, fontSize: '14px', color: '#64748b' }}>{qrEleve.prenom} {qrEleve.nom} • {qrEleve.matricule}</p>
+                            </div>
+                            <div style={{ padding: '16px', background: 'white', border: '2px dashed #e2e8f0', borderRadius: '16px' }}>
+                                <QRCodeSVG value={qrEleve.matricule} size={240} level={"Q"} />
+                            </div>
+                            <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8', textAlign: 'center', maxWidth: '280px' }}>
+                                Vous pouvez scanner ce code avec l'application de pointage pour valider l'identité de cet élève.
+                            </p>
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Header / Actions */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <Link href="/eleves" className="btn btn-outline btn-sm" style={{ padding: '8px', color: 'var(--text-secondary)' }}>
+                        <ArrowLeft size={18} />
+                    </Link>
+                    <h1 style={{ fontSize: '20px', fontWeight: 800 }}>Dossier de l'Élève</h1>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <button onClick={() => setBadgeEleve(eleve)} className="btn btn-primary btn-sm" style={{ fontSize: '13px', background: '#10b981', borderColor: '#10b981' }}>
+                        <UserCheck size={14} /> Voir la Carte
+                    </button>
+                    <button onClick={() => setQrEleve(eleve)} className="btn btn-outline btn-sm" style={{ fontSize: '13px', color: '#3b82f6', borderColor: '#3b82f6' }}>
+                        <Scan size={14} /> QR Code
+                    </button>
+                    <Link href={`/eleves/modifier/${id}`} className="btn btn-outline btn-sm" style={{ fontSize: '13px' }}>
+                        <Edit size={14} /> Modifier
+                    </Link>
+                    <button className="btn btn-primary btn-sm" style={{ fontSize: '13px' }}>
+                        <MessageSquare size={14} /> Contacter
+                    </button>
+                </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 1fr) 2.2fr', gap: '24px' }}>
+
+                {/* ---------- COLONNE DE GAUCHE (Identité & Infos) ---------- */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+
+                    {/* Carte Entête Profile */}
+                    <motion.div className="card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+                        <div style={{ padding: '32px 24px', textAlign: 'center', borderBottom: '1px solid var(--border-light)', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '80px', background: 'linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-secondary) 100%)', opacity: 0.8, zIndex: 0 }} />
+
+                            <div className="avatar avatar-xxl" style={{ width: '110px', height: '110px', fontSize: '36px', background: '#fff', color: 'var(--brand-primary)', border: '4px solid #fff', margin: '0 auto 16px', position: 'relative', zIndex: 1, boxShadow: '0 8px 20px rgba(0,0,0,0.1)' }}>
+                                {eleve.prenom.charAt(0)}{eleve.nom.charAt(0)}
+                            </div>
+
+                            <h2 style={{ fontSize: '20px', fontWeight: 800, marginBottom: '4px' }}>{eleve.prenom} {eleve.nom}</h2>
+                            <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginBottom: '16px' }}>
+                                Matricule : <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>{eleve.matricule}</code>
+                            </p>
+
+                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', marginBottom: '16px' }}>
+                                <span className={`badge ${eleve.statut === 'ACTIF' ? 'badge-success' : 'badge-danger'}`}>
+                                    {eleve.statut}
+                                </span>
+                                <span className={`badge ${eleve.sexe === 'M' ? 'badge-info' : 'badge-subtle-danger'}`}>
+                                    {eleve.sexe === 'M' ? 'Garçon' : 'Fille'}
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
+                                <div>
+                                    <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Assiduité</p>
+                                    <p style={{ fontWeight: 700, color: '#10b981' }}>95%</p>
+                                </div>
+                                <div>
+                                    <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Performance</p>
+                                    <p style={{ fontWeight: 700, color: '#3b82f6' }}>Excellente</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Infos Personnelles */}
+                        <div style={{ padding: '24px' }}>
+                            <h5 style={{ fontSize: '13px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '16px', fontWeight: 700, letterSpacing: '0.5px' }}>
+                                Informations Personnelles
+                            </h5>
+
+                            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <Calendar size={18} color="var(--text-muted)" />
+                                    <div>
+                                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Date de naissance</p>
+                                        <p style={{ fontWeight: 600, fontSize: '14px' }}>
+                                            {new Date(eleve.date_naissance).toLocaleDateString('fr-FR')}
+                                            <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> ({calculateAge(eleve.date_naissance)} ans)</span>
+                                        </p>
+                                    </div>
+                                </li>
+                                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <MapPin size={18} color="var(--text-muted)" />
+                                    <div>
+                                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Lieu de naissance</p>
+                                        <p style={{ fontWeight: 600, fontSize: '14px' }}>{eleve.lieu_naissance || 'Non renseigné'}</p>
+                                    </div>
+                                </li>
+                                {eleve.groupe_sanguin && (
+                                    <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <Droplet size={18} color="#ef4444" />
+                                        <div>
+                                            <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Groupe Sanguin</p>
+                                            <p style={{ fontWeight: 600, fontSize: '14px', color: '#ef4444' }}>{eleve.groupe_sanguin}</p>
+                                        </div>
+                                    </li>
+                                )}
+                            </ul>
+                        </div>
+
+                        {/* Coordonnées */}
+                        <div style={{ padding: '24px', borderTop: '1px solid var(--border-light)', background: '#f8fafc' }}>
+                            <h5 style={{ fontSize: '13px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '16px', fontWeight: 700, letterSpacing: '0.5px' }}>
+                                Coordonnées & Adresse
+                            </h5>
+
+                            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{ padding: '8px', background: 'white', borderRadius: '8px', border: '1px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                                        <Phone size={16} />
+                                    </div>
+                                    <div>
+                                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Téléphone (Tuteur)</p>
+                                        <p style={{ fontWeight: 600, fontSize: '14px' }}>{eleve.telephone || 'Non renseigné'}</p>
+                                    </div>
+                                </li>
+                                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{ padding: '8px', background: 'white', borderRadius: '8px', border: '1px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                                        <Mail size={16} />
+                                    </div>
+                                    <div>
+                                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Email (Tuteur)</p>
+                                        <p style={{ fontWeight: 600, fontSize: '14px' }}>{eleve.email || 'Non renseigné'}</p>
+                                    </div>
+                                </li>
+                                <li style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{ padding: '8px', background: 'white', borderRadius: '8px', border: '1px solid var(--border-light)', color: 'var(--text-muted)' }}>
+                                        <MapPin size={16} />
+                                    </div>
+                                    <div>
+                                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Adresse</p>
+                                        <p style={{ fontWeight: 600, fontSize: '14px' }}>
+                                            {eleve.quartier ? `${eleve.quartier}, ` : ''} {eleve.ville || 'Adresse non spécifiée'}
+                                        </p>
+                                    </div>
+                                </li>
+                            </ul>
+                        </div>
+                    </motion.div>
+
+                </div>
+
+                {/* ---------- COLONNE DE DROITE (Académique & Activités) ---------- */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+
+                    {/* Stats KPIs (Simulées) */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                        <motion.div className="kpi-card" style={{ padding: '20px' }} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div>
+                                    <p className="kpi-label">Moyenne Générale</p>
+                                    <p className="kpi-value">16.5 <span style={{ fontSize: '14px', color: 'var(--text-muted)' }}>/ 20</span></p>
+                                </div>
+                                <div style={{ background: '#3b82f615', color: '#3b82f6', padding: '10px', borderRadius: '10px' }}>
+                                    <BookOpen size={20} />
+                                </div>
+                            </div>
+                        </motion.div>
+                        <motion.div className="kpi-card" style={{ padding: '20px' }} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div>
+                                    <p className="kpi-label">Devoirs Rendus</p>
+                                    <p className="kpi-value">45</p>
+                                    <p style={{ fontSize: '12px', color: '#10b981', marginTop: '4px' }}>+5 cette semaine</p>
+                                </div>
+                                <div style={{ background: '#10b98115', color: '#10b981', padding: '10px', borderRadius: '10px' }}>
+                                    <CheckCircle size={20} />
+                                </div>
+                            </div>
+                        </motion.div>
+                        <motion.div className="kpi-card" style={{ padding: '20px' }} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div>
+                                    <p className="kpi-label">Points Mérite</p>
+                                    <p className="kpi-value">120<span style={{ fontSize: '14px', color: 'var(--text-muted)' }}> pts</span></p>
+                                </div>
+                                <div style={{ background: '#f59e0b15', color: '#f59e0b', padding: '10px', borderRadius: '10px' }}>
+                                    <Award size={20} />
+                                </div>
+                            </div>
+                        </motion.div>
+                    </div>
+
+                    {/* Emploi du temps (Cours d'aujourd'hui) */}
+                    <motion.div className="card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }}>
+                        <div className="card-header">
+                            <h5>Emploi du temps — Aujourd'hui</h5>
+                            <button className="btn btn-outline btn-sm">Voir tout</button>
+                        </div>
+                        <div className="card-body" style={{ padding: 0 }}>
+                            <table className="sp-table">
+                                <thead>
+                                    <tr>
+                                        <th>Horaire</th>
+                                        <th>Matière</th>
+                                        <th>Enseignant</th>
+                                        <th>Salle</th>
+                                        <th>Statut</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {scheduleData.map((cours, i) => (
+                                        <tr key={i}>
+                                            <td style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                                <Clock size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
+                                                {cours.heure}
+                                            </td>
+                                            <td style={{ fontWeight: 600 }}>{cours.matiere}</td>
+                                            <td><div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <Users size={14} color="var(--text-muted)" /> {cours.prof}
+                                            </div></td>
+                                            <td>{cours.salle}</td>
+                                            <td>
+                                                <span className={`badge ${cours.statut === 'Terminé' ? 'badge-subtle-success' : cours.statut === 'En cours' ? 'badge-primary' : 'badge-subtle-warning'}`}>
+                                                    {cours.statut}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </motion.div>
+
+                    {/* Activités & Événements */}
+                    <motion.div className="card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.7 }}>
+                        <div className="card-header">
+                            <h5>Activités & Évaluations à venir</h5>
+                        </div>
+                        <div className="card-body" style={{ padding: 0 }}>
+                            <table className="sp-table">
+                                <tbody>
+                                    {activitiesData.map((act, i) => (
+                                        <tr key={i}>
+                                            <td style={{ width: '150px' }}>
+                                                <span style={{ fontSize: '13px', color: 'var(--text-secondary)', fontWeight: 600 }}>{act.date}</span>
+                                            </td>
+                                            <td>
+                                                <span className={`badge badge-subtle-${act.color}`} style={{ marginBottom: '4px', display: 'inline-block' }}>
+                                                    {act.type}
+                                                </span>
+                                                <p style={{ fontWeight: 600, fontSize: '14px', margin: 0 }}>{act.titre}</p>
+                                            </td>
+                                            <td style={{ textAlign: 'right' }}>
+                                                <span className={`badge badge-${act.statut === 'Terminé' ? 'success' : act.statut === 'À venir' ? 'info' : 'warning'}`}>
+                                                    {act.statut}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </motion.div>
+
+                </div>
+
+            </div>
+
+        </div>
+    );
+}

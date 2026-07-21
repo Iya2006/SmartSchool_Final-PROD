@@ -1,0 +1,551 @@
+"""
+SMARTSCHOOL API — Routes Élèves (CRUD complet)
+"""
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from typing import List, Optional
+from app.core.database import get_db
+from app.core.security import hash_password
+from datetime import date as date_type
+from app.models.academique import Eleve, Inscription, Classe, Niveau, Parent, EleveParent, Facture, EcheanceFacture, TypeFrais
+from app.schemas.schemas import EleveCreate, EleveUpdate, EleveOut, EleveListOut
+from pydantic import BaseModel
+
+router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
+
+
+@router.get("", response_model=List[EleveListOut])
+def list_eleves(
+    etablissement_id: int = 1,
+    annee_id: int = 1,
+    statut: Optional[str] = None,
+    search: Optional[str] = None,
+    classe_code: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """Liste des élèves avec classe et niveau"""
+    query = db.query(
+        Eleve.eleve_id,
+        Eleve.matricule,
+        Eleve.nom,
+        Eleve.prenom,
+        Eleve.sexe,
+        Eleve.date_naissance,
+        Eleve.statut,
+        Eleve.photo_url,
+        Eleve.adresse,
+        Eleve.groupe_sanguin,
+        Classe.code.label("classe_code"),
+        Niveau.libelle.label("niveau")
+    ).outerjoin(
+        Inscription, (Eleve.eleve_id == Inscription.eleve_id) & 
+                      (Inscription.statut == "ACTIVE") & 
+                      (Inscription.annee_id == annee_id)
+    ).outerjoin(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).outerjoin(
+        Niveau, Classe.niveau_id == Niveau.niveau_id
+    ).filter(
+        Eleve.etablissement_id == etablissement_id
+    )
+
+    if statut:
+        query = query.filter(Eleve.statut == statut)
+    if search:
+        query = query.filter(
+            (Eleve.nom.ilike(f"%{search}%")) |
+            (Eleve.prenom.ilike(f"%{search}%")) |
+            (Eleve.matricule.ilike(f"%{search}%"))
+        )
+    if classe_code:
+        query = query.filter(Classe.code == classe_code)
+
+    results = query.order_by(Eleve.nom, Eleve.prenom).offset(skip).limit(limit).all()
+    return [EleveListOut(
+        eleve_id=r.eleve_id, matricule=r.matricule, nom=r.nom,
+        prenom=r.prenom, sexe=r.sexe, date_naissance=r.date_naissance,
+        statut=r.statut, classe_code=r.classe_code, niveau=r.niveau,
+        photo_url=r.photo_url, adresse=r.adresse, groupe_sanguin=r.groupe_sanguin
+    ) for r in results]
+
+
+@router.get("/count")
+def count_eleves(etablissement_id: int = 1, db: Session = Depends(get_db)):
+    total = db.query(func.count(Eleve.eleve_id)).filter(
+        Eleve.etablissement_id == etablissement_id
+    ).scalar()
+    actifs = db.query(func.count(Eleve.eleve_id)).filter(
+        Eleve.etablissement_id == etablissement_id, Eleve.statut == "ACTIF"
+    ).scalar()
+    return {"total": total, "actifs": actifs, "inactifs": total - actifs}
+
+
+@router.get("/{eleve_id}", response_model=EleveOut)
+def get_eleve(eleve_id: int, db: Session = Depends(get_db)):
+    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    if not eleve:
+        raise HTTPException(status_code=404, detail="Élève non trouvé")
+        
+    # Inject current class
+    inscription = db.query(Inscription).filter(
+        Inscription.eleve_id == eleve_id,
+        Inscription.statut == "ACTIVE"
+    ).first()
+    if inscription:
+        setattr(eleve, "classe_id", inscription.classe_id)
+        
+    return eleve
+
+
+@router.post("", response_model=EleveOut, status_code=201)
+def create_eleve(data: EleveCreate, db: Session = Depends(get_db)):
+    # Génération matricule
+    count = db.query(func.count(Eleve.eleve_id)).scalar() or 0
+    matricule = f"ELV-{count + 1:05d}"
+
+    eleve = Eleve(
+        **data.model_dump(),
+        matricule=matricule
+    )
+    db.add(eleve)
+    db.commit()
+    db.refresh(eleve)
+    return eleve
+
+
+@router.put("/{eleve_id}", response_model=EleveOut)
+def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db)):
+    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    if not eleve:
+        raise HTTPException(status_code=404, detail="Élève non trouvé")
+
+    update_data = data.model_dump(exclude_unset=True)
+    classe_id = update_data.pop("classe_id", None)
+
+    for key, value in update_data.items():
+        setattr(eleve, key, value)
+        
+    if classe_id is not None:
+        current_insc = db.query(Inscription).filter(
+            Inscription.eleve_id == eleve_id,
+            Inscription.statut == "ACTIVE",
+            Inscription.annee_id == 1
+        ).first()
+
+        if current_insc and current_insc.classe_id != classe_id:
+            current_insc.statut = "ANNULEE"
+            old_class = db.query(Classe).filter(Classe.classe_id == current_insc.classe_id).first()
+            if old_class and old_class.effectif_actuel and old_class.effectif_actuel > 0:
+                old_class.effectif_actuel -= 1
+            current_insc = None
+            
+        if not current_insc:
+            new_insc = Inscription(
+                eleve_id=eleve_id,
+                classe_id=classe_id,
+                annee_id=1,
+                statut="ACTIVE"
+            )
+            db.add(new_insc)
+            new_class = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+            if new_class:
+                new_class.effectif_actuel = (new_class.effectif_actuel or 0) + 1
+
+    db.commit()
+    db.refresh(eleve)
+    
+    active_insc = db.query(Inscription).filter(
+        Inscription.eleve_id == eleve_id,
+        Inscription.statut == "ACTIVE"
+    ).first()
+    if active_insc:
+        setattr(eleve, "classe_id", active_insc.classe_id)
+
+    return eleve
+
+
+# ================================================================
+# INSCRIPTION COMPLÈTE : Élève + Parent en une seule opération
+# ================================================================
+class ParentData(BaseModel):
+    nom: str
+    prenom: str
+    sexe: Optional[str] = None
+    telephone_1: str
+    telephone_2: Optional[str] = None
+    email: Optional[str] = None
+    profession: Optional[str] = None
+    adresse: Optional[str] = None
+    quartier: Optional[str] = None
+    lien_parente: str = "PERE"
+    mot_de_passe: Optional[str] = None
+
+class FraisScolaireSelection(BaseModel):
+    type_frais_id: int
+    montant: float
+
+class InscriptionCompleteData(BaseModel):
+    # Élève
+    nom: str
+    prenom: str
+    date_naissance: Optional[str] = None
+    sexe: str = "M"
+    lieu_naissance: Optional[str] = None
+    telephone: Optional[str] = None
+    email: Optional[str] = None
+    statut: str = "ACTIF"
+    etablissement_id: int = 1
+    classe_id: Optional[int] = None
+    eleve_mot_de_passe: Optional[str] = None  # MDP portail élève (optionnel, défaut: smartschool)
+    # Parent
+    parent: Optional[ParentData] = None
+    # Facturation
+    frais_scolaires: Optional[List[FraisScolaireSelection]] = None
+
+
+@router.post("/inscription-complete", status_code=201)
+def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(get_db)):
+    """Inscription complète : crée l'élève, l'inscription et le parent en une seule opération."""
+    try:
+        # 1. Créer l'élève
+        count = db.query(func.count(Eleve.eleve_id)).scalar() or 0
+        matricule = f"ELV-{count + 1:05d}"
+
+        eleve = Eleve(
+            nom=data.nom,
+            prenom=data.prenom,
+            date_naissance=data.date_naissance,
+            sexe=data.sexe,
+            lieu_naissance=data.lieu_naissance,
+            telephone=data.telephone,
+            email=data.email,
+            statut=data.statut,
+            etablissement_id=data.etablissement_id,
+            matricule=matricule,
+            mot_de_passe=hash_password(data.eleve_mot_de_passe) if data.eleve_mot_de_passe else None,
+        )
+        db.add(eleve)
+        db.flush()  # Get eleve_id without committing
+
+        # 2. Créer l'inscription si classe_id fourni
+        inscription = None
+        if data.classe_id:
+            inscription = Inscription(
+                eleve_id=eleve.eleve_id,
+                classe_id=data.classe_id,
+                annee_id=1,
+                statut="ACTIVE",
+            )
+            db.add(inscription)
+            # Update effectif
+            classe = db.query(Classe).filter(Classe.classe_id == data.classe_id).first()
+            if classe:
+                classe.effectif_actuel = (classe.effectif_actuel or 0) + 1
+
+        # 3. Traiter le parent si fourni
+        parent_info = None
+        if data.parent and data.parent.telephone_1:
+            # Vérifier si un parent avec ce téléphone existe déjà
+            existing_parent = db.query(Parent).filter(
+                (Parent.telephone_1 == data.parent.telephone_1)
+            ).first()
+
+            if existing_parent:
+                parent = existing_parent
+                # Mettre à jour le mot de passe si fourni
+                if data.parent.mot_de_passe:
+                    parent.mot_de_passe = hash_password(data.parent.mot_de_passe)
+                # Mettre à jour les infos si elles étaient vides
+                if data.parent.email and not parent.email:
+                    parent.email = data.parent.email
+                if data.parent.profession and not parent.profession:
+                    parent.profession = data.parent.profession
+            else:
+                parent = Parent(
+                    nom=data.parent.nom,
+                    prenom=data.parent.prenom,
+                    sexe=data.parent.sexe,
+                    telephone_1=data.parent.telephone_1,
+                    telephone_2=data.parent.telephone_2,
+                    email=data.parent.email,
+                    profession=data.parent.profession,
+                    adresse=data.parent.adresse,
+                    quartier=data.parent.quartier,
+                    mot_de_passe=hash_password(data.parent.mot_de_passe) if data.parent.mot_de_passe else None,
+                    statut="ACTIF",
+                )
+                db.add(parent)
+                db.flush()
+
+            # 4. Créer le lien Elève-Parent
+            existing_link = db.query(EleveParent).filter(
+                EleveParent.eleve_id == eleve.eleve_id,
+                EleveParent.parent_id == parent.parent_id
+            ).first()
+            if not existing_link:
+                link = EleveParent(
+                    eleve_id=eleve.eleve_id,
+                    parent_id=parent.parent_id,
+                    lien_parente=data.parent.lien_parente,
+                    est_contact_principal="O",
+                    est_responsable_financier="O",
+                )
+                db.add(link)
+
+            parent_info = {
+                "parent_id": parent.parent_id,
+                "nom": parent.nom,
+                "prenom": parent.prenom,
+                "telephone": parent.telephone_1,
+                "is_new": not bool(existing_parent),
+            }
+
+        # 5. Créer les factures initiales (si applicables)
+        factures_generees = 0
+        if inscription and data.frais_scolaires:
+            for frais in data.frais_scolaires:
+                if frais.montant > 0:
+                    # Générer numéro de facture
+                    f_count = db.query(func.count(Facture.facture_id)).scalar() or 0
+                    numero_facture = f"FAC-{f_count + 1:06d}"
+                    
+                    facture = Facture(
+                        inscription_id=inscription.inscription_id,
+                        type_frais_id=frais.type_frais_id,
+                        numero_facture=numero_facture,
+                        montant_total=frais.montant,
+                        montant_remise=0,
+                        montant_net=frais.montant,
+                        montant_paye=0,
+                        montant_restant=frais.montant,
+                        statut="EN_ATTENTE"
+                    )
+                    db.add(facture)
+                    db.flush()
+                    
+                    # Créer une échéance unique par défaut
+                    echeance = EcheanceFacture(
+                        facture_id=facture.facture_id,
+                        libelle="Paiement unique",
+                        date_limite=date_type.today(),
+                        montant_attendu=frais.montant,
+                        montant_paye=0,
+                        statut="EN_ATTENTE"
+                    )
+                    db.add(echeance)
+                    factures_generees += 1
+
+        db.commit()
+        db.refresh(eleve)
+
+        return {
+            "eleve_id": eleve.eleve_id,
+            "matricule": eleve.matricule,
+            "parent_id": parent_info["parent_id"] if parent_info else None,
+            "factures_generees": factures_generees,
+            "eleve": {
+                "eleve_id": eleve.eleve_id,
+                "matricule": eleve.matricule,
+                "nom": eleve.nom,
+                "prenom": eleve.prenom,
+            },
+            "parent": parent_info,
+            "classe_id": data.classe_id,
+            "message": "Inscription complète réussie !"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Erreur lors de l'inscription : {str(e)}")
+
+
+@router.delete("/{eleve_id}")
+def delete_eleve(eleve_id: int, db: Session = Depends(get_db)):
+    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    if not eleve:
+        raise HTTPException(status_code=404, detail="Élève non trouvé")
+    db.delete(eleve)
+    db.commit()
+    return {"message": "Élève supprimé"}
+
+# ════════════════════════════════════════════════════════════
+# GÉNÉRATION PDF — Certificat de Scolarité
+# ════════════════════════════════════════════════════════════
+
+@router.get("/{eleve_id}/certificat-scolarite/pdf")
+def generer_certificat_scolarite_pdf(
+    eleve_id: int,
+    annee_id: int = 1,
+    db: Session = Depends(get_db)
+):
+    """Génère un certificat de scolarité officiel au format PDF."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    from fastapi.responses import StreamingResponse
+    from app.models.academique import Etablissement, AnneeScolaire
+    from app.core.documents_settings import get_documents_settings, dessiner_filigrane, _bool
+    import io
+    from datetime import date
+
+    # ── Charger les données ──
+    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    if not eleve:
+        raise HTTPException(404, "Élève non trouvé")
+
+    inscription = db.query(Inscription).filter(
+        Inscription.eleve_id == eleve_id,
+        Inscription.annee_id == annee_id,
+        Inscription.statut == "ACTIVE"
+    ).first()
+    if not inscription:
+        raise HTTPException(404, "Aucune inscription active pour cette année")
+
+    classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_id).first()
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == classe.etablissement_id
+    ).first()
+
+    settings = get_documents_settings(db, classe.etablissement_id)
+    nom_ecole = etablissement.nom if etablissement else "SmartSchool"
+    directeur = getattr(etablissement, "nom_directeur", "") or "Le Directeur"
+    adresse = getattr(etablissement, "adresse", "") or ""
+    tel = getattr(etablissement, "telephone", "") or ""
+
+    # ── Construire le PDF ──
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    largeur, hauteur = A4
+
+    y = hauteur - 2 * cm
+
+    # === En-tête officiel ===
+    if _bool(settings.get("documents.entete_republique", "true")):
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.setFillColorRGB(0, 0.3, 0.1)
+        pdf.drawCentredString(largeur / 2, y, "RÉPUBLIQUE DE GUINÉE")
+        y -= 0.4 * cm
+        pdf.setFont("Helvetica", 8)
+        pdf.drawCentredString(largeur / 2, y, "Travail — Justice — Solidarité")
+        y -= 0.3 * cm
+        pdf.setFont("Helvetica", 8)
+        pdf.drawCentredString(largeur / 2, y, "Ministère de l'Éducation Nationale")
+        y -= 0.8 * cm
+
+    # Logo placeholder
+    if _bool(settings.get("documents.entete_logo", "true")):
+        pdf.setStrokeColorRGB(0.7, 0.7, 0.7)
+        pdf.rect(2 * cm, y - 1.5 * cm, 2.5 * cm, 2 * cm)
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColorRGB(0.5, 0.5, 0.5)
+        pdf.drawCentredString(3.25 * cm, y - 0.7 * cm, "LOGO")
+
+    # Nom école
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.setFillColorRGB(0, 0.3, 0.1)
+    pdf.drawCentredString(largeur / 2, y, nom_ecole)
+    y -= 0.5 * cm
+    if adresse:
+        pdf.setFont("Helvetica", 9)
+        pdf.setFillColorRGB(0.3, 0.3, 0.3)
+        pdf.drawCentredString(largeur / 2, y, adresse)
+        y -= 0.4 * cm
+    if tel:
+        pdf.setFont("Helvetica", 9)
+        pdf.drawCentredString(largeur / 2, y, f"Tél: {tel}")
+        y -= 0.4 * cm
+
+    # Séparation
+    y -= 0.5 * cm
+    pdf.setLineWidth(2)
+    pdf.setStrokeColorRGB(0, 0.4, 0.15)
+    pdf.line(2 * cm, y, largeur - 2 * cm, y)
+
+    # === Titre ===
+    y -= 2 * cm
+    pdf.setFont("Helvetica-Bold", 22)
+    pdf.setFillColorRGB(0, 0.3, 0.1)
+    pdf.drawCentredString(largeur / 2, y, "CERTIFICAT DE SCOLARITÉ")
+
+    y -= 0.5 * cm
+    pdf.setLineWidth(1)
+    pdf.line(largeur / 2 - 4 * cm, y, largeur / 2 + 4 * cm, y)
+
+    # === Corps du certificat ===
+    y -= 2 * cm
+    pdf.setFont("Helvetica", 12)
+    pdf.setFillColorRGB(0, 0, 0)
+
+    annee_label = annee.libelle if annee else "N/A"
+    sexe_il = "l'élève" 
+    sexe_inscrit = "inscrit(e)"
+
+    texte_lines = [
+        f"Le soussigné, {directeur}, Directeur de l'établissement",
+        f"{nom_ecole},",
+        "",
+        f"certifie que {sexe_il} :",
+        "",
+        f"Nom : {eleve.nom}",
+        f"Prénom(s) : {eleve.prenom}",
+        f"Matricule : {eleve.matricule or 'N/A'}",
+        f"Date de naissance : {eleve.date_naissance or 'N/A'}",
+        "",
+        f"est régulièrement {sexe_inscrit} dans notre établissement",
+        f"en classe de {classe.libelle} pour l'année scolaire {annee_label}.",
+        "",
+        "En foi de quoi, le présent certificat est délivré pour servir",
+        "et valoir ce que de droit.",
+    ]
+
+    for line in texte_lines:
+        pdf.drawCentredString(largeur / 2, y, line)
+        y -= 0.6 * cm
+
+    # === Date et lieu ===
+    y -= 1 * cm
+    ville = getattr(etablissement, "ville", "") or "Conakry"
+    pdf.setFont("Helvetica", 11)
+    pdf.drawRightString(
+        largeur - 2 * cm, y,
+        f"Fait à {ville}, le {date.today().strftime('%d/%m/%Y')}"
+    )
+
+    # === Signature du directeur ===
+    y -= 1.5 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawRightString(largeur - 2 * cm, y, "Le Directeur")
+    y -= 0.3 * cm
+    pdf.setFont("Helvetica", 10)
+    pdf.drawRightString(largeur - 2 * cm, y, directeur)
+    # Ligne de signature
+    pdf.line(largeur - 6 * cm, y - 1.5 * cm, largeur - 2 * cm, y - 1.5 * cm)
+
+    # === Cachet placeholder ===
+    y -= 3 * cm
+    pdf.setStrokeColorRGB(0.7, 0.7, 0.7)
+    pdf.setDash(3, 3)
+    pdf.circle(4 * cm, y, 1.5 * cm)
+    pdf.setDash()
+    pdf.setFont("Helvetica", 7)
+    pdf.setFillColorRGB(0.5, 0.5, 0.5)
+    pdf.drawCentredString(4 * cm, y - 0.1 * cm, "CACHET")
+
+    # === Filigrane ===
+    if _bool(settings.get("documents.filigrane_certificats", "true")):
+        dessiner_filigrane(pdf, largeur, hauteur, settings)
+
+    # === Finaliser ===
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+
+    filename = f"certificat_{eleve.nom}_{eleve.prenom}.pdf".replace(" ", "_")
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )

@@ -1,0 +1,16 @@
+{
+  "include": ["backend"],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    "frontend",
+    "backend/venv",
+    "backend/.pytest_cache"
+  ],
+  "venvPath": "backend",
+  "venv": "venv",
+  "extraPaths": ["backend"],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning"
+}

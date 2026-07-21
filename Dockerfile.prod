@@ -1,0 +1,73 @@
+# Dockerfile.prod — SMART_SCHOOL_FINAL (FastAPI - Production-Ready)
+# Multi-stage, non-root, sécurisé, optimisé pour performance
+
+# ============================================
+# STAGE 1 : Builder — Compiler les dépendances
+# ============================================
+FROM python:3.12-slim as builder
+
+WORKDIR /build
+
+# Installer les outils de build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copier et compiler les dépendances
+COPY backend/requirements.txt .
+RUN pip install --user --no-cache-dir -r requirements.txt
+
+# ============================================
+# STAGE 2 : Runtime — Image minimale optimisée
+# ============================================
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Variables d'environnement
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/home/appuser/.local/bin:$PATH
+
+# Installer les dépendances runtime uniquement
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copier les dépendances compilées depuis le builder
+COPY --from=builder /root/.local /home/appuser/.local
+
+# Créer un utilisateur non-root
+RUN groupadd -r appuser && \
+    useradd -r -g appuser appuser && \
+    mkdir -p /app/logs /app/uploads && \
+    chown -R appuser:appuser /app
+
+# Copier le code application
+COPY --chown=appuser:appuser backend/ .
+
+# Permissions sécurisées
+RUN chmod 755 /app && \
+    chown appuser:appuser /app/logs /app/uploads
+
+# Changer vers l'utilisateur non-root
+USER appuser
+
+# Health check — Endpoint dédicacé recommandé
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8500/health || exit 1
+
+# Port
+EXPOSE 8500
+
+# Commande de démarrage avec Uvicorn + workers pour haute performance
+CMD ["uvicorn", \
+     "main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8500", \
+     "--workers", "4", \
+     "--loop", "uvloop", \
+     "--http", "httptools", \
+     "--access-log"]
