@@ -48,7 +48,12 @@ api.interceptors.response.use(
                              path.startsWith('/portail-enseignant') ||
                              path.startsWith('/portail-eleve');
 
-            if (!isPortal) {
+            if (path.startsWith('/comptabilite')) {
+                sessionStorage.removeItem('comptabilite_auth');
+                localStorage.removeItem('smartschool_token');
+                localStorage.removeItem('smartschool_user');
+                window.location.href = '/comptabilite/login';
+            } else if (!isPortal) {
                 localStorage.removeItem('smartschool_token');
                 localStorage.removeItem('smartschool_user');
                 window.location.href = '/login';

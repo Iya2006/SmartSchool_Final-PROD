@@ -5,7 +5,7 @@ import { useApp } from '@/context/AppContext';
 import { motion } from 'framer-motion';
 import {
     Calendar, Printer, Download, ChevronRight, Loader2,
-    DollarSign, AlertTriangle, FileText, CheckCircle2
+    Banknote, AlertTriangle, FileText, CheckCircle2
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';

@@ -4,60 +4,36 @@ import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { 
-    Book, DollarSign, CreditCard, AlertTriangle, Link2, Search, 
-    ClipboardList, Building, RefreshCw, FileText, LayoutDashboard, 
-    Download, Scale, Calendar, Lock, Smartphone, Settings, LogOut,
-    Menu, ChevronDown, ChevronRight, CheckCircle2
+    Banknote, AlertTriangle, Wallet, LayoutDashboard, 
+    FileText, Users, LogOut, Menu, ChevronDown, ChevronRight
 } from 'lucide-react';
 
 const MODULES = [
-    { id: 'dashboard', label: 'Tableaux de Bord', icon: LayoutDashboard, path: '/comptabilite/dashboard' },
     { 
-        id: 'general', 
-        label: 'Comptabilité Générale', 
-        icon: Book, 
-        path: '/comptabilite/general',
-        subItems: [
-            { id: 'saisie', label: 'Saisie manuelle des écritures', path: '/comptabilite/general?tab=saisie', tab: 'saisie' },
-            { id: 'auto', label: 'Saisie automatique (Facturation)', path: '/comptabilite/general?tab=auto', tab: 'auto' },
-            { id: 'recherche', label: 'Recherche et filtrage', path: '/comptabilite/general?tab=recherche', tab: 'recherche' },
-            { id: 'exercices', label: 'Gestion des exercices', path: '/comptabilite/general?tab=exercices', tab: 'exercices' },
-            { id: 'journaux', label: 'Journaux comptables', path: '/comptabilite/general?tab=journaux', tab: 'journaux' },
-            { id: 'plan', label: 'Plan comptable', path: '/comptabilite/general?tab=plan', tab: 'plan' },
-            { id: 'balance', label: 'Balance générale', path: '/comptabilite/general?tab=balance', tab: 'balance' },
-            { id: 'livre', label: 'Grand livre', path: '/comptabilite/general?tab=livre', tab: 'livre' },
-            { id: 'resultat', label: 'Compte de résultat', path: '/comptabilite/general?tab=resultat', tab: 'resultat' },
-            { id: 'analytique', label: 'Compte de résultat analytique', path: '/comptabilite/general?tab=analytique', tab: 'analytique' },
-            { id: 'balance_comptes', label: 'Balance des comptes', path: '/comptabilite/general?tab=balance_comptes', tab: 'balance_comptes' },
-        ]
+        id: 'encaissement', 
+        label: 'Encaissement Scolarité', 
+        icon: Banknote, 
+        path: '/comptabilite/encaissement',
     },
-    { 
-        id: 'frais', 
-        label: 'Frais Scolaires', 
-        icon: DollarSign, 
-        path: '/comptabilite/frais',
-        subItems: [
-            { id: 'types-frais', label: 'Paramétrage des tarifs', path: '/comptabilite/frais?tab=types', tab: 'types' },
-            { id: 'factures', label: 'Gestion des factures', path: '/comptabilite/frais?tab=factures', tab: 'factures' },
-            { id: 'echeances', label: 'Échéanciers de paiement', path: '/comptabilite/frais?tab=echeances', tab: 'echeances' },
-            { id: 'paiements', label: 'Suivi des encaissements', path: '/comptabilite/frais?tab=paiements', tab: 'paiements' },
-        ]
-    },
-    { id: 'paiements', label: 'Gestion des Paiements', icon: CreditCard, path: '/comptabilite/paiements' },
     { id: 'impayes', label: 'Suivi des Impayés', icon: AlertTriangle, path: '/comptabilite/impayes' },
-    { id: 'auxiliaire', label: 'Comptabilité Auxiliaire', icon: Link2, path: '/comptabilite/auxiliaire' },
-    { id: 'analytique', label: 'Comptabilité Analytique', icon: Search, path: '/comptabilite/analytique' },
-    { id: 'budget', label: 'Comptabilité Budgétaire', icon: ClipboardList, path: '/comptabilite/budget' },
-    { id: 'immobilisations', label: 'Immobilisations', icon: Building, path: '/comptabilite/immobilisations' },
-    { id: 'arretes', label: 'Arrêtés Comptables', icon: RefreshCw, path: '/comptabilite/arretes' },
-    { id: 'lettrage', label: 'Lettrage & Rapprochement', icon: CheckCircle2, path: '/comptabilite/lettrage' },
-    { id: 'caisses', label: 'Gestion des Caisses', icon: FileText, path: '/comptabilite/caisses' },
-    { id: 'exports', label: 'Exportations & Rapports', icon: Download, path: '/comptabilite/exports' },
-    { id: 'fiscal', label: 'Obligations Fiscales', icon: Scale, path: '/comptabilite/fiscal' },
-    { id: 'annees', label: 'Gestion Multi-Année', icon: Calendar, path: '/comptabilite/annees' },
-    { id: 'securite', label: 'Sécurité & Contrôle', icon: Lock, path: '/comptabilite/securite' },
-    { id: 'scolaire', label: 'Spécificités Scolaires', icon: Smartphone, path: '/comptabilite/scolaire' },
-    { id: 'automatisations', label: 'Automatisations', icon: Settings, path: '/comptabilite/automatisations' },
+    { id: 'depenses', label: 'Dépenses', icon: Wallet, path: '/comptabilite/depenses' },
+    { id: 'dashboard', label: 'Tableau de Bord', icon: LayoutDashboard, path: '/comptabilite/dashboard' },
+    { id: 'rapports', label: 'Rapports et Exports', icon: FileText, path: '/comptabilite/rapports' },
+    { 
+        id: 'salaires', 
+        label: 'Salaires et Personnel', 
+        icon: Users, 
+        path: '/comptabilite/salaires',
+        subItems: [
+            { id: 'personnel', label: 'Liste du personnel', path: '/comptabilite/salaires?tab=personnel', tab: 'personnel' },
+            { id: 'paie', label: 'Calcul des salaires', path: '/comptabilite/salaires?tab=paie', tab: 'paie' },
+            { id: 'avances', label: 'Primes & Avances', path: '/comptabilite/salaires?tab=avances', tab: 'avances' },
+            { id: 'sources', label: 'Source des absences', path: '/comptabilite/salaires?tab=sources', tab: 'sources' },
+            { id: 'calendrier', label: 'Calendrier de paie', path: '/comptabilite/salaires?tab=calendrier', tab: 'calendrier' },
+            { id: 'bulletins', label: 'Bulletins de paie', path: '/comptabilite/salaires?tab=bulletins', tab: 'bulletins' },
+            { id: 'historique', label: 'Historique de paie', path: '/comptabilite/salaires?tab=historique', tab: 'historique' },
+        ]
+    },
 ];
 
 function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
@@ -133,7 +109,27 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
                                 }}
                             >
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <Icon size={18} />
+                                    {Icon === Banknote ? (
+                                        <span style={{ 
+                                            fontSize: '9px', 
+                                            fontWeight: '800', 
+                                            backgroundColor: '#10b981', 
+                                            color: '#ffffff', 
+                                            padding: '3px 5px', 
+                                            borderRadius: '4px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            lineHeight: '1',
+                                            width: '24px',
+                                            height: '18px',
+                                            boxSizing: 'border-box'
+                                        }}>
+                                            GNF
+                                        </span>
+                                    ) : (
+                                        <Icon size={18} />
+                                    )}
                                     <span>{mod.label}</span>
                                 </div>
                                 {hasSubItems && (
@@ -181,14 +177,34 @@ export default function ComptabiliteLayout({ children }: { children: React.React
     const pathname = usePathname();
     const [isSidebarOpen, setSidebarOpen] = useState(true);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [comptableInfo, setComptableInfo] = useState<{
+        nom?: string;
+        prenom?: string;
+        etablissement_nom?: string;
+    } | null>(null);
 
     useEffect(() => {
-        // Simple session check for PIN
+        // Simple session check for PIN and token
         const session = sessionStorage.getItem('comptabilite_auth');
-        if (!session && pathname !== '/comptabilite/login') {
+        const token = localStorage.getItem('smartschool_token');
+        if ((!session || !token) && pathname !== '/comptabilite/login') {
+            sessionStorage.removeItem('comptabilite_auth');
+            localStorage.removeItem('smartschool_token');
+            localStorage.removeItem('smartschool_user');
             router.push('/comptabilite/login');
         } else if (session) {
             setIsAuthenticated(true);
+            try {
+                const data = JSON.parse(session);
+                setComptableInfo(data);
+            } catch (e) {
+                // Fallback if session is just string 'true'
+                setComptableInfo({
+                    nom: 'Comptable',
+                    prenom: 'Admin',
+                    etablissement_nom: 'Portail Financier'
+                });
+            }
             if (pathname === '/comptabilite') {
                 router.push('/comptabilite/dashboard');
             }
@@ -242,18 +258,33 @@ export default function ComptabiliteLayout({ children }: { children: React.React
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div style={{ width: '36px', height: '36px', borderRadius: '50%', backgroundColor: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', color: '#475569' }}>
-                                A
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div style={{ 
+                                width: '38px', height: '38px', 
+                                borderRadius: '50%', 
+                                backgroundColor: '#ecfdf5', 
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', 
+                                fontWeight: '700', color: '#059669',
+                                border: '1px solid #d1fae5',
+                                fontSize: '14px'
+                            }}>
+                                {comptableInfo?.prenom?.[0] || 'C'}
                             </div>
-                            <div>
-                                <p style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#0f172a' }}>Admin Comptable</p>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                <p style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#0f172a', lineHeight: '1.2' }}>
+                                    {comptableInfo ? `${comptableInfo.prenom} ${comptableInfo.nom}` : 'Admin Comptable'}
+                                </p>
+                                <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#64748b', fontWeight: '500', lineHeight: '1.1' }}>
+                                    {comptableInfo?.etablissement_nom || 'Portail Financier'}
+                                </p>
                             </div>
                         </div>
                         <button 
                             onClick={() => {
                                 sessionStorage.removeItem('comptabilite_auth');
-                                router.push('/dashboard');
+                                localStorage.removeItem('smartschool_token');
+                                localStorage.removeItem('smartschool_user');
+                                router.push('/comptabilite/login');
                             }}
                             style={{
                                 background: '#fee2e2',
@@ -270,7 +301,7 @@ export default function ComptabiliteLayout({ children }: { children: React.React
                             }}
                         >
                             <LogOut size={16} />
-                            Retour Admin
+                            Se déconnecter
                         </button>
                     </div>
                 </header>
