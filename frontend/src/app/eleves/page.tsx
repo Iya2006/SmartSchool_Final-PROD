@@ -14,7 +14,7 @@ import { useApp } from '@/context/AppContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Search, Plus, Users, UserCheck, UserX, Clock,
-    Loader2, ChevronRight, ChevronLeft, Eye, Edit, Trash2, Camera, X, ArrowLeft
+    Loader2, ChevronRight, ChevronLeft, Eye, Edit, Trash2, Camera, X, ArrowLeft, AlertTriangle
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -24,7 +24,7 @@ import BadgeCarte from '@/components/BadgeCarte';
 // ─── Constantes ─────────────────────────────────────────────────────────────
 const AVATAR_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#ec4899', '#14b8a6', '#f97316'];
 const API_BASE      = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
-const PAGE_SIZE     = 10;
+const PAGE_SIZE     = 8;
 
 // ─── Sous-composant : Avatar élève ───────────────────────────────────────────
 function EleveAvatar({
@@ -261,6 +261,28 @@ export default function ElevesPage() {
                                 />
                             ))}
                         </div>
+
+                        {/* Pagination dans la modal */}
+                        <div className="pagination" style={{ marginTop: 'auto', paddingTop: '20px', display: 'flex', justifyContent: 'center' }}>
+                            <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
+                                <ChevronLeft size={16} />
+                            </button>
+                            {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => {
+                                let page: number;
+                                if (totalPages <= 5)           page = i + 1;
+                                else if (currentPage <= 3)     page = i + 1;
+                                else if (currentPage >= totalPages - 2) page = totalPages - 4 + i;
+                                else                           page = currentPage - 2 + i;
+                                return (
+                                    <button key={page} className={currentPage === page ? 'active' : ''} onClick={() => setCurrentPage(page)}>
+                                        {page}
+                                    </button>
+                                );
+                            })}
+                            <button onClick={() => setCurrentPage(p => Math.max(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0}>
+                                <ChevronRight size={16} />
+                            </button>
+                        </div>
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -290,7 +312,7 @@ export default function ElevesPage() {
                     <button onClick={() => setViewMode('grid')} className="btn btn-outline btn-sm" style={{ color: '#10b981', borderColor: '#10b981' }}>
                         <Users size={16} /> Toutes les Cartes
                     </button>
-                    <Link href="/galerie" className="btn btn-outline btn-sm">📷 Galerie Photos</Link>
+                    <Link href="/galerie" className="btn btn-outline btn-sm"><Camera size={16} /> Galerie Photos</Link>
                     <Link href="/eleves/nouveau" className="btn btn-primary"><Plus size={18} /> Ajouter Élève</Link>
                 </div>
             </div>
@@ -388,8 +410,8 @@ export default function ElevesPage() {
                 <div className="card-body">
                     {/* Message d'erreur */}
                     {error && (
-                        <div style={{ textAlign: 'center', padding: '24px', color: '#ef4444', background: '#fef2f2', borderRadius: '8px' }}>
-                            ⚠️ {error}
+                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '4px', textAlign: 'center', padding: '24px', color: '#ef4444', background: '#fef2f2', borderRadius: '8px' }}>
+                            <AlertTriangle size={14} /> {error}
                         </div>
                     )}
 

@@ -97,9 +97,9 @@ const DEFAULT_THEME: ThemeConfig = {
     seasonalEnabled: false,
     seasonalAutoApply: false,
     seasonalThemesJson: JSON.stringify([
-        { id: "noel", label: "Noël & Fêtes", emoji: "🎄", primary: "#b91c1c", secondary: "#15803d", accent: "#fbbf24", start: "12-15", end: "01-05", description: "Thème festif rouge et vert pour les fêtes de fin d'année" },
-        { id: "independance", label: "Fête Nationale", emoji: "🇬🇳", primary: "#be123c", secondary: "#15803d", accent: "#f59e0b", start: "09-25", end: "10-05", description: "Thème tricolore aux couleurs de la Guinée" },
-        { id: "vacances", label: "Vacances d'Été", emoji: "☀️", primary: "#ea580c", secondary: "#ca8a04", accent: "#06b6d4", start: "07-01", end: "08-31", description: "Thème ensoleillé et rafraîchissant pour l'été" }
+        { id: "noel", label: "Noël & Fêtes", iconName: "TreePine", primary: "#b91c1c", secondary: "#15803d", accent: "#fbbf24", start: "12-15", end: "01-05", description: "Thème festif rouge et vert pour les fêtes de fin d'année" },
+        { id: "independance", label: "Fête Nationale", iconName: "Flag", primary: "#be123c", secondary: "#15803d", accent: "#f59e0b", start: "09-25", end: "10-05", description: "Thème tricolore aux couleurs de la Guinée" },
+        { id: "vacances", label: "Vacances d'Été", iconName: "Sun", primary: "#ea580c", secondary: "#ca8a04", accent: "#06b6d4", start: "07-01", end: "08-31", description: "Thème ensoleillé et rafraîchissant pour l'été" }
     ])
 };
 

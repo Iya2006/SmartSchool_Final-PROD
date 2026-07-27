@@ -9,11 +9,11 @@ import {
     CheckCircle2, AlertCircle, Users, Clock, BookOpen, Wand2, Check, XCircle,
     Mail, MailOpen, Filter, ArrowRight, Zap, FileText, Shield, Award, Download,
     UserPlus, Search, Phone, Inbox, TrendingUp, BarChart3, Radio, Megaphone,
-    Handshake, ClipboardCheck, Wallet, ScrollText, Sparkles, Bell
+    Handshake, ClipboardCheck, Wallet, ScrollText, Sparkles, Bell, Lock, User, Smartphone, School, Edit3, AlertTriangle, GraduationCap
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 interface MessageItem {
     message_id: number; demande_id: number | null;
@@ -64,18 +64,19 @@ const OBJET_ICONS: Record<string, React.ReactNode> = {
     BULLETIN: <ScrollText size={16} />,
 };
 const OBJET_CONFIG: Record<string, { label: string; icon: string; color: string; bg: string; lucide: React.ReactNode }> = {
-    EMPLOI: { label: 'Emploi du Temps', icon: '📅', color: '#0d9488', bg: '#ccfbf1', lucide: <Calendar size={16} /> },
-    DISCIPLINE: { label: 'Discipline', icon: '⚖️', color: '#dc2626', bg: '#fee2e2', lucide: <Shield size={16} /> },
-    GENERAL: { label: 'Général', icon: '📢', color: '#3b82f6', bg: '#dbeafe', lucide: <Megaphone size={16} /> },
-    REUNION: { label: 'Réunion', icon: '🤝', color: '#7c3aed', bg: '#ede9fe', lucide: <Handshake size={16} /> },
-    EXAMENS: { label: 'Examens', icon: '📝', color: '#f59e0b', bg: '#fef3c7', lucide: <ClipboardCheck size={16} /> },
-    PAIEMENT: { label: 'Paiement', icon: '💰', color: '#059669', bg: '#d1fae5', lucide: <Wallet size={16} /> },
-    BULLETIN: { label: 'Bulletin', icon: '📄', color: '#ea580c', bg: '#fff7ed', lucide: <ScrollText size={16} /> },
+    EMPLOI: { label: 'Emploi du Temps', icon: '', color: '#0d9488', bg: '#ccfbf1', lucide: <Calendar size={16} /> },
+    DISCIPLINE: { label: 'Discipline', icon: '', color: '#dc2626', bg: '#fee2e2', lucide: <Shield size={16} /> },
+    GENERAL: { label: 'Général', icon: '', color: '#3b82f6', bg: '#dbeafe', lucide: <Megaphone size={16} /> },
+    REUNION: { label: 'Réunion', icon: '', color: '#7c3aed', bg: '#ede9fe', lucide: <Handshake size={16} /> },
+    EXAMENS: { label: 'Examens', icon: '', color: '#f59e0b', bg: '#fef3c7', lucide: <ClipboardCheck size={16} /> },
+    PAIEMENT: { label: 'Paiement', icon: '', color: '#059669', bg: '#d1fae5', lucide: <Wallet size={16} /> },
+    BULLETIN: { label: 'Bulletin', icon: '', color: '#ea580c', bg: '#fff7ed', lucide: <ScrollText size={16} /> },
 };
 const JOURS_L: Record<string, string> = { LUNDI: 'Lun', MARDI: 'Mar', MERCREDI: 'Mer', JEUDI: 'Jeu', VENDREDI: 'Ven' };
 
 export default function CommunicationAdminPage() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const [tab, setTab] = useState<'messages' | 'demandes' | 'parents'>('demandes');
     const [messages, setMessages] = useState<MessageItem[]>([]);
     const [demandes, setDemandes] = useState<DemandeItem[]>([]);
@@ -102,10 +103,12 @@ export default function CommunicationAdminPage() {
 
     // Parent messaging state
     const [parentsList, setParentsList] = useState<ParentItem[]>([]);
+    const [enseignantsList, setEnseignantsList] = useState<any[]>([]);
+    const [elevesList, setElevesList] = useState<any[]>([]);
     const [parentMessages, setParentMessages] = useState<ParentMsgItem[]>([]);
     const [parentMsgLoading, setParentMsgLoading] = useState(false);
     const [showNewParentMsg, setShowNewParentMsg] = useState(false);
-    const [pmDestType, setPmDestType] = useState<'TOUS_PARENTS'|'CLASSE_PARENTS'|'PARENT'>('TOUS_PARENTS');
+    const [pmDestType, setPmDestType] = useState<'TOUS_PARENTS'|'CLASSE_PARENTS'|'PARENT'|'TOUS_ENSEIGNANTS'|'ENSEIGNANT'|'TOUS_ELEVES'|'CLASSE_ELEVES'|'ELEVE'>('TOUS_PARENTS');
     const [pmDestId, setPmDestId] = useState<number|null>(null);
     const [pmObjet, setPmObjet] = useState('GENERAL');
     const [pmSujet, setPmSujet] = useState('');
@@ -120,18 +123,38 @@ export default function CommunicationAdminPage() {
     const showSuccess = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(null), 3500); };
     const showError = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(null), 4000); };
 
+    const handleDownloadSujet = async (sujetId: number, filename: string) => {
+        try {
+            const res = await api.get(`/api/examens/sujets/${sujetId}/fichier`, { responseType: 'blob' });
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', filename || `sujet_${sujetId}`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch {
+            alert('Erreur lors du téléchargement du fichier.');
+        }
+    };
+
     const loadAll = useCallback(async () => {
         try {
-            const [msgR, demR, clR, parR] = await Promise.all([
+            const [msgR, demR, clR, parR, ensR, elvR] = await Promise.all([
                 api.get('/api/communication/messages?role=ADMIN'),
                 api.get('/api/communication/demandes'),
                 api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
                 api.get('/api/communication/parents-list'),
+                api.get(`/api/enseignants?etablissement_id=${etablissementId}`),
+                api.get(`/api/eleves?etablissement_id=${etablissementId}&annee_id=${anneeId}&limit=500`),
             ]);
             setMessages(msgR.data);
             setDemandes(demR.data);
             setClasses(clR.data);
             setParentsList(parR.data);
+            setEnseignantsList(ensR.data);
+            setElevesList(elvR.data);
         } catch (err) { console.error(err); }
         finally { setLoading(false); }
     }, []);
@@ -158,7 +181,7 @@ export default function CommunicationAdminPage() {
                 sujet: pmSujet,
                 contenu: pmContenu,
             });
-            showSuccess('✅ Message envoyé aux parents !');
+            showSuccess('Message envoyé avec succès !');
             setShowNewParentMsg(false);
             setPmSujet(''); setPmContenu('');
             loadParentMessages();
@@ -167,6 +190,24 @@ export default function CommunicationAdminPage() {
     };
 
     useEffect(() => { loadAll(); }, [loadAll]);
+
+    // Read query params for pre-filled messaging from admin dossiers
+    useEffect(() => {
+        const qTab = searchParams.get('tab');
+        const qDestType = searchParams.get('dest_type');
+        const qDestId = searchParams.get('dest_id');
+        if (qTab === 'parents') {
+            setTab('parents');
+        } else if (qTab === 'messages') {
+            setTab('messages');
+        }
+        // If dest_type and dest_id are provided, pre-fill the message modal
+        if (qDestType && qDestId) {
+            setPmDestType(qDestType as any);
+            setPmDestId(Number(qDestId));
+            setShowNewParentMsg(true);
+        }
+    }, [searchParams]);
 
     const handleCreateDemande = async () => {
         if (!newTitre.trim()) { showError("Le titre est requis."); return; }
@@ -177,7 +218,7 @@ export default function CommunicationAdminPage() {
                 classes_concernees: newClasses,
                 ...(newObjet === 'EXAMENS' ? { trimestre: newTrimestre } : {}),
             });
-            showSuccess("✅ Demande envoyée à tous les enseignants !");
+            showSuccess("Demande envoyée à tous les enseignants !");
             setShowNewDemande(false);
             setNewTitre(''); setNewDesc('');
             loadAll();
@@ -197,7 +238,7 @@ export default function CommunicationAdminPage() {
     const handleValidateSlot = async (dispoId: number) => {
         try {
             await api.put(`/api/communication/disponibilites/${dispoId}/valider`);
-            showSuccess("✅ Créneau validé");
+            showSuccess("Créneau validé");
             if (detailDemande) openDetail(detailDemande.demande_id);
         } catch (err: any) { showError(err.response?.data?.detail || "Conflit détecté"); }
     };
@@ -215,7 +256,7 @@ export default function CommunicationAdminPage() {
     const handleValidateAll = async (demandeId: number) => {
         try {
             const res = await api.put(`/api/communication/disponibilites/valider-tout/${demandeId}`);
-            showSuccess(`✅ ${res.data.validated} validées, ${res.data.conflicts} conflits`);
+            showSuccess(`${res.data.validated} validées, ${res.data.conflicts} conflits`);
             openDetail(demandeId);
             loadAll();
         } catch (err: any) { showError(err.response?.data?.detail || "Erreur"); }
@@ -232,7 +273,7 @@ export default function CommunicationAdminPage() {
         setGenerating(true);
         try {
             const res = await api.post(`/api/communication/demandes/${demandeId}/generer-emplois`);
-            showSuccess(`🪄 ${res.data.total_created} créneaux générés pour ${res.data.classes.length} classes ! Redirection...`);
+            showSuccess(`${res.data.total_created} créneaux générés pour ${res.data.classes.length} classes ! Redirection...`);
             setShowDetail(false);
             setGenerating(false);
             loadAll();
@@ -287,15 +328,26 @@ export default function CommunicationAdminPage() {
                             <p style={{ margin: '6px 0 0', opacity: 0.75, fontSize: '14px', fontWeight: 500 }}>Centre de messagerie, demandes et coordination</p>
                         </div>
                     </div>
-                    <button onClick={() => setShowNewDemande(true)} style={{
-                        display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px', borderRadius: '14px',
-                        fontSize: '13px', fontWeight: 700, background: 'rgba(255,255,255,0.15)', color: 'white',
-                        border: '1px solid rgba(255,255,255,0.25)', cursor: 'pointer', backdropFilter: 'blur(8px)',
-                        transition: 'all 0.2s',
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; e.currentTarget.style.transform = 'translateY(0)'; }}
-                    ><Sparkles size={15} /> Nouvelle Demande</button>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                        <button onClick={() => setShowNewParentMsg(true)} style={{
+                            display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px', borderRadius: '14px',
+                            fontSize: '13px', fontWeight: 700, background: 'rgba(255,255,255,0.25)', color: 'white',
+                            border: '1px solid rgba(255,255,255,0.35)', cursor: 'pointer', backdropFilter: 'blur(8px)',
+                            transition: 'all 0.2s',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.4)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+                        ><Send size={15} /> Nouveau Message</button>
+                        <button onClick={() => setShowNewDemande(true)} style={{
+                            display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 24px', borderRadius: '14px',
+                            fontSize: '13px', fontWeight: 700, background: 'rgba(255,255,255,0.15)', color: 'white',
+                            border: '1px solid rgba(255,255,255,0.25)', cursor: 'pointer', backdropFilter: 'blur(8px)',
+                            transition: 'all 0.2s',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+                        ><Sparkles size={15} /> Nouvelle Demande</button>
+                    </div>
                 </div>
             </motion.div>
 
@@ -436,7 +488,7 @@ export default function CommunicationAdminPage() {
                                         <div style={{ minWidth: 0 }}>
                                             <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{m.sujet}</p>
                                             <p style={{ margin: '2px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
-                                                {isAdmin ? '🔒 Admin' : `👤 ${m.expediteur_nom}`} • {m.date_envoi ? new Date(m.date_envoi).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
+                                                {isAdmin ? <><Lock size={14} style={{display:'inline', verticalAlign:'middle'}}/> Admin</> : <><User size={14} style={{display:'inline', verticalAlign:'middle'}}/> {m.expediteur_nom}</>} • {m.date_envoi ? new Date(m.date_envoi).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
                                             </p>
                                         </div>
                                     </div>
@@ -486,11 +538,7 @@ export default function CommunicationAdminPage() {
                             </div>
                             <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{parentsList.length} parent(s)</span>
                         </div>
-                        <button onClick={() => setShowNewParentMsg(true)} style={{
-                            display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 20px', borderRadius: '12px',
-                            fontSize: '13px', fontWeight: 700, background: 'linear-gradient(135deg, #059669, #10b981)', color: 'white',
-                            border: 'none', cursor: 'pointer', boxShadow: '0 4px 12px rgba(5,150,105,0.3)'
-                        }}><Send size={14} /> Nouveau Message</button>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}>{parentMessages.length} message(s)</span>
                     </div>
 
                     {/* Two columns: Parents list + Messages */}
@@ -541,7 +589,7 @@ export default function CommunicationAdminPage() {
                                     </h4>
                                     {selectedParentFilter && (
                                         <p style={{ margin: '4px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
-                                            📱 {selectedParentFilter.telephone} • {selectedParentFilter.nb_enfants} enfant(s)
+                                            <Smartphone size={14} style={{display:'inline', verticalAlign:'middle'}}/> {selectedParentFilter.telephone} • {selectedParentFilter.nb_enfants} enfant(s)
                                         </p>
                                     )}
                                 </div>
@@ -605,7 +653,7 @@ export default function CommunicationAdminPage() {
                                                     <div style={{ flex: 1, minWidth: 0 }}>
                                                         <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{m.sujet}</p>
                                                         <p style={{ margin: '2px 0 0', fontSize: '10px', color: 'var(--text-muted)' }}>
-                                                            {isFromParent ? `👤 ${m.expediteur_nom} → Admin` : `🔒 Admin → ${m.destinataire_nom}`}
+                                                            {isFromParent ? <><User size={14} style={{display:'inline', verticalAlign:'middle'}}/> {m.expediteur_nom} → Admin</> : <><Lock size={14} style={{display:'inline', verticalAlign:'middle'}}/> Admin → {m.destinataire_nom}</>}
                                                             {' • '}{m.date_envoi ? new Date(m.date_envoi).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
                                                         </p>
                                                     </div>
@@ -627,12 +675,17 @@ export default function CommunicationAdminPage() {
                                                             <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
                                                                 {textContent}
                                                             </p>
-                                                            {hasMeta && meta['entity_id'] && (
+                                                            {(hasMeta && meta['entity_id']) ? (
                                                                 <button onClick={() => window.location.href=`/galerie?search=${encodeURIComponent(meta['target_name'] || '')}&tab=${meta['entity_type'] === 'parent' ? 'parents' : (meta['entity_type'] === 'enseignant' ? 'enseignants' : 'eleves')}&highlight=${meta['entity_id']}`}
                                                                     style={{ marginTop: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: '#e0e7ff', color: '#4f46e5', border: 'none', cursor: 'pointer' }}>
                                                                     <Eye size={14} /> Voir dans la Galerie
                                                                 </button>
-                                                            )}
+                                                            ) : (m.sujet?.includes('📷') || m.sujet?.toLowerCase().includes('photo') || textContent.toLowerCase().includes('photo')) ? (
+                                                                <button onClick={() => window.location.href='/galerie?tab=attente'}
+                                                                    style={{ marginTop: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: '#e0e7ff', color: '#4f46e5', border: 'none', cursor: 'pointer' }}>
+                                                                    <Eye size={14} /> Voir les Photos en Attente dans la Galerie
+                                                                </button>
+                                                            ) : null}
                                                         </div>
                                                     )
                                                 })()}
@@ -646,38 +699,70 @@ export default function CommunicationAdminPage() {
                 </motion.div>
             )}
 
-            {/* ═══════════════ MODAL: SEND MESSAGE TO PARENTS ═══════════════ */}
+            {/* ═══════════════ MODAL: NOUVEAU MESSAGE ═══════════════ */}
             <AnimatePresence>
                 {showNewParentMsg && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                         style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '24px' }}
                         onClick={() => setShowNewParentMsg(false)}>
                         <motion.div initial={{ y: 30, scale: 0.95 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, scale: 0.95 }}
-                            style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '540px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }}
+                            style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '580px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }}
                             onClick={e => e.stopPropagation()}>
-                            <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #059669, #10b981)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Send size={18} /><h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Message aux Parents</h3></div>
+                            <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #4338ca, #6366f1)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Send size={18} /><h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Nouveau Message</h3></div>
                                 <button onClick={() => setShowNewParentMsg(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '8px', width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}><X size={16} /></button>
                             </div>
                             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                 {/* Destinataire */}
                                 <div>
                                     <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Destinataire *</label>
-                                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                    {/* Section Parents */}
+                                    <p style={{ fontSize: '10px', fontWeight: 700, color: '#059669', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 4px' }}>Parents</p>
+                                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
                                         {[
-                                            { key: 'TOUS_PARENTS' as const, label: '👥 Tous les parents' },
-                                            { key: 'CLASSE_PARENTS' as const, label: '🏫 Par classe' },
-                                            { key: 'PARENT' as const, label: '👤 Un parent' },
+                                            { key: 'TOUS_PARENTS' as const, color: '#059669', label: <span style={{display:'inline-flex', alignItems:'center', gap:'4px'}}><Users size={14} /> Tous les parents</span> },
+                                            { key: 'CLASSE_PARENTS' as const, color: '#059669', label: <><School size={14} style={{display:'inline', verticalAlign:'middle'}}/> Parents par classe</> },
+                                            { key: 'PARENT' as const, color: '#059669', label: <><User size={14} style={{display:'inline', verticalAlign:'middle'}}/> Un parent</> },
                                         ].map(d => (
                                             <button key={d.key} onClick={() => { setPmDestType(d.key); setPmDestId(null); }} style={{
-                                                padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 600,
-                                                background: pmDestType === d.key ? '#059669' : '#f1f5f9', color: pmDestType === d.key ? 'white' : '#64748b',
-                                                border: 'none', cursor: 'pointer'
+                                                padding: '7px 12px', borderRadius: '10px', fontSize: '11px', fontWeight: 600,
+                                                background: pmDestType === d.key ? d.color : '#f1f5f9', color: pmDestType === d.key ? 'white' : '#64748b',
+                                                border: 'none', cursor: 'pointer', transition: 'all 0.15s'
+                                            }}>{d.label}</button>
+                                        ))}
+                                    </div>
+                                    {/* Section Enseignants */}
+                                    <p style={{ fontSize: '10px', fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 4px' }}>Enseignants</p>
+                                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                                        {[
+                                            { key: 'TOUS_ENSEIGNANTS' as const, color: '#3b82f6', label: <><Users size={14} style={{display:'inline', verticalAlign:'middle'}}/> Tous les enseignants</> },
+                                            { key: 'CLASSE_ENSEIGNANTS' as const, color: '#3b82f6', label: <><School size={14} style={{display:'inline', verticalAlign:'middle'}}/> Enseignants par classe</> },
+                                            { key: 'ENSEIGNANT' as const, color: '#3b82f6', label: <><User size={14} style={{display:'inline', verticalAlign:'middle'}}/> Un enseignant</> },
+                                        ].map(d => (
+                                            <button key={d.key} onClick={() => { setPmDestType(d.key); setPmDestId(null); }} style={{
+                                                padding: '7px 12px', borderRadius: '10px', fontSize: '11px', fontWeight: 600,
+                                                background: pmDestType === d.key ? d.color : '#f1f5f9', color: pmDestType === d.key ? 'white' : '#64748b',
+                                                border: 'none', cursor: 'pointer', transition: 'all 0.15s'
+                                            }}>{d.label}</button>
+                                        ))}
+                                    </div>
+                                    {/* Section Élèves */}
+                                    <p style={{ fontSize: '10px', fontWeight: 700, color: '#6366f1', textTransform: 'uppercase', letterSpacing: '0.5px', margin: '0 0 4px' }}>Élèves</p>
+                                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                        {[
+                                            { key: 'TOUS_ELEVES' as const, color: '#6366f1', label: <><GraduationCap size={14} style={{display:'inline', verticalAlign:'middle'}}/> Tous les élèves</> },
+                                            { key: 'CLASSE_ELEVES' as const, color: '#6366f1', label: <><School size={14} style={{display:'inline', verticalAlign:'middle'}}/> Élèves par classe</> },
+                                            { key: 'ELEVE' as const, color: '#6366f1', label: <><User size={14} style={{display:'inline', verticalAlign:'middle'}}/> Un élève</> },
+                                        ].map(d => (
+                                            <button key={d.key} onClick={() => { setPmDestType(d.key); setPmDestId(null); }} style={{
+                                                padding: '7px 12px', borderRadius: '10px', fontSize: '11px', fontWeight: 600,
+                                                background: pmDestType === d.key ? d.color : '#f1f5f9', color: pmDestType === d.key ? 'white' : '#64748b',
+                                                border: 'none', cursor: 'pointer', transition: 'all 0.15s'
                                             }}>{d.label}</button>
                                         ))}
                                     </div>
                                 </div>
-                                {pmDestType === 'CLASSE_PARENTS' && (
+                                {(pmDestType === 'CLASSE_PARENTS' || pmDestType === 'CLASSE_ELEVES' || pmDestType === 'CLASSE_ENSEIGNANTS') && (
                                     <select value={pmDestId || ''} onChange={e => setPmDestId(Number(e.target.value) || null)}
                                         style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px' }}>
                                         <option value="">— Choisir une classe —</option>
@@ -689,6 +774,20 @@ export default function CommunicationAdminPage() {
                                         style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px' }}>
                                         <option value="">— Choisir un parent —</option>
                                         {parentsList.map(p => <option key={p.parent_id} value={p.parent_id}>{p.prenom} {p.nom} ({p.enfants.map(e => e.prenom).join(', ')})</option>)}
+                                    </select>
+                                )}
+                                {pmDestType === 'ENSEIGNANT' && (
+                                    <select value={pmDestId || ''} onChange={e => setPmDestId(Number(e.target.value) || null)}
+                                        style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px' }}>
+                                        <option value="">— Choisir un enseignant —</option>
+                                        {enseignantsList.map(ens => <option key={ens.enseignant_id} value={ens.enseignant_id}>{ens.prenom} {ens.nom}</option>)}
+                                    </select>
+                                )}
+                                {pmDestType === 'ELEVE' && (
+                                    <select value={pmDestId || ''} onChange={e => setPmDestId(Number(e.target.value) || null)}
+                                        style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px' }}>
+                                        <option value="">— Choisir un élève —</option>
+                                        {elevesList.map((el: any) => <option key={el.eleve_id} value={el.eleve_id}>{el.prenom} {el.nom} — {el.matricule} ({el.classe_code || 'N/A'})</option>)}
                                     </select>
                                 )}
                                 {/* Type objet */}
@@ -848,7 +947,7 @@ export default function CommunicationAdminPage() {
                                                             <div>
                                                                 <p style={{ margin: 0, fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{ens.prenom} {ens.nom}</p>
                                                                 <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)' }}>
-                                                                    {ens.specialite || 'Enseignant'} • {ens.sujets.length} sujet(s) • {ens.nb_valides} ✅ {ens.nb_envoyes} ⏳ {ens.nb_rejetes} ❌
+                                                                    {ens.specialite || 'Enseignant'} • {ens.sujets.length} sujet(s) • {ens.nb_valides} <CheckCircle2 size={12} color="#16a34a" style={{display:'inline', verticalAlign:'middle'}}/> {ens.nb_envoyes} <Clock size={12} color="#d97706" style={{display:'inline', verticalAlign:'middle'}}/> {ens.nb_rejetes} <XCircle size={12} color="#dc2626" style={{display:'inline', verticalAlign:'middle'}}/>
                                                                 </p>
                                                             </div>
                                                         </div>
@@ -857,27 +956,27 @@ export default function CommunicationAdminPage() {
                                                                 const stColor = s.statut === 'VALIDE' ? '#16a34a' : s.statut === 'REJETE' ? '#dc2626' : s.statut === 'ENVOYE' ? '#d97706' : '#64748b';
                                                                 const stBg = s.statut === 'VALIDE' ? '#f0fdf4' : s.statut === 'REJETE' ? '#fef2f2' : s.statut === 'ENVOYE' ? '#fffbeb' : '#f8fafc';
                                                                 const stBorder = s.statut === 'VALIDE' ? '#bbf7d0' : s.statut === 'REJETE' ? '#fecaca' : s.statut === 'ENVOYE' ? '#fde68a' : '#e2e8f0';
-                                                                const stLabel = s.statut === 'VALIDE' ? '✅ Validé' : s.statut === 'REJETE' ? '❌ Rejeté' : s.statut === 'ENVOYE' ? '⏳ En attente' : '📝 Brouillon';
+                                                                const stLabel = s.statut === 'VALIDE' ? <><CheckCircle2 size={12} style={{display:'inline', verticalAlign:'middle'}}/> Validé</> : s.statut === 'REJETE' ? <><XCircle size={12} style={{display:'inline', verticalAlign:'middle'}}/> Rejeté</> : s.statut === 'ENVOYE' ? <><Clock size={12} style={{display:'inline', verticalAlign:'middle'}}/> En attente</> : <><Edit3 size={12} style={{display:'inline', verticalAlign:'middle'}}/> Brouillon</>;
                                                                 return (
                                                                     <div key={s.sujet_id} style={{
                                                                         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
                                                                         padding: '10px 14px', borderRadius: '10px', background: stBg, border: `1px solid ${stBorder}`, fontSize: '12px'
                                                                     }}>
                                                                         <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flex: 1, minWidth: 0 }}>
-                                                                            <span style={{ fontSize: '16px' }}>📄</span>
+                                                                            <span style={{ fontSize: '16px' }}><FileText size={16} /></span>
                                                                             <div style={{ minWidth: 0 }}>
                                                                                 <p style={{ margin: 0, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.titre}</p>
                                                                                 <p style={{ margin: '2px 0 0', color: 'var(--text-muted)', fontSize: '11px' }}>
-                                                                                    📚 {s.matiere_libelle} • 🕐 {s.duree_minutes} min • {s.fichier_nom}
+                                                                                    <BookOpen size={12} style={{display:'inline', verticalAlign:'middle'}}/> {s.matiere_libelle} • <Clock size={12} style={{display:'inline', verticalAlign:'middle'}}/> {s.duree_minutes} min • {s.fichier_nom}
                                                                                 </p>
                                                                             </div>
                                                                         </div>
                                                                         <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
                                                                             <span style={{ padding: '3px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700, background: stBg, color: stColor, border: `1px solid ${stBorder}` }}>{stLabel}</span>
-                                                                            <a href={`/api/examens/sujets/${s.sujet_id}/fichier`} target="_blank" rel="noreferrer" title="Télécharger"
-                                                                                style={{ width: '26px', height: '26px', borderRadius: '7px', background: 'white', color: 'var(--text-secondary)', border: '1px solid var(--border-light)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}>
+                                                                            <button onClick={() => handleDownloadSujet(s.sujet_id, s.fichier_nom || `sujet_${s.sujet_id}`)} title="Télécharger"
+                                                                                style={{ width: '26px', height: '26px', borderRadius: '7px', background: 'white', color: 'var(--text-secondary)', border: '1px solid var(--border-light)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>
                                                                                 <Download size={12} />
-                                                                            </a>
+                                                                            </button>
                                                                         </div>
                                                                     </div>
                                                                 );
@@ -906,7 +1005,7 @@ export default function CommunicationAdminPage() {
                                                     transition: 'all 0.2s'
                                                 }}>
                                                     {generating ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
-                                                    {generating ? 'Génération en cours...' : confirmGenerate === detailDemande.demande_id ? '⚠️ Confirmer la génération' : '⚡ Générer les Emplois'}
+                                                    {generating ? 'Génération en cours...' : confirmGenerate === detailDemande.demande_id ? <><AlertTriangle size={14} style={{display:'inline', verticalAlign:'middle'}}/> Confirmer la génération</> : <><Wand2 size={14} style={{display:'inline', verticalAlign:'middle'}}/> Générer les Emplois</>}
                                                 </button>
                                                 {confirmGenerate === detailDemande.demande_id && (
                                                     <button onClick={() => setConfirmGenerate(null)} style={{
@@ -927,7 +1026,7 @@ export default function CommunicationAdminPage() {
                                                             </div>
                                                             <div>
                                                                 <p style={{ margin: 0, fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{ens.prenom} {ens.nom}</p>
-                                                                <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)' }}>{ens.specialite || 'Enseignant'} • {ens.slots.length} créneaux • {ens.nb_validees} ✅ {ens.nb_rejetees} ❌</p>
+                                                                <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)' }}>{ens.specialite || 'Enseignant'} • {ens.slots.length} créneaux • {ens.nb_validees} <CheckCircle2 size={12} color="#16a34a" style={{display:'inline', verticalAlign:'middle'}}/> {ens.nb_rejetees} <XCircle size={12} color="#dc2626" style={{display:'inline', verticalAlign:'middle'}}/></p>
                                                             </div>
                                                         </div>
                                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingLeft: '44px' }}>
@@ -942,7 +1041,7 @@ export default function CommunicationAdminPage() {
                                                                         <div style={{ display: 'flex', gap: '12px', alignItems: 'center', color: 'var(--text-primary)', fontWeight: 600 }}>
                                                                             <span style={{ width: '30px' }}>{JOURS_L[s.jour] || s.jour}</span>
                                                                             <span>{s.heure_debut} - {s.heure_fin}</span>
-                                                                            <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>📚 {s.classe_libelle}</span>
+                                                                            <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}><BookOpen size={12} style={{display:'inline', verticalAlign:'middle'}}/> {s.classe_libelle}</span>
                                                                         </div>
                                                                         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                                                                             {s.statut === 'SOUMISE' && (
@@ -951,8 +1050,8 @@ export default function CommunicationAdminPage() {
                                                                                     <button onClick={() => handleRejectSlot(s.disponibilite_id)} title="Rejeter" style={{ width: '26px', height: '26px', borderRadius: '7px', background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><XCircle size={12} /></button>
                                                                                 </>
                                                                             )}
-                                                                            {s.statut === 'VALIDEE' && <span style={{ color: '#16a34a', fontWeight: 700 }}>✅</span>}
-                                                                            {s.statut === 'REJETEE' && <span style={{ color: '#dc2626', fontWeight: 700 }}>❌</span>}
+                                                                            {s.statut === 'VALIDEE' && <span style={{ color: '#16a34a', fontWeight: 700 }}><CheckCircle2 size={14} /></span>}
+                                                                            {s.statut === 'REJETEE' && <span style={{ color: '#dc2626', fontWeight: 700 }}><XCircle size={14} /></span>}
                                                                         </div>
                                                                     </div>
                                                                 );

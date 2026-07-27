@@ -226,9 +226,15 @@ def eleve_dashboard(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Sessi
             })
 
     # Messages non lus
+    filters_non_lus = [
+        (Message.destinataire_type == "ELEVE") & (Message.destinataire_id == eleve_id),
+        Message.destinataire_type == "TOUS"
+    ]
+    if classe_id:
+        filters_non_lus.append((Message.destinataire_type == "CLASSE") & (Message.destinataire_id == classe_id))
+
     nb_messages_non_lus = db.query(Message).filter(
-        Message.destinataire_type == "ELEVE",
-        Message.destinataire_id == eleve_id,
+        or_(*filters_non_lus),
         Message.statut == "ENVOYE"
     ).count()
 
@@ -443,6 +449,40 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depen
 # ================================================================
 # MESSAGES
 # ================================================================
+@router.get("/{eleve_id}/enseignants")
+def get_enseignants_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
+    """Liste les enseignants de la classe de l'élève pour la sélection de destinataire."""
+    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    if not eleve:
+        raise HTTPException(404, "Élève non trouvé")
+
+    insc = db.query(Inscription).filter(Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE").first()
+    if not insc:
+        return []
+
+    affs = db.query(Affectation, Enseignant, Matiere).join(
+        Enseignant, Affectation.enseignant_id == Enseignant.enseignant_id
+    ).join(
+        Matiere, Affectation.matiere_id == Matiere.matiere_id
+    ).filter(
+        Affectation.classe_id == insc.classe_id
+    ).all()
+
+    result = []
+    seen = set()
+    for aff, ens, mat in affs:
+        if ens.enseignant_id not in seen:
+            seen.add(ens.enseignant_id)
+            result.append({
+                "enseignant_id": ens.enseignant_id,
+                "nom": ens.nom,
+                "prenom": ens.prenom,
+                "specialite": ens.specialite or mat.libelle,
+                "matiere": mat.libelle
+            })
+    return result
+
+
 @router.get("/{eleve_id}/messages")
 def get_messages_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
     """Messages reçus et envoyés par l'élève."""
@@ -451,9 +491,14 @@ def get_messages_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Se
         raise HTTPException(404, "Élève non trouvé")
 
     insc = db.query(Inscription).filter(Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE").first()
-    filters = [(Message.destinataire_type == "ELEVE") & (Message.destinataire_id == eleve_id)]
+    filters = [
+        (Message.destinataire_type == "ELEVE") & (Message.destinataire_id == eleve_id),
+        Message.destinataire_type == "TOUS",
+        Message.destinataire_type == "TOUS_ELEVES"
+    ]
     if insc:
         filters.append((Message.destinataire_type == "CLASSE") & (Message.destinataire_id == insc.classe_id))
+        filters.append((Message.destinataire_type == "CLASSE_ELEVES") & (Message.destinataire_id == insc.classe_id))
 
     received = db.query(Message).filter(or_(*filters)).order_by(desc(Message.date_envoi)).limit(50).all()
     sent = db.query(Message).filter(
@@ -462,10 +507,33 @@ def get_messages_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Se
     ).order_by(desc(Message.date_envoi)).limit(20).all()
 
     def fmt(m):
+        exp_nom = "Administration"
+        if m.expediteur_type == "ENSEIGNANT" and m.expediteur_id:
+            ens = db.query(Enseignant).filter(Enseignant.enseignant_id == m.expediteur_id).first()
+            if ens:
+                exp_nom = f"M. / Mme {ens.prenom} {ens.nom}"
+        elif m.expediteur_type == "ELEVE" and m.expediteur_id:
+            el = db.query(Eleve).filter(Eleve.eleve_id == m.expediteur_id).first()
+            if el:
+                exp_nom = f"{el.prenom} {el.nom}"
+
+        dest_nom = "Administration"
+        if m.destinataire_type == "ENSEIGNANT" and m.destinataire_id:
+            ens = db.query(Enseignant).filter(Enseignant.enseignant_id == m.destinataire_id).first()
+            if ens:
+                dest_nom = f"M. / Mme {ens.prenom} {ens.nom}"
+
         return {
-            "message_id": m.message_id, "expediteur_type": m.expediteur_type,
-            "expediteur_id": m.expediteur_id, "destinataire_type": m.destinataire_type,
-            "sujet": m.sujet, "contenu": m.contenu, "statut": m.statut,
+            "message_id": m.message_id,
+            "expediteur_type": m.expediteur_type,
+            "expediteur_id": m.expediteur_id,
+            "expediteur_nom": exp_nom,
+            "destinataire_type": m.destinataire_type,
+            "destinataire_id": m.destinataire_id,
+            "destinataire_nom": dest_nom,
+            "sujet": m.sujet,
+            "contenu": m.contenu,
+            "statut": m.statut,
             "date_envoi": str(m.date_envoi) if m.date_envoi else None,
         }
 
@@ -475,17 +543,23 @@ def get_messages_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Se
 class EleveMessageSend(BaseModel):
     sujet: str
     contenu: str
+    destinataire_type: Optional[str] = "ADMIN"
+    destinataire_id: Optional[int] = None
 
 
 @router.post("/{eleve_id}/messages/envoyer")
 def envoyer_message_eleve(eleve_id: int, data: EleveMessageSend, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
-    """Élève envoie un message à l'administration."""
+    """Élève envoie un message à l'administration ou à un professeur."""
     eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
     if not eleve:
         raise HTTPException(404, "Élève non trouvé")
+
+    dest_type = data.destinataire_type or "ADMIN"
+    dest_id = data.destinataire_id if dest_type == "ENSEIGNANT" else None
+
     msg = Message(
         expediteur_type="ELEVE", expediteur_id=eleve_id,
-        destinataire_type="ADMIN", destinataire_id=None,
+        destinataire_type=dest_type, destinataire_id=dest_id,
         sujet=data.sujet, contenu=data.contenu,
     )
     db.add(msg)

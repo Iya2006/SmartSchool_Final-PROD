@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     ChevronRight, Loader2, CheckCircle2, AlertCircle, X, Plus, Trash2,
     Calendar, Clock, Users, BookOpen, Send, Eye, Printer, Save,
-    Award, Building, UserCheck, ArrowLeft
+    Award, Building, UserCheck, ArrowLeft, ClipboardList, School, DoorOpen, User
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -97,7 +97,7 @@ export default function EmploiExamenPage() {
             const res = await api.post('/api/examens/emploi', {
                 trimestre: newTrimestre, titre: newTitre, date_debut: newDateDebut, date_fin: newDateFin,
             });
-            showSuccess('✅ Emploi des examens créé !');
+            showSuccess('Emploi des examens créé !');
             setShowCreate(false);
             setNewTitre(''); setNewDateDebut(''); setNewDateFin('');
             loadData();
@@ -128,7 +128,7 @@ export default function EmploiExamenPage() {
                 surveillant_id: crSurvType === 'ENSEIGNANT' ? crSurvId : null,
                 surveillant_nom: crSurvType === 'EXTERNE' ? crSurvNom : null,
             });
-            showSuccess('Créneau ajouté ✅');
+            showSuccess('Créneau ajouté');
             setShowAddCreneau(false);
             openDetail(selectedEmploi.emploi_examen_id);
             loadData();
@@ -150,7 +150,7 @@ export default function EmploiExamenPage() {
         try {
             setPublishing(true);
             await api.put(`/api/examens/emploi/${selectedEmploi.emploi_examen_id}/publier`);
-            showSuccess('📋 Emploi publié ! Tous les enseignants ont été notifiés.');
+            showSuccess('Emploi publié ! Tous les enseignants ont été notifiés.');
             openDetail(selectedEmploi.emploi_examen_id);
             loadData();
         } catch (err: any) { showError(err.response?.data?.detail || 'Erreur'); }
@@ -242,11 +242,11 @@ export default function EmploiExamenPage() {
                                         padding: '3px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700,
                                         background: e.statut === 'PUBLIE' ? '#dcfce7' : '#f1f5f9',
                                         color: e.statut === 'PUBLIE' ? '#16a34a' : '#64748b',
-                                    }}>{e.statut === 'PUBLIE' ? '✅ Publié' : '📝 Brouillon'}</span>
+                                    }}>{e.statut === 'PUBLIE' ? 'Publié' : 'Brouillon'}</span>
                                 </div>
                                 <div style={{ display: 'flex', gap: '14px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                                    <span>📅 T{e.trimestre}</span>
-                                    <span>📋 {e.nb_creneaux} créneaux</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Calendar size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> T{e.trimestre}</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><ClipboardList size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {e.nb_creneaux} créneaux</span>
                                     <span>{e.date_debut} → {e.date_fin}</span>
                                 </div>
                             </motion.div>
@@ -301,7 +301,7 @@ export default function EmploiExamenPage() {
                                         <div key={date}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
                                                 <div style={{ padding: '6px 14px', borderRadius: '10px', background: '#f5f3ff', color: '#7c3aed', fontWeight: 700, fontSize: '13px' }}>
-                                                    📅 {new Date(date).toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long' })}
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {new Date(date).toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long' })}</span>
                                                 </div>
                                                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{slots.length} épreuve(s)</span>
                                             </div>
@@ -317,9 +317,9 @@ export default function EmploiExamenPage() {
                                                         <div style={{ flex: 1, minWidth: 0 }}>
                                                             <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{c.matiere_libelle}</p>
                                                             <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', flexWrap: 'wrap' }}>
-                                                                <span>🏫 {c.classe_libelle}</span>
-                                                                {c.salle && <span>🚪 {c.salle}</span>}
-                                                                <span>👤 {c.surveillant_nom || '—'} ({c.surveillant_type === 'EXTERNE' ? 'Ext.' : 'Ens.'})</span>
+                                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><School size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {c.classe_libelle}</span>
+                                                                {c.salle && <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><DoorOpen size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {c.salle}</span>}
+                                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><User size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {c.surveillant_nom || '—'} ({c.surveillant_type === 'EXTERNE' ? 'Ext.' : 'Ens.'})</span>
                                                             </div>
                                                         </div>
                                                         {selectedEmploi.statut === 'BROUILLON' && (
@@ -462,12 +462,12 @@ export default function EmploiExamenPage() {
                                             flex: 1, padding: '9px', borderRadius: '10px', fontSize: '12px', fontWeight: 600,
                                             background: crSurvType === 'ENSEIGNANT' ? '#4f46e5' : '#f1f5f9', color: crSurvType === 'ENSEIGNANT' ? 'white' : '#64748b',
                                             border: 'none', cursor: 'pointer'
-                                        }}>👨‍🏫 Enseignant</button>
+                                        }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><UserCheck size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Enseignant</span></button>
                                         <button onClick={() => setCrSurvType('EXTERNE')} style={{
                                             flex: 1, padding: '9px', borderRadius: '10px', fontSize: '12px', fontWeight: 600,
                                             background: crSurvType === 'EXTERNE' ? '#4f46e5' : '#f1f5f9', color: crSurvType === 'EXTERNE' ? 'white' : '#64748b',
                                             border: 'none', cursor: 'pointer'
-                                        }}>👤 Externe</button>
+                                        }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><User size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Externe</span></button>
                                     </div>
                                     {crSurvType === 'ENSEIGNANT' ? (
                                         <select value={crSurvId || ''} onChange={e => setCrSurvId(Number(e.target.value))}

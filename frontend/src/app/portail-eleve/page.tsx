@@ -21,6 +21,8 @@ import EleveDevoirs from './components/EleveDevoirs';
 import EleveRessources from './components/EleveRessources';
 import EleveProfil from './components/EleveProfil';
 import EleveScolarite from './components/EleveScolarite';
+import EleveEvenements from './components/EleveEvenements';
+import EleveActivites from './components/EleveActivites';
 
 // Hook & types
 import { useEleveData } from './hooks/useEleveData';
@@ -281,6 +283,14 @@ export default function PortailEleve() {
                                         loading={ressourcesLoading}
                                         couleurPortail={couleurPortail}
                                     />
+                                )}
+
+                                {activeTab === 'evenements' && (
+                                    <EleveEvenements couleurPortail={couleurPortail} />
+                                )}
+
+                                {activeTab === 'activites' && (
+                                    <EleveActivites couleurPortail={couleurPortail} />
                                 )}
 
                                 {activeTab === 'profil' && eleveId && (

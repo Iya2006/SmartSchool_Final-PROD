@@ -145,6 +145,90 @@ class PersonnelOut(OrmBase, PersonnelBase):
 
 
 # ============================================================================
+# BIBLIOTHÈQUE SCOLAIRE
+# ============================================================================
+class OuvrageBase(BaseModel):
+    etablissement_id: int = 1
+    isbn: Optional[str] = None
+    code_interne: str
+    titre: str
+    auteur: Optional[str] = None
+    editeur: Optional[str] = None
+    annee_publication: Optional[int] = None
+    categorie: Optional[str] = None
+    sous_categorie: Optional[str] = None
+    langue: Optional[str] = "FRANCAIS"
+    niveau_cible: Optional[str] = None
+    matiere_associee: Optional[str] = None
+    resume: Optional[str] = None
+    couverture_url: Optional[str] = None
+    emplacement: Optional[str] = None
+    statut: Optional[str] = "DISPONIBLE"
+
+class OuvrageCreate(OuvrageBase):
+    nb_exemplaires_initial: int = 1
+
+class OuvrageUpdate(BaseModel):
+    isbn: Optional[str] = None
+    code_interne: Optional[str] = None
+    titre: Optional[str] = None
+    auteur: Optional[str] = None
+    editeur: Optional[str] = None
+    annee_publication: Optional[int] = None
+    categorie: Optional[str] = None
+    sous_categorie: Optional[str] = None
+    langue: Optional[str] = None
+    niveau_cible: Optional[str] = None
+    matiere_associee: Optional[str] = None
+    resume: Optional[str] = None
+    couverture_url: Optional[str] = None
+    emplacement: Optional[str] = None
+    statut: Optional[str] = None
+
+class OuvrageOut(OrmBase, OuvrageBase):
+    ouvrage_id: int
+    nb_exemplaires: int = 0
+    nb_disponibles: int = 0
+    created_date: Optional[datetime] = None
+
+class ExemplaireCreate(BaseModel):
+    ouvrage_id: int
+    code_exemplaire: Optional[str] = None
+    etat: str = "BON"
+    statut: str = "DISPONIBLE"
+    date_acquisition: Optional[date] = None
+    observation: Optional[str] = None
+
+class ExemplaireOut(OrmBase):
+    exemplaire_id: int
+    ouvrage_id: int
+    code_exemplaire: str
+    etat: str = "BON"
+    statut: str = "DISPONIBLE"
+    date_acquisition: Optional[date] = None
+    observation: Optional[str] = None
+    created_date: Optional[datetime] = None
+
+class EmpruntCreate(BaseModel):
+    exemplaire_id: int
+    eleve_id: Optional[int] = None
+    enseignant_id: Optional[int] = None
+    date_retour_prevue: date
+    observation: Optional[str] = None
+
+class EmpruntOut(OrmBase, EmpruntCreate):
+    emprunt_id: int
+    date_emprunt: Optional[date] = None
+    date_retour_effective: Optional[date] = None
+    nb_jours_retard: int = 0
+    nb_renouvellements: int = 0
+    etat_retour: Optional[str] = None
+    statut: str = "EN_COURS"
+    rappel_envoye: str = "N"
+    date_rappel: Optional[date] = None
+
+
+# ============================================================================
 # ANNÉES SCOLAIRES
 # ============================================================================
 class AnneeScolaireBase(BaseModel):
@@ -157,8 +241,41 @@ class AnneeScolaireBase(BaseModel):
     est_courante: str = "N"
 
 class AnneeScolaireCreate(AnneeScolaireBase): pass
+
+class AnneeScolaireUpdate(BaseModel):
+    code: Optional[str] = None
+    libelle: Optional[str] = None
+    date_debut: Optional[date] = None
+    date_fin: Optional[date] = None
+    statut: Optional[str] = None
+    est_courante: Optional[str] = None
+
 class AnneeScolaireOut(OrmBase, AnneeScolaireBase):
     annee_id: int
+
+
+class TrimestreBase(BaseModel):
+    annee_id: int
+    code: str
+    libelle: str
+    numero: int
+    date_debut: date
+    date_fin: date
+    statut: str = "PLANIFIE"
+
+class TrimestreCreate(TrimestreBase):
+    pass
+
+class TrimestreUpdate(BaseModel):
+    code: Optional[str] = None
+    libelle: Optional[str] = None
+    numero: Optional[int] = None
+    date_debut: Optional[date] = None
+    date_fin: Optional[date] = None
+    statut: Optional[str] = None
+
+class TrimestreOut(OrmBase, TrimestreBase):
+    trimestre_id: int
 
 
 # ============================================================================
@@ -539,6 +656,7 @@ class PedagogieStats(BaseModel):
     conflits_edt_ia: int = 0
     bulletins_generes: int = 0
     taux_reussite_global: float = 0
+    taux_reussite_par_cycle: List[dict] = []
 
 class CommunicationStats(BaseModel):
     sms_relances_envoyes: int = 0
@@ -553,3 +671,6 @@ class DashboardResponse(BaseModel):
     inscriptions_par_classe: List[dict] = []
     paiements_recents: List[dict] = []
     impayes_en_attente: List[dict] = []
+    evenements_a_venir: List[dict] = []
+    activites_du_jour: List[dict] = []
+

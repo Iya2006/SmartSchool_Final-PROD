@@ -24,6 +24,8 @@ type TabId = typeof TABS[number]['id'];
 
 // ─── Interfaces ─────────────────────────────────────────────────────────────
 interface ParametreSetting {
+    etablissement_id: number;
+    categorie: string;
     cle: string;
     valeur: string;
     type_valeur: 'BOOLEAN' | 'NUMBER' | 'TEXT' | 'JSON';
@@ -33,7 +35,6 @@ interface DocumentsSettings {
     template_bulletin: 'classique' | 'moderne' | 'officiel_gn' | 'minimaliste';
     entete_logo: boolean;
     entete_slogan: boolean;
-    entete_republique: boolean;
     champ_rang: boolean;
     champ_moyenne_classe: boolean;
     champ_min_max: boolean;
@@ -60,7 +61,6 @@ const DEFAULT_SETTINGS: DocumentsSettings = {
     template_bulletin: 'classique',
     entete_logo: true,
     entete_slogan: true,
-    entete_republique: true,
     champ_rang: true,
     champ_moyenne_classe: true,
     champ_min_max: true,
@@ -100,6 +100,8 @@ function parseSettings(list: ParametreSetting[]): Partial<DocumentsSettings> {
 
 function buildParam(key: string, value: any, type: 'BOOLEAN' | 'NUMBER' | 'TEXT' | 'JSON'): ParametreSetting {
     return {
+        etablissement_id: 1,
+        categorie: 'DOCUMENTS',
         cle: `documents.${key}`,
         valeur: type === 'JSON' ? JSON.stringify(value) : String(value),
         type_valeur: type
@@ -172,7 +174,6 @@ export default function DocumentsPage() {
                 buildParam('template_bulletin', settings.template_bulletin, 'TEXT'),
                 buildParam('entete_logo', settings.entete_logo, 'BOOLEAN'),
                 buildParam('entete_slogan', settings.entete_slogan, 'BOOLEAN'),
-                buildParam('entete_republique', settings.entete_republique, 'BOOLEAN'),
                 buildParam('champ_rang', settings.champ_rang, 'BOOLEAN'),
                 buildParam('champ_moyenne_classe', settings.champ_moyenne_classe, 'BOOLEAN'),
                 buildParam('champ_min_max', settings.champ_min_max, 'BOOLEAN'),
@@ -357,13 +358,6 @@ export default function DocumentsPage() {
                             checked={settings.entete_slogan}
                             onChange={(v: boolean) => update('entete_slogan', v)}
                             icon={FileText}
-                        />
-                        <ToggleItem
-                            label="Mention 'République de Guinée'"
-                            desc="Affiche la devise nationale en haut à droite des documents officiels."
-                            checked={settings.entete_republique}
-                            onChange={(v: boolean) => update('entete_republique', v)}
-                            icon={ShieldAlert}
                         />
                     </motion.div>
                 )}

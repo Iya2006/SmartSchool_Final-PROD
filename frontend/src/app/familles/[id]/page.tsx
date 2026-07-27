@@ -6,7 +6,7 @@ import {
     ArrowLeft, Phone, Mail, Briefcase, GraduationCap, Clock,
     CheckCircle, Loader2, Edit3, Camera, User, MapPin, Shield,
     Heart, Hash, Save, X, KeyRound, Lock, Users, Calendar,
-    ChevronRight, Eye, Star, TrendingUp, Award, BookOpen
+    ChevronRight, Eye, Star, TrendingUp, Award, BookOpen, MessageSquare
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -181,14 +181,14 @@ export default function ProfilParent() {
                                     background: parent.sexe === 'M' ? '#dbeafe' : '#fce7f3',
                                     color: parent.sexe === 'M' ? '#2563eb' : '#db2777',
                                     border: `1px solid ${parent.sexe === 'M' ? '#93c5fd' : '#f9a8d4'}`,
-                                }}>{parent.sexe === 'M' ? '♂ Père' : '♀ Mère'}</span>
+                                }}>{parent.sexe === 'M' ? 'Père' : 'Mère'}</span>
                             )}
                             <span style={{
                                 padding: '5px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 700,
                                 background: parent.has_password ? '#d1fae5' : '#fee2e2',
                                 color: parent.has_password ? '#065f46' : '#dc2626',
                                 border: `1px solid ${parent.has_password ? '#6ee7b7' : '#fecaca'}`,
-                            }}>{parent.has_password ? '🔒 Compte actif' : '⚠ MdP non configuré'}</span>
+                            }}>{parent.has_password ? 'Compte actif' : 'MdP non configuré'}</span>
                             <span style={{
                                 padding: '5px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 700,
                                 background: parent.statut === 'ACTIF' ? '#d1fae5' : '#fee2e2',
@@ -200,8 +200,8 @@ export default function ProfilParent() {
 
                     {/* Quick actions */}
                     <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
-                        <Link href="/communication" className="btn btn-primary btn-sm" style={{ borderRadius: '10px', fontSize: '13px', textDecoration: 'none' }}>
-                            💬 Message
+                        <Link href={`/communication?tab=parents&dest_type=PARENT&dest_id=${parent.parent_id}&dest_nom=${encodeURIComponent(parent.nom + ' ' + parent.prenom)}`} className="btn btn-primary btn-sm" style={{ borderRadius: '10px', fontSize: '13px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <MessageSquare size={14} /> Message
                         </Link>
                         <button onClick={openEdit} className="btn btn-outline btn-sm" style={{ borderRadius: '10px', fontSize: '13px' }}>
                             <Edit3 size={14} /> Modifier
@@ -486,7 +486,7 @@ export default function ProfilParent() {
                                             <KeyRound size={16} color="#f59e0b" />
                                             <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>Sécurité du compte</span>
                                             <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', fontWeight: 700, background: parent.has_password ? '#d1fae5' : '#fee2e2', color: parent.has_password ? '#065f46' : '#dc2626' }}>
-                                                {parent.has_password ? '✓ Configuré' : '⚠ Non configuré'}
+                                                {parent.has_password ? 'Configuré' : 'Non configuré'}
                                             </span>
                                         </div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

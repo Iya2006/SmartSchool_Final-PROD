@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Hash, Award, BookOpen, ToggleRight, Save, CheckCircle,
     Loader2, TrendingUp, Eye, Pencil, Check, ClipboardList,
-    Plus, Trash2, RotateCcw
+    Plus, Trash2, RotateCcw, Settings, Type as TypeIcon, Microscope, Info, BarChart3, GraduationCap, CheckCircle2, AlertTriangle, Zap, Trophy, Medal, MessageSquare, Users
 } from 'lucide-react';
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
@@ -14,7 +14,7 @@ import styles from './Notation.module.css';
 // ─── Constantes cycles ─────────────────────────────────────────────────────
 const CYCLES = [
     {
-        key: 'primaire', label: 'Primaire', emoji: '📚',
+        key: 'primaire', label: 'Primaire', emoji: '',
         classes: '1ère → 6ème Année',
         cardClass: styles.cardPrimaire,
         tabClass: `${styles.mentionCycleTab} ${styles.mentionCycleTabPrimaire}`,
@@ -23,7 +23,7 @@ const CYCLES = [
         color: '#f59e0b', defaultNoteSur: 10, defaultPassage: 5,
     },
     {
-        key: 'college', label: 'Collège', emoji: '🏫',
+        key: 'college', label: 'Collège', emoji: '',
         classes: '7ème → 10ème Année',
         cardClass: styles.cardCollege,
         tabClass: `${styles.mentionCycleTab} ${styles.mentionCycleTabCollege}`,
@@ -32,7 +32,7 @@ const CYCLES = [
         color: '#3b82f6', defaultNoteSur: 20, defaultPassage: 10,
     },
     {
-        key: 'lycee', label: 'Lycée', emoji: '🎓',
+        key: 'lycee', label: 'Lycée', emoji: '',
         classes: '11ème → Terminale',
         cardClass: styles.cardLycee,
         tabClass: `${styles.mentionCycleTab} ${styles.mentionCycleTabLycee}`,
@@ -593,7 +593,7 @@ export default function NotationPage() {
 
                             {/* Cycle details subtitle */}
                             <div style={{ marginTop: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem 1rem', background: 'var(--brand-primary-light, #eff6ff)', borderRadius: '10px', border: '1px solid var(--brand-primary, #3b82f6)' }}>
-                                <span style={{ fontSize: '1.2rem' }}>⚙️</span>
+                                <span style={{ fontSize: '1.2rem', display: 'inline-flex', alignItems: 'center' }}><Settings size={18} /></span>
                                 <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--brand-primary, #2563eb)' }}>
                                     Configuration avancée pour le cycle : {CYCLES.find(c => c.key === baremeCycle)?.label}
                                 </span>
@@ -603,7 +603,7 @@ export default function NotationPage() {
                             <div style={{ marginTop: '1rem', padding: '1.25rem', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                        <span style={{ fontSize: '1.3rem' }}>🔤</span>
+                                        <span style={{ fontSize: '1.3rem', display: 'inline-flex', alignItems: 'center' }}><TypeIcon size={20} /></span>
                                         <div>
                                             <span style={{ fontWeight: 700, color: '#1e293b', fontSize: '0.95rem' }}>Système de Notation par Lettres ({CYCLES.find(c => c.key === baremeCycle)?.label})</span>
                                             <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '2px' }}>Affiche A+/A/B/C/D/F en plus de la note numérique</div>
@@ -766,7 +766,7 @@ export default function NotationPage() {
 
                                 {/* Right: live preview */}
                                 <div className={styles.previewCard}>
-                                    <div className={styles.previewTitle}>⚡ Aperçu en direct — {CYCLES.find(c=>c.key===mentionCycle)?.label}</div>
+                                    <div className={styles.previewTitle} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Zap size={14} /> Aperçu en direct — {CYCLES.find(c=>c.key===mentionCycle)?.label}</div>
                                     {Array.from({ length: 8 }, (_, i) => {
                                         const noteSur = baremes[mentionCycle] || 20;
                                         const note = Math.round((noteSur / 7) * (7 - i) * 10) / 10;
@@ -808,7 +808,7 @@ export default function NotationPage() {
                             {/* Cycle filter */}
                             <div className={styles.coefCycleFilter}>
                                 {[
-                                    { key: 'all', label: '🌍 Tous les cycles', class: styles.filterBtnAll },
+                                    { key: 'all', label: 'Tous les cycles', class: styles.filterBtnAll },
                                     ...CYCLES.map(c => ({ key: c.key, label: `${c.emoji} ${c.label}`, class: styles[`filterBtn${c.label.charAt(0).toUpperCase()}${c.label.slice(1)}`] })),
                                 ].map(f => (
                                     <button key={f.key}
@@ -835,7 +835,7 @@ export default function NotationPage() {
                                 >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '0.85rem' }}>
                                         <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#7c3aed', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                                            🎓 Configurer par série :
+                                            <GraduationCap size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Configurer par série :
                                         </span>
                                     </div>
                                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -859,7 +859,7 @@ export default function NotationPage() {
                                                     boxShadow: lyceeSerie === s.key ? `0 4px 14px ${s.color}40` : 'none',
                                                 }}
                                             >
-                                                <span>{s.key === 'all' ? '⚙️' : `🔬`} {s.label}</span>
+                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>{s.key === 'all' ? <Settings size={14} /> : <Microscope size={14} />} {s.label}</span>
                                                 <span style={{ fontSize: '0.7rem', opacity: 0.75, fontWeight: 500 }}>{s.desc}</span>
                                             </button>
                                         ))}
@@ -867,7 +867,7 @@ export default function NotationPage() {
 
                                     {lyceeSerie !== 'all' && seriesData[lyceeSerie] && (
                                         <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'rgba(255,255,255,0.6)', borderRadius: '10px', fontSize: '0.78rem', color: '#5b21b6' }}>
-                                            ℹ️ Les coefficients ci-dessous s'appliquent aux classes <strong>
+                                            <Info size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Les coefficients ci-dessous s'appliquent aux classes <strong>
                                                 {lyceeSerie === 'SM' ? '11SM, 12SM, Terminale SM' : lyceeSerie === 'SE' ? '11SE, 12SE, Terminale SE' : '11SS, 12SS, Terminale SS'}
                                             </strong> uniquement. Ils remplacent les valeurs par défaut pour cette série.
                                         </div>
@@ -892,7 +892,7 @@ export default function NotationPage() {
                                             display: 'flex', alignItems: 'center', gap: '10px',
                                             fontSize: '0.82rem', color: '#5b21b6'
                                         }}>
-                                            <span style={{ fontSize: '1.1rem' }}>📊</span>
+                                            <span style={{ fontSize: '1.1rem', display: 'inline-flex', alignItems: 'center' }}><BarChart3 size={20} /></span>
                                             <div>
                                                 <strong>Vue comparative des 3 séries du Lycée</strong><br/>
                                                 <span style={{ opacity: 0.8 }}>Cliquez sur une série (SM / SE / SS) ci-dessus pour modifier ses coefficients</span>
@@ -914,7 +914,7 @@ export default function NotationPage() {
                                                 const labels: Record<string, string> = { SM: 'Sc. Math.', SE: 'Sc. Exp.', SS: 'Sc. Soc.' };
                                                 return (
                                                     <div key={s} style={{ padding: '0.75rem 1rem', background: colors[s], color: 'white', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center' }}>
-                                                        <div style={{ fontSize: '0.88rem' }}>🎓 {s}</div>
+                                                        <div style={{ fontSize: '0.88rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><GraduationCap size={14} /> {s}</div>
                                                         <div style={{ fontSize: '0.68rem', opacity: 0.85, marginTop: '2px' }}>{labels[s]} · {seriesData[s]?.classes_count ?? 0} classe(s)</div>
                                                     </div>
                                                 );
@@ -1172,7 +1172,7 @@ export default function NotationPage() {
                                     <div style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem', borderRadius: '12px', background: isValid ? '#f0fdf4' : '#fef2f2', border: `1px solid ${isValid ? '#bbf7d0' : '#fecaca'}` }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                                             <span style={{ fontWeight: 700, fontSize: '0.88rem', color: isValid ? '#166534' : '#991b1b' }}>
-                                                {isValid ? '✅ Pondération valide' : '⚠️ La somme des poids doit être égale à 100%'}
+                                                {isValid ? <><CheckCircle2 size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Pondération valide</> : <><AlertTriangle size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> La somme des poids doit être égale à 100%</>}
                                             </span>
                                             <span style={{ fontWeight: 800, fontSize: '1rem', color: isValid ? '#166534' : '#991b1b' }}>{total.toFixed(1)}%</span>
                                         </div>
@@ -1249,7 +1249,7 @@ export default function NotationPage() {
                             {/* Add new type */}
                             {showNewTypeForm ? (
                                 <div style={{ marginTop: '1rem', padding: '1.25rem', borderRadius: '12px', border: '2px dashed var(--brand-primary, #3b82f6)', background: 'var(--brand-primary-light, #eff6ff)' }}>
-                                    <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '1rem', fontSize: '0.9rem' }}>➕ Nouveau type d&apos;évaluation</div>
+                                    <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '1rem', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '4px' }}><Plus size={16} /> Nouveau type d&apos;évaluation</div>
                                     <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 100px auto', gap: '0.75rem', alignItems: 'end' }}>
                                         <div>
                                             <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '0.25rem' }}>Code</label>
@@ -1314,16 +1314,20 @@ export default function NotationPage() {
                             </div>
                             <div className={styles.toggleSection}>
                                 {[
-                                    { key:'rang',          icon:'🏆', color:'#f59e0b', bg:'#fef3c7', label:'Classement (Rang)',           desc:"Affiche la position de l'élève dans sa classe (ex: 3ème / 42)." },
-                                    { key:'mention',       icon:'🎖️', color:'#3b82f6', bg:'#dbeafe', label:'Mention',                     desc:'Affiche la mention obtenue (TRÈS BIEN, BIEN, ASSEZ BIEN…).' },
-                                    { key:'appreciation',  icon:'💬', color:'#10b981', bg:'#d1fae5', label:'Appréciation par matière',     desc:'Génère une appréciation automatique pour chaque matière (Passable, Bien…).' },
-                                    { key:'effectif',      icon:'👥', color:'#8b5cf6', bg:'#ede9fe', label:"Effectif de la classe",        desc:"Affiche le nombre total d'élèves dans la classe sur le bulletin." },
-                                    { key:'stats_matiere', icon:'📊', color:'#ec4899', bg:'#fce7f3', label:'Stats de classe par matière',  desc:'Affiche la moyenne de classe, le min et le max pour chaque matière.' },
+                                    { key:'rang',          icon:'Trophy', color:'#f59e0b', bg:'#fef3c7', label:'Classement (Rang)',           desc:"Affiche la position de l'élève dans sa classe (ex: 3ème / 42)." },
+                                    { key:'mention',       icon:'Medal', color:'#3b82f6', bg:'#dbeafe', label:'Mention',                     desc:'Affiche la mention obtenue (TRÈS BIEN, BIEN, ASSEZ BIEN…).' },
+                                    { key:'appreciation',  icon:'MessageSquare', color:'#10b981', bg:'#d1fae5', label:'Appréciation par matière',     desc:'Génère une appréciation automatique pour chaque matière (Passable, Bien…).' },
+                                    { key:'effectif',      icon:'Users', color:'#8b5cf6', bg:'#ede9fe', label:"Effectif de la classe",        desc:"Affiche le nombre total d'élèves dans la classe sur le bulletin." },
+                                    { key:'stats_matiere', icon:'BarChart3', color:'#ec4899', bg:'#fce7f3', label:'Stats de classe par matière',  desc:'Affiche la moyenne de classe, le min et le max pour chaque matière.' },
                                 ].map(item => (
                                     <div key={item.key} className={styles.toggleRow}>
                                         <div className={styles.toggleLeft}>
-                                            <div className={styles.toggleIconBox} style={{ background: item.bg }}>
-                                                <span style={{ fontSize: '1.2rem' }}>{item.icon}</span>
+                                            <div className={styles.toggleIconBox} style={{ background: item.bg, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                {item.icon === 'Trophy' && <Trophy size={18} color={item.color} />}
+                                                {item.icon === 'Medal' && <Medal size={18} color={item.color} />}
+                                                {item.icon === 'MessageSquare' && <MessageSquare size={18} color={item.color} />}
+                                                {item.icon === 'Users' && <Users size={18} color={item.color} />}
+                                                {item.icon === 'BarChart3' && <BarChart3 size={18} color={item.color} />}
                                             </div>
                                             <div className={styles.toggleText}>
                                                 <h4>{item.label}</h4>

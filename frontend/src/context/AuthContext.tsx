@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import { canAccessPathForRole, getRedirectPathForRole } from '@/lib/roleAccess';
 
 export interface UserInfo {
     id: number;
@@ -29,26 +30,11 @@ export const AuthContext = createContext<AuthContextType>({
     logout: () => {},
 });
 
-// ─── Fonction utilitaire pour obtenir la route cible selon le rôle ───
 export const getRedirectPath = (userRole: string): string => {
-    // Tous les rôles administratifs ou de direction vont vers le dashboard unifié
-    const adminRoles = ['SUPER_ADMIN', 'FONDATEUR', 'DG', 'DIRECTEUR_NIVEAU', 'ADMIN'];
-    
-    if (adminRoles.includes(userRole)) {
-        return '/dashboard';
-    }
-
-    const ROLE_ROUTES: Record<string, string> = {
-        'COMPTABLE': '/comptabilite/dashboard',
-        'ENSEIGNANT': '/portail-enseignant',
-        'BIBLIOTHECAIRE': '/portail-bibliotheque',
-        'INFORMATICIEN': '/portail-informatique',
-        'PARENT': '/portail-parent',
-        'ELEVE': '/portail-eleve',
-    };
-    
-    return ROLE_ROUTES[userRole] || '/dashboard';
+    return getRedirectPathForRole(userRole);
 };
+
+const PUBLIC_PATHS = ['/login'];
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<UserInfo | null>(null);
@@ -57,57 +43,73 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const router = useRouter();
     const pathname = usePathname();
 
-    // Charger les données depuis localStorage au démarrage.
     useEffect(() => {
         const savedToken = localStorage.getItem('smartschool_token');
-        const savedUser  = localStorage.getItem('smartschool_user');
+        const savedUser = localStorage.getItem('smartschool_user');
+
+        let parsedToken: string | null = null;
+        let parsedUser: UserInfo | null = null;
 
         if (savedToken && savedUser) {
             try {
-                const parsedUser = JSON.parse(savedUser);
-                setToken(savedToken);
-                setUser(parsedUser);
+                parsedUser = JSON.parse(savedUser);
+                parsedToken = savedToken;
             } catch (e) {
                 console.error('Erreur parsing user', e);
+                localStorage.removeItem('smartschool_token');
+                localStorage.removeItem('smartschool_user');
             }
         }
+
+        setToken(parsedToken);
+        setUser(parsedUser);
         setChecked(true);
     }, []);
 
-    // Protection des routes et redirection globale
     useEffect(() => {
         if (!checked) return;
 
-        if (!token) {
-            if (pathname !== '/login') {
+        const isPublicPath = PUBLIC_PATHS.includes(pathname);
+
+        if (!token || !user) {
+            if (!isPublicPath) {
                 router.push('/login');
             }
-        } else {
-            // S'il est sur /login mais connecté, on le redirige vers son portail
-            if (pathname === '/login' && user) {
-                router.push(getRedirectPath(user.role));
-            }
+            return;
         }
-    }, [checked, token, pathname, router, user]);
+
+        const targetPath = getRedirectPath(user.role);
+
+        if (pathname === '/login') {
+            router.push(targetPath);
+            return;
+        }
+
+        if (!canAccessPathForRole(user.role, pathname)) {
+            router.push(targetPath);
+        }
+    }, [checked, token, user, pathname, router]);
 
     const login = (newToken: string, newUser: UserInfo) => {
         setToken(newToken);
         setUser(newUser);
-        
+
         localStorage.setItem('smartschool_token', newToken);
         localStorage.setItem('smartschool_user', JSON.stringify(newUser));
-        
+
         router.push(getRedirectPath(newUser.role));
     };
 
     const logout = () => {
         setToken(null);
         setUser(null);
-        
-        localStorage.removeItem('smartschool_token');
-        localStorage.removeItem('smartschool_user');
-        
-        router.push('/login');
+
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('smartschool_token');
+            localStorage.removeItem('smartschool_user');
+            sessionStorage.clear();
+            window.location.href = '/login';
+        }
     };
 
     return (

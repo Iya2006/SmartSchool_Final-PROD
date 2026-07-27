@@ -38,10 +38,13 @@ export default function ComptabiliteLogin() {
         setIsLoading(true);
         setError('');
         try {
-            const res = await api.post('/api/comptabilite/auth', { pin });
-            if (res.data.success) {
+            const res = await api.post('/api/comptabilite/pin/verify', { pin });
+            if (res.data.valid) {
                 sessionStorage.setItem('comptabilite_auth', 'true');
                 router.push('/comptabilite/dashboard');
+            } else {
+                setError("Code PIN incorrect");
+                setPin('');
             }
         } catch (err: any) {
             setError(err.response?.data?.detail || "Code PIN incorrect");

@@ -4,7 +4,7 @@ import React from 'react';
 import { 
     Home, BarChart3, Award, Calendar, Clock, 
     CreditCard, BookMarked, MessageSquare, ShoppingBag, 
-    ExternalLink, User, LogOut
+    ExternalLink, User, LogOut, Activity
 } from 'lucide-react';
 import styles from '../portail-eleve.module.css';
 import { EleveInfo, Tab } from '../types';
@@ -47,6 +47,8 @@ export default function EleveSidebar({
         { id: 'messages', label: 'Messages', icon: MessageSquare },
         { id: 'fournitures', label: 'Fournitures', icon: ShoppingBag },
         { id: 'liens', label: 'Ressources', icon: ExternalLink },
+        { id: 'evenements', label: 'Événements', icon: Calendar },
+        { id: 'activites', label: 'Activités', icon: Activity },
         { id: 'profil', label: 'Mon Profil', icon: User },
     ] as const;
 

@@ -63,7 +63,7 @@ export default function FournituresPage() {
       const payload = { ...form, etablissement_id: etablissementId, prix_unitaire: form.prix_unitaire !== '' ? Number(form.prix_unitaire) : null };
       if (editing) await api.put(`/api/fournitures/${editing.fourniture_id}`, payload);
       else await api.post('/api/fournitures', payload);
-      setSuccess(editing ? 'Fourniture modifiée ✅' : 'Fourniture ajoutée ✅');
+      setSuccess(editing ? 'Fourniture modifiée' : 'Fourniture ajoutée');
       setTimeout(() => setSuccess(''), 3000);
       closeModal();
       if (selectedClass) loadFournitures(selectedClass.classe_id);

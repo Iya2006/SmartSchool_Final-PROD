@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Users, Briefcase, BookOpen, Clock, Loader2, Search, ChevronDown, ChevronUp,
     Plus, X, Trash2, CheckCircle2, AlertCircle, UserCheck, Building, GraduationCap,
-    ArrowLeft, TrendingUp
+    ArrowLeft, TrendingUp, School
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -39,9 +39,9 @@ interface EnseignantItem {
 }
 
 const CYCLE_COLORS: Record<string, { bg: string; border: string; text: string; badge: string; gradient: string }> = {
-    'PRM': { bg: '#fef3c7', border: '#f59e0b', text: '#92400e', badge: '🏫 Primaire', gradient: 'linear-gradient(135deg, #f59e0b, #d97706)' },
-    'CLG': { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af', badge: '📘 Collège', gradient: 'linear-gradient(135deg, #3b82f6, #2563eb)' },
-    'LYC': { bg: '#ede9fe', border: '#8b5cf6', text: '#5b21b6', badge: '🎓 Lycée', gradient: 'linear-gradient(135deg, #8b5cf6, #7c3aed)' },
+    'PRM': { bg: '#fef3c7', border: '#f59e0b', text: '#92400e', badge: 'Primaire', gradient: 'linear-gradient(135deg, #f59e0b, #d97706)' },
+    'CLG': { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af', badge: 'Collège', gradient: 'linear-gradient(135deg, #3b82f6, #2563eb)' },
+    'LYC': { bg: '#ede9fe', border: '#8b5cf6', text: '#5b21b6', badge: 'Lycée', gradient: 'linear-gradient(135deg, #8b5cf6, #7c3aed)' },
 };
 
 export default function SalleDesProfsPage() {
@@ -110,7 +110,7 @@ export default function SalleDesProfsPage() {
                 annee_id: anneeId,
             });
             setShowModal(false);
-            setSuccessMsg('✅ Enseignant affecté avec succès !');
+            setSuccessMsg('Enseignant affecté avec succès !');
             setTimeout(() => setSuccessMsg(null), 3000);
             await loadData();
         } catch (e: any) {
@@ -231,7 +231,7 @@ export default function SalleDesProfsPage() {
                         style={{ width: '100%', padding: '10px 12px 10px 36px', borderRadius: '10px', border: '1.5px solid var(--border-light)', fontSize: '13px', outline: 'none', fontFamily: 'Inter, sans-serif' }} />
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                    {[{ code: '', label: 'Tous' }, { code: 'PRM', label: '🏫 Primaire' }, { code: 'CLG', label: '📘 Collège' }, { code: 'LYC', label: '🎓 Lycée' }].map(f => (
+                    {[{ code: '', label: 'Tous' }, { code: 'PRM', label: 'Primaire' }, { code: 'CLG', label: 'Collège' }, { code: 'LYC', label: 'Lycée' }].map(f => (
                         <button key={f.code} onClick={() => setFilterCycle(f.code)}
                             style={{
                                 padding: '7px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
@@ -440,8 +440,8 @@ export default function SalleDesProfsPage() {
                             <div style={{ padding: '20px 24px' }}>
                                 {/* Info Box */}
                                 <div style={{ background: '#f5f3ff', borderRadius: '10px', padding: '12px 14px', fontSize: '12px', color: '#5b21b6', marginBottom: '16px', lineHeight: 1.6 }}>
-                                    📘 <strong>{modalMatiere.libelle}</strong> — Coef {modalMatiere.coefficient} • {modalMatiere.nb_heures}h/sem
-                                    <br/>🏫 Classe : <strong>{modalClasse.libelle}</strong> ({modalClasse.cycle})
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BookOpen size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /></span> <strong>{modalMatiere.libelle}</strong> — Coef {modalMatiere.coefficient} • {modalMatiere.nb_heures}h/sem
+                                    <br/><span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><School size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Classe :</span> <strong>{modalClasse.libelle}</strong> ({modalClasse.cycle})
                                 </div>
 
                                 {/* Search dans la liste */}

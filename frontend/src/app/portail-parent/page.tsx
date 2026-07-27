@@ -9,7 +9,8 @@ import {
     MessageSquare, FileText, BarChart3, Award, Eye, EyeOff, X, ArrowRight, Search,
     Shield, Loader2, Lock, Home, ArrowLeft, LogOut, ChevronDown, Send, Inbox,
     PieChart, Activity, TrendingDown, Mail, MailOpen, Settings, Key,
-    Camera, Upload, ImageIcon, ChevronLeft, ShoppingBag, Download,
+    Camera, Upload, ImageIcon, ChevronLeft, ShoppingBag, Download, CheckCircle2, XCircle, PenLine, AlertTriangle, Target,
+    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
@@ -21,14 +22,14 @@ interface MsgItem {
     sujet: string; contenu: string; statut: string; date_envoi: string|null; date_lecture: string|null;
 }
 const OBJET_COLORS: Record<string,{icon:string;color:string;bg:string}> = {
-    GENERAL:{icon:'📢',color:'#3b82f6',bg:'#dbeafe'}, EMPLOI:{icon:'📅',color:'#0d9488',bg:'#ccfbf1'},
-    DISCIPLINE:{icon:'⚖️',color:'#dc2626',bg:'#fee2e2'}, REUNION:{icon:'🤝',color:'#7c3aed',bg:'#ede9fe'},
-    EXAMENS:{icon:'📝',color:'#f59e0b',bg:'#fef3c7'}, PAIEMENT:{icon:'💰',color:'#059669',bg:'#d1fae5'},
-    BULLETIN:{icon:'📄',color:'#ea580c',bg:'#fff7ed'},
+    GENERAL:{icon:'',color:'#3b82f6',bg:'#dbeafe'}, EMPLOI:{icon:'',color:'#0d9488',bg:'#ccfbf1'},
+    DISCIPLINE:{icon:'',color:'#dc2626',bg:'#fee2e2'}, REUNION:{icon:'',color:'#7c3aed',bg:'#ede9fe'},
+    EXAMENS:{icon:'',color:'#f59e0b',bg:'#fef3c7'}, PAIEMENT:{icon:'',color:'#059669',bg:'#d1fae5'},
+    BULLETIN:{icon:'',color:'#ea580c',bg:'#fff7ed'},
 };
 
 /* ─── Types ─── */
-interface ParentInfo { parent_id: number; nom: string; prenom: string; telephone: string; email: string; profession: string; photo_url?: string | null; }
+interface ParentInfo { parent_id: number; nom: string; prenom: string; telephone: string; email: string; profession: string; photo_url?: string | null; has_pending_photo?: boolean; }
 interface NoteData { matiere: string; evaluation: string; note: number | null; note_sur: number; coefficient: number; est_absent: boolean; date: string | null; }
 interface EcheanceData { echeance_id: number; libelle: string; date_limite: string | null; montant_attendu: number; montant_paye: number; statut: string; }
 interface FactureData { facture_id: number; numero: string; date: string | null; montant_total: number; montant_paye: number; montant_restant: number; statut: string; type_frais?: string; echeances?: EcheanceData[]; }
@@ -38,7 +39,7 @@ interface Enfant {
     eleve_id: number; nom: string; prenom: string; matricule: string; sexe: string; photo_url: string | null;
     classe_code: string; classe: string; lien_parente: string; moyenne: number | null; nb_notes: number;
     notes: NoteData[]; factures: FactureData[]; paiements: PaiementData[];
-    nb_present: number; nb_absent: number; statut: string;
+    nb_present: number; nb_absent: number; statut: string; has_pending_photo?: boolean;
 }
 interface FinResume { total_factures: number; total_paye: number; total_restant: number; taux: number; }
 interface DashData { parent: ParentInfo; enfants: Enfant[]; finance_resume: FinResume; nb_enfants: number; }
@@ -81,7 +82,9 @@ export default function PortailParent() {
     const router = useRouter();
     const [data, setData] = useState<DashData | null>(null);
     const [selectedChild, setSelectedChild] = useState<number>(0);
-    const [activeTab, setActiveTab] = useState<'notes' | 'paiements' | 'emploi' | 'bulletin' | 'absences' | 'messages' | 'dashboard' | 'profil' | 'parametres' | 'devoirs' | 'photos' | 'fournitures'>('dashboard');
+    const [activeTab, setActiveTab] = useState<'notes' | 'paiements' | 'emploi' | 'bulletin' | 'absences' | 'messages' | 'dashboard' | 'profil' | 'parametres' | 'devoirs' | 'photos' | 'fournitures' | 'evenements' | 'activites'>('dashboard');
+    const [parentEvts, setParentEvts] = useState<any[]>([]);
+    const [parentActs, setParentActs] = useState<any[]>([]);
     const [detailModal, setDetailModal] = useState<Enfant | null>(null);
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
     const [edtLoading, setEdtLoading] = useState(false);
@@ -199,18 +202,58 @@ export default function PortailParent() {
         }
     }, [activeTab, selectedChild, data]);
 
+    useEffect(() => {
+        if (activeTab === 'evenements') {
+            api.get('/api/evenements').then(r => {
+                setParentEvts((r.data || []).filter((e: any) => e.statut === 'PUBLIE'));
+            }).catch(() => {});
+        }
+        if (activeTab === 'activites') {
+            api.get('/api/activites').then(r => {
+                setParentActs((r.data || []).filter((a: any) => a.est_actif === 'O'));
+            }).catch(() => {});
+        }
+    }, [activeTab]);
+
+    // Load profil when tab changes to 'profil'
+    useEffect(() => {
+        if (activeTab === 'profil' && data) {
+            const parentId = data.parent.parent_id;
+            setProfilLoading(true);
+            api.get(`/api/portail-parent/${parentId}/profil`)
+                .then(res => {
+                    setProfilData(res.data);
+                    setProfileForm({
+                        prenom: res.data.prenom || '',
+                        nom: res.data.nom || '',
+                        telephone_1: res.data.telephone_1 || '',
+                        telephone_2: res.data.telephone_2 || '',
+                        email: res.data.email || '',
+                        profession: res.data.profession || '',
+                        adresse: res.data.adresse || '',
+                    });
+                })
+                .catch(() => setProfilData(null))
+                .finally(() => setProfilLoading(false));
+        }
+    }, [activeTab, data]);
+
     // P1 FIX: Sync pendingPhotos with actual server data — clear pending if photo_url already exists
     useEffect(() => {
         if (!data) return;
         setPendingPhotos(prev => {
             const next = new Set(prev);
             // Check parent photo
-            if (data.parent.photo_url && next.has(data.parent.parent_id)) {
+            if (data.parent.has_pending_photo) {
+                next.add(data.parent.parent_id);
+            } else if (data.parent.photo_url && next.has(data.parent.parent_id)) {
                 next.delete(data.parent.parent_id);
             }
             // Check children photos
-            for (const enf of data.enfants) {
-                if (enf.photo_url && next.has(enf.eleve_id)) {
+            for (const enf of data.enfants || []) {
+                if (enf.has_pending_photo) {
+                    next.add(enf.eleve_id);
+                } else if (enf.photo_url && next.has(enf.eleve_id)) {
                     next.delete(enf.eleve_id);
                 }
             }
@@ -347,6 +390,8 @@ export default function PortailParent() {
         { key: 'devoirs' as const, label: 'Devoirs', icon: BookOpen },
         { key: 'fournitures' as const, label: 'Fournitures', icon: ShoppingBag },
         { key: 'photos' as const, label: 'Photos', icon: Camera },
+        { key: 'evenements' as const, label: 'Événements', icon: Calendar },
+        { key: 'activites' as const, label: 'Activités', icon: Activity },
         { key: 'parametres' as const, label: 'Paramètres', icon: Settings },
     ];
 
@@ -465,7 +510,7 @@ export default function PortailParent() {
                 </div>
 
                 <div style={{ flex: 1, padding: '28px 32px', overflowY: 'auto' }}>
-                {!["profil", "parametres"].includes(activeTab) && (
+                {!["profil", "parametres", "evenements", "activites"].includes(activeTab) && (
                     <>
                         {/* ═══ WELCOME + KPI CARDS ═══ */}
                 <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}>
@@ -544,10 +589,10 @@ export default function PortailParent() {
 
                 {/* ═══ MAIN CONTENT: TWO COLUMNS ═══ */}
                 {child && (
-                    <div style={{ display: 'grid', gridTemplateColumns: ['profil', 'parametres'].includes(activeTab) ? '1fr' : '340px 1fr', gap: '24px', alignItems: 'start' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: ['profil', 'parametres', 'evenements', 'activites'].includes(activeTab) ? '1fr' : '340px 1fr', gap: '24px', alignItems: 'start' }}>
 
                         {/* ─── LEFT: CHILD CARD ─── */}
-                        {!['profil', 'parametres'].includes(activeTab) && (
+                        {!['profil', 'parametres', 'evenements', 'activites'].includes(activeTab) && (
                         <motion.div key={child.eleve_id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
                             style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
@@ -670,7 +715,7 @@ export default function PortailParent() {
                                             boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0',
                                         }}>
                                             <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📊 Dernières Notes</h5>
+                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><BarChart3 size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Dernières Notes</h5>
                                                 {child.moyenne !== null && (
                                                     <span style={{
                                                         padding: '6px 16px', borderRadius: '20px', fontSize: '13px', fontWeight: 700,
@@ -744,9 +789,9 @@ export default function PortailParent() {
                                             {/* Summary Cards */}
                                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                                                 {[
-                                                    { label: 'Montant Total', value: formatGNF(totalFact), icon: '🧾', color: '#6366f1', bg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)' },
-                                                    { label: 'Montant Payé', value: formatGNF(totalPaye), icon: '✅', color: primaryColor, bg: 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
-                                                    { label: 'Reste à Payer', value: formatGNF(totalRestant), icon: '⏳', color: totalRestant > 0 ? '#ef4444' : '#10b981', bg: totalRestant > 0 ? 'linear-gradient(135deg, #fee2e2, #fecaca)' : 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
+                                                    { label: 'Montant Total', value: formatGNF(totalFact), icon: 'FileText', color: '#6366f1', bg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)' },
+                                                    { label: 'Montant Payé', value: formatGNF(totalPaye), icon: 'CheckCircle2', color: primaryColor, bg: 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
+                                                    { label: 'Reste à Payer', value: formatGNF(totalRestant), icon: 'Hourglass', color: totalRestant > 0 ? '#ef4444' : '#10b981', bg: totalRestant > 0 ? 'linear-gradient(135deg, #fee2e2, #fecaca)' : 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
                                                 ].map((s, i) => (
                                                     <div key={i} style={{
                                                         background: s.bg, borderRadius: '16px', padding: '24px',
@@ -774,7 +819,7 @@ export default function PortailParent() {
                                             {/* Factures with Echeances */}
                                             <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
                                                 <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0' }}>
-                                                    <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>🧾 État des Factures & Échéancier</h5>
+                                                    <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><FileText size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> État des Factures & Échéancier</h5>
                                                 </div>
                                                 <div style={{ padding: '0', overflowX: 'auto' }}>
                                                     {child.factures.length === 0 ? (
@@ -811,7 +856,7 @@ export default function PortailParent() {
                                                                                         background: f.statut === 'PAYEE' ? '#d1fae5' : f.statut === 'PARTIELLEMENT_PAYEE' ? '#fef3c7' : '#fee2e2',
                                                                                         color: f.statut === 'PAYEE' ? '#15803d' : f.statut === 'PARTIELLEMENT_PAYEE' ? '#92400e' : '#dc2626',
                                                                                     }}>
-                                                                                        {f.statut === 'PAYEE' ? '✅ Payée' : f.statut === 'PARTIELLEMENT_PAYEE' ? '⏳ Partiel' : '🔴 En attente'}
+                                                                                        {f.statut === 'PAYEE' ? 'Payée' : f.statut === 'PARTIELLEMENT_PAYEE' ? 'Partiel' : 'En attente'}
                                                                                     </span>
                                                                                     {hasEcheances && (
                                                                                         <span style={{ fontSize: '11px', color: '#6366f1', fontWeight: 600 }}>
@@ -896,7 +941,7 @@ export default function PortailParent() {
                                             {/* Historique des Paiements */}
                                             <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
                                                 <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0' }}>
-                                                    <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>💳 Historique des Paiements</h5>
+                                                    <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><CreditCard size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Historique des Paiements</h5>
                                                 </div>
                                                 <div style={{ padding: '16px 24px' }}>
                                                     {child.paiements.length === 0 ? (
@@ -957,7 +1002,7 @@ export default function PortailParent() {
                                             boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0',
                                         }}>
                                             <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📅 Emploi du Temps — {child.classe}</h5>
+                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><Calendar size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Emploi du Temps — {child.classe}</h5>
                                                 <span style={{ fontSize: '12px', color: '#6366f1', fontWeight: 600 }}>Année en cours</span>
                                             </div>
                                             <div style={{ padding: '16px 20px', overflowX: 'auto' }}>
@@ -1007,8 +1052,8 @@ export default function PortailParent() {
                                                                                         borderLeft: `3px solid ${colors.border}`, minHeight: '50px',
                                                                                     }}>
                                                                                         <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: colors.text }}>{slot.matiere}</p>
-                                                                                        <p style={{ margin: '2px 0 0', fontSize: '10px', color: colors.text, opacity: 0.7 }}>👨‍🏫 {slot.enseignant}</p>
-                                                                                        {slot.salle && <p style={{ margin: '1px 0 0', fontSize: '10px', color: colors.text, opacity: 0.6 }}>🏫 {slot.salle}</p>}
+                                                                                        <p style={{ margin: '2px 0 0', fontSize: '10px', color: colors.text, opacity: 0.7 }}><UserCheck size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> {slot.enseignant}</p>
+                                                                                        {slot.salle && <p style={{ margin: '1px 0 0', fontSize: '10px', color: colors.text, opacity: 0.6 }}><School size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> {slot.salle}</p>}
                                                                                     </div>
                                                                                 </td>
                                                                             );
@@ -1027,7 +1072,7 @@ export default function PortailParent() {
                                     {activeTab === 'bulletin' && (
                                         <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
                                             <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📄 Bulletin Scolaire — {child.classe}</h5>
+                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><FileText size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Bulletin Scolaire — {child.classe}</h5>
                                                 <select value={selectedTrimestre} onChange={e => setSelectedTrimestre(Number(e.target.value))}
                                                     style={{ padding: '8px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
                                                     <option value={1}>1er Trimestre</option>
@@ -1093,7 +1138,7 @@ export default function PortailParent() {
                                                         {/* Decision */}
                                                         {bulletinData.decision && (
                                                             <div style={{ marginTop: '16px', padding: '14px 18px', borderRadius: '12px', background: '#fef3c7', border: '1px solid #fbbf24' }}>
-                                                                <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: '#92400e' }}>📋 Décision du Conseil de Classe</p>
+                                                                <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: '#92400e' }}><ClipboardList size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Décision du Conseil de Classe</p>
                                                                 <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#78350f', fontWeight: 600 }}>{bulletinData.decision}</p>
                                                             </div>
                                                         )}
@@ -1107,14 +1152,14 @@ export default function PortailParent() {
                                     {activeTab === 'absences' && (
                                         <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
                                             <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>🕐 Suivi des Présences & Absences</h5>
+                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><Clock size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Suivi des Présences & Absences</h5>
                                                 {absencesData && (
                                                     <div style={{ display: 'flex', gap: '10px' }}>
                                                         <span style={{ padding: '4px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, background: '#d1fae5', color: '#15803d' }}>
-                                                            ✅ {absencesData.total_present} Présences
+                                                            <CheckCircle2 size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '2px' }} /> {absencesData.total_present} Présences
                                                         </span>
                                                         <span style={{ padding: '4px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, background: '#fee2e2', color: '#dc2626' }}>
-                                                            ❌ {absencesData.total_absent} Absences
+                                                            <XCircle size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '2px' }} /> {absencesData.total_absent} Absences
                                                         </span>
                                                     </div>
                                                 )}
@@ -1143,7 +1188,7 @@ export default function PortailParent() {
                                                                         background: p.statut === 'PRESENT' ? '#d1fae5' : p.statut === 'ABSENT_JUSTIFIE' ? '#fef3c7' : '#fee2e2',
                                                                         display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '16px',
                                                                     }}>
-                                                                        {p.statut === 'PRESENT' ? '✅' : p.statut === 'ABSENT_JUSTIFIE' ? '📝' : '❌'}
+                                                                        {p.statut === 'PRESENT' ? <CheckCircle2 size={14} /> : p.statut === 'ABSENT_JUSTIFIE' ? <PenLine size={14} /> : <XCircle size={14} />}
                                                                     </div>
                                                                     <div>
                                                                         <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>
@@ -1191,7 +1236,7 @@ export default function PortailParent() {
                                                             ← Retour
                                                         </button>
                                                         <span style={{ padding: '4px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, background: selectedMsg.statut === 'LU' ? '#d1fae5' : '#fef3c7', color: selectedMsg.statut === 'LU' ? '#15803d' : '#a16207' }}>
-                                                            {selectedMsg.statut === 'LU' ? '✅ Lu' : '🔔 Non lu'}
+                                                            {selectedMsg.statut === 'LU' ? 'Lu' : 'Non lu'}
                                                         </span>
                                                     </div>
                                                     <div style={{ padding: '24px' }}>
@@ -1220,7 +1265,7 @@ export default function PortailParent() {
                                                                     fontWeight: 700, fontSize: '13px', width: '100%', justifyContent: 'center',
                                                                     boxShadow: '0 4px 12px rgba(99,102,241,0.3)',
                                                                 }}>
-                                                                <Camera size={16} /> 📸 Voir les photos / Galerie
+                                                                <Camera size={16} /> Voir les photos / Galerie
                                                             </button>
                                                         )}
                                                         {/* Reply area */}
@@ -1326,7 +1371,7 @@ export default function PortailParent() {
                                                     <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
                                                         style={{ background: 'white', borderRadius: '20px', width: '520px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px rgba(0,0,0,0.25)' }}>
                                                         <div style={{ padding: '24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                            <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>✉️ Nouveau Message</h4>
+                                                            <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}><Mail size={16} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Nouveau Message</h4>
                                                             <button onClick={() => setShowComposeMsg(false)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}><X size={16} /></button>
                                                         </div>
                                                         <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -1362,17 +1407,17 @@ export default function PortailParent() {
                                     {activeTab === 'devoirs' && (() => {
 
                                         const typeColors: Record<string,{bg:string;color:string;icon:string}> = {
-                                            EXERCICE: { bg: '#dbeafe', color: '#2563eb', icon: '📝' },
-                                            RECHERCHE: { bg: '#fef3c7', color: '#d97706', icon: '🔍' },
-                                            LECTURE: { bg: '#ede9fe', color: '#7c3aed', icon: '📖' },
-                                            PROJET: { bg: '#d1fae5', color: accentColor, icon: '🚀' },
+                                            EXERCICE: { bg: '#dbeafe', color: '#2563eb', icon: 'PenLine' },
+                                            RECHERCHE: { bg: '#fef3c7', color: '#d97706', icon: 'Search' },
+                                            LECTURE: { bg: '#ede9fe', color: '#7c3aed', icon: 'BookOpen' },
+                                            PROJET: { bg: '#d1fae5', color: accentColor, icon: 'Rocket' },
                                         };
 
                                         return (
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                                 <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
                                                     <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0' }}>
-                                                        <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📚 Devoirs de {child.prenom}</h5>
+                                                        <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><BookOpen size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Devoirs de {child.prenom}</h5>
                                                         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Devoirs assignés par les enseignants</p>
                                                     </div>
                                                     {devoirsLoading ? (
@@ -1403,7 +1448,7 @@ export default function PortailParent() {
                                                                                         {tc.icon} {d.type_devoir}
                                                                                     </span>
                                                                                     <span style={{ fontSize: '11px', color: '#94a3b8' }}>📘 {d.matiere}</span>
-                                                                                    <span style={{ fontSize: '11px', color: '#94a3b8' }}>👨‍🏫 {d.enseignant}</span>
+                                                                                    <span style={{ fontSize: '11px', color: '#94a3b8' }}><UserCheck size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> {d.enseignant}</span>
                                                                                     {isExpired && <span style={{ padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: '#fef2f2', color: '#dc2626' }}>⏰ Expiré</span>}
                                                                                 </div>
                                                                                 <h5 style={{ margin: '0 0 6px', fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>{d.titre}</h5>
@@ -1413,7 +1458,7 @@ export default function PortailParent() {
                                                                                     </p>
                                                                                 )}
                                                                                 <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#94a3b8', alignItems: 'center', flexWrap: 'wrap' }}>
-                                                                                    {d.date_limite && <span>📅 Limite: {new Date(d.date_limite).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</span>}
+                                                                                    {d.date_limite && <span><Calendar size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Limite: {new Date(d.date_limite).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</span>}
                                                                                     <span>Publié le {d.date_creation ? new Date(d.date_creation).toLocaleDateString('fr-FR') : '—'}</span>
                                                                                     {d.fichier_nom && (
                                                                                         <a href={`http://localhost:8300${d.fichier_path}`} target="_blank" rel="noreferrer"
@@ -1468,15 +1513,15 @@ export default function PortailParent() {
                                                 {/* Donut charts row */}
                                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                                                     <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}>🎯 Moyenne Générale</h5>
+                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}><Target size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Moyenne Générale</h5>
                                                         <Donut pct={child.moyenne ? (child.moyenne / 20) * 100 : 0} color={child.moyenne && child.moyenne >= 10 ? '#10b981' : '#ef4444'} label="sur 20" value={child.moyenne ? `${child.moyenne}` : '—'} />
                                                     </div>
                                                     <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}>✅ Assiduité</h5>
+                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}><CheckCircle2 size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Assiduité</h5>
                                                         <Donut pct={pctPresent} color="#6366f1" label={`${child.nb_present}P / ${child.nb_absent}A`} value={`${pctPresent}%`} />
                                                     </div>
                                                     <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}>💰 Paiements</h5>
+                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}><Wallet size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Paiements</h5>
                                                         <Donut pct={pctPaye} color="#f59e0b" label={`${formatGNF(totalPaye)} payé`} value={`${pctPaye}%`} />
                                                     </div>
                                                 </div>
@@ -1504,7 +1549,7 @@ export default function PortailParent() {
                                                 {/* Best & worst subjects */}
                                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
                                                     <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
-                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}>🏆 Meilleures Matières</h5>
+                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}><Trophy size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Meilleures Matières</h5>
                                                         {topMat.length === 0 ? <p style={{ fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>—</p> : topMat.slice(0, 3).map((m, i) => (
                                                             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: '10px', marginBottom: '6px', background: i === 0 ? '#f0fdf4' : '#f8fafc' }}>
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1516,11 +1561,11 @@ export default function PortailParent() {
                                                         ))}
                                                     </div>
                                                     <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
-                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}>📉 À Améliorer</h5>
+                                                        <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}><TrendingDown size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> À Améliorer</h5>
                                                         {topMat.length === 0 ? <p style={{ fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>—</p> : [...topMat].reverse().slice(0, 3).map((m, i) => (
                                                             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: '10px', marginBottom: '6px', background: m.avg < 10 ? '#fef2f2' : '#f8fafc' }}>
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                    <span style={{ fontSize: '16px' }}>{m.avg < 10 ? '⚠️' : '📝'}</span>
+                                                                    <span style={{ fontSize: '16px' }}>{m.avg < 10 ? <AlertTriangle size={14} /> : <PenLine size={14} />}</span>
                                                                     <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{m.name}</span>
                                                                 </div>
                                                                 <span style={{ fontSize: '14px', fontWeight: 800, color: m.avg < 10 ? '#ef4444' : '#f59e0b' }}>{m.avg}/20</span>
@@ -1531,10 +1576,10 @@ export default function PortailParent() {
                                                 {/* Summary stat cards */}
                                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
                                                     {[
-                                                        { label: 'Notes', value: String(child.nb_notes), icon: '📝', color: '#6366f1', bg: '#ede9fe' },
-                                                        { label: 'Présences', value: String(child.nb_present), icon: '✅', color: primaryColor, bg: '#d1fae5' },
-                                                        { label: 'Absences', value: String(child.nb_absent), icon: '❌', color: '#ef4444', bg: '#fee2e2' },
-                                                        { label: 'Factures', value: String(child.factures.length), icon: '🧾', color: '#f59e0b', bg: '#fef3c7' },
+                                                        { label: 'Notes', value: String(child.nb_notes), icon: <PenLine size={20} />, color: '#6366f1', bg: '#ede9fe' },
+                                                        { label: 'Présences', value: String(child.nb_present), icon: <CheckCircle2 size={20} />, color: primaryColor, bg: '#d1fae5' },
+                                                        { label: 'Absences', value: String(child.nb_absent), icon: <XCircle size={20} />, color: '#ef4444', bg: '#fee2e2' },
+                                                        { label: 'Factures', value: String(child.factures.length), icon: <FileText size={20} />, color: '#f59e0b', bg: '#fef3c7' },
                                                     ].map((s, i) => (
                                                         <div key={i} style={{ background: 'white', borderRadius: '14px', padding: '18px', textAlign: 'center', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
                                                             <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: s.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 8px', fontSize: '18px' }}>{s.icon}</div>
@@ -1568,9 +1613,9 @@ export default function PortailParent() {
                                                                 <h3 style={{ margin: 0, fontSize: '24px', fontWeight: 800 }}>{profilData.prenom} {profilData.nom}</h3>
                                                                 <p style={{ margin: '4px 0 0', fontSize: '14px', opacity: 0.85 }}>{profilData.profession || 'Parent d\'élève'}</p>
                                                                 <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
-                                                                    <span style={{ padding: '4px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.15)', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>📱 {profilData.telephone_1}</span>
-                                                                    {profilData.email && <span style={{ padding: '4px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.15)', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>✉️ {profilData.email}</span>}
-                                                                    <span style={{ padding: '4px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.15)', fontSize: '12px', fontWeight: 600 }}>👨‍👩‍👧‍👦 {profilData.nb_enfants} enfant(s)</span>
+                                                                    <span style={{ padding: '4px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.15)', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Smartphone size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> {profilData.telephone_1}</span>
+                                                                    {profilData.email && <span style={{ padding: '4px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.15)', fontSize: '12px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}><Mail size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> {profilData.email}</span>}
+                                                                    <span style={{ padding: '4px 12px', borderRadius: '8px', background: 'rgba(255,255,255,0.15)', fontSize: '12px', fontWeight: 600 }}><Users size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> {profilData.nb_enfants} enfant(s)</span>
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -1586,23 +1631,34 @@ export default function PortailParent() {
                                                     {!editingProfile ? (
                                                         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
                                                             <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📋 Informations personnelles</h5>
-                                                                <button onClick={() => setEditingProfile(true)}
+                                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><ClipboardList size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Informations personnelles</h5>
+                                                                <button onClick={() => {
+                                                                    setProfileForm({
+                                                                        prenom: profilData.prenom || '',
+                                                                        nom: profilData.nom || '',
+                                                                        telephone_1: profilData.telephone_1 || '',
+                                                                        telephone_2: profilData.telephone_2 || '',
+                                                                        email: profilData.email || '',
+                                                                        profession: profilData.profession || '',
+                                                                        adresse: profilData.adresse || '',
+                                                                    });
+                                                                    setEditingProfile(true);
+                                                                }}
                                                                     style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px', fontSize: '12px', fontWeight: 700, background: '#6366f1', color: 'white', border: 'none', cursor: 'pointer' }}>
-                                                                    ✏️ Modifier
+                                                                    <Pencil size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Modifier
                                                                 </button>
                                                             </div>
                                                             <div style={{ padding: '20px 24px' }}>
                                                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                                                                     {[
-                                                                        { label: 'Prénom', value: profilData.prenom, icon: '👤' },
-                                                                        { label: 'Nom', value: profilData.nom, icon: '👤' },
-                                                                        { label: 'Téléphone principal', value: profilData.telephone_1, icon: '📱' },
-                                                                        { label: 'Téléphone secondaire', value: profilData.telephone_2 || '—', icon: '📱' },
-                                                                        { label: 'Email', value: profilData.email || '—', icon: '✉️' },
-                                                                        { label: 'Profession', value: profilData.profession || '—', icon: '💼' },
-                                                                        { label: 'Adresse', value: profilData.adresse || '—', icon: '📍' },
-                                                                        { label: 'Mot de passe', value: profilData.has_password ? '••••••••' : 'Non défini', icon: '🔐' },
+                                                                        { label: 'Prénom', value: profilData.prenom, icon: 'User' },
+                                                                        { label: 'Nom', value: profilData.nom, icon: 'User' },
+                                                                        { label: 'Téléphone principal', value: profilData.telephone_1, icon: 'Smartphone' },
+                                                                        { label: 'Téléphone secondaire', value: profilData.telephone_2 || '—', icon: 'Smartphone' },
+                                                                        { label: 'Email', value: profilData.email || '—', icon: 'Mail' },
+                                                                        { label: 'Profession', value: profilData.profession || '—', icon: 'Briefcase' },
+                                                                        { label: 'Adresse', value: profilData.adresse || '—', icon: 'MapPin' },
+                                                                        { label: 'Mot de passe', value: profilData.has_password ? '••••••••' : 'Non défini', icon: 'Lock' },
                                                                     ].map((f, i) => (
                                                                         <div key={i} style={{ padding: '14px 16px', borderRadius: '12px', background: '#f8fafc', border: '1px solid #f1f5f9' }}>
                                                                             <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>{f.icon} {f.label}</p>
@@ -1616,7 +1672,7 @@ export default function PortailParent() {
                                                         /* Edit Profile Form */
                                                         <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
                                                             <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>✏️ Modifier le profil</h5>
+                                                                <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><Pencil size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Modifier le profil</h5>
                                                                 <button onClick={() => setEditingProfile(false)}
                                                                     style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, background: '#f1f5f9', color: '#64748b', border: 'none', cursor: 'pointer' }}>Annuler</button>
                                                             </div>
@@ -1664,7 +1720,7 @@ export default function PortailParent() {
                                                     {/* Children Section */}
                                                     <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
                                                         <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
-                                                            <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>🎓 Mes enfants</h5>
+                                                            <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><GraduationCap size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Mes enfants</h5>
                                                         </div>
                                                         <div style={{ padding: '16px 24px' }}>
                                                             {profilData.enfants.length === 0 ? (
@@ -1693,14 +1749,14 @@ export default function PortailParent() {
                                                                                         border: '2px solid white', cursor: 'pointer',
                                                                                         boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
                                                                                     }}>
-                                                                                    <span style={{ fontSize: '10px' }}>📷</span>
+                                                                                    <span style={{ fontSize: '10px' }}><Camera size={10} /></span>
                                                                                 </button>
                                                                             </div>
                                                                             <div style={{ flex: 1 }}>
                                                                                 <p style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>{e.prenom} {e.nom}</p>
                                                                                 <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#94a3b8' }}>
-                                                                                    📋 {e.matricule} • 🎓 {e.classe} • {e.lien_parente}
-                                                                                    {e.date_naissance && ` • 📅 ${new Date(e.date_naissance).toLocaleDateString('fr-FR')}`}
+                                                                                    <FileText size={10} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> {e.matricule} • <GraduationCap size={10} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> {e.classe} • {e.lien_parente}
+                                                                                    {e.date_naissance && ` • ${new Date(e.date_naissance).toLocaleDateString('fr-FR')}`}
                                                                                 </p>
                                                                             </div>
                                                                             <span style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, background: e.statut === 'ACTIF' ? '#d1fae5' : '#fee2e2', color: e.statut === 'ACTIF' ? '#065f46' : '#dc2626' }}>{e.statut}</span>
@@ -1806,7 +1862,7 @@ export default function PortailParent() {
                                                     <div style={{ flex: 1 }}>
                                                         <p style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>{data.parent.prenom} {data.parent.nom}</p>
                                                         <p style={{ margin: '0 0 12px', fontSize: '12px', color: data.parent.photo_url ? '#10b981' : '#f59e0b' }}>
-                                                            {data.parent.photo_url ? '✅ Photo de profil définie' : '⚠️ Aucune photo de profil'}
+                                                            {data.parent.photo_url ? 'Photo de profil définie' : 'Aucune photo de profil'}
                                                         </p>
                                                         <button onClick={() => {
                                                             const input = document.createElement('input');
@@ -1834,7 +1890,7 @@ export default function PortailParent() {
                                                             {photoUploading === data.parent.parent_id ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={14} />}
                                                             {data.parent.photo_url ? 'Modifier ma photo' : 'Envoyer ma photo'}
                                                         </button>
-                                                        {photoSuccess && <p style={{ margin: '8px 0 0', fontSize: '12px', color: primaryColor, fontWeight: 600 }}>✅ {photoSuccess}</p>}
+                                                        {photoSuccess && <p style={{ margin: '8px 0 0', fontSize: '12px', color: primaryColor, fontWeight: 600 }}>{photoSuccess}</p>}
                                                     </div>
                                                 </div>
                                             </div>
@@ -1859,17 +1915,17 @@ export default function PortailParent() {
                                                         </div>
                                                     )}
                                                     <div>
-                                                        <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔑 Ancien mot de passe</label>
+                                                        <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}><Key size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Ancien mot de passe</label>
                                                         <input type="password" value={oldPwd} onChange={e => setOldPwd(e.target.value)} placeholder="Votre ancien mot de passe"
                                                             style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }} />
                                                     </div>
                                                     <div>
-                                                        <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔒 Nouveau mot de passe</label>
+                                                        <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}><Lock size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Nouveau mot de passe</label>
                                                         <input type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)} placeholder="Minimum 6 caractères"
                                                             style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }} />
                                                     </div>
                                                     <div>
-                                                        <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔒 Confirmer le mot de passe</label>
+                                                        <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}><Lock size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Confirmer le mot de passe</label>
                                                         <input type="password" value={confirmPwd} onChange={e => setConfirmPwd(e.target.value)} placeholder="Retapez le nouveau mot de passe"
                                                             style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }} />
                                                     </div>
@@ -2014,9 +2070,9 @@ export default function PortailParent() {
                                                         <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '15px' }}>{data.parent.prenom} {data.parent.nom}</p>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
                                                             {pendingPhotos.has(data.parent.parent_id)
-                                                                ? <><Clock size={14} color="#d97706" /><span style={{ fontSize: '12px', color: '#d97706', fontWeight: 600 }}>⏳ En attente de validation</span></>
+                                                                ? <><Clock size={14} color="#d97706" /><span style={{ fontSize: '12px', color: '#d97706', fontWeight: 600 }}>En attente de validation</span></>
                                                                 : data.parent.photo_url
-                                                                    ? <><CheckCircle size={14} color={accentColor} /><span style={{ fontSize: '12px', color: accentColor, fontWeight: 600 }}>✅ Photo validée</span></>
+                                                                    ? <><CheckCircle size={14} color={accentColor} /><span style={{ fontSize: '12px', color: accentColor, fontWeight: 600 }}>Photo validée</span></>
                                                                     : <><AlertCircle size={14} color="#dc2626" /><span style={{ fontSize: '12px', color: '#dc2626', fontWeight: 600 }}>Aucune photo</span></>
                                                             }
                                                         </div>
@@ -2088,9 +2144,9 @@ export default function PortailParent() {
                                                                 </p>
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                                     {pendingPhotos.has(enf.eleve_id)
-                                                                        ? <><Clock size={12} color="#d97706" /><span style={{ fontSize: '11px', color: '#d97706', fontWeight: 600 }}>⏳ En attente de validation</span></>
+                                                                        ? <><Clock size={12} color="#d97706" /><span style={{ fontSize: '11px', color: '#d97706', fontWeight: 600 }}>En attente de validation</span></>
                                                                         : enf.photo_url
-                                                                            ? <><CheckCircle size={12} color={accentColor} /><span style={{ fontSize: '11px', color: accentColor, fontWeight: 600 }}>✅ Photo validée</span></>
+                                                                            ? <><CheckCircle size={12} color={accentColor} /><span style={{ fontSize: '11px', color: accentColor, fontWeight: 600 }}>Photo validée</span></>
                                                                             : <><AlertCircle size={12} color="#d97706" /><span style={{ fontSize: '11px', color: '#d97706', fontWeight: 600 }}>Aucune photo</span></>
                                                                     }
                                                                 </div>
@@ -2142,6 +2198,114 @@ export default function PortailParent() {
                                         </div>
                                         );
                                     })()}
+
+                                    {/* ─── EVENEMENTS TAB ─── */}
+                                    {activeTab === 'evenements' && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: 'linear-gradient(135deg, #3b82f6, #60a5fa)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                    <Calendar size={20} color="white" />
+                                                </div>
+                                                <div>
+                                                    <h5 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#1e293b' }}>Événements de l'École</h5>
+                                                    <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>
+                                                        Agenda et événements prévus
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {parentEvts.length === 0 ? (
+                                                <div style={{ padding: '40px', textAlign: 'center', background: 'white', borderRadius: '16px', border: '1px dashed #cbd5e1' }}>
+                                                    <p style={{ margin: 0, color: '#64748b', fontSize: '14px', fontWeight: 500 }}>Aucun événement publié pour le moment.</p>
+                                                </div>
+                                            ) : (
+                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+                                                    {parentEvts.map((evt, idx) => (
+                                                        <div key={idx} style={{
+                                                            background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', padding: '20px',
+                                                            display: 'flex', flexDirection: 'column', gap: '12px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
+                                                            position: 'relative', overflow: 'hidden'
+                                                        }}>
+                                                            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '4px', background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)' }} />
+                                                            <div>
+                                                                <span style={{ padding: '4px 10px', borderRadius: '8px', background: '#eff6ff', color: '#1d4ed8', fontSize: '11px', fontWeight: 700 }}>
+                                                                    {evt.type_evenement || 'Événement'}
+                                                                </span>
+                                                            </div>
+                                                            <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#1e293b' }}>{evt.titre}</h4>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: '#64748b', fontWeight: 500 }}>
+                                                                <Clock size={14} /> {new Date(evt.date_debut).toLocaleDateString()}
+                                                                {evt.lieu && <><span style={{ margin: '0 4px' }}>•</span> {evt.lieu}</>}
+                                                            </div>
+                                                            {evt.description && (
+                                                                <p style={{ margin: 0, fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>
+                                                                    {evt.description}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* ─── ACTIVITES TAB ─── */}
+                                    {activeTab === 'activites' && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: 'linear-gradient(135deg, #10b981, #34d399)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                    <Activity size={20} color="white" />
+                                                </div>
+                                                <div>
+                                                    <h5 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#1e293b' }}>Activités du Jour</h5>
+                                                    <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>
+                                                        Suivez les activités quotidiennes
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {parentActs.length === 0 ? (
+                                                <div style={{ padding: '40px', textAlign: 'center', background: 'white', borderRadius: '16px', border: '1px dashed #cbd5e1' }}>
+                                                    <p style={{ margin: 0, color: '#64748b', fontSize: '14px', fontWeight: 500 }}>Aucune activité signalée pour le moment.</p>
+                                                </div>
+                                            ) : (
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', position: 'relative' }}>
+                                                    <div style={{ position: 'absolute', left: '19px', top: '20px', bottom: '20px', width: '2px', background: '#e2e8f0', zIndex: 0 }} />
+                                                    {parentActs.map((act, idx) => (
+                                                        <div key={idx} style={{ display: 'flex', gap: '16px', position: 'relative', zIndex: 1 }}>
+                                                            <div style={{
+                                                                width: '40px', height: '40px', borderRadius: '50%', background: '#fff',
+                                                                border: '2px solid #10b981', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                                color: '#10b981', flexShrink: 0, boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                                                            }}>
+                                                                <Clock size={16} />
+                                                            </div>
+                                                            <div style={{
+                                                                flex: 1, background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0',
+                                                                padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px',
+                                                                boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
+                                                            }}>
+                                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                                                    <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>{act.titre}</h4>
+                                                                    <span style={{ padding: '4px 8px', borderRadius: '6px', background: '#f1f5f9', color: '#475569', fontSize: '11px', fontWeight: 600 }}>
+                                                                        {act.heure || 'N/A'}
+                                                                    </span>
+                                                                </div>
+                                                                <span style={{ display: 'inline-block', alignSelf: 'flex-start', padding: '4px 10px', borderRadius: '8px', background: '#d1fae5', color: '#047857', fontSize: '11px', fontWeight: 700 }}>
+                                                                    {act.type_activite || 'Général'}
+                                                                </span>
+                                                                {act.description && (
+                                                                    <p style={{ margin: 0, fontSize: '13px', color: '#64748b', lineHeight: 1.5 }}>
+                                                                        {act.description}
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
 
                                 </motion.div>
                             </AnimatePresence>

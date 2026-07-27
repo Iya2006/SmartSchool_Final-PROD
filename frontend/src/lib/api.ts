@@ -37,21 +37,41 @@ api.interceptors.request.use(
 );
 
 
-// ── Intercepteur de réponse : gère les erreurs 401 (token expiré) ──
+// ── Intercepteur de réponse : gère les erreurs 401 (token expiré) et 403 (accès interdit) ──
 api.interceptors.response.use(
     (response) => response,
     (error) => {
-        if (error.response?.status === 401 && typeof window !== 'undefined') {
-            // Token expiré ou invalide → ne pas rediriger si on est sur un portail
-            const path = window.location.pathname;
-            const isPortal = path.startsWith('/portail-parent') ||
-                             path.startsWith('/portail-enseignant') ||
-                             path.startsWith('/portail-eleve');
+        if (typeof window !== 'undefined' && error.response) {
+            const status = error.response.status;
+            const currentPath = window.location.pathname;
 
-            if (!isPortal) {
-                localStorage.removeItem('smartschool_token');
-                localStorage.removeItem('smartschool_user');
-                window.location.href = '/login';
+            if (status === 401) {
+                // Token expiré ou invalide → déconnexion complète et retour à la page de connexion
+                if (currentPath !== '/login') {
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    window.location.href = '/login';
+                }
+            } else if (status === 403) {
+                // Erreur de rôle / permission → rediriger selon le rôle sauvegardé
+                const savedUser = localStorage.getItem('smartschool_user');
+                if (savedUser) {
+                    try {
+                        const u = JSON.parse(savedUser);
+                        if (u.role === 'PARENT' && !currentPath.startsWith('/portail-parent')) {
+                            window.location.href = '/portail-parent';
+                            return Promise.reject(error);
+                        }
+                        if (u.role === 'ENSEIGNANT' && !currentPath.startsWith('/portail-enseignant')) {
+                            window.location.href = '/portail-enseignant';
+                            return Promise.reject(error);
+                        }
+                        if (u.role === 'ELEVE' && !currentPath.startsWith('/portail-eleve')) {
+                            window.location.href = '/portail-eleve';
+                            return Promise.reject(error);
+                        }
+                    } catch {}
+                }
             }
         }
         return Promise.reject(error);

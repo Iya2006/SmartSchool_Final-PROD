@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, Edit, CheckCircle2, Loader2 } from 'lucide-react';
+import { ArrowLeft, Save, Edit, CheckCircle2, Loader2, FileText } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 
@@ -283,7 +283,7 @@ export default function ModifierEnseignant() {
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="card" style={{ overflow: 'visible' }}>
                     <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-light)', display: 'flex', alignItems: 'center', gap: '12px', background: '#f8fafc' }}>
                         <div style={{ padding: '8px', background: '#3b82f6', color: 'white', borderRadius: '8px' }}>
-                            <span style={{ fontSize: '18px' }}>📄</span>
+                            <FileText size={18} />
                         </div>
                         <div>
                             <h2 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>Contrat & Rémunération</h2>

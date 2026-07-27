@@ -4,7 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, DollarSign, Receipt, FileText } from 'lucide-react';
+import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, DollarSign, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
@@ -213,8 +213,8 @@ export default function NouveauEleve() {
             </div>
 
             {error && (
-                <div style={{ padding: '16px', background: '#fee2e2', color: '#b91c1c', borderRadius: '12px', fontSize: '14px', fontWeight: 500, border: '1px solid #fecaca' }}>
-                    ⚠️ {error}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '16px', background: '#fee2e2', color: '#b91c1c', borderRadius: '12px', fontSize: '14px', fontWeight: 500, border: '1px solid #fecaca' }}>
+                    <AlertTriangle size={16} /> {error}
                 </div>
             )}
 
@@ -303,7 +303,7 @@ export default function NouveauEleve() {
                             <Shield size={20} />
                         </div>
                         <div>
-                            <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0 }}>Accès Portail Élève 🎓</h2>
+                            <h2 style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '16px', fontWeight: 700, margin: 0 }}>Accès Portail Élève <GraduationCap size={16} /></h2>
                             <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>
                                 L&apos;élève utilisera son <strong>matricule</strong> + ce mot de passe pour se connecter
                             </p>
@@ -311,8 +311,8 @@ export default function NouveauEleve() {
                     </div>
                     <div style={{ padding: '24px 28px' }}>
                         <div style={{ padding: '14px 18px', borderRadius: '12px', background: '#fef3c7', border: '1px solid #fde68a', marginBottom: '18px' }}>
-                            <p style={{ margin: 0, fontSize: '13px', color: '#92400e', fontWeight: 600 }}>
-                                ⚠️ Mot de passe par défaut : <code style={{ background: '#fff', padding: '2px 8px', borderRadius: '6px', fontFamily: 'monospace', fontSize: '14px', border: '1px solid #fed7aa' }}>smartschool</code>
+                            <p style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: 0, fontSize: '13px', color: '#92400e', fontWeight: 600 }}>
+                                <AlertTriangle size={14} /> Mot de passe par défaut : <code style={{ background: '#fff', padding: '2px 8px', borderRadius: '6px', fontFamily: 'monospace', fontSize: '14px', border: '1px solid #fed7aa' }}>smartschool</code>
                             </p>
                             <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#78350f' }}>
                                 Si vous ne saisissez rien, le mot de passe sera <strong>smartschool</strong>. Vous pouvez personnaliser ci-dessous.
@@ -345,7 +345,7 @@ export default function NouveauEleve() {
                         <div>
                             <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0 }}>Parent / Tuteur Responsable</h2>
                             <p style={{ fontSize: '12px', color: '#94a3b8', margin: 0 }}>
-                                Ces informations permettront au parent d&apos;accéder au <strong>Portail Parent</strong> 🔐
+                                Ces informations permettront au parent d&apos;accéder au <strong>Portail Parent</strong> <Lock size={12} style={{ display: 'inline', verticalAlign: 'middle' }} />
                             </p>
                         </div>
                     </div>
@@ -380,7 +380,7 @@ export default function NouveauEleve() {
                                 </select>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                <label style={{ ...LABEL, color: '#10b981' }}>📱 Téléphone principal * <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 400 }}>(Identifiant portail)</span></label>
+                                <label style={{ ...LABEL, color: '#10b981' }}><Smartphone size={14} /> Téléphone principal * <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 400 }}>(Identifiant portail)</span></label>
                                 <input type="tel" name="parent_telephone" value={formData.parent_telephone} onChange={handleChange} placeholder="Ex: 620 00 00 01" style={{ ...FIELD, borderColor: '#10b981' }} />
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

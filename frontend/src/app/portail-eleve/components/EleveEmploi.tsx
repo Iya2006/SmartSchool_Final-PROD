@@ -133,17 +133,19 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
                                                         </p>
                                                         {slot.salle && (
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: '3px', marginTop: '4px' }}>
-                                                                <span style={{ 
-                                                                    display: 'inline-block',
-                                                                    fontSize: '9px', 
-                                                                    color: c.border, 
-                                                                    fontWeight: 800,
-                                                                    background: `${c.border}15`,
-                                                                    padding: '1px 6px',
-                                                                    borderRadius: '6px'
-                                                                }}>
-                                                                    📍 {slot.salle}
-                                                                </span>
+                                                                    <span style={{ 
+                                                                        display: 'inline-flex',
+                                                                        alignItems: 'center',
+                                                                        gap: '2px',
+                                                                        fontSize: '9px', 
+                                                                        color: c.border, 
+                                                                        fontWeight: 800,
+                                                                        background: `${c.border}15`,
+                                                                        padding: '1px 6px',
+                                                                        borderRadius: '6px'
+                                                                    }}>
+                                                                        <MapPin size={9} /> {slot.salle}
+                                                                    </span>
                                                             </div>
                                                         )}
                                                     </div>

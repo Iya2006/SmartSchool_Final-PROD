@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Palette, Sun, Moon, Type, Save, Check, Loader2, Sparkles, Monitor, RefreshCcw, Layout, Calendar, AlertTriangle, Bell, Clock } from 'lucide-react';
+import { Palette, Sun, Moon, Type, Save, Check, Loader2, Sparkles, Monitor, RefreshCcw, Layout, Calendar, AlertTriangle, Bell, Clock, GraduationCap, Users, BookOpen, ClipboardList } from 'lucide-react';
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
 import { useApp, applyThemeStyles } from '@/context/AppContext';
@@ -32,12 +32,12 @@ type ToastState = { msg: string; type: 'success' | 'error' } | null;
 
 /* ─── Data ─── */
 const PRESETS = [
-    { id: 'smartschool', label: 'SmartSchool', emoji: '🎓', primary: '#4f46e5', secondary: '#6366f1', accent: '#0ea5e9', gradient: 'linear-gradient(135deg,#4f46e5,#6366f1)', description: "Le thème officiel SmartSchool" },
-    { id: 'ocean',       label: 'Océan',        emoji: '🌊', primary: '#0369a1', secondary: '#0284c7', accent: '#38bdf8', gradient: 'linear-gradient(135deg,#0369a1,#0ea5e9)', description: 'Bleus profonds et dynamiques' },
-    { id: 'forest',      label: 'Forêt',        emoji: '🌿', primary: '#166534', secondary: '#16a34a', accent: '#4ade80', gradient: 'linear-gradient(135deg,#166534,#16a34a)', description: 'Verts naturels et apaisants' },
-    { id: 'sunset',      label: 'Coucher de Soleil', emoji: '🌅', primary: '#c2410c', secondary: '#ea580c', accent: '#fb923c', gradient: 'linear-gradient(135deg,#c2410c,#f97316)', description: 'Orangés chauds et énergiques' },
-    { id: 'royal',       label: 'Royal',        emoji: '👑', primary: '#7e22ce', secondary: '#9333ea', accent: '#c084fc', gradient: 'linear-gradient(135deg,#7e22ce,#a855f7)', description: 'Violets élégants et raffinés' },
-    { id: 'rouge',       label: 'Grenade',      emoji: '🌹', primary: '#9f1239', secondary: '#be123c', accent: '#fb7185', gradient: 'linear-gradient(135deg,#9f1239,#e11d48)', description: 'Rouges profonds et distingués' },
+    { id: 'smartschool', label: 'SmartSchool', emoji: '', primary: '#4f46e5', secondary: '#6366f1', accent: '#0ea5e9', gradient: 'linear-gradient(135deg,#4f46e5,#6366f1)', description: "Le thème officiel SmartSchool" },
+    { id: 'ocean',       label: 'Océan',        emoji: '', primary: '#0369a1', secondary: '#0284c7', accent: '#38bdf8', gradient: 'linear-gradient(135deg,#0369a1,#0ea5e9)', description: 'Bleus profonds et dynamiques' },
+    { id: 'forest',      label: 'Forêt',        emoji: '', primary: '#166534', secondary: '#16a34a', accent: '#4ade80', gradient: 'linear-gradient(135deg,#166534,#16a34a)', description: 'Verts naturels et apaisants' },
+    { id: 'sunset',      label: 'Coucher de Soleil', emoji: '', primary: '#c2410c', secondary: '#ea580c', accent: '#fb923c', gradient: 'linear-gradient(135deg,#c2410c,#f97316)', description: 'Orangés chauds et énergiques' },
+    { id: 'royal',       label: 'Royal',        emoji: '', primary: '#7e22ce', secondary: '#9333ea', accent: '#c084fc', gradient: 'linear-gradient(135deg,#7e22ce,#a855f7)', description: 'Violets élégants et raffinés' },
+    { id: 'rouge',       label: 'Grenade',      emoji: '', primary: '#9f1239', secondary: '#be123c', accent: '#fb7185', gradient: 'linear-gradient(135deg,#9f1239,#e11d48)', description: 'Rouges profonds et distingués' },
 ];
 const FONTS = [
     { id: 'inter',       label: 'Inter',        style: "'Inter', sans-serif" },
@@ -46,9 +46,9 @@ const FONTS = [
     { id: 'poppins',     label: 'Poppins',       style: "'Poppins', sans-serif" },
 ];
 const COLOR_FIELDS: { key: ThemeColorKey; label: string; hint: string; placeholder: string }[] = [
-    { key: 'primary',   label: '🎨 Couleur Principale',  hint: 'Boutons, liens actifs, barres de navigation', placeholder: '#4f46e5' },
-    { key: 'secondary', label: '🌈 Couleur Secondaire',   hint: 'Survols, dégradés, arrière-plans actifs',     placeholder: '#6366f1' },
-    { key: 'accent',    label: '⚡ Couleur Accent',        hint: 'Badges, alertes, étiquettes, indicateurs',    placeholder: '#0ea5e9' },
+    { key: 'primary',   label: 'Couleur Principale',  hint: 'Boutons, liens actifs, barres de navigation', placeholder: '#4f46e5' },
+    { key: 'secondary', label: 'Couleur Secondaire',   hint: 'Survols, dégradés, arrière-plans actifs',     placeholder: '#6366f1' },
+    { key: 'accent',    label: 'Couleur Accent',        hint: 'Badges, alertes, étiquettes, indicateurs',    placeholder: '#0ea5e9' },
 ];
 const TABS = [
     { id: 'presets' as const, label: 'Thèmes'   },
@@ -70,9 +70,9 @@ const DEFAULT: ThemeConfig = {
     seasonalEnabled: false,
     seasonalAutoApply: false,
     seasonalThemesJson: JSON.stringify([
-        { id: "noel", label: "Noël & Fêtes", emoji: "🎄", primary: "#b91c1c", secondary: "#15803d", accent: "#fbbf24", start: "12-15", end: "01-05", description: "Thème festif rouge et vert pour les fêtes de fin d'année" },
-        { id: "independance", label: "Fête Nationale", emoji: "🇬🇳", primary: "#be123c", secondary: "#15803d", accent: "#f59e0b", start: "09-25", end: "10-05", description: "Thème tricolore aux couleurs de la Guinée" },
-        { id: "vacances", label: "Vacances d'Été", emoji: "☀️", primary: "#ea580c", secondary: "#ca8a04", accent: "#06b6d4", start: "07-01", end: "08-31", description: "Thème ensoleillé et rafraîchissant pour l'été" }
+        { id: "noel", label: "Noël & Fêtes", emoji: "", primary: "#b91c1c", secondary: "#15803d", accent: "#fbbf24", start: "12-15", end: "01-05", description: "Thème festif rouge et vert pour les fêtes de fin d'année" },
+        { id: "independance", label: "Fête Nationale", emoji: "", primary: "#be123c", secondary: "#15803d", accent: "#f59e0b", start: "09-25", end: "10-05", description: "Thème tricolore aux couleurs de la Guinée" },
+        { id: "vacances", label: "Vacances d'Été", emoji: "", primary: "#ea580c", secondary: "#ca8a04", accent: "#06b6d4", start: "07-01", end: "08-31", description: "Thème ensoleillé et rafraîchissant pour l'été" }
     ])
 };
 
@@ -200,7 +200,7 @@ export default function ApparencePage() {
                             className={`${styles.toast} ${toast.type === 'success' ? styles.toastSuccess : styles.toastError}`}
                             initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}
                         >
-                            {toast.type === 'success' ? <Check size={16} /> : '⚠'} {toast.msg}
+                            {toast.type === 'success' ? <Check size={16} /> : <AlertTriangle size={16} />} {toast.msg}
                         </motion.div>
                     )}
                 </AnimatePresence>
@@ -351,9 +351,9 @@ export default function ApparencePage() {
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', marginTop: '1rem' }}>
                                     {[
-                                        { key: 'Eleve' as const, label: 'Portail Élève', desc: "S'applique à l'espace élève", colorKey: 'couleurEleve' as const, msgKey: 'msgEleve' as const, icon: '👨🎓', defaultColor: '#0284c7' },
-                                        { key: 'Parent' as const, label: 'Portail Parent', desc: "S'applique à l'espace parent", colorKey: 'couleurParent' as const, msgKey: 'msgParent' as const, icon: '👨👩👦', defaultColor: '#16a34a' },
-                                        { key: 'Enseignant' as const, label: 'Portail Enseignant', desc: "S'applique à l'espace enseignant", colorKey: 'couleurEnseignant' as const, msgKey: 'msgEnseignant' as const, icon: '👩🏫', defaultColor: '#7e22ce' }
+                                        { key: 'Eleve' as const, label: 'Portail Élève', desc: "S'applique à l'espace élève", colorKey: 'couleurEleve' as const, msgKey: 'msgEleve' as const, icon: <GraduationCap size={24} />, defaultColor: '#0284c7' },
+                                        { key: 'Parent' as const, label: 'Portail Parent', desc: "S'applique à l'espace parent", colorKey: 'couleurParent' as const, msgKey: 'msgParent' as const, icon: <Users size={24} />, defaultColor: '#16a34a' },
+                                        { key: 'Enseignant' as const, label: 'Portail Enseignant', desc: "S'applique à l'espace enseignant", colorKey: 'couleurEnseignant' as const, msgKey: 'msgEnseignant' as const, icon: <BookOpen size={24} />, defaultColor: '#7e22ce' }
                                     ].map(p => (
                                         <div key={p.key} style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem', padding: '1.5rem', background: '#f8fafc', borderRadius: '16px', border: '1px solid #e2e8f0' }}>
                                             <div>
@@ -426,7 +426,7 @@ export default function ApparencePage() {
                                         </div>
 
                                         {/* Seasonal themes list */}
-                                        <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>📋 Liste des thèmes configurés</h3>
+                                        <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><ClipboardList size={20} /> Liste des thèmes configurés</h3>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                             {(() => {
                                                 let themesList: any[] = [];
@@ -525,7 +525,7 @@ export default function ApparencePage() {
                                     {([
                                         { label: 'Thème', value: PRESETS.find((p) => p.id === theme.preset)?.label ?? 'Personnalisé' },
                                         { label: 'Police', value: FONTS.find((f) => f.id === theme.font)?.label ?? 'Inter' },
-                                        { label: 'Mode', value: theme.darkMode ? '🌙 Sombre' : '☀️ Clair' },
+                                        { label: 'Mode', value: theme.darkMode ? 'Sombre' : 'Clair' },
                                     ] as { label: string; value: string }[]).map(({ label, value }) => (
                                         <div key={label} className={styles.themeSummaryItem}>
                                             <span>{label}</span><strong>{value}</strong>

@@ -37,6 +37,11 @@ from app.api.comptabilite import router as comptabilite_router
 from app.api.personnel import router as personnel_router
 from app.api.presence_agent import router as presence_agent_router
 from app.api.securite import router as securite_router
+from app.api.evenements import router as evenements_router
+from app.api.activites import router as activites_router
+from app.api.bibliotheque import router as bibliotheque_router
+from app.api.informatique import router as informatique_router
+from app.api.pointage_eleves import router as pointage_eleves_router
 
 
 # Création des tables au démarrage
@@ -104,10 +109,20 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 from fastapi import Depends
 from app.core.auth import get_current_user, require_roles, ADMIN_TIER_ROLES
 
-# Rôles autorisés sur les modules Finance / Comptabilité / RH / Présences agents :
+# Rôles autorisés sur les modules Finance / Comptabilité :
 # l'équipe de direction (ADMIN_TIER_ROLES) + le rôle COMPTABLE dédié.
 # Aucun rôle externe (ENSEIGNANT, PARENT, ELEVE) ne doit jamais y avoir accès.
 FINANCE_ROLES = (*ADMIN_TIER_ROLES, "COMPTABLE")
+
+# RH / Personnel : direction + rôles métiers internes autorisés à consulter leur espace.
+PERSONNEL_ROLES = (
+    *ADMIN_TIER_ROLES,
+    "COMPTABLE",
+    "BIBLIOTHECAIRE",
+    "INFORMATICIEN",
+    "SURVEILLANT",
+    "OPERATEUR",
+)
 
 # Sujets d'examens : direction + enseignants uniquement.
 # Un élève/parent authentifié ne doit jamais pouvoir lister ou télécharger un
@@ -135,8 +150,13 @@ app.include_router(examens_router, dependencies=[Depends(require_roles(*EXAMENS_
 app.include_router(devoirs_router, dependencies=[Depends(get_current_user)])
 app.include_router(photos_router, dependencies=[Depends(get_current_user)])
 app.include_router(fournitures_router, dependencies=[Depends(get_current_user)])
-app.include_router(personnel_router, dependencies=[Depends(require_roles(*FINANCE_ROLES))])
-app.include_router(presence_agent_router, dependencies=[Depends(require_roles(*FINANCE_ROLES))])
+app.include_router(personnel_router, dependencies=[Depends(require_roles(*PERSONNEL_ROLES))])
+app.include_router(presence_agent_router, dependencies=[Depends(get_current_user)])
+app.include_router(pointage_eleves_router, dependencies=[Depends(get_current_user)])
+app.include_router(evenements_router, dependencies=[Depends(get_current_user)])
+app.include_router(activites_router, dependencies=[Depends(get_current_user)])
+app.include_router(bibliotheque_router)
+app.include_router(informatique_router)
 
 # ── Routes PUBLIQUES (gèrent leur propre authentification) ──
 app.include_router(auth_router)           # Login admin → retourne le JWT

@@ -116,6 +116,15 @@ function buildParam(key: string, value: any) {
     return { etablissement_id: 1, categorie: 'FINANCE', cle: `finance.${key}`, valeur, type_valeur };
 }
 
+const extractError = (e: any, defaultMsg: string) => {
+    if (e?.response?.data?.detail) {
+        const d = e.response.data.detail;
+        if (typeof d === 'string') return d;
+        if (Array.isArray(d)) return d.map((err: any) => err.msg).join(', ');
+    }
+    return e?.message || defaultMsg;
+};
+
 /* ─── Toggle Component ─── */
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
     return (
@@ -233,7 +242,7 @@ export default function FinancePage() {
             setToast({ msg: 'Type de frais créé', type: 'success' });
             setTimeout(() => setToast(null), 2500);
         } catch (e: any) {
-            setToast({ msg: e?.response?.data?.detail || 'Erreur lors de la création', type: 'error' });
+            setToast({ msg: extractError(e, 'Erreur lors de la création'), type: 'error' });
             setTimeout(() => setToast(null), 3500);
         }
     };
@@ -254,7 +263,7 @@ export default function FinancePage() {
             setTypesFrais(prev => prev.map(t => t.type_frais_id === editingTypeId ? res.data : t));
             setEditingTypeId(null);
         } catch (e: any) {
-            setToast({ msg: e?.response?.data?.detail || 'Erreur lors de la mise à jour', type: 'error' });
+            setToast({ msg: extractError(e, 'Erreur lors de la mise à jour'), type: 'error' });
             setTimeout(() => setToast(null), 3500);
         }
     };
@@ -265,7 +274,7 @@ export default function FinancePage() {
             await api.delete(`/api/finance/types-frais/${id}`);
             setTypesFrais(prev => prev.filter(t => t.type_frais_id !== id));
         } catch (e: any) {
-            setToast({ msg: e?.response?.data?.detail || 'Suppression impossible', type: 'error' });
+            setToast({ msg: extractError(e, 'Suppression impossible'), type: 'error' });
             setTimeout(() => setToast(null), 3500);
         }
     };
@@ -283,7 +292,7 @@ export default function FinancePage() {
             setPinForm({ ancien: '', nouveau: '', confirmer: '' });
             setPinConfigured(true);
         } catch (e: any) {
-            setPinMsg({ text: e?.response?.data?.detail || 'Erreur lors de la modification du PIN', type: 'error' });
+            setPinMsg({ text: extractError(e, 'Erreur lors de la modification du PIN'), type: 'error' });
         }
         setPinSaving(false);
     };

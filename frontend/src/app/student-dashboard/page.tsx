@@ -21,19 +21,19 @@ const courses = [
 ];
 
 const upcomingClasses = [
-    { subject: 'Mathématiques', topic: 'Algèbre — Équations Linéaires', time: 'Aujourd\'hui, 10h00 - 11h00', icon: '📐', color: '#3b82f6' },
-    { subject: 'Chimie', topic: 'Composés Organiques', time: 'Aujourd\'hui, 12h00 - 13h00', icon: '🧪', color: '#10b981' },
-    { subject: 'Géographie', topic: 'Zones Climatiques', time: 'Aujourd\'hui, 15h00 - 16h00', icon: '🌍', color: '#f59e0b' },
-    { subject: 'Informatique', topic: 'Introduction à Python', time: 'Aujourd\'hui, 17h30 - 18h30', icon: '💻', color: '#6366f1' },
+    { subject: 'Mathématiques', topic: 'Algèbre — Équations Linéaires', time: 'Aujourd\'hui, 10h00 - 11h00', icon: '', color: '#3b82f6' },
+    { subject: 'Chimie', topic: 'Composés Organiques', time: 'Aujourd\'hui, 12h00 - 13h00', icon: '', color: '#10b981' },
+    { subject: 'Géographie', topic: 'Zones Climatiques', time: 'Aujourd\'hui, 15h00 - 16h00', icon: '', color: '#f59e0b' },
+    { subject: 'Informatique', topic: 'Introduction à Python', time: 'Aujourd\'hui, 17h30 - 18h30', icon: '', color: '#6366f1' },
 ];
 
 const assignmentsList = [
-    { title: 'Devoir de Maths — Algèbre', deadline: 'Aujourd\'hui, 18h00', status: 'pending', icon: '📝' },
-    { title: 'Rapport de Labo Chimie', deadline: 'Demain, 23h59', status: 'pending', icon: '🧪' },
-    { title: 'Exposé Histoire — Seconde Guerre', deadline: 'Mercredi, 10h00', status: 'pending', icon: '📜' },
-    { title: 'Dissertation Anglais — Shakespeare', deadline: 'Vendredi, 16h00', status: 'pending', icon: '📖' },
-    { title: 'Dissertation Géographie — Zones Climatiques', deadline: 'Soumis', status: 'completed', icon: '🌍' },
-    { title: 'Informatique — Les Bases Python', deadline: 'Soumis', status: 'completed', icon: '💻' },
+    { title: 'Devoir de Maths — Algèbre', deadline: 'Aujourd\'hui, 18h00', status: 'pending', icon: '' },
+    { title: 'Rapport de Labo Chimie', deadline: 'Demain, 23h59', status: 'pending', icon: '' },
+    { title: 'Exposé Histoire — Seconde Guerre', deadline: 'Mercredi, 10h00', status: 'pending', icon: 'FileText' },
+    { title: 'Dissertation Anglais — Shakespeare', deadline: 'Vendredi, 16h00', status: 'pending', icon: 'BookOpen' },
+    { title: 'Dissertation Géographie — Zones Climatiques', deadline: 'Soumis', status: 'completed', icon: '' },
+    { title: 'Informatique — Les Bases Python', deadline: 'Soumis', status: 'completed', icon: '' },
 ];
 
 const discussions = [
@@ -112,7 +112,7 @@ export default function StudentDashboard() {
                                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = 'none'; (e.currentTarget as HTMLElement).style.transform = 'translateY(0)'; }}
                             >
                                 <div style={{ height: '120px', background: `linear-gradient(135deg, ${course.color}, ${course.color}88)`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '36px' }}>
-                                    📚
+                                    <BookOpen size={14} />
                                 </div>
                                 <div style={{ padding: '16px' }}>
                                     <p style={{ fontWeight: 700, fontSize: '13px', marginBottom: '4px', lineHeight: '1.4', minHeight: '36px' }}>{course.title}</p>
@@ -152,7 +152,7 @@ export default function StudentDashboard() {
                                     <div>
                                         <p style={{ fontWeight: 700, fontSize: '14px' }}>{cls.subject}</p>
                                         <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Topic: {cls.topic}</p>
-                                        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>🕐 {cls.time}</p>
+                                        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}><Clock size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '2px' }} /> {cls.time}</p>
                                     </div>
                                 </div>
                                 <button className="btn btn-primary btn-sm"><Play size={14} /> Rejoindre</button>
@@ -172,7 +172,7 @@ export default function StudentDashboard() {
                                     <span style={{ fontSize: '18px' }}>{a.icon}</span>
                                     <div>
                                         <p style={{ fontWeight: 600, fontSize: '14px' }}>{a.title}</p>
-                                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>🕐 {a.deadline}</p>
+                                        <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}><Clock size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '2px' }} /> {a.deadline}</p>
                                     </div>
                                 </div>
                                 <span className={`badge ${a.status === 'completed' ? 'badge-success' : 'badge-warning'}`}>

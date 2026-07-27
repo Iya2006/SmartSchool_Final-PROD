@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Calendar, ChevronRight, Loader2, Eye, Edit3, X, Clock, Send,
-    CheckCircle2, AlertCircle, AlertTriangle, ArrowRight, Zap, BookOpen
+    CheckCircle2, AlertCircle, AlertTriangle, ArrowRight, Zap, BookOpen, User, Utensils, CheckCircle
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -135,7 +135,7 @@ export default function EmploisGeneresPage() {
             {/* Warning Banner */}
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}
                 style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 20px', background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '14px', fontSize: '13px', color: '#92400e' }}>
-                <AlertTriangle size={18} /><span><strong>⚠️ Rappel :</strong> Veuillez bien vérifier chaque emploi du temps avant de le rendre définitif. Les modifications sont possibles via la page de gestion complète.</span>
+                <AlertTriangle size={18} /><span><strong>Rappel :</strong> Veuillez bien vérifier chaque emploi du temps avant de le rendre définitif. Les modifications sont possibles via la page de gestion complète.</span>
             </motion.div>
 
             {/* Liste des emplois */}
@@ -163,10 +163,10 @@ export default function EmploisGeneresPage() {
 
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
                                     <div>
-                                        <h3 style={{ margin: '0 0 4px', fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}>📚 {e.classe_libelle}</h3>
+                                        <h3 style={{ margin: '0 0 4px', fontSize: '17px', fontWeight: 800, color: 'var(--text-primary)' }}><BookOpen size={16} style={{display:'inline',verticalAlign:'middle',marginRight:'6px'}}/>{e.classe_libelle}</h3>
                                         <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>{e.nb_creneaux} créneaux • {joursUtilises.length} jours</p>
                                     </div>
-                                    <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '11px', fontWeight: 700, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0' }}>✅ Généré</span>
+                                    <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '11px', fontWeight: 700, background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><CheckCircle size={12}/> Généré</span>
                                 </div>
 
                                 {/* Mini timetable preview */}
@@ -216,7 +216,7 @@ export default function EmploisGeneresPage() {
                             {/* Header */}
                             <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #0f766e, #14b8a6)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
                                 <div>
-                                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800 }}>📚 {selectedEmploi.classe_libelle}</h3>
+                                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800 }}><BookOpen size={16} style={{display:'inline',verticalAlign:'middle',marginRight:'6px'}}/>{selectedEmploi.classe_libelle}</h3>
                                     <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>{selectedEmploi.nb_creneaux} créneaux • Veuillez vérifier avant de publier</p>
                                 </div>
                                 <button onClick={() => setShowPreview(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '8px', width: '30px', height: '30px', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} /></button>
@@ -239,7 +239,7 @@ export default function EmploisGeneresPage() {
                                             return (
                                                 <React.Fragment key={h.debut}>
                                                     {isPause && (
-                                                        <tr><td colSpan={6} style={{ padding: '6px', textAlign: 'center', fontSize: '11px', color: '#f59e0b', fontWeight: 700, background: '#fffbeb', borderRadius: '6px' }}>🕐 Pause déjeuner — 12h00 - 14h00</td></tr>
+                                                        <tr><td colSpan={6} style={{ padding: '6px', textAlign: 'center', fontSize: '11px', color: '#f59e0b', fontWeight: 700, background: '#fffbeb', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}><Utensils size={11}/> Pause déjeuner — 12h00 - 14h00</td></tr>
                                                     )}
                                                     <tr>
                                                         <td style={{ padding: '8px', fontWeight: 600, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h.debut}-{h.fin}</td>
@@ -251,7 +251,7 @@ export default function EmploisGeneresPage() {
                                                                 <td key={j} style={{ padding: '8px', background: color + '10', borderRadius: '8px', borderLeft: `3px solid ${color}`, textAlign: 'center' }}>
                                                                     <p style={{ margin: 0, fontWeight: 700, fontSize: '11px', color }}>{slot.matiere_code}</p>
                                                                     <p style={{ margin: '2px 0 0', fontSize: '10px', color: 'var(--text-muted)' }}>{slot.matiere_libelle}</p>
-                                                                    {slot.enseignant_nom && <p style={{ margin: '1px 0 0', fontSize: '9px', color: 'var(--text-muted)' }}>👤 {slot.enseignant_nom}</p>}
+                                                                    {slot.enseignant_nom && <p style={{ margin: '1px 0 0', fontSize: '9px', color: 'var(--text-muted)' }}><User size={9} style={{display:'inline',verticalAlign:'middle'}}/> {slot.enseignant_nom}</p>}
                                                                 </td>
                                                             );
                                                         })}
@@ -270,7 +270,7 @@ export default function EmploisGeneresPage() {
                                     fontSize: '12px', fontWeight: 700, background: 'white', color: 'var(--text-secondary)',
                                     border: '1px solid var(--border-light)', textDecoration: 'none', cursor: 'pointer'
                                 }}><Edit3 size={13} /> Modifier cet emploi</Link>
-                                <button onClick={() => { showSuccess(`✅ Emploi de ${selectedEmploi.classe_libelle} validé !`); setShowPreview(false); }} style={{
+                                <button onClick={() => { showSuccess(`Emploi de ${selectedEmploi.classe_libelle} validé !`); setShowPreview(false); }} style={{
                                     display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 24px', borderRadius: '10px',
                                     fontSize: '13px', fontWeight: 700, background: 'linear-gradient(135deg, #0f766e, #14b8a6)',
                                     color: 'white', border: 'none', cursor: 'pointer'

@@ -181,7 +181,8 @@ async def upload_photo(entity_type: str, entity_id: int, fichier: UploadFile = F
             target_name = f"{row[1]} {row[0]}" if row else "Parent"
 
         sujet = f"📷 Nouvelle photo en attente de validation ({target_name})"
-        contenu = f"Une nouvelle photo de profil a été soumise par {target_name} et nécessite votre validation."
+        contenu_base = f"Une nouvelle photo de profil a été soumise par {target_name} et nécessite votre validation."
+        contenu = f"{contenu_base}\n---PHOTO_META---\nentity_id={entity_id}\nentity_type={entity_type}\ntarget_name={target_name}"
         
         db.execute(text("""
             INSERT INTO ss_messages (expediteur_type, expediteur_id, destinataire_type, destinataire_id, objet_type, sujet, contenu, statut)
@@ -264,10 +265,12 @@ async def parent_upload_photo(entity_type: str, entity_id: int, parent_id: int =
 
         if entity_type == "parent":
             sujet = f"📷 {parent_name} a envoyé sa photo"
-            contenu = f"Le parent {parent_name} a envoyé sa photo, elle est en attente de validation."
+            contenu_base = f"Le parent {parent_name} a envoyé sa photo, elle est en attente de validation."
         else:
             sujet = f"📷 Photo reçue pour {target_name}"
-            contenu = f"Le parent {parent_name} a envoyé la photo de {target_name}, elle est en attente de validation."
+            contenu_base = f"Le parent {parent_name} a envoyé la photo de {target_name}, elle est en attente de validation."
+
+        contenu = f"{contenu_base}\n---PHOTO_META---\nentity_id={entity_id}\nentity_type={entity_type}\ntarget_name={target_name}"
 
         db.execute(text("""
             INSERT INTO ss_messages (expediteur_type, expediteur_id, destinataire_type, destinataire_id, objet_type, sujet, contenu, statut)
@@ -329,6 +332,33 @@ def get_entity_pending(entity_type: str, entity_id: int):
         if p:
             return {"photo_id": p.photo_id, "file_path": p.file_path, "date_upload": p.date_upload}
         return None
+    finally:
+        db.close()
+
+@router.get("/parent-pending/{parent_id}")
+def get_parent_pending(parent_id: int):
+    db = SessionLocal()
+    from app.models.academique import PhotoEnAttente
+    from sqlalchemy import or_, and_
+    try:
+        children_ids = [r[0] for r in db.execute(text("SELECT eleve_id FROM ss_eleve_parent WHERE parent_id = :pid"), {"pid": parent_id}).fetchall()]
+        conditions = [and_(PhotoEnAttente.entity_type == 'parent', PhotoEnAttente.entity_id == parent_id)]
+        if children_ids:
+            conditions.append(and_(PhotoEnAttente.entity_type == 'eleve', PhotoEnAttente.entity_id.in_(children_ids)))
+        pending = db.query(PhotoEnAttente).filter(
+            PhotoEnAttente.statut == 'EN_ATTENTE',
+            or_(*conditions)
+        ).all()
+        return [
+            {
+                "photo_id": p.photo_id,
+                "entity_type": p.entity_type,
+                "entity_id": p.entity_id,
+                "file_path": p.file_path,
+                "date_upload": str(p.date_upload) if p.date_upload else None
+            }
+            for p in pending
+        ]
     finally:
         db.close()
 

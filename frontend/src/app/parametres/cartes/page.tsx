@@ -6,7 +6,7 @@ import {
     CreditCard, Save, Loader2, Layout, Palette, 
     Eye, AlignCenter, AlignLeft, AlignRight, 
     ToggleLeft, Type, Check, X,
-    Upload, ImageIcon, Sparkles, Monitor
+    Upload, ImageIcon, Sparkles, Monitor, GraduationCap, Briefcase
 } from 'lucide-react';
 import SettingsLayout from '@/components/SettingsLayout';
 import BadgeCarte from '@/components/BadgeCarte';
@@ -46,16 +46,16 @@ type ToastState = { msg: string; type: 'success' | 'error' } | null;
 
 /* ─── Constants ─── */
 const TEMPLATES = [
-    { id: 'classique', label: 'Classique',        emoji: '🎓', colorStart: '#1e293b', colorEnd: '#0f172a', angle: 135, description: 'Fond sombre élégant' },
-    { id: 'ocean',     label: 'Océan',             emoji: '🌊', colorStart: '#0369a1', colorEnd: '#0c4a6e', angle: 135, description: 'Bleus profonds' },
-    { id: 'foret',     label: 'Forêt',             emoji: '🌿', colorStart: '#166534', colorEnd: '#14532d', angle: 135, description: 'Verts naturels' },
-    { id: 'royal',     label: 'Royal',             emoji: '👑', colorStart: '#7e22ce', colorEnd: '#581c87', angle: 135, description: 'Violets raffinés' },
-    { id: 'sunset',    label: 'Coucher de Soleil', emoji: '🌅', colorStart: '#c2410c', colorEnd: '#7c2d12', angle: 135, description: 'Orangés chaleureux' },
-    { id: 'minuit',    label: 'Minuit',            emoji: '🌙', colorStart: '#312e81', colorEnd: '#1e1b4b', angle: 160, description: 'Indigo mystérieux' },
+    { id: 'classique', label: 'Classique',        emoji: '', colorStart: '#1e293b', colorEnd: '#0f172a', angle: 135, description: 'Fond sombre élégant' },
+    { id: 'ocean',     label: 'Océan',             emoji: '', colorStart: '#0369a1', colorEnd: '#0c4a6e', angle: 135, description: 'Bleus profonds' },
+    { id: 'foret',     label: 'Forêt',             emoji: '', colorStart: '#166534', colorEnd: '#14532d', angle: 135, description: 'Verts naturels' },
+    { id: 'royal',     label: 'Royal',             emoji: '', colorStart: '#7e22ce', colorEnd: '#581c87', angle: 135, description: 'Violets raffinés' },
+    { id: 'sunset',    label: 'Coucher de Soleil', emoji: '', colorStart: '#c2410c', colorEnd: '#7c2d12', angle: 135, description: 'Orangés chaleureux' },
+    { id: 'minuit',    label: 'Minuit',            emoji: '', colorStart: '#312e81', colorEnd: '#1e1b4b', angle: 160, description: 'Indigo mystérieux' },
 ];
 
 const FORMATS = [
-    { id: 'vertical',   label: 'Portrait',   icon: '▯', desc: '320 × 500 px', sub: 'Format standard badge' },
+    { id: 'vertical',   label: 'Portrait',   icon: '□', desc: '320 × 500 px', sub: 'Format standard badge' },
     { id: 'horizontal', label: 'Paysage',    icon: '▭', desc: '500 × 320 px', sub: 'Format carte magnétique' },
     { id: 'compact',    label: 'Compact',    icon: '⬜', desc: '280 × 400 px', sub: 'Format économique' },
 ];
@@ -371,14 +371,14 @@ export default function CartesPage() {
                         className={`${styles.roleTab} ${activeRole === 'eleve' ? styles.roleTabActive : ''}`}
                         onClick={() => handleRoleChange('eleve')}
                     >
-                        🎓 Élève
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><GraduationCap size={16} /> Élève</span>
                     </button>
                     <button
                         type="button"
                         className={`${styles.roleTab} ${activeRole === 'enseignant' ? styles.roleTabActive : ''}`}
                         onClick={() => handleRoleChange('enseignant')}
                     >
-                        💼 Enseignant
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Briefcase size={16} /> Enseignant</span>
                     </button>
                 </div>
             </div>

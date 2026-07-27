@@ -9,7 +9,7 @@ import {
     Plus, Eye, Printer, XCircle, ChevronDown, Filter, Calendar,
     Briefcase, PieChart, BarChart3, Receipt, Wallet, HandCoins,
     CircleDollarSign, Landmark, Percent, Award, Ban, Clock, ChevronRight, CheckCircle,
-    AlertCircle, Loader2
+    AlertCircle, Loader2, Store, Package, Wrench, Monitor, Bus, Signal, ClipboardList
 } from 'lucide-react';
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -97,15 +97,15 @@ const CATEGORIE_DEPENSES = [
     'EQUIPEMENT', 'TRANSPORT', 'COMMUNICATION', 'AUTRE'
 ];
 
-const CATEGORIE_INFO: Record<string, { label: string; color: string; bg: string; emoji: string; benefLabel: string; benefPlaceholder: string }> = {
-    'FOURNISSEUR':   { label: 'Fournisseur',   color: '#7c3aed', bg: '#ede9fe', emoji: '🏪', benefLabel: 'Nom du fournisseur *', benefPlaceholder: 'Ex: Librairie Scolaire, Imprimerie ABC...' },
-    'SALAIRES':      { label: 'Salaires',       color: '#0891b2', bg: '#e0f2fe', emoji: '👨‍💼', benefLabel: 'Bénéficiaire (employé ou groupe) *', benefPlaceholder: 'Ex: Corps Enseignant - Juin, M. Diallo Ibrahima...' },
-    'FOURNITURES':   { label: 'Fournitures',    color: '#d97706', bg: '#fef3c7', emoji: '📦', benefLabel: 'Fournisseur', benefPlaceholder: 'Ex: Papeterie Centrale...' },
-    'MAINTENANCE':   { label: 'Maintenance',    color: '#dc2626', bg: '#fee2e2', emoji: '🔧', benefLabel: 'Prestataire / Technicien', benefPlaceholder: 'Ex: Entreprise XYZ Maintenance...' },
-    'EQUIPEMENT':    { label: 'Équipement',     color: '#059669', bg: '#d1fae5', emoji: '🖥️', benefLabel: 'Fournisseur / Vendeur', benefPlaceholder: 'Ex: Magasin Électronique...' },
-    'TRANSPORT':     { label: 'Transport',      color: '#2563eb', bg: '#dbeafe', emoji: '🚌', benefLabel: 'Prestataire Transport', benefPlaceholder: 'Ex: Société de Transport Alpha...' },
-    'COMMUNICATION': { label: 'Communication',  color: '#7c3aed', bg: '#ede9fe', emoji: '📡', benefLabel: 'Opérateur / Fournisseur', benefPlaceholder: 'Ex: Orange Guinée, Connexion Internet...' },
-    'AUTRE':         { label: 'Autre',           color: '#475569', bg: '#f1f5f9', emoji: '📋', benefLabel: 'Bénéficiaire / Destinataire', benefPlaceholder: 'Ex: Nom de la personne ou entité...' },
+const CATEGORIE_INFO: Record<string, { label: string; color: string; bg: string; icon: any; benefLabel: string; benefPlaceholder: string }> = {
+    'FOURNISSEUR':   { label: 'Fournisseur',   color: '#7c3aed', bg: '#ede9fe', icon: Store, benefLabel: 'Nom du fournisseur *', benefPlaceholder: 'Ex: Librairie Scolaire, Imprimerie ABC...' },
+    'SALAIRES':      { label: 'Salaires',       color: '#0891b2', bg: '#e0f2fe', icon: Briefcase, benefLabel: 'Bénéficiaire (employé ou groupe) *', benefPlaceholder: 'Ex: Corps Enseignant - Juin, M. Diallo Ibrahima...' },
+    'FOURNITURES':   { label: 'Fournitures',    color: '#d97706', bg: '#fef3c7', icon: Package, benefLabel: 'Fournisseur', benefPlaceholder: 'Ex: Papeterie Centrale...' },
+    'MAINTENANCE':   { label: 'Maintenance',    color: '#dc2626', bg: '#fee2e2', icon: Wrench, benefLabel: 'Prestataire / Technicien', benefPlaceholder: 'Ex: Entreprise XYZ Maintenance...' },
+    'EQUIPEMENT':    { label: 'Équipement',     color: '#059669', bg: '#d1fae5', icon: Monitor, benefLabel: 'Fournisseur / Vendeur', benefPlaceholder: 'Ex: Magasin Électronique...' },
+    'TRANSPORT':     { label: 'Transport',      color: '#2563eb', bg: '#dbeafe', icon: Bus, benefLabel: 'Prestataire Transport', benefPlaceholder: 'Ex: Société de Transport Alpha...' },
+    'COMMUNICATION': { label: 'Communication',  color: '#7c3aed', bg: '#ede9fe', icon: Signal, benefLabel: 'Opérateur / Fournisseur', benefPlaceholder: 'Ex: Orange Guinée, Connexion Internet...' },
+    'AUTRE':         { label: 'Autre',           color: '#475569', bg: '#f1f5f9', icon: ClipboardList, benefLabel: 'Bénéficiaire / Destinataire', benefPlaceholder: 'Ex: Nom de la personne ou entité...' },
 };
 
 function Badge({ statut }: { statut: string }) {
@@ -810,7 +810,7 @@ export default function GestionPaiements() {
                                 >
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                            <span style={{ fontSize: '24px' }}>{info.emoji}</span>
+                                            <info.icon size={24} style={{ color: info.color }} />
                                             <div>
                                                 <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>{info.label}</p>
                                                 <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#94a3b8' }}>{nb} opération(s)</p>
@@ -855,7 +855,7 @@ export default function GestionPaiements() {
 
                     {/* Dernières opérations */}
                     <div style={cardStyle}>
-                        <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>🕐 Dernières Opérations</h3>
+                        <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}><Clock size={16} /> Dernières Opérations</h3>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             {depenses.slice(0, 15).map(d => {
                                 const info = CATEGORIE_INFO[d.categorie] || CATEGORIE_INFO['AUTRE'];
@@ -866,7 +866,7 @@ export default function GestionPaiements() {
                                         borderLeft: `3px solid ${info.color}`
                                     }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                            <span style={{ fontSize: '18px' }}>{info.emoji}</span>
+                                            <info.icon size={18} style={{ color: info.color }} />
                                             <div>
                                                 <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>
                                                     {d.fournisseur || d.description || info.label}
@@ -1301,7 +1301,7 @@ export default function GestionPaiements() {
                             {/* Header coloré selon la catégorie */}
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', padding: '16px 20px', borderRadius: '12px', background: info.bg, border: `1px solid ${info.color}30` }}>
                                 <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: info.color, display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                    <span style={{ fontSize: '24px' }}>{info.emoji}</span>
+                                    {info.icon && <info.icon size={22} />}
                                     Nouveau Décaissement — {info.label}
                                 </h2>
                                 <button onClick={() => setShowFournisseurForm(false)} style={{ background: 'white', border: 'none', borderRadius: '10px', padding: '8px', cursor: 'pointer' }}>
@@ -1319,7 +1319,7 @@ export default function GestionPaiements() {
                                         return (
                                             <button key={cat} onClick={() => setDecaisFormCategorie(cat)}
                                                 style={{ padding: '6px 12px', borderRadius: '8px', border: `2px solid ${isActive ? ci.color : '#e2e8f0'}`, background: isActive ? ci.bg : 'white', color: isActive ? ci.color : '#64748b', fontSize: '12px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s' }}>
-                                                {ci.emoji} {ci.label}
+                                                {ci.icon && <ci.icon size={14} />} {ci.label}
                                             </button>
                                         );
                                     })}
@@ -1386,7 +1386,7 @@ export default function GestionPaiements() {
                         <div style={{ background: 'linear-gradient(135deg, #0891b2, #0e7490)', padding: '24px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                                 <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: 'white', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                    👨‍💼 Gestion des Salaires — Corps Enseignant
+                                    <Briefcase size={20} /> Gestion des Salaires — Corps Enseignant
                                 </h2>
                                 <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'rgba(255,255,255,0.8)' }}>Sélectionnez un enseignant pour enregistrer son paiement</p>
                             </div>
@@ -1527,8 +1527,8 @@ export default function GestionPaiements() {
                                     }}>
                                         <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: selectedEns.paye_ce_mois ? '#059669' : '#d97706' }}>
                                             {selectedEns.paye_ce_mois
-                                                ? `✅ Salaire déjà payé pour ${salairesMois}`
-                                                : `⏳ Salaire non payé pour ${salairesMois}`
+                                                ? <span style={{display: 'inline-flex', alignItems: 'center', gap: '4px'}}><CheckCircle2 size={14} /> Salaire déjà payé pour {salairesMois}</span>
+                                                : <span style={{display: 'inline-flex', alignItems: 'center', gap: '4px'}}><Clock size={14} /> Salaire non payé pour {salairesMois}</span>
                                             }
                                         </p>
                                     </div>
@@ -1558,7 +1558,7 @@ export default function GestionPaiements() {
                                             }}>
                                             {salairePaying === selectedEns.id
                                                 ? 'Enregistrement...'
-                                                : `💸 Payer le Salaire`
+                                                : <span style={{display: 'inline-flex', alignItems: 'center', gap: '4px'}}><Banknote size={14} /> Payer le Salaire</span>
                                             }
                                         </button>
                                     </div>
@@ -1566,8 +1566,8 @@ export default function GestionPaiements() {
                                     {/* Historique des paiements de cet enseignant */}
                                     {selectedEns.historique.length > 0 && (
                                         <div style={{ background: 'white', borderRadius: '12px', padding: '16px', border: '1px solid #e2e8f0' }}>
-                                            <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>
-                                                📅 Historique des paiements
+                                            <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                <Calendar size={14} /> Historique des paiements
                                             </h4>
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                                 {selectedEns.historique.map((h, i) => (

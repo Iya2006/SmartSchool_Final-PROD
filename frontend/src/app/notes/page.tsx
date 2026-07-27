@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     ClipboardList, Search, Filter, BarChart3, Users, BookOpen, Trophy,
     ChevronDown, AlertCircle, Check, Edit3, Save, Eye, Calculator,
-    FileText, X, ArrowUpDown, TrendingUp, TrendingDown, Minus
+    FileText, X, ArrowUpDown, TrendingUp, TrendingDown, Minus, CheckCircle2
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
@@ -194,7 +194,7 @@ export default function CentralisationNotesPage() {
                             style={{ padding: '10px 16px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', fontWeight: 600, minWidth: '280px', background: 'white', cursor: 'pointer' }}>
                             <option value="">— Sélectionner une classe —</option>
                             {Object.entries(groupedClasses).map(([cycle, cls]: [string, any]) => (
-                                <optgroup key={cycle} label={`📚 ${cycle}`}>
+                                <optgroup key={cycle} label={`${cycle}`}>
                                     {cls.map((c: any) => <option key={c.classe_id} value={c.classe_id}>{c.libelle}</option>)}
                                 </optgroup>
                             ))}
@@ -221,7 +221,7 @@ export default function CentralisationNotesPage() {
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                         style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
                         <div style={{ padding: '18px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📋 Évaluations Centralisées par les Enseignants</h3>
+                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><ClipboardList size={18} /> Évaluations Centralisées par les Enseignants</h3>
                             <div style={{ position: 'relative' }}>
                                 <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                 <input type="text" placeholder="Rechercher..." value={search} onChange={e => setSearch(e.target.value)}
@@ -268,7 +268,7 @@ export default function CentralisationNotesPage() {
                                                 </td>
                                                 <td style={{ padding: '14px 16px' }}>
                                                     <span style={{ padding: '4px 12px', borderRadius: '20px', background: '#ecfdf5', color: '#059669', fontSize: '11px', fontWeight: 700 }}>
-                                                        ✅ Centralisée
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><CheckCircle2 size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Centralisée</span>
                                                     </span>
                                                 </td>
                                             </tr>
@@ -285,7 +285,7 @@ export default function CentralisationNotesPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                         <div>
                             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>
-                                📊 {classeData.classe.libelle}
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BarChart3 size={16} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {classeData.classe.libelle}</span>
                             </h2>
                             <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>
                                 {classeData.effectif} élèves • {classeData.matieres.length} matières • {trimestres.find((t: any) => t.trimestre_id === selectedTrimestre)?.libelle || `Trimestre ${selectedTrimestre}`}
@@ -325,7 +325,7 @@ export default function CentralisationNotesPage() {
                                     {/* Stats row */}
                                     <tr style={{ background: '#fafbff' }}>
                                         <td colSpan={2} style={{ padding: '8px 16px', fontSize: '10px', fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', position: 'sticky', left: 0, background: '#fafbff', zIndex: 2, borderRight: '2px solid #e2e8f0' }}>
-                                            📊 Moyenne Classe
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BarChart3 size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Moyenne Classe</span>
                                         </td>
                                         {classeData.matieres.map(m => {
                                             const st = classeData.matieres_stats[String(m.matiere_id)];

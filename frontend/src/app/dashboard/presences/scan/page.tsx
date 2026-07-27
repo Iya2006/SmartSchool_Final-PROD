@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { ScanLine, CheckCircle, AlertTriangle, Clock, LogOut, ArrowRightCircle, Users, GraduationCap } from 'lucide-react';
+import { ScanLine, CheckCircle, AlertTriangle, Clock, LogOut, ArrowRightCircle, Users, GraduationCap, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 
@@ -27,13 +27,14 @@ interface DailyStats {
     total_departs: number;
 }
 
-type ActionType = "ARRIVEE" | "DEPART";
+type ActionType = "AUTO" | "ARRIVEE" | "DEPART";
 
 export default function ScanPage() {
     const router = useRouter();
     const [scanResult, setScanResult] = useState<ScanResult | null>(null);
     const [isScanning, setIsScanning] = useState(false);
-    const [actionType, setActionType] = useState<ActionType>("ARRIVEE");
+    const [actionType, setActionType] = useState<ActionType>("AUTO");
+    const [isMounted, setIsMounted] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [stats, setStats] = useState<DailyStats>({ total_enregistrements: 0, presences: 0, total_arrivees: 0, total_departs: 0 });
     const scannerRef = useRef<Html5QrcodeScanner | null>(null);
@@ -58,6 +59,7 @@ export default function ScanPage() {
     };
 
     useEffect(() => {
+        setIsMounted(true);
         fetchTodayStats();
     }, []);
 
@@ -66,30 +68,37 @@ export default function ScanPage() {
             scannerRef.current = new Html5QrcodeScanner(
                 "reader",
                 { 
-                    fps: 30, // Plus d'images par seconde pour un scan instantané
-                    qrbox: { width: 300, height: 300 }, // Zone plus large
-                    aspectRatio: 1.0,
-                    disableFlip: false, // Permet de lire les QR codes inversés (caméra frontale)
-                    formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE], // Restreint uniquement aux QR codes pour booster la vitesse de détection
-                    videoConstraints: {
-                        facingMode: "environment", // Force la caméra arrière par défaut (plus nette)
-                        advanced: [{ focusMode: "continuous" }] // Autofocus continu
-                    } as any
+                    fps: 15, 
+                    qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+                        const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+                        return {
+                            width: Math.floor(minEdge * 0.85),
+                            height: Math.floor(minEdge * 0.85)
+                        };
+                    },
+                    rememberLastUsedCamera: true,
+                    experimentalFeatures: {
+                        useBarCodeDetectorIfSupported: true
+                    }
                 },
                 /* verbose= */ false
             );
             
             scannerRef.current.render(onScanSuccess, onScanFailure);
         } else if (scannerRef.current) {
-            scannerRef.current.clear().catch(error => {
-                console.error("Failed to clear html5QrcodeScanner. ", error);
-            });
+            try {
+                scannerRef.current.clear().catch(error => {
+                    console.error("Failed to clear html5QrcodeScanner. ", error);
+                });
+            } catch (e) {}
             scannerRef.current = null;
         }
 
         return () => {
             if (scannerRef.current) {
-                scannerRef.current.clear().catch(e => console.error(e));
+                try {
+                    scannerRef.current.clear().catch(e => console.error(e));
+                } catch (e) {}
                 scannerRef.current = null;
             }
         };
@@ -116,9 +125,36 @@ export default function ScanPage() {
                 audio.play().catch(() => {});
             }
         } catch (error: any) {
+            // Fallback: If not an agent, check if it's an Élève!
+            try {
+                const eleveRes = await api.post('/api/pointage-eleves/scan', {
+                    qr_data: decodedText,
+                    action_type: actionType
+                });
+                
+                if (eleveRes.data) {
+                    setScanResult({
+                        success: eleveRes.data.success,
+                        message: eleveRes.data.message + " (Pointeuse Élève)",
+                        action: eleveRes.data.action,
+                        agent: {
+                            nom: eleveRes.data.eleve.nom,
+                            matricule: eleveRes.data.eleve.matricule,
+                            role: `Élève (${eleveRes.data.eleve.classe || 'N/A'})`,
+                            photo: eleveRes.data.eleve.photo
+                        },
+                        heure: eleveRes.data.heure
+                    });
+                    fetchTodayStats();
+                    return;
+                }
+            } catch (eleveError) {
+                // Ignore fallback
+            }
+
             setScanResult({
                 success: false,
-                message: error.response?.data?.detail || error.response?.data?.message || "Erreur de pointage",
+                message: error.response?.data?.detail || error.response?.data?.message || "Code QR inconnu ou non attribué.",
                 action: "ERREUR",
                 agent: { nom: "Inconnu", role: "-", matricule: decodedText, photo: "" },
                 heure: new Date().toLocaleTimeString('fr-FR')
@@ -155,7 +191,7 @@ export default function ScanPage() {
             <div style={{ background: '#1e40af', borderRadius: '16px', padding: '24px', color: 'white', marginBottom: '24px', boxShadow: '0 10px 25px rgba(30,64,175,0.2)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.2)', paddingBottom: '16px', marginBottom: '16px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px', fontWeight: 600 }}>
-                        <Clock size={18} /> Présences du {formatDate()}
+                        <Clock size={18} /> Présences du {isMounted ? formatDate() : '...'}
                     </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '16px' }}>
@@ -181,7 +217,7 @@ export default function ScanPage() {
             {/* Tabs */}
             <div style={{ display: 'flex', gap: '10px', marginBottom: '24px', borderBottom: '2px solid #e2e8f0' }}>
                 <button 
-                    onClick={() => setActiveTab('personnel')}
+                    onClick={() => router.push('/dashboard/presences/scan')}
                     style={{ 
                         padding: '12px 24px', background: 'transparent', border: 'none', 
                         borderBottom: activeTab === 'personnel' ? '3px solid #3b82f6' : '3px solid transparent',
@@ -193,14 +229,13 @@ export default function ScanPage() {
                     <Users size={18} /> Personnel (Pointeuse)
                 </button>
                 <button 
-                    onClick={() => setActiveTab('eleves')}
+                    onClick={() => router.push('/dashboard/presences/scan-eleves')}
                     style={{ 
                         padding: '12px 24px', background: 'transparent', border: 'none', 
                         borderBottom: activeTab === 'eleves' ? '3px solid #3b82f6' : '3px solid transparent',
                         color: activeTab === 'eleves' ? '#3b82f6' : '#64748b',
                         fontWeight: activeTab === 'eleves' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', marginBottom: '-2px',
-                        opacity: 0.5
+                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', marginBottom: '-2px'
                     }}
                 >
                     <GraduationCap size={18} /> Élèves
@@ -217,6 +252,18 @@ export default function ScanPage() {
 
                     {/* Action Toggle */}
                     <div style={{ display: 'flex', background: '#0f172a', borderRadius: '16px', padding: '8px', marginBottom: '30px', gap: '10px' }}>
+                        <button 
+                            onClick={() => setActionType('AUTO')}
+                            style={{
+                                flex: 1, padding: '12px', borderRadius: '12px', border: 'none', 
+                                background: actionType === 'AUTO' ? '#f1f5f9' : 'transparent',
+                                color: actionType === 'AUTO' ? '#0f172a' : '#94a3b8',
+                                fontWeight: 700, fontSize: '15px', cursor: 'pointer', transition: 'all 0.3s',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                            }}
+                        >
+                            <RefreshCw size={18} /> Auto
+                        </button>
                         <button 
                             onClick={() => setActionType('ARRIVEE')}
                             style={{
@@ -261,7 +308,7 @@ export default function ScanPage() {
                         background: '#0f172a', borderRadius: '20px', overflow: 'hidden', 
                         minHeight: '350px', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
                         boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)',
-                        border: `4px solid ${actionType === 'ARRIVEE' ? '#10b981' : '#f59e0b'}`,
+                        border: `4px solid ${actionType === 'ARRIVEE' ? '#10b981' : actionType === 'DEPART' ? '#f59e0b' : '#3b82f6'}`,
                         transition: 'border-color 0.3s'
                     }}>
                         {isScanning && !scanResult ? (
@@ -370,7 +417,7 @@ export default function ScanPage() {
                 </div>
             </div>
             
-            <style jsx global>{`
+            <style dangerouslySetInnerHTML={{ __html: `
                 /* Override html5-qrcode styles to make it look premium */
                 #reader { border: none !important; }
                 #reader button { background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600; margin: 10px; font-size: 14px; transition: all 0.2s; }
@@ -382,7 +429,7 @@ export default function ScanPage() {
                     from { opacity: 0; transform: translateY(20px); }
                     to { opacity: 1; transform: translateY(0); }
                 }
-            `}</style>
+            ` }} />
         </div>
     );
 }

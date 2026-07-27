@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from datetime import date, datetime, time
 from pydantic import BaseModel
@@ -201,7 +202,6 @@ def get_historique_presences(
         
     return resultats
 
-from sqlalchemy import func
 
 @router.get("/stats")
 def get_presences_stats(

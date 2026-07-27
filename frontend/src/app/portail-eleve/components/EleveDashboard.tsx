@@ -4,7 +4,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { 
     Award, Calendar, Clock, CheckCircle, 
-    BookOpen, CreditCard 
+    BookOpen, CreditCard, MapPin 
 } from 'lucide-react';
 import styles from '../portail-eleve.module.css';
 import { DashboardData, Tab, SUBJECT_COLORS } from '../types';
@@ -69,7 +69,7 @@ export default function EleveDashboard({
                 <div className={styles.bannerDecor2} />
                 <div className={styles.bannerText}>
                     <motion.h1 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className={styles.bannerTitle}>
-                        Bonjour, {eleveData.prenom} 👋
+                        Bonjour, {eleveData.prenom}
                     </motion.h1>
                     <motion.p initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className={styles.bannerSubtitle}>
                         {messageBienvenue}
@@ -131,7 +131,7 @@ export default function EleveDashboard({
                                             <p style={{ margin: 0, fontWeight: 700, fontSize: '13px', color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.matiere}</p>
                                             <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>{c.heure_debut} – {c.heure_fin} • {c.enseignant}</p>
                                         </div>
-                                        {c.salle && <span style={{ fontSize: '11px', background: '#f1f5f9', padding: '2px 8px', borderRadius: '6px', color: '#64748b', fontWeight: 600, flexShrink: 0 }}>📍 {c.salle}</span>}
+                                        {c.salle && <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', background: '#f1f5f9', padding: '2px 8px', borderRadius: '6px', color: '#64748b', fontWeight: 600, flexShrink: 0 }}><MapPin size={12} /> {c.salle}</span>}
                                     </div>
                                 ))
                             )}

@@ -14,7 +14,8 @@ import {
     ChevronRight, ChevronLeft, X, Star, TrendingUp, Send, Plus, Trash2, Upload, FileUp,
     Settings, LogOut, ChevronDown, Key, Mail as MailIcon, Save,
     Camera, ImageIcon, Activity, PieChart, Target, Zap, Hash, Building2,
-    ExternalLink, Link as LinkIcon, Banknote, Download, UserCheck
+    ExternalLink, Link as LinkIcon, Banknote, Download, UserCheck,
+    School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip
 } from 'lucide-react';
 
 const DISPO_JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
@@ -95,7 +96,7 @@ export default function PortailEnseignant() {
         }
     }, [user]);
     const [data, setData] = useState<DashData | null>(null);
-    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
     const [edtLoading, setEdtLoading] = useState(false);
     const [selectedClass, setSelectedClass] = useState<AffectationData|null>(null);
@@ -135,6 +136,8 @@ export default function PortailEnseignant() {
 
     // ── Messages state ──
     const [messages, setMessages] = useState<any[]>([]);
+    const [teacherEvts, setTeacherEvts] = useState<any[]>([]);
+    const [teacherActs, setTeacherActs] = useState<any[]>([]);
     const [messagesLoading, setMessagesLoading] = useState(false);
     const [selectedMessage, setSelectedMessage] = useState<any>(null);
     const [replyText, setReplyText] = useState('');
@@ -180,6 +183,10 @@ export default function PortailEnseignant() {
     const [uploadTrimestre, setUploadTrimestre] = useState(1);
     const [uploading, setUploading] = useState(false);
     const [mesSujets, setMesSujets] = useState<any[]>([]);
+    const [sujetsLoading, setSujetsLoading] = useState(false);
+    const [showEditSujet, setShowEditSujet] = useState(false);
+    const [editSujetData, setEditSujetData] = useState<{sujet_id: number; titre: string; duree_minutes: number; trimestre: number} | null>(null);
+    const [editSujetSaving, setEditSujetSaving] = useState(false);
     const [toastMsg, setToastMsg] = useState<{type: 'success'|'error'; text: string} | null>(null);
     const [showNotifDropdown, setShowNotifDropdown] = useState(false);
 
@@ -199,6 +206,58 @@ export default function PortailEnseignant() {
     const [passwordChanging, setPasswordChanging] = useState(false);
     const [passwordMsg, setPasswordMsg] = useState<{type: 'success'|'error'; text: string} | null>(null);
 
+
+    // ── Signalement Enfant Parent state ──
+    const [mesEnfantsData, setMesEnfantsData] = useState<{ est_parent: boolean; enfants: any[] } | null>(null);
+    const [showSignalerEnfantModal, setShowSignalerEnfantModal] = useState(false);
+    const [signalerForm, setSignalerForm] = useState({ nom_enfant: '', prenom_enfant: '', classe_detail: '', remarque: '' });
+    const [signalerSending, setSignalerSending] = useState(false);
+
+    const loadMesEnfants = useCallback(async () => {
+        if (!data) return;
+        try {
+            const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/mes-enfants`);
+            setMesEnfantsData(res.data);
+        } catch { setMesEnfantsData(null); }
+    }, [data]);
+
+    useEffect(() => {
+        if (data) loadMesEnfants();
+    }, [data, loadMesEnfants]);
+
+    const handleSignalerEnfant = async () => {
+        if (!data || !signalerForm.nom_enfant.trim()) {
+            showToast('error', 'Veuillez saisir le nom de votre enfant.');
+            return;
+        }
+        setSignalerSending(true);
+        try {
+            await api.post(`/api/portail-enseignant/${data.enseignant.enseignant_id}/signaler-enfant`, signalerForm);
+            showToast('success', 'Demande de raccordement transmise à la direction avec succès !');
+            setShowSignalerEnfantModal(false);
+            setSignalerForm({ nom_enfant: '', prenom_enfant: '', classe_detail: '', remarque: '' });
+        } catch (err: any) {
+            showToast('error', err.response?.data?.detail || 'Erreur lors du signalement.');
+        } finally {
+            setSignalerSending(false);
+        }
+    };
+
+    const handleDownloadSujet = async (sujetId: number, filename: string) => {
+        try {
+            const res = await api.get(`/api/examens/sujets/${sujetId}/fichier`, { responseType: 'blob' });
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', filename || `sujet_${sujetId}`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch {
+            alert('Erreur lors du téléchargement du fichier.');
+        }
+    };
 
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
 
@@ -239,6 +298,21 @@ export default function PortailEnseignant() {
             .catch(() => {})
             .finally(() => setDevoirsLoading(false));
     }, [activeTab, data]);
+
+    // ── Load mes sujets when documents tab is opened ──
+    const loadMesSujets = useCallback(async () => {
+        if (!data) return;
+        setSujetsLoading(true);
+        try {
+            const res = await api.get(`/api/examens/sujets`, { params: { enseignant_id: data.enseignant.enseignant_id } });
+            setMesSujets(res.data);
+        } catch { setMesSujets([]); }
+        finally { setSujetsLoading(false); }
+    }, [data]);
+
+    useEffect(() => {
+        if (activeTab === 'documents' && data) loadMesSujets();
+    }, [activeTab, data, loadMesSujets]);
 
     /* ═══ FETCH EDT ═══ */
     useEffect(() => {
@@ -313,7 +387,30 @@ export default function PortailEnseignant() {
         if (data) {
             loadMessages();
         }
-    }, [ data, loadMessages]);
+    }, [data, loadMessages]);
+
+    // ── Auto-mark messages as read when messages tab is active ──
+    useEffect(() => {
+        if (activeTab !== 'messages' || !data) return;
+        const unread = messages.filter(m => m.statut === 'ENVOYE' && m.expediteur_type === 'ADMIN');
+        if (unread.length === 0) return;
+        // Mark all unread messages as read silently
+        Promise.all(unread.map(m => api.put(`/api/communication/messages/${m.message_id}/lire`).catch(() => {})))
+            .then(() => loadMessages());
+    }, [activeTab, data]);
+
+    useEffect(() => {
+        if (activeTab === 'evenements' && data) {
+            api.get('/api/evenements').then(r => {
+                setTeacherEvts((r.data || []).filter((e: any) => e.statut === 'PUBLIE'));
+            }).catch(() => {});
+        }
+        if (activeTab === 'activites' && data) {
+            api.get('/api/activites').then(r => {
+                setTeacherActs((r.data || []).filter((a: any) => a.est_actif === 'O'));
+            }).catch(() => {});
+        }
+    }, [activeTab, data]);
 
     // ═══ REFRESH AUTOMATIQUE du tableau de bord ═══
     const refreshDashboard = useCallback(async () => {
@@ -399,7 +496,7 @@ export default function PortailEnseignant() {
                 enseignant_id: data.enseignant.enseignant_id,
                 slots: dispoSlots,
             });
-            showToast('success', `✅ ${dispoSlots.length} créneaux envoyés !`);
+            showToast('success', `${dispoSlots.length} créneaux envoyés !`);
             setShowDispoForm(false);
             loadMessages();
         } catch (err: any) { showToast('error', err.response?.data?.detail || "Erreur d'envoi"); }
@@ -431,14 +528,41 @@ export default function PortailEnseignant() {
             formData.append('duree_minutes', String(uploadDuree));
             if (activeExamDemande?.demande_id) formData.append('demande_id', String(activeExamDemande.demande_id));
 
-            await api.post('/api/examens/sujets/upload', formData, {
+            const uploadRes = await api.post('/api/examens/sujets/upload', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
-            showToast('success', '✅ Sujet téléversé avec succès !');
+            showToast('success', uploadRes.data.message || 'Sujet envoyé à l\'administration avec succès !');
             setShowUploadForm(false);
             loadMessages();
+            loadMesSujets(); // refresh historique
         } catch (err: any) { showToast('error', err.response?.data?.detail || 'Erreur lors du téléversement.'); }
         finally { setUploading(false); }
+    };
+
+    const handleDeleteSujet = async (sujetId: number) => {
+        if (!confirm('Supprimer ce sujet ?')) return;
+        try {
+            await api.delete(`/api/examens/sujets/${sujetId}`);
+            showToast('success', 'Sujet supprimé.');
+            loadMesSujets();
+        } catch (err: any) { showToast('error', err.response?.data?.detail || 'Erreur lors de la suppression.'); }
+    };
+
+    const handleEditSujet = async () => {
+        if (!editSujetData) return;
+        setEditSujetSaving(true);
+        try {
+            await api.put(`/api/examens/sujets/${editSujetData.sujet_id}/modifier`, {
+                titre: editSujetData.titre,
+                duree_minutes: editSujetData.duree_minutes,
+                trimestre: editSujetData.trimestre,
+            });
+            showToast('success', 'Sujet mis à jour avec succès.');
+            setShowEditSujet(false);
+            setEditSujetData(null);
+            loadMesSujets();
+        } catch (err: any) { showToast('error', err.response?.data?.detail || 'Erreur lors de la modification.'); }
+        finally { setEditSujetSaving(false); }
     };
 
     const formatFileSize = (bytes: number) => {
@@ -505,11 +629,11 @@ export default function PortailEnseignant() {
                 coefficient: selectedClass.coefficient,
                 notes: notesPayload,
             });
-            setNotesSaved(`✅ "${evalLibelle}" enregistrée avec succès`);
+            setNotesSaved(`"${evalLibelle}" enregistrée avec succès`);
             setNotesData({});
             setEvalLibelle('');
         } catch (err: any) {
-            setNotesSaved(`❌ ${err.response?.data?.detail || 'Erreur'}`);
+            setNotesSaved(`${err.response?.data?.detail || 'Erreur'}`);
         } finally { setNotesLoading(false); }
     }, [data, selectedClass, evalLibelle, evalNoteSur, classEleves, notesData, selectedTrimestre, selectedTypeEval]);
 
@@ -549,7 +673,7 @@ export default function PortailEnseignant() {
                 `/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations/${evalDetailData.evaluation.evaluation_id}/notes`,
                 { notes: payload }
             );
-            showToast('success', `✅ ${res.data.nb_modifiees} notes modifiées (Moy: ${res.data.moyenne || '—'})`);
+            showToast('success', `${res.data.nb_modifiees} notes modifiées (Moy: ${res.data.moyenne || '—'})`);
             // Reload detail
             await openEvalDetail(evalDetailData.evaluation.evaluation_id);
             // Reload history
@@ -593,9 +717,9 @@ export default function PortailEnseignant() {
                 demi_journee: appelDemiJournee,
                 presences,
             });
-            setAppelSaved(`✅ ${res.data.message}`);
+            setAppelSaved(`${res.data.message}`);
         } catch (err: any) {
-            setAppelSaved(`❌ ${err.response?.data?.detail || 'Erreur'}`);
+            setAppelSaved(`${err.response?.data?.detail || 'Erreur'}`);
         } finally { setAppelLoading(false); }
     }, [data, selectedClass, classEleves, appelData, appelDemiJournee]);
 
@@ -608,7 +732,14 @@ export default function PortailEnseignant() {
 
     /* ═══════════ LOGIN PAGE ═══════════ */
     if (!user || user.role !== 'ENSEIGNANT') return <div style={{padding: '50px', textAlign: 'center'}}>Chargement ou accès refusé...</div>;
-    if (!data) return null;
+    if (!data) return (
+        <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', fontFamily: "'Inter', sans-serif" }}>
+            <div style={{ textAlign: 'center' }}>
+                <Loader2 size={40} style={{ animation: 'spin 1s linear infinite', color: '#8b5cf6', marginBottom: '16px' }} />
+                <p style={{ color: '#64748b', fontSize: '14px', fontWeight: 600 }}>Chargement du portail enseignant...</p>
+            </div>
+        </div>
+    );
     const { enseignant: ens, affectations, stats } = data;
 
     // Map classes for unique display
@@ -661,6 +792,8 @@ export default function PortailEnseignant() {
                         { key: 'devoirs' as const, label: 'Devoirs', icon: BookOpen },
                         { key: 'documents' as const, label: 'Documents & Partages', icon: FileText },
                         { key: 'liens' as const, label: 'Liens Externes', icon: ExternalLink },
+                        { key: 'evenements' as const, label: 'Événements', icon: Calendar },
+                        { key: 'activites' as const, label: 'Activités', icon: Activity },
                         { key: 'paiements' as const, label: 'Mes Paiements', icon: Banknote }
                     ] as const).map(item => {
                         const isActive = activeTab === item.key;
@@ -715,12 +848,12 @@ export default function PortailEnseignant() {
                 </div>
 
                 <div style={{ flex: 1, overflowY: 'auto', padding: '28px 24px' }}>
-                {!['parametres', 'carte'].includes(activeTab) && (
+                {!['parametres', 'carte', 'evenements', 'activites'].includes(activeTab) && (
                     <>
                         {/* ═══ WELCOME ═══ */}
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                     <h1 style={{ fontSize: '26px', fontWeight: 800, color: '#1e293b', margin: '0 0 4px' }}>
-                        Bonjour, {ens.prenom} 👋
+                        Bonjour, {ens.prenom}
                     </h1>
                     <p style={{ color: '#64748b', fontSize: '14px', margin: 0 }}>
                         {ens.specialite || 'Enseignant'} • Matricule : {ens.matricule}
@@ -796,7 +929,7 @@ export default function PortailEnseignant() {
                                                 <Hash size={11} style={{ marginRight: '4px', verticalAlign: '-1px' }} />{ens.matricule}
                                             </span>
                                             <span style={{ padding: '5px 14px', borderRadius: '10px', background: ens.statut === 'ACTIF' ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)', fontSize: '12px', fontWeight: 700 }}>
-                                                {ens.statut === 'ACTIF' ? '● Actif' : '○ Inactif'}
+                                                {ens.statut === 'ACTIF' ? 'Actif' : 'Inactif'}
                                             </span>
                                             <span style={{ padding: '5px 14px', borderRadius: '10px', background: 'rgba(245,158,11,0.25)', fontSize: '12px', fontWeight: 700 }}>
                                                 <Briefcase size={11} style={{ marginRight: '4px', verticalAlign: '-1px' }} />{ens.type_contrat}
@@ -1141,7 +1274,7 @@ export default function PortailEnseignant() {
                             style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                             <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div>
-                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📅 Mon Emploi du Temps</h3>
+                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><Calendar size={18} /> Mon Emploi du Temps</h3>
                                     <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{edtSlots.length} créneaux programmés</p>
                                 </div>
                                 <span style={{ fontSize: '12px', color: '#f59e0b', fontWeight: 600 }}>Année en cours</span>
@@ -1185,8 +1318,8 @@ export default function PortailEnseignant() {
                                                                         borderLeft: `3px solid ${colors.border}`, minHeight: '50px',
                                                                     }}>
                                                                         <p style={{ margin: 0, fontSize: '12px', fontWeight: 700, color: colors.text }}>{slot.matiere}</p>
-                                                                        <p style={{ margin: '2px 0 0', fontSize: '10px', color: colors.text, opacity: 0.7 }}>📍 {slot.classe}</p>
-                                                                        {slot.salle && <p style={{ margin: '2px 0 0', fontSize: '10px', color: colors.text, opacity: 0.5 }}>🏫 {slot.salle}</p>}
+                                                                        <p style={{ margin: '2px 0 0', fontSize: '10px', color: colors.text, opacity: 0.7, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><MapPin size={10} /> {slot.classe}</p>
+                                                                        {slot.salle && <p style={{ margin: '2px 0 0', fontSize: '10px', color: colors.text, opacity: 0.5, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><School size={10} /> {slot.salle}</p>}
                                                                     </div>
                                                                 </td>
                                                             );
@@ -1261,7 +1394,7 @@ export default function PortailEnseignant() {
                                     <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                                         <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <div>
-                                                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>🎓 {selectedClass.classe} — {selectedClass.matiere}</h3>
+                                                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><GraduationCap size={18} /> {selectedClass.classe} — {selectedClass.matiere}</h3>
                                                 <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{classEleves.length} élèves inscrits</p>
                                             </div>
                                         </div>
@@ -1329,7 +1462,7 @@ export default function PortailEnseignant() {
                         <motion.div key="notes" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                             <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                                 <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
-                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📝 Saisie des Notes</h3>
+                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><PenLine size={18} /> Saisie des Notes</h3>
                                     <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Sélectionnez une classe, nommez l&apos;évaluation, puis saisissez les notes</p>
                                 </div>
                                 <div style={{ padding: '20px 24px' }}>
@@ -1358,7 +1491,7 @@ export default function PortailEnseignant() {
                                             <div style={{ background: '#f8fafc', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
                                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '12px' }}>
                                                     <div>
-                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>📅 Trimestre</label>
+                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><Calendar size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Trimestre</label>
                                                         <select value={selectedTrimestre || ''} onChange={e => setSelectedTrimestre(Number(e.target.value))}
                                                             style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
                                                             {trimestres.map(t => <option key={t.trimestre_id} value={t.trimestre_id}>{t.libelle}</option>)}
@@ -1366,7 +1499,7 @@ export default function PortailEnseignant() {
                                                         </select>
                                                     </div>
                                                     <div>
-                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>📋 Type d&apos;évaluation</label>
+                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><ClipboardList size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Type d&apos;évaluation</label>
                                                         <select value={selectedTypeEval || ''} onChange={e => setSelectedTypeEval(Number(e.target.value))}
                                                             style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
                                                             {typesEval.map(t => <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle} ({t.poids_pourcentage}%)</option>)}
@@ -1374,13 +1507,13 @@ export default function PortailEnseignant() {
                                                         </select>
                                                     </div>
                                                     <div>
-                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>📝 Nom de l&apos;évaluation</label>
+                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><PenLine size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Nom de l&apos;évaluation</label>
                                                         <input type="text" placeholder="Ex: Devoir 1, Interro 2..." value={evalLibelle}
                                                             onChange={e => setEvalLibelle(e.target.value)}
                                                             style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }} />
                                                     </div>
                                                     <div>
-                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}>🎯 Note sur</label>
+                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><Target size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Note sur</label>
                                                         <input type="number" value={evalNoteSur} onChange={e => setEvalNoteSur(e.target.value)}
                                                             style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 700, outline: 'none', boxSizing: 'border-box', textAlign: 'center' }} />
                                                     </div>
@@ -1433,13 +1566,13 @@ export default function PortailEnseignant() {
                                                     </table>
                                                     {notesSaved && (
                                                         <div style={{ padding: '12px 16px', borderRadius: '12px', marginTop: '12px', fontSize: '13px', fontWeight: 600,
-                                                            background: notesSaved.startsWith('✅') ? '#f0fdf4' : '#fef2f2',
-                                                            color: notesSaved.startsWith('✅') ? '#065f46' : '#991b1b',
+                                                            background: notesSaved.includes('succès') ? '#f0fdf4' : '#fef2f2',
+                                                            color: notesSaved.includes('succès') ? '#065f46' : '#991b1b',
                                                         }}>{notesSaved}</div>
                                                     )}
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', gap: '10px' }}>
                                                         {!evalLibelle.trim() && (
-                                                            <p style={{ margin: 0, fontSize: '12px', color: '#f59e0b', fontWeight: 600 }}>⚠️ Remplissez le nom de l&apos;évaluation pour activer le bouton</p>
+                                                            <p style={{ margin: 0, fontSize: '12px', color: '#f59e0b', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><AlertTriangle size={14} /> Remplissez le nom de l&apos;évaluation pour activer le bouton</p>
                                                         )}
                                                         {evalLibelle.trim() && <div />}
                                                         <button onClick={saveNotes} disabled={notesLoading || !evalLibelle.trim()}
@@ -1450,7 +1583,7 @@ export default function PortailEnseignant() {
                                                                 boxShadow: !evalLibelle.trim() ? 'none' : '0 4px 12px rgba(99,102,241,0.3)',
                                                                 opacity: notesLoading ? 0.6 : 1, transition: 'all 0.2s',
                                                             }}>
-                                                            {notesLoading ? '⏳ Enregistrement...' : '💾 Enregistrer les notes'}
+                                                            {notesLoading ? 'Enregistrement...' : 'Enregistrer les notes'}
                                                         </button>
                                                     </div>
                                                 </div>
@@ -1476,7 +1609,7 @@ export default function PortailEnseignant() {
                                     style={{ padding: '16px 24px', borderBottom: showEvalHistory ? '1px solid #f1f5f9' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', transition: 'background 0.15s' }}
                                     onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                                     <div>
-                                        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>📊 Historique des évaluations</h3>
+                                        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><BarChart3 size={16} /> Historique des évaluations</h3>
                                         <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{evalHistory.length} évaluation(s) enregistrée(s)</p>
                                     </div>
                                     <ChevronDown size={18} color="#94a3b8" style={{ transition: 'transform 0.2s', transform: showEvalHistory ? 'rotate(180deg)' : 'rotate(0deg)' }} />
@@ -1515,12 +1648,12 @@ export default function PortailEnseignant() {
                                                                     <span style={{ padding: '3px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700,
                                                                         background: ev.statut === 'CENTRALISEE' ? '#ecfdf5' : ev.statut === 'PUBLIEE' ? '#eff6ff' : '#f8fafc',
                                                                         color: ev.statut === 'CENTRALISEE' ? '#059669' : ev.statut === 'PUBLIEE' ? '#3b82f6' : '#64748b',
-                                                                    }}>{ev.statut === 'CENTRALISEE' ? '✅ Centralisée' : ev.statut === 'PUBLIEE' ? '📝 Publiée' : ev.statut}</span>
+                                                                    }}>{ev.statut === 'CENTRALISEE' ? 'Centralisée' : ev.statut === 'PUBLIEE' ? 'Publiée' : ev.statut}</span>
                                                                 </td>
                                                                 <td style={{ padding: '10px 12px', textAlign: 'center' }}>
                                                                     <button onClick={() => openEvalDetail(ev.evaluation_id)}
                                                                         style={{ padding: '5px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', fontSize: '11px', fontWeight: 700, cursor: 'pointer', color: accentColor }}>
-                                                                        👁️ Détail
+                                                                        <Eye size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Détail
                                                                     </button>
                                                                 </td>
                                                             </tr>
@@ -1554,7 +1687,7 @@ export default function PortailEnseignant() {
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                                 <span style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '11px', fontWeight: 700,
                                                     background: evalDetailData.evaluation.statut === 'CENTRALISEE' ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.2)', color: 'white' }}>
-                                                    {evalDetailData.evaluation.statut === 'CENTRALISEE' ? '✅ Centralisée' : '📝 ' + evalDetailData.evaluation.statut}
+                                                    {evalDetailData.evaluation.statut === 'CENTRALISEE' ? 'Centralisée' : evalDetailData.evaluation.statut}
                                                 </span>
                                                 <button onClick={() => setShowEvalDetail(false)} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '8px', width: '32px', height: '32px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                                     <X size={16} color="white" />
@@ -1617,7 +1750,7 @@ export default function PortailEnseignant() {
                                                                 </td>
                                                                 <td style={{ padding: '8px 16px', textAlign: 'center' }}>
                                                                     {isCentralized ? (
-                                                                        <span>{ed.absent ? '❌' : '—'}</span>
+                                                                        <span>{ed.absent ? <XCircle size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> : '—'}</span>
                                                                     ) : (
                                                                         <input type="checkbox" checked={ed.absent}
                                                                             onChange={ev => setEditingNotes(prev => ({ ...prev, [n.note_id]: { ...ed, absent: ev.target.checked, valeur: ev.target.checked ? '' : ed.valeur } }))}
@@ -1652,7 +1785,7 @@ export default function PortailEnseignant() {
                                                         </button>
                                                         <button onClick={centralizeEval} disabled={centralizingEval}
                                                             style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', background: showConfirmCentralize ? 'linear-gradient(135deg, #dc2626, #ef4444)' : 'linear-gradient(135deg, #059669, #10b981)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', boxShadow: showConfirmCentralize ? '0 4px 12px rgba(220,38,38,0.3)' : '0 4px 12px rgba(5,150,105,0.3)', transition: 'all 0.3s' }}>
-                                                            <Send size={14} /> {centralizingEval ? 'Centralisation...' : showConfirmCentralize ? '⚠️ Confirmer la centralisation ?' : 'Centraliser vers Admin'}
+                                                            <Send size={14} /> {centralizingEval ? 'Centralisation...' : showConfirmCentralize ? 'Confirmer la centralisation ?' : 'Centraliser vers Admin'}
                                                         </button>
                                                         {showConfirmCentralize && (
                                                             <button onClick={() => setShowConfirmCentralize(false)}
@@ -1684,14 +1817,14 @@ export default function PortailEnseignant() {
                             <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                                 <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
-                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>✅ Faire l&apos;Appel</h3>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><CheckCircle2 size={16} /> Faire l&apos;Appel</h3>
                                         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Sélectionnez une classe pour l&apos;appel</p>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                         <select value={appelDemiJournee} onChange={e => setAppelDemiJournee(e.target.value)}
                                             style={{ padding: '8px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
-                                            <option value="MATIN">🌅 Matin</option>
-                                            <option value="APRES_MIDI">🌇 Après-midi</option>
+                                            <option value="MATIN">Matin</option>
+                                            <option value="APRES_MIDI">Après-midi</option>
                                         </select>
                                         <span style={{ fontSize: '12px', color: accentColor, fontWeight: 600 }}>
                                             {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
@@ -1795,8 +1928,8 @@ export default function PortailEnseignant() {
                                                     </div>
                                                     {appelSaved && (
                                                         <div style={{ padding: '12px 16px', borderRadius: '12px', marginTop: '12px', fontSize: '13px', fontWeight: 600,
-                                                            background: appelSaved.startsWith('✅') ? '#f0fdf4' : '#fef2f2',
-                                                            color: appelSaved.startsWith('✅') ? '#065f46' : '#991b1b',
+                                                            background: appelSaved.includes('succès') ? '#f0fdf4' : '#fef2f2',
+                                                            color: appelSaved.includes('succès') ? '#065f46' : '#991b1b',
                                                         }}>{appelSaved}</div>
                                                     )}
                                                     <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '16px 0', gap: '10px' }}>
@@ -1808,7 +1941,7 @@ export default function PortailEnseignant() {
                                                                 boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
                                                                 opacity: appelLoading ? 0.6 : 1,
                                                             }}>
-                                                            {appelLoading ? '⏳ Enregistrement...' : '✅ Valider l\'appel'}
+                                                            {appelLoading ? 'Enregistrement...' : 'Valider l\'appel'}
                                                         </button>
                                                     </div>
                                                 </div>
@@ -1834,7 +1967,7 @@ export default function PortailEnseignant() {
                                     style={{ padding: '16px 24px', borderBottom: showAppelHistory ? '1px solid #f1f5f9' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', transition: 'background 0.15s' }}
                                     onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                                     <div>
-                                        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>📋 Historique des appels (30 derniers jours)</h3>
+                                        <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><ClipboardList size={16} /> Historique des appels (30 derniers jours)</h3>
                                         <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>{appelHistory.length} appel(s) enregistré(s)</p>
                                     </div>
                                     <ChevronDown size={18} color="#94a3b8" style={{ transition: 'transform 0.2s', transform: showAppelHistory ? 'rotate(180deg)' : 'rotate(0deg)' }} />
@@ -1849,9 +1982,9 @@ export default function PortailEnseignant() {
                                                             <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Date</th>
                                                             <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Classe</th>
                                                             <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Session</th>
-                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#10b981' }}>✅ Présents</th>
-                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#ef4444' }}>❌ Absents</th>
-                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#f59e0b' }}>⏰ Retards</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#10b981' }}>Présents</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#ef4444' }}>Absents</th>
+                                                            <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#f59e0b' }}>Retards</th>
                                                             <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Total</th>
                                                         </tr>
                                                     </thead>
@@ -1860,7 +1993,7 @@ export default function PortailEnseignant() {
                                                             <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
                                                                 <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1e293b' }}>{new Date(a.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</td>
                                                                 <td style={{ padding: '10px 12px' }}><span style={{ background: '#eff6ff', color: '#3b82f6', padding: '2px 8px', borderRadius: '6px', fontWeight: 600, fontSize: '11px' }}>{a.classe}</span></td>
-                                                                <td style={{ padding: '10px 12px', color: '#64748b' }}>{a.demi_journee === 'MATIN' ? '🌅 Matin' : '🌇 Après-midi'}</td>
+                                                                <td style={{ padding: '10px 12px', color: '#64748b' }}>{a.demi_journee === 'MATIN' ? 'Matin' : 'Après-midi'}</td>
                                                                 <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: '#f0fdf4', color: '#10b981', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.presents}</span></td>
                                                                 <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: a.absents > 0 ? '#fef2f2' : '#f8fafc', color: a.absents > 0 ? '#ef4444' : '#94a3b8', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.absents}</span></td>
                                                                 <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: a.retards > 0 ? '#fffbeb' : '#f8fafc', color: a.retards > 0 ? '#f59e0b' : '#94a3b8', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.retards}</span></td>
@@ -1886,7 +2019,7 @@ export default function PortailEnseignant() {
                                 {/* Message list */}
                                 <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                                     <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
-                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>📨 Centre de Communication</h3>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><MailIcon size={18} /> Centre de Communication</h3>
                                         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>
                                             {messages.filter(m => m.statut === 'ENVOYE' && m.expediteur_type === 'ADMIN').length} message(s) non lu(s)
                                         </p>
@@ -1990,17 +2123,17 @@ export default function PortailEnseignant() {
                                                 {selectedMessage.objet_type === 'EMPLOI' && selectedMessage.demande_id && (
                                                     <button onClick={() => openDispoForm(selectedMessage)}
                                                         style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #0f766e, #14b8a6)', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer', marginBottom: '14px', width: '100%', justifyContent: 'center' }}>
-                                                        <Calendar size={16} /> 📅 Répondre — Soumettre mes Disponibilités
+                                                        <Calendar size={16} /> Répondre — Soumettre mes Disponibilités
                                                     </button>
                                                 )}
                                                 {selectedMessage.objet_type === 'EXAMENS' && selectedMessage.demande_id && (
                                                     <button onClick={() => openExamUpload(selectedMessage)}
                                                         style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #d97706, #f59e0b)', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer', marginBottom: '14px', width: '100%', justifyContent: 'center' }}>
-                                                        <FileUp size={16} /> 📝 Répondre — Déposer un Sujet d&apos;Examen
+                                                        <FileUp size={16} /> Répondre — Déposer un Sujet d&apos;Examen
                                                     </button>
                                                 )}
                                                 {/* Text reply */}
-                                                <p style={{ margin: '0 0 10px', fontSize: '13px', fontWeight: 700, color: '#475569' }}>↩️ Réponse écrite</p>
+                                                <p style={{ margin: '0 0 10px', fontSize: '13px', fontWeight: 700, color: '#475569' }}>Réponse écrite</p>
                                                 <textarea value={replyText} onChange={e => setReplyText(e.target.value)}
                                                     placeholder="Écrivez votre réponse ici..."
                                                     rows={3}
@@ -2011,7 +2144,7 @@ export default function PortailEnseignant() {
                                                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
                                                     <button onClick={() => sendReply(selectedMessage)} disabled={replySending || !replyText.trim()}
                                                         style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', background: !replyText.trim() ? '#cbd5e1' : `linear-gradient(135deg, ${accentColor}, ${primaryColor})`, color: 'white', fontWeight: 700, fontSize: '13px', cursor: !replyText.trim() ? 'not-allowed' : 'pointer', opacity: replySending ? 0.6 : 1 }}>
-                                                        {replySending ? '⏳ Envoi...' : '📤 Envoyer la réponse'}
+                                                        {replySending ? 'Envoi...' : 'Envoyer la réponse'}
                                                     </button>
                                                 </div>
                                             </div>
@@ -2058,11 +2191,11 @@ export default function PortailEnseignant() {
                             } catch {}
                         };
 
-                        const typeColors: Record<string,{bg:string;color:string;icon:string}> = {
-                            EXERCICE: { bg: '#dbeafe', color: '#2563eb', icon: '📝' },
-                            RECHERCHE: { bg: '#fef3c7', color: '#d97706', icon: '🔍' },
-                            LECTURE: { bg: '#ede9fe', color: '#7c3aed', icon: '📖' },
-                            PROJET: { bg: '#d1fae5', color: '#059669', icon: '🚀' },
+                        const typeColors: Record<string,{bg:string;color:string;icon:React.ReactNode}> = {
+                            EXERCICE: { bg: '#dbeafe', color: '#2563eb', icon: <PenLine size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> },
+                            RECHERCHE: { bg: '#fef3c7', color: '#d97706', icon: <Search size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> },
+                            LECTURE: { bg: '#ede9fe', color: '#7c3aed', icon: <BookOpen size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> },
+                            PROJET: { bg: '#d1fae5', color: '#059669', icon: <Rocket size={14} style={{ display: 'inline', verticalAlign: 'middle' }} /> },
                         };
 
                         return (
@@ -2127,10 +2260,10 @@ export default function PortailEnseignant() {
                                                     <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Type</label>
                                                     <select value={devoirForm.type_devoir} onChange={e => setDevoirForm({...devoirForm, type_devoir: e.target.value})}
                                                         style={{ padding: '12px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', cursor: 'pointer' }}>
-                                                        <option value="EXERCICE">📝 Exercice</option>
-                                                        <option value="RECHERCHE">🔍 Recherche</option>
-                                                        <option value="LECTURE">📖 Lecture</option>
-                                                        <option value="PROJET">🚀 Projet</option>
+                                                        <option value="EXERCICE">Exercice</option>
+                                                        <option value="RECHERCHE">Recherche</option>
+                                                        <option value="LECTURE">Lecture</option>
+                                                        <option value="PROJET">Projet</option>
                                                     </select>
                                                 </div>
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -2146,7 +2279,7 @@ export default function PortailEnseignant() {
                                                         onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'} onBlur={e => e.currentTarget.style.borderColor = '#e2e8f0'} />
                                                 </div>
                                                 <div style={{ gridColumn: '1/-1', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>📎 Fichier joint (optionnel)</label>
+                                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}><Paperclip size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Fichier joint (optionnel)</label>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                                         <input ref={devoirFileRef} type="file" accept=".pdf,.doc,.docx,.jpg,.png,.xlsx" style={{ display: 'none' }}
                                                             onChange={e => setDevoirFile(e.target.files?.[0] || null)} />
@@ -2160,7 +2293,7 @@ export default function PortailEnseignant() {
                                             </div>
                                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px', borderTop: '1px solid #f1f5f9', paddingTop: '20px' }}>
                                                 <button onClick={() => setShowNewDevoir(false)}
-                                                    style={{ padding: '10px 20px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', fontSize: '13px', fontWeight: 600, cursor: 'pointer', color: '#64748b' }}>
+                                                    style={{ padding: '10px 20px', borderRadius: '10px', border: '1px solid #f1f5f9', background: 'white', fontSize: '13px', fontWeight: 600, cursor: 'pointer', color: '#64748b' }}>
                                                     Annuler
                                                 </button>
                                                 <button onClick={handleCreateDevoir} disabled={devoirSaving || !devoirForm.titre || !devoirForm.classe_id || !devoirForm.matiere_id}
@@ -2195,13 +2328,13 @@ export default function PortailEnseignant() {
                                                                 <span style={{ padding: '3px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: tc.bg, color: tc.color }}>
                                                                     {tc.icon} {d.type_devoir}
                                                                 </span>
-                                                                <span style={{ fontSize: '11px', color: '#94a3b8' }}>📅 {d.classe}</span>
-                                                                <span style={{ fontSize: '11px', color: '#94a3b8' }}>📘 {d.matiere}</span>
+                                                                <span style={{ fontSize: '11px', color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Calendar size={12} /> {d.classe}</span>
+                                                                <span style={{ fontSize: '11px', color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BookOpen size={12} /> {d.matiere}</span>
                                                             </div>
                                                             <h4 style={{ margin: '0 0 6px', fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>{d.titre}</h4>
                                                             {d.description && <p style={{ margin: '0 0 8px', fontSize: '13px', color: '#64748b', lineHeight: 1.5 }}>{d.description.length > 150 ? d.description.slice(0, 150) + '...' : d.description}</p>}
                                                             <div style={{ display: 'flex', gap: '16px', fontSize: '11px', color: '#94a3b8' }}>
-                                                                {d.date_limite && <span>⏰ Limite: {new Date(d.date_limite).toLocaleDateString('fr-FR')}</span>}
+                                                                {d.date_limite && <span>Limite: {new Date(d.date_limite).toLocaleDateString('fr-FR')}</span>}
                                                                 {d.fichier_nom && <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><FileUp size={11} /> {d.fichier_nom}</span>}
                                                                 <span>Créé le {d.date_creation ? new Date(d.date_creation).toLocaleDateString('fr-FR') : '—'}</span>
                                                             </div>
@@ -2220,8 +2353,113 @@ export default function PortailEnseignant() {
                         );
                     })()}
 
-                    {/* ──── DOCUMENTS & PARTAGES TAB ──── */}
-                    {activeTab === 'documents' && <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}><FileText size={48} style={{ marginBottom: '12px', opacity: 0.3 }} /><p>Documents non implémentés</p></div>}
+                    {/* ──── DOCUMENTS & SUJETS TAB ──── */}
+                    {activeTab === 'documents' && (
+                        <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                    <div>
+                                        <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <FileText size={20} color={primaryColor} /> Historique de mes Sujets d'Examen
+                                        </h3>
+                                        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                                            Consultez, modifiez ou déposez vos sujets transmis à l'administration.
+                                        </p>
+                                    </div>
+                                    <button onClick={() => {
+                                        setActiveExamDemande(null);
+                                        setUploadFile(null);
+                                        setUploadTitre('');
+                                        setUploadDuree(60);
+                                        if (data && data.affectations.length > 0) setUploadMatiere(data.affectations[0].matiere_id);
+                                        setShowUploadForm(true);
+                                    }} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', borderRadius: '12px', background: 'linear-gradient(135deg, #d97706, #f59e0b)', color: 'white', border: 'none', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                                        <Plus size={16} /> Nouveau Sujet
+                                    </button>
+                                </div>
+
+                                {sujetsLoading ? (
+                                    <div style={{ textAlign: 'center', padding: '40px' }}>
+                                        <Loader2 size={24} className="animate-spin" color={accentColor} />
+                                    </div>
+                                ) : mesSujets.length === 0 ? (
+                                    <div style={{ textAlign: 'center', padding: '50px', color: '#94a3b8' }}>
+                                        <FileText size={40} style={{ opacity: 0.3, marginBottom: '10px' }} />
+                                        <p style={{ fontSize: '14px', fontWeight: 600 }}>Aucun sujet d'examen déposé pour le moment.</p>
+                                    </div>
+                                ) : (
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                            <thead>
+                                                <tr style={{ borderBottom: '2px solid #f1f5f9', textAlign: 'left', color: '#64748b' }}>
+                                                    <th style={{ padding: '12px 16px' }}>Titre du sujet</th>
+                                                    <th style={{ padding: '12px 16px' }}>Matière</th>
+                                                    <th style={{ padding: '12px 16px' }}>Trimestre</th>
+                                                    <th style={{ padding: '12px 16px' }}>Durée</th>
+                                                    <th style={{ padding: '12px 16px' }}>Statut</th>
+                                                    <th style={{ padding: '12px 16px' }}>Date dépôt</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'right' }}>Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {mesSujets.map((s: any) => {
+                                                    const isValide = s.statut === 'VALIDE';
+                                                    const isRejete = s.statut === 'REJETE';
+                                                    const isEnvoye = s.statut === 'ENVOYE';
+                                                    const badgeColor = isValide ? { bg: '#dcfce7', text: '#15803d' } : isRejete ? { bg: '#fee2e2', text: '#b91c1c' } : isEnvoye ? { bg: '#e0f2fe', text: '#0369a1' } : { bg: '#f1f5f9', text: '#475569' };
+
+                                                    return (
+                                                        <tr key={s.sujet_id} style={{ borderBottom: '1px solid #f8fafc' }}>
+                                                            <td style={{ padding: '12px 16px', fontWeight: 600, color: '#1e293b' }}>
+                                                                {s.titre}
+                                                                {isRejete && s.commentaire && (
+                                                                    <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#dc2626', fontWeight: 500 }}>
+                                                                        <AlertTriangle size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Raison du rejet : {s.commentaire}
+                                                                    </p>
+                                                                )}
+                                                            </td>
+                                                            <td style={{ padding: '12px 16px', color: '#475569' }}>{s.matiere_libelle || '—'}</td>
+                                                            <td style={{ padding: '12px 16px' }}><span style={{ padding: '2px 8px', borderRadius: '6px', background: '#f1f5f9', fontWeight: 700 }}>T{s.trimestre}</span></td>
+                                                            <td style={{ padding: '12px 16px', color: '#475569' }}>{s.duree_minutes} min</td>
+                                                            <td style={{ padding: '12px 16px' }}>
+                                                                <span style={{ padding: '4px 10px', borderRadius: '8px', background: badgeColor.bg, color: badgeColor.text, fontSize: '11px', fontWeight: 700 }}>
+                                                                    {isValide ? 'VALIDÉ' : isRejete ? 'REJETÉ' : isEnvoye ? 'REÇU (ADMIN)' : 'BROUILLON'}
+                                                                </span>
+                                                            </td>
+                                                            <td style={{ padding: '12px 16px', color: '#94a3b8', fontSize: '12px' }}>
+                                                                {s.date_depot ? new Date(s.date_depot).toLocaleDateString('fr-FR') : '—'}
+                                                            </td>
+                                                            <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                                                                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                                                    <button onClick={() => handleDownloadSujet(s.sujet_id, s.fichier_nom || `sujet_${s.sujet_id}`)} style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 14px', borderRadius: '8px', border: '1px solid #3b82f6', background: '#eff6ff', color: '#3b82f6', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                                                                        <Download size={13} /> Télécharger
+                                                                    </button>
+                                                                    {!isValide && (
+                                                                        <button onClick={() => {
+                                                                            setEditSujetData({ sujet_id: s.sujet_id, titre: s.titre, duree_minutes: s.duree_minutes, trimestre: s.trimestre });
+                                                                            setShowEditSujet(true);
+                                                                        }} style={{ padding: '6px 12px', borderRadius: '8px', background: '#e0e7ff', color: '#4338ca', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                                                                            Modifier
+                                                                        </button>
+                                                                    )}
+                                                                    {!isValide && (
+                                                                        <button onClick={() => handleDeleteSujet(s.sujet_id)}
+                                                                            style={{ padding: '6px 10px', borderRadius: '8px', background: '#fee2e2', color: '#dc2626', border: 'none', cursor: 'pointer' }}>
+                                                                            <Trash2 size={13} />
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
+                        </motion.div>
+                    )}
 
                     {/* ──── LIENS EXTERNES TAB ──── */}
                     {activeTab === 'liens' && <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}><LinkIcon size={48} style={{ marginBottom: '12px', opacity: 0.3 }} /><p>Liens non implémentés</p></div>}
@@ -2253,14 +2491,14 @@ export default function PortailEnseignant() {
                                     <div style={{ padding: '20px 24px' }}>
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
                                             {[
-                                                { label: 'Téléphone', value: ens.telephone, icon: '📱' },
-                                                { label: 'Email', value: ens.email || '—', icon: '✉️' },
-                                                { label: 'Spécialité', value: ens.specialite || '—', icon: '📚' },
-                                                { label: 'Diplôme', value: ens.diplome || '—', icon: '🎓' },
-                                                { label: 'Type de contrat', value: ens.type_contrat || '—', icon: '📋' },
-                                                { label: 'Date d\'embauche', value: ens.date_embauche ? new Date(ens.date_embauche).toLocaleDateString('fr-FR') : '—', icon: '📅' },
-                                                { label: 'Statut', value: ens.statut, icon: '✅' },
-                                                { label: 'Classes', value: `${stats.nb_classes} classe(s)`, icon: '🏫' },
+                                                { label: 'Téléphone', value: ens.telephone, icon: <Smartphone size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
+                                                { label: 'Email', value: ens.email || '—', icon: <MailIcon size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
+                                                { label: 'Spécialité', value: ens.specialite || '—', icon: <BookOpen size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
+                                                { label: 'Diplôme', value: ens.diplome || '—', icon: <GraduationCap size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
+                                                { label: 'Type de contrat', value: ens.type_contrat || '—', icon: <ClipboardList size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
+                                                { label: "Date d'embauche", value: ens.date_embauche ? new Date(ens.date_embauche).toLocaleDateString('fr-FR') : '—', icon: <Calendar size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
+                                                { label: 'Statut', value: ens.statut, icon: <CheckCircle2 size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
+                                                { label: 'Classes', value: `${stats.nb_classes} classe(s)`, icon: <School size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
                                             ].map((f, i) => (
                                                 <div key={i} style={{ padding: '14px 16px', borderRadius: '12px', background: '#f8fafc', border: '1px solid #f1f5f9' }}>
                                                     <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', fontWeight: 600 }}>{f.icon} {f.label}</p>
@@ -2285,7 +2523,7 @@ export default function PortailEnseignant() {
                                         </div>
                                         <div style={{ flex: 1 }}>
                                             <p style={{ margin: '0 0 4px', fontSize: '14px', fontWeight: 700, color: '#1e293b' }}>{ens.prenom} {ens.nom}</p>
-                                            <p style={{ margin: '0 0 12px', fontSize: '12px', color: ens.photo_url ? '#10b981' : '#f59e0b' }}>{ens.photo_url ? '✅ Photo de profil définie' : '⚠️ Aucune photo de profil'}</p>
+                                            <p style={{ margin: '0 0 12px', fontSize: '12px', color: ens.photo_url ? '#10b981' : '#f59e0b', display: 'flex', alignItems: 'center', gap: '4px' }}>{ens.photo_url ? <><CheckCircle2 size={12} /> Photo de profil définie</> : <><AlertTriangle size={12} /> Aucune photo de profil</>}</p>
                                             <button onClick={() => {
                                                 const input = document.createElement('input');
                                                 input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp';
@@ -2310,8 +2548,56 @@ export default function PortailEnseignant() {
                                                 {photoUploading ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>}
                                                 {ens.photo_url ? 'Modifier ma photo' : 'Envoyer ma photo'}
                                             </button>
-                                            {photoSuccess && <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#10b981', fontWeight: 600 }}>✅ {photoSuccess}</p>}
+                                            {photoSuccess && <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#10b981', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><CheckCircle2 size={12} /> {photoSuccess}</p>}
                                         </div>
+                                </div>
+                                </div>
+
+                                {/* Statut Parent d'Élève Section */}
+                                <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: '20px' }}>
+                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div>
+                                            <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <Users size={16} /> Statut Parent d'Élève
+                                            </h4>
+                                            <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                                                Avez-vous des enfants scolarisés dans l'école ? Signalez-les pour que votre compte soit raccordé.
+                                            </p>
+                                        </div>
+                                        <button onClick={() => setShowSignalerEnfantModal(true)} style={{ padding: '8px 14px', borderRadius: '10px', background: 'linear-gradient(135deg, #0f766e, #14b8a6)', color: 'white', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
+                                            Signaler un enfant
+                                        </button>
+                                    </div>
+                                    <div style={{ padding: '20px 24px' }}>
+                                        {mesEnfantsData?.est_parent && mesEnfantsData.enfants.length > 0 ? (
+                                            <div>
+                                                <p style={{ fontSize: '12px', fontWeight: 700, color: '#166534', marginBottom: '10px' }}>
+                                                    <CheckCircle2 size={12} style={{ display: 'inline', marginRight: '4px' }} /> Compte raccordé — {mesEnfantsData.enfants.length} enfant(s) scolarisé(s) dans l'école :
+                                                </p>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                    {mesEnfantsData.enfants.map((ef: any, idx: number) => (
+                                                        <div key={idx} style={{ padding: '10px 14px', borderRadius: '10px', background: '#f0fdf4', border: '1px solid #bbf7d0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                            <div>
+                                                                <span style={{ fontWeight: 700, fontSize: '13px', color: '#14532d' }}><GraduationCap size={13} style={{ display: 'inline', marginRight: '4px' }} /> {ef.prenom} {ef.nom}</span>
+                                                                <span style={{ fontSize: '11px', color: '#166534', marginLeft: '10px' }}>({ef.classe})</span>
+                                                            </div>
+                                                            <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '6px', background: '#dcfce7', color: '#15803d' }}>
+                                                                Lien: {ef.lien_parente}
+                                                            </span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div style={{ textAlign: 'center', padding: '10px' }}>
+                                                <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>
+                                                    Aucun enfant raccordé à votre profil pour le moment.
+                                                </p>
+                                                <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                                                    Si vous avez des enfants inscrits dans l'établissement, cliquez sur "Signaler un enfant" ci-dessus pour avertir l'administration.
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -2330,21 +2616,21 @@ export default function PortailEnseignant() {
                                             </div>
                                         )}
                                         <div>
-                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔑 Ancien mot de passe</label>
+                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}><Key size={12} style={{ display: 'inline', marginRight: '4px' }} /> Ancien mot de passe</label>
                                             <input type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} placeholder="Votre ancien mot de passe"
                                                 style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }}
                                                 onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'}
                                                 onBlur={e => e.currentTarget.style.borderColor = '#e2e8f0'} />
                                         </div>
                                         <div>
-                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔒 Nouveau mot de passe</label>
+                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}><Lock size={12} style={{ display: 'inline', marginRight: '4px' }} /> Nouveau mot de passe</label>
                                             <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Minimum 6 caractères"
                                                 style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }}
                                                 onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'}
                                                 onBlur={e => e.currentTarget.style.borderColor = '#e2e8f0'} />
                                         </div>
                                         <div>
-                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>🔒 Confirmer le mot de passe</label>
+                                            <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}><Lock size={12} style={{ display: 'inline', marginRight: '4px' }} /> Confirmer le mot de passe</label>
                                             <input type="password" value={confirmNewPassword} onChange={e => setConfirmNewPassword(e.target.value)} placeholder="Retapez le nouveau mot de passe"
                                                 style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '2px solid #e2e8f0', fontSize: '14px', outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' }}
                                                 onFocus={e => e.currentTarget.style.borderColor = '#f59e0b'}
@@ -2361,7 +2647,7 @@ export default function PortailEnseignant() {
                                                         ancien_mdp: oldPassword || null,
                                                         nouveau_mdp: newPassword,
                                                     });
-                                                    setPasswordMsg({ type: 'success', text: '✅ Mot de passe modifié avec succès !' });
+                                                    setPasswordMsg({ type: 'success', text: 'Mot de passe modifié avec succès !' });
                                                     setOldPassword(''); setNewPassword(''); setConfirmNewPassword('');
                                                 } catch (err: any) {
                                                     setPasswordMsg({ type: 'error', text: err.response?.data?.detail || 'Erreur lors du changement.' });
@@ -2410,6 +2696,98 @@ export default function PortailEnseignant() {
                                     </button>
                                 </div>
                             </div>
+                        </motion.div>
+                    )}
+                    
+                    {activeTab === 'evenements' && (
+                        <motion.div key="evenements" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ marginBottom: '24px' }}>
+                                <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#1e293b', margin: '0 0 8px 0' }}>Événements de l'École</h2>
+                                <p style={{ margin: 0, color: '#64748b', fontSize: '13px' }}>Retrouvez ici les événements publiés par l'administration.</p>
+                            </div>
+                            {teacherEvts.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '60px 20px', background: 'white', borderRadius: '16px', border: '1px dashed #cbd5e1' }}>
+                                    <Calendar size={48} color="#94a3b8" style={{ marginBottom: '16px' }} />
+                                    <h3 style={{ margin: '0 0 8px', color: '#1e293b', fontSize: '16px', fontWeight: 600 }}>Aucun événement</h3>
+                                    <p style={{ margin: 0, color: '#64748b', fontSize: '14px' }}>Il n'y a pas d'événement publié pour le moment.</p>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+                                    {teacherEvts.map(evt => (
+                                        <div key={evt.evenement_id} style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 12px rgba(0,0,0,0.03)', border: '1px solid #e2e8f0', borderTop: `4px solid ${primaryColor}` }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                                                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>{evt.titre}</h3>
+                                                {evt.type_evenement && (
+                                                    <span style={{ fontSize: '11px', fontWeight: 600, padding: '4px 8px', borderRadius: '12px', background: '#f1f5f9', color: '#475569' }}>
+                                                        {evt.type_evenement}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', fontSize: '12px', marginBottom: '6px' }}>
+                                                <Calendar size={14} />
+                                                <span>{new Date(evt.date_debut).toLocaleDateString('fr-FR')} {evt.date_fin && `- ${new Date(evt.date_fin).toLocaleDateString('fr-FR')}`}</span>
+                                            </div>
+                                            {evt.lieu && (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#64748b', fontSize: '12px', marginBottom: '12px' }}>
+                                                    <MapPin size={14} />
+                                                    <span>{evt.lieu}</span>
+                                                </div>
+                                            )}
+                                            {evt.description && (
+                                                <p style={{ margin: 0, fontSize: '13px', color: '#475569', lineHeight: 1.5, background: '#f8fafc', padding: '12px', borderRadius: '10px' }}>
+                                                    {evt.description}
+                                                </p>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </motion.div>
+                    )}
+
+                    {activeTab === 'activites' && (
+                        <motion.div key="activites" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ marginBottom: '24px' }}>
+                                <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#1e293b', margin: '0 0 8px 0' }}>Activités du Jour</h2>
+                                <p style={{ margin: 0, color: '#64748b', fontSize: '13px' }}>Suivez les activités parascolaires et clubs.</p>
+                            </div>
+                            {teacherActs.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '60px 20px', background: 'white', borderRadius: '16px', border: '1px dashed #cbd5e1' }}>
+                                    <Activity size={48} color="#94a3b8" style={{ marginBottom: '16px' }} />
+                                    <h3 style={{ margin: '0 0 8px', color: '#1e293b', fontSize: '16px', fontWeight: 600 }}>Aucune activité</h3>
+                                    <p style={{ margin: 0, color: '#64748b', fontSize: '14px' }}>Il n'y a pas d'activité planifiée pour aujourd'hui.</p>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                    {teacherActs.map(act => (
+                                        <div key={act.activite_id} style={{ display: 'flex', gap: '20px', background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.02)', border: '1px solid #e2e8f0' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: '60px' }}>
+                                                <div style={{ fontSize: '14px', fontWeight: 800, color: primaryColor }}>{act.heure_debut?.substring(0,5)}</div>
+                                                <div style={{ width: '2px', flex: 1, background: '#e2e8f0', margin: '8px 0' }}></div>
+                                                <div style={{ fontSize: '12px', fontWeight: 600, color: '#94a3b8' }}>{act.heure_fin?.substring(0,5)}</div>
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#1e293b' }}>{act.titre}</h3>
+                                                    {act.type_activite && (
+                                                        <span style={{ fontSize: '11px', fontWeight: 600, padding: '4px 8px', borderRadius: '12px', background: '#e0e7ff', color: '#3730a3' }}>
+                                                            {act.type_activite}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                {act.description && (
+                                                    <p style={{ margin: 0, fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>{act.description}</p>
+                                                )}
+                                                {act.lieu && (
+                                                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '12px', padding: '6px 12px', background: '#f8fafc', borderRadius: '20px', fontSize: '12px', color: '#64748b', fontWeight: 500 }}>
+                                                        <MapPin size={12} /> {act.lieu}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </motion.div>
                     )}
                 </AnimatePresence>
@@ -2470,7 +2848,7 @@ export default function PortailEnseignant() {
                                     </div>
                                 )}
                                 <div>
-                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>🔒 Ancien mot de passe</label>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}><Lock size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Ancien mot de passe</label>
                                     <div style={{ position: 'relative' }}>
                                         <Lock size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                         <input type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} placeholder="Votre mot de passe actuel"
@@ -2479,7 +2857,7 @@ export default function PortailEnseignant() {
                                     </div>
                                 </div>
                                 <div>
-                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>🔑 Nouveau mot de passe</label>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}><Key size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Nouveau mot de passe</label>
                                     <div style={{ position: 'relative' }}>
                                         <Key size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                         <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Min. 6 caractères"
@@ -2488,7 +2866,7 @@ export default function PortailEnseignant() {
                                     </div>
                                 </div>
                                 <div>
-                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>✅ Confirmer le nouveau mot de passe</label>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}><CheckCircle2 size={12} style={{ display: 'inline', marginRight: '4px' }} /> Confirmer le nouveau mot de passe</label>
                                     <div style={{ position: 'relative' }}>
                                         <CheckCircle size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: newPassword && confirmNewPassword && newPassword === confirmNewPassword ? '#10b981' : '#94a3b8' }} />
                                         <input type="password" value={confirmNewPassword} onChange={e => setConfirmNewPassword(e.target.value)} placeholder="Retapez le nouveau mot de passe"
@@ -2496,7 +2874,7 @@ export default function PortailEnseignant() {
                                             onFocus={e => e.target.style.borderColor = '#f59e0b'} onBlur={e => e.target.style.borderColor = newPassword && confirmNewPassword ? (newPassword === confirmNewPassword ? '#10b981' : '#ef4444') : '#e2e8f0'} />
                                     </div>
                                     {newPassword && confirmNewPassword && newPassword !== confirmNewPassword && (
-                                        <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#ef4444', fontWeight: 600 }}>❌ Les mots de passe ne correspondent pas</p>
+                                        <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#ef4444', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><XCircle size={12} /> Les mots de passe ne correspondent pas</p>
                                     )}
                                 </div>
                             </div>
@@ -2517,7 +2895,7 @@ export default function PortailEnseignant() {
                                                 ancien_mdp: oldPassword || null,
                                                 nouveau_mdp: newPassword,
                                             });
-                                            setPasswordMsg({ type: 'success', text: '✅ Mot de passe modifié avec succès !' });
+                                            setPasswordMsg({ type: 'success', text: 'Mot de passe modifié avec succès !' });
                                             setOldPassword(''); setNewPassword(''); setConfirmNewPassword('');
                                             setTimeout(() => setShowPasswordModal(false), 1500);
                                         } catch (err: any) {
@@ -2572,7 +2950,7 @@ export default function PortailEnseignant() {
                                         <label style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', display: 'block', marginBottom: '3px' }}>Classe</label>
                                         <select value={dispoClasse || ''} onChange={e => setDispoClasse(Number(e.target.value))}
                                             style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '12px', outline: 'none' }}>
-                                            {(data?.affectations || []).map(a => <option key={a.classe_id} value={a.classe_id}>{a.classe}</option>)}
+                                            {(() => { const seen = new Set<number>(); return (data?.affectations || []).filter(a => { if (seen.has(a.classe_id)) return false; seen.add(a.classe_id); return true; }).map(a => <option key={`dispo-cls-${a.classe_id}`} value={a.classe_id}>{a.classe}</option>); })()}
                                         </select>
                                     </div>
                                     <div style={{ flex: '1 1 100px' }}>
@@ -2604,7 +2982,7 @@ export default function PortailEnseignant() {
                                             return (
                                                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: '10px', background: '#f0fdfa', border: '1px solid #ccfbf1', fontSize: '12px' }}>
                                                     <div style={{ display: 'flex', gap: '12px', fontWeight: 600, color: '#0f766e' }}>
-                                                        <span>📚 {clsName}</span>
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BookOpen size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '2px' }} /> {clsName}</span>
                                                         <span>{DISPO_JOURS_L[s.jour]}</span>
                                                         <span>{s.heure_debut} - {s.heure_fin}</span>
                                                     </div>
@@ -2664,7 +3042,7 @@ export default function PortailEnseignant() {
                                     <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Matière *</label>
                                     <select value={uploadMatiere || ''} onChange={e => setUploadMatiere(Number(e.target.value))}
                                         style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none' }}>
-                                        {(data?.affectations || []).map(a => <option key={a.matiere_id} value={a.matiere_id}>{a.matiere}</option>)}
+                                        {(() => { const seen = new Set<number>(); return (data?.affectations || []).filter(a => { if (seen.has(a.matiere_id)) return false; seen.add(a.matiere_id); return true; }).map(a => <option key={`upload-mat-${a.matiere_id}`} value={a.matiere_id}>{a.matiere}</option>); })()}
                                     </select>
                                 </div>
                                 {/* Titre */}
@@ -2723,6 +3101,104 @@ export default function PortailEnseignant() {
                 )}
             </AnimatePresence>
 
+            {/* ═══ MODAL: MODIFIER UN SUJET ═══ */}
+            <AnimatePresence>
+                {showEditSujet && editSujetData && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1500, padding: '24px' }}
+                        onClick={() => setShowEditSujet(false)}>
+                        <motion.div initial={{ y: 30, scale: 0.95 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, scale: 0.95 }} transition={{ type: 'spring', damping: 25 }}
+                            style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '480px', padding: '24px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}
+                            onClick={e => e.stopPropagation()}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Modifier le Sujet</h3>
+                                <button onClick={() => setShowEditSujet(false)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}><X size={16} /></button>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Trimestre</label>
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        {[1, 2, 3].map(t => (
+                                            <button key={t} type="button" onClick={() => setEditSujetData({ ...editSujetData, trimestre: t })}
+                                                style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: editSujetData.trimestre === t ? primaryColor : '#f8fafc', color: editSujetData.trimestre === t ? 'white' : '#64748b', border: '1px solid #e2e8f0', cursor: 'pointer' }}>T{t}</button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Titre du sujet</label>
+                                    <input value={editSujetData.titre} onChange={e => setEditSujetData({ ...editSujetData, titre: e.target.value })}
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Durée (minutes)</label>
+                                    <input type="number" value={editSujetData.duree_minutes} onChange={e => setEditSujetData({ ...editSujetData, duree_minutes: Number(e.target.value) })}
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+                                    <button onClick={() => setShowEditSujet(false)} style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', fontSize: '13px', cursor: 'pointer' }}>Annuler</button>
+                                    <button onClick={handleEditSujet} disabled={editSujetSaving}
+                                        style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', background: primaryColor, color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                                        {editSujetSaving ? 'Enregistrement...' : 'Mettre à jour'}
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ═══ MODAL: SIGNALER UN ENFANT SCOLARISÉ ═══ */}
+            <AnimatePresence>
+                {showSignalerEnfantModal && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1500, padding: '24px' }}
+                        onClick={() => setShowSignalerEnfantModal(false)}>
+                        <motion.div initial={{ y: 30, scale: 0.95 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, scale: 0.95 }} transition={{ type: 'spring', damping: 25 }}
+                            style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '480px', padding: '24px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}
+                            onClick={e => e.stopPropagation()}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>Signaler un Enfant Scolarisé</h3>
+                                <button onClick={() => setShowSignalerEnfantModal(false)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}><X size={16} /></button>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>Nom de l'enfant *</label>
+                                    <input value={signalerForm.nom_enfant} onChange={e => setSignalerForm({ ...signalerForm, nom_enfant: e.target.value })}
+                                        placeholder="Ex: Camara"
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>Prénom de l'enfant</label>
+                                    <input value={signalerForm.prenom_enfant} onChange={e => setSignalerForm({ ...signalerForm, prenom_enfant: e.target.value })}
+                                        placeholder="Ex: Mohamed"
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>Classe / Précisions</label>
+                                    <input value={signalerForm.classe_detail} onChange={e => setSignalerForm({ ...signalerForm, classe_detail: e.target.value })}
+                                        placeholder="Ex: 6ème Année A"
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box' }} />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569', display: 'block', marginBottom: '4px' }}>Remarque / Précisions complémentaires</label>
+                                    <textarea value={signalerForm.remarque} onChange={e => setSignalerForm({ ...signalerForm, remarque: e.target.value })}
+                                        placeholder="Toute information utile pour la direction..."
+                                        rows={3}
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', outline: 'none', boxSizing: 'border-box', resize: 'vertical' }} />
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+                                    <button onClick={() => setShowSignalerEnfantModal(false)} style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', fontSize: '13px', cursor: 'pointer' }}>Annuler</button>
+                                    <button onClick={handleSignalerEnfant} disabled={signalerSending || !signalerForm.nom_enfant.trim()}
+                                        style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #0f766e, #14b8a6)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                                        {signalerSending ? 'Envoi...' : 'Transmettre à la direction'}
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* ═══ LIGHTBOX ═══ */}
             <AnimatePresence>
                 {lightboxUrl && (
@@ -2764,8 +3240,8 @@ export default function PortailEnseignant() {
 
 const DOC_TYPES = [
   { key: 'YOUTUBE', label: 'YouTube',     color: '#ef4444', icon: '▶️' },
-  { key: 'GFORM',   label: 'Google Form', color: '#7c3aed', icon: '📋' },
-  { key: 'GDOC',    label: 'Google Doc',  color: '#2563eb', icon: '📄' },
+  { key: 'GFORM',   label: 'Google Form', color: '#7c3aed', icon: 'ClipboardList' },
+  { key: 'GDOC',    label: 'Google Doc',  color: '#2563eb', icon: 'FileText' },
   { key: 'PDF',     label: 'PDF',         color: '#dc2626', icon: '📕' },
   { key: 'LIEN',    label: 'Lien',        color: '#0891b2', icon: '🔗' },
 ];
@@ -2906,8 +3382,8 @@ function DocumentsTab({ enseignantId }: { enseignantId?: number }) {
 // ══════════════════════════════════════════════════════════════════════════════
 
 const LINK_CATS = [
-  { key: 'PEDAGOGIE', label: 'Pédagogie',  color: '#8b5cf6', icon: '🎓' },
-  { key: 'RESSOURCE', label: 'Ressources', color: '#059669', icon: '📚' },
+  { key: 'PEDAGOGIE', label: 'Pédagogie',  color: '#8b5cf6', icon: 'GraduationCap' },
+  { key: 'RESSOURCE', label: 'Ressources', color: '#059669', icon: 'BookOpen' },
   { key: 'OUTIL',     label: 'Outils',     color: '#0891b2', icon: '🛠️' },
   { key: 'AUTRE',     label: 'Autre',      color: '#64748b', icon: '🔗' },
 ];

@@ -13,7 +13,8 @@ from app.models.academique import (
 )
 from app.schemas.schemas import (
     EtablissementCreate, EtablissementUpdate, EtablissementOut,
-    AnneeScolaireCreate, AnneeScolaireOut,
+    AnneeScolaireCreate, AnneeScolaireUpdate, AnneeScolaireOut,
+    TrimestreCreate, TrimestreUpdate, TrimestreOut,
     MatiereCreate, MatiereOut,
     ParametreCreate, ParametreUpdate, ParametreOut
 )
@@ -137,6 +138,36 @@ def create_annee(data: AnneeScolaireCreate, db: Session = Depends(get_db)):
     db.refresh(a)
     return a
 
+@router.put("/annees/{id}", response_model=AnneeScolaireOut)
+def update_annee(id: int, data: AnneeScolaireUpdate, db: Session = Depends(get_db)):
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == id).first()
+    if not annee:
+        raise HTTPException(404, "Année non trouvée")
+
+    payload = data.model_dump(exclude_unset=True)
+    if "date_debut" in payload and "date_fin" in payload and payload["date_debut"] > payload["date_fin"]:
+        raise HTTPException(400, "La date de début doit être antérieure à la date de fin")
+
+    future_date_debut = payload.get("date_debut", annee.date_debut)
+    future_date_fin = payload.get("date_fin", annee.date_fin)
+    if future_date_debut > future_date_fin:
+        raise HTTPException(400, "La date de début doit être antérieure à la date de fin")
+
+    for k, v in payload.items():
+        setattr(annee, k, v)
+
+    if annee.est_courante == "O":
+        db.query(AnneeScolaire).filter(
+            AnneeScolaire.etablissement_id == annee.etablissement_id,
+            AnneeScolaire.annee_id != id
+        ).update({"est_courante": "N"})
+        if annee.statut == "PLANIFIEE":
+            annee.statut = "EN_COURS"
+
+    db.commit()
+    db.refresh(annee)
+    return annee
+
 @router.put("/annees/{id}/activer")
 def activer_annee(id: int, db: Session = Depends(get_db)):
     """Permet d'activer une année (et désactiver les autres)"""
@@ -157,11 +188,53 @@ def activer_annee(id: int, db: Session = Depends(get_db)):
 # ============================================================================
 # TRIMESTRES
 # ============================================================================
-@router.get("/trimestres")
+@router.get("/trimestres", response_model=List[TrimestreOut])
 def list_trimestres(annee_id: int = 1, db: Session = Depends(get_db)):
     return db.query(Trimestre).filter(
         Trimestre.annee_id == annee_id
     ).order_by(Trimestre.numero).all()
+
+@router.post("/trimestres", response_model=TrimestreOut, status_code=201)
+def create_trimestre(data: TrimestreCreate, db: Session = Depends(get_db)):
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == data.annee_id).first()
+    if not annee:
+        raise HTTPException(404, "Année scolaire non trouvée")
+    if data.date_debut > data.date_fin:
+        raise HTTPException(400, "La date de début doit être antérieure à la date de fin")
+
+    trimestre = Trimestre(**data.model_dump())
+    db.add(trimestre)
+    db.commit()
+    db.refresh(trimestre)
+    return trimestre
+
+@router.put("/trimestres/{id}", response_model=TrimestreOut)
+def update_trimestre(id: int, data: TrimestreUpdate, db: Session = Depends(get_db)):
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == id).first()
+    if not trimestre:
+        raise HTTPException(404, "Période non trouvée")
+
+    payload = data.model_dump(exclude_unset=True)
+    future_date_debut = payload.get("date_debut", trimestre.date_debut)
+    future_date_fin = payload.get("date_fin", trimestre.date_fin)
+    if future_date_debut > future_date_fin:
+        raise HTTPException(400, "La date de début doit être antérieure à la date de fin")
+
+    for k, v in payload.items():
+        setattr(trimestre, k, v)
+
+    db.commit()
+    db.refresh(trimestre)
+    return trimestre
+
+@router.delete("/trimestres/{id}")
+def delete_trimestre(id: int, db: Session = Depends(get_db)):
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == id).first()
+    if not trimestre:
+        raise HTTPException(404, "Période non trouvée")
+    db.delete(trimestre)
+    db.commit()
+    return {"message": "Période supprimée avec succès"}
 
 
 # ============================================================================

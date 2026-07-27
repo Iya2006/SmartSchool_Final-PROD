@@ -41,6 +41,8 @@ export default function HistoriquePresences() {
     const [dateDebut, setDateDebut] = useState('');
     const [dateFin, setDateFin] = useState('');
     const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+    const [isMounted, setIsMounted] = useState(false);
+    const [activeTab, setActiveTab] = useState<'personnel' | 'eleves'>('personnel');
 
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
     const getPhotoUrl = (url: string | null | undefined) => {
@@ -59,14 +61,56 @@ export default function HistoriquePresences() {
             if (search) params.append('recherche', search);
             if (dateDebut) params.append('date_debut', dateDebut);
             if (dateFin) params.append('date_fin', dateFin);
+            const baseUrl = activeTab === 'personnel' ? '/api/presences-agents' : '/api/pointage-eleves';
             
             const [historyRes, statsRes] = await Promise.all([
-                api.get(`/api/presences-agents/historique?${params.toString()}`),
-                api.get(`/api/presences-agents/stats?${params.toString()}`)
+                api.get(`${baseUrl}/historique?${params.toString()}`),
+                api.get(`${baseUrl}/stats?${params.toString()}`)
             ]);
             
-            setPresences(historyRes.data);
-            setStats(statsRes.data);
+            let normalizedPresences = [];
+            if (activeTab === 'personnel') {
+                normalizedPresences = historyRes.data;
+            } else {
+                normalizedPresences = historyRes.data.data.map((p: any) => ({
+                    presence_id: p.pointage_id,
+                    date: p.date,
+                    heure_arrivee: p.heure_arrivee,
+                    heure_depart: p.heure_depart,
+                    statut: p.statut,
+                    agent: {
+                        nom: p.eleve.nom,
+                        matricule: p.eleve.matricule,
+                        role: `Élève (${p.eleve.classe || 'N/A'})`,
+                        type: 'ELEVE',
+                        photo: p.eleve.photo
+                    }
+                }));
+            }
+            
+            let normalizedStats = statsRes.data;
+            if (activeTab === 'eleves') {
+                const kpis = statsRes.data.kpis || {};
+                const total = kpis.total_eleves_actifs || 0;
+                const presents = kpis.presents || kpis.total_arrivees || 0;
+                const absents = total > presents ? total - presents : 0;
+                const taux = total > 0 ? Math.round((presents / total) * 100) : 0;
+                
+                normalizedStats = {
+                    kpis: {
+                        total_agents: total,
+                        presences: presents,
+                        absents: absents,
+                        taux_presence: taux,
+                        total_enregistrements: kpis.total_pointages || 0
+                    },
+                    graphique_jours: statsRes.data.graphique_jours || [],
+                    graphique_heures: statsRes.data.graphique_heures || []
+                };
+            }
+            
+            setPresences(normalizedPresences);
+            setStats(normalizedStats);
         } catch (error: any) {
             toast.error("Erreur lors de la récupération des données");
         } finally {
@@ -81,14 +125,15 @@ export default function HistoriquePresences() {
         
         setDateDebut(firstDay.toISOString().split('T')[0]);
         setDateFin(today.toISOString().split('T')[0]);
+        setIsMounted(true);
     }, []);
 
-    // Fetch once dates are set
+    // Fetch once dates and tab are set
     useEffect(() => {
         if (dateDebut && dateFin) {
             fetchData();
         }
-    }, [dateDebut, dateFin]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [dateDebut, dateFin, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
@@ -139,7 +184,9 @@ export default function HistoriquePresences() {
     };
 
     const formatDate = (dateStr: string) => {
+        if (!dateStr || !isMounted) return '';
         const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '';
         return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
     };
 
@@ -173,6 +220,34 @@ export default function HistoriquePresences() {
             <div className="print-only" style={{ display: 'none', marginBottom: '30px', textAlign: 'center', borderBottom: '2px solid #000', paddingBottom: '20px' }}>
                 <h1 style={{ fontSize: '24px', margin: 0, textTransform: 'uppercase' }}>Rapport de Présences</h1>
                 <p style={{ margin: '5px 0 0 0' }}>Période du {formatDate(dateDebut)} au {formatDate(dateFin)}</p>
+            </div>
+
+            {/* Tabs */}
+            <div className="print-hide" style={{ display: 'flex', gap: '10px', marginBottom: '24px', borderBottom: '2px solid #e2e8f0' }}>
+                <button 
+                    onClick={() => setActiveTab('personnel')}
+                    style={{ 
+                        padding: '12px 24px', background: 'transparent', border: 'none', 
+                        borderBottom: activeTab === 'personnel' ? '3px solid #3b82f6' : '3px solid transparent',
+                        color: activeTab === 'personnel' ? '#3b82f6' : '#64748b',
+                        fontWeight: activeTab === 'personnel' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', marginBottom: '-2px'
+                    }}
+                >
+                    <UserIcon size={18} /> Personnel
+                </button>
+                <button 
+                    onClick={() => setActiveTab('eleves')}
+                    style={{ 
+                        padding: '12px 24px', background: 'transparent', border: 'none', 
+                        borderBottom: activeTab === 'eleves' ? '3px solid #3b82f6' : '3px solid transparent',
+                        color: activeTab === 'eleves' ? '#3b82f6' : '#64748b',
+                        fontWeight: activeTab === 'eleves' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
+                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', marginBottom: '-2px'
+                    }}
+                >
+                    <UserIcon size={18} /> Élèves
+                </button>
             </div>
 
             {/* Filters */}
@@ -230,7 +305,7 @@ export default function HistoriquePresences() {
                     {/* KPI Cards */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '30px' }}>
                         <div style={{ background: 'white', padding: '24px', borderRadius: '20px', border: '1px solid #e0e7ff', borderLeft: '4px solid #4f46e5', boxShadow: '0 4px 20px rgba(79,70,229,0.05)' }}>
-                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#6366f1', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>Total Personnels</div>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#6366f1', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>{activeTab === 'personnel' ? 'Total Personnels' : 'Total Élèves'}</div>
                             <div style={{ fontSize: '32px', fontWeight: 800, color: '#1e293b' }}>{stats?.kpis.total_agents || 0}</div>
                         </div>
                         <div style={{ background: 'white', padding: '24px', borderRadius: '20px', border: '1px solid #dcfce7', borderLeft: '4px solid #10b981', boxShadow: '0 4px 20px rgba(16,185,129,0.05)' }}>
@@ -377,7 +452,7 @@ export default function HistoriquePresences() {
             )}
 
             {/* Print specific styles */}
-            <style jsx global>{`
+            <style dangerouslySetInnerHTML={{ __html: `
                 @media print {
                     body { background: white !important; }
                     .print-hide { display: none !important; }
@@ -385,7 +460,7 @@ export default function HistoriquePresences() {
                     .print-break-inside { page-break-inside: avoid; }
                     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
                 }
-            `}</style>
+            ` }} />
 
             {/* Photo Modal */}
             {selectedPhoto && (

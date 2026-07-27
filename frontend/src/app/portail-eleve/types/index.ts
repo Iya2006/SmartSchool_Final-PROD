@@ -139,7 +139,9 @@ export interface MessageInfo {
     message_id: number;
     expediteur_type: string;
     expediteur_id: number | null;
+    expediteur_nom?: string;
     destinataire_type: string;
+    destinataire_nom?: string;
     sujet: string;
     contenu: string;
     statut: string;
@@ -197,6 +199,8 @@ export type Tab =
     | 'messages'
     | 'fournitures'
     | 'devoirs'
+    | 'evenements'
+    | 'activites'
     | 'profil'
     | 'liens'
     | 'scolarite';

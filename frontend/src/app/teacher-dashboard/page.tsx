@@ -9,7 +9,7 @@ import {
     Users, BookOpen, ClipboardList, CheckCircle, ChevronRight,
     Loader2, Megaphone, Clock, Play, Eye, Star, MessageCircle,
     Send, Calendar, FileText, Link2, FolderOpen, Wrench, Mail,
-    Plus, X, CheckCircle2, AlertCircle, Trash2, Upload, Download, FileUp
+    Plus, X, CheckCircle2, AlertCircle, Trash2, Upload, Download, FileUp, AlertTriangle, PenLine, Paperclip
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -43,11 +43,11 @@ interface SujetExamen {
 }
 
 const OBJET_ICONS: Record<string, { icon: string; color: string; bg: string }> = {
-    EMPLOI: { icon: '📅', color: '#0d9488', bg: '#ccfbf1' },
-    DISCIPLINE: { icon: '⚖️', color: '#dc2626', bg: '#fee2e2' },
-    GENERAL: { icon: '📢', color: '#3b82f6', bg: '#dbeafe' },
-    REUNION: { icon: '🤝', color: '#7c3aed', bg: '#ede9fe' },
-    EXAMENS: { icon: '📝', color: '#f59e0b', bg: '#fef3c7' },
+    EMPLOI: { icon: '', color: '#0d9488', bg: '#ccfbf1' },
+    DISCIPLINE: { icon: '', color: '#dc2626', bg: '#fee2e2' },
+    GENERAL: { icon: '', color: '#3b82f6', bg: '#dbeafe' },
+    REUNION: { icon: '', color: '#7c3aed', bg: '#ede9fe' },
+    EXAMENS: { icon: '', color: '#f59e0b', bg: '#fef3c7' },
 };
 
 // Keep mock data for other sections
@@ -109,6 +109,22 @@ export default function TeacherDashboard() {
     const [uploadTrimestre, setUploadTrimestre] = useState(1);
     const [uploading, setUploading] = useState(false);
 
+    const handleDownloadSujet = async (sujetId: number, filename: string) => {
+        try {
+            const res = await api.get(`/api/examens/sujets/${sujetId}/fichier`, { responseType: 'blob' });
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', filename || `sujet_${sujetId}`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch {
+            alert('Erreur lors du téléchargement du fichier.');
+        }
+    };
+
     // Mes Sujets
     const [mesSujets, setMesSujets] = useState<SujetExamen[]>([]);
     const [sendingSujetId, setSendingSujetId] = useState<number | null>(null);
@@ -169,7 +185,7 @@ export default function TeacherDashboard() {
                 enseignant_id: enseignantId,
                 slots: dispoSlots,
             });
-            showSuccess(`✅ ${dispoSlots.length} créneaux de disponibilité envoyés !`);
+            showSuccess(`${dispoSlots.length} créneaux de disponibilité envoyés !`);
             setShowDispoForm(false);
             loadData();
         } catch (err: any) { showError(err.response?.data?.detail || "Erreur d'envoi"); }
@@ -297,7 +313,7 @@ export default function TeacherDashboard() {
                     </div>
                     {emploiMessages.length > 0 && (
                         <span style={{ padding: '5px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, background: 'rgba(255,255,255,0.2)', color: 'white' }}>
-                            📅 {emploiMessages.length} demande(s) d&apos;emploi
+                            <Calendar size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> {emploiMessages.length} demande(s) d&apos;emploi
                         </span>
                     )}
                 </div>
@@ -347,11 +363,11 @@ export default function TeacherDashboard() {
                                                             background: expired ? '#94a3b8' : 'linear-gradient(135deg, #0f766e, #14b8a6)',
                                                             color: 'white', border: 'none', cursor: expired ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap', opacity: expired ? 0.7 : 1,
                                                         }}>
-                                                            <Calendar size={13} /> {expired ? '⏰ Expiré' : 'Répondre Disponibilité'}
+                                                            <Calendar size={13} /> {expired ? 'Expiré' : 'Répondre Disponibilité'}
                                                         </button>
                                                         {daysLeft !== null && !expired && (
                                                             <span style={{ fontSize: '10px', color: daysLeft <= 2 ? '#dc2626' : '#64748b', fontWeight: 600 }}>
-                                                                ⏳ {daysLeft}j restant{daysLeft > 1 ? 's' : ''}
+                                                                {daysLeft}j restant{daysLeft > 1 ? 's' : ''}
                                                             </span>
                                                         )}
                                                     </div>
@@ -373,11 +389,11 @@ export default function TeacherDashboard() {
                                                             color: 'white', border: 'none', cursor: expired ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap', opacity: expired ? 0.7 : 1,
                                                         }}>
                                                             <FileUp size={13} />
-                                                            {expired ? '⏰ Expiré' : nbSujetsDeposes > 0 ? `📄 ${nbSujetsDeposes} déposé(s) — Ajouter` : 'Déposer un Sujet'}
+                                                            {expired ? 'Expiré' : nbSujetsDeposes > 0 ? `${nbSujetsDeposes} déposé(s) — Ajouter` : 'Déposer un Sujet'}
                                                         </button>
                                                         {daysLeft !== null && !expired && (
                                                             <span style={{ fontSize: '10px', color: daysLeft <= 2 ? '#dc2626' : '#64748b', fontWeight: 600 }}>
-                                                                ⏳ {daysLeft}j restant{daysLeft > 1 ? 's' : ''}
+                                                                {daysLeft}j restant{daysLeft > 1 ? 's' : ''}
                                                             </span>
                                                         )}
                                                     </div>
@@ -464,7 +480,7 @@ export default function TeacherDashboard() {
                                                     padding: '8px 12px', borderRadius: '10px', background: '#f0fdfa', border: '1px solid #ccfbf1', fontSize: '12px'
                                                 }}>
                                                     <div style={{ display: 'flex', gap: '12px', fontWeight: 600, color: '#0f766e' }}>
-                                                        <span>📚 {clsName}</span>
+                                                        <span><BookOpen size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '2px' }} /> {clsName}</span>
                                                         <span>{JOURS_L[s.jour]}</span>
                                                         <span>{s.heure_debut} - {s.heure_fin}</span>
                                                     </div>
@@ -692,7 +708,7 @@ export default function TeacherDashboard() {
                     <div style={{ display: 'flex', gap: '8px' }}>
                         {mesSujets.filter(s => s.statut === 'BROUILLON').length > 0 && (
                             <span style={{ padding: '5px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, background: 'rgba(255,255,255,0.2)' }}>
-                                ⚠️ {mesSujets.filter(s => s.statut === 'BROUILLON').length} à envoyer
+                                <AlertTriangle size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '2px' }} /> {mesSujets.filter(s => s.statut === 'BROUILLON').length} à envoyer
                             </span>
                         )}
                     </div>
@@ -708,13 +724,13 @@ export default function TeacherDashboard() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                             {mesSujets.map((s, i) => {
                                 const statusCfg: Record<string, { label: string; color: string; bg: string }> = {
-                                    BROUILLON: { label: '📝 Brouillon', color: '#64748b', bg: '#f1f5f9' },
-                                    ENVOYE: { label: '📨 Envoyé', color: '#0d9488', bg: '#ccfbf1' },
-                                    VALIDE: { label: '✅ Validé', color: '#16a34a', bg: '#dcfce7' },
-                                    REJETE: { label: '❌ Rejeté', color: '#dc2626', bg: '#fee2e2' },
+                                    BROUILLON: { label: 'Brouillon', color: '#64748b', bg: '#f1f5f9' },
+                                    ENVOYE: { label: 'Envoyé', color: '#0d9488', bg: '#ccfbf1' },
+                                    VALIDE: { label: 'Validé', color: '#16a34a', bg: '#dcfce7' },
+                                    REJETE: { label: 'Rejeté', color: '#dc2626', bg: '#fee2e2' },
                                 };
                                 const st = statusCfg[s.statut] || statusCfg.BROUILLON;
-                                const fileIcon = s.fichier_type === 'pdf' ? '📄' : s.fichier_type === 'docx' || s.fichier_type === 'doc' ? '📝' : '📎';
+                                const fileIcon = s.fichier_type === 'pdf' ? <FileText size={14} /> : s.fichier_type === 'docx' || s.fichier_type === 'doc' ? <PenLine size={14} /> : <Paperclip size={14} />;
                                 return (
                                     <motion.div key={s.sujet_id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.05 }}
                                         style={{
@@ -748,10 +764,9 @@ export default function TeacherDashboard() {
                                                     Envoyer
                                                 </button>
                                             )}
-                                            <a href={`/api/examens/sujets/${s.sujet_id}/fichier`} target="_blank" rel="noreferrer"
-                                                style={{ padding: '7px', borderRadius: '8px', border: '1px solid var(--border-light)', display: 'flex', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                                            <button onClick={() => handleDownloadSujet(s.sujet_id, s.fichier_nom || `sujet_${s.sujet_id}`)} style={{ padding: '7px', borderRadius: '8px', border: '1px solid var(--border-light)', display: 'flex', cursor: 'pointer', color: 'var(--text-secondary)', background: 'transparent' }}>
                                                 <Download size={14} />
-                                            </a>
+                                            </button>
                                         </div>
                                     </motion.div>
                                 );

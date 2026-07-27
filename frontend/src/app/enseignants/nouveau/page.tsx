@@ -4,7 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, Briefcase, Lock, Eye, EyeOff, Shield, Copy, Check } from 'lucide-react';
+import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, Briefcase, Lock, Eye, EyeOff, Shield, Copy, Check, Smartphone, FileText, Lightbulb, AlertTriangle, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
@@ -166,11 +166,11 @@ export default function NouveauEnseignant() {
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.6)', borderRadius: '8px' }}>
-                                <span style={{ fontSize: '12px', color: '#92400e' }}>📱 Téléphone</span>
+                                <span style={{ fontSize: '12px', color: '#92400e', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Smartphone size={12} /> Téléphone</span>
                                 <span style={{ fontSize: '13px', fontWeight: 700, color: '#78350f', fontFamily: 'monospace' }}>{createdInfo.telephone}</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: 'rgba(255,255,255,0.6)', borderRadius: '8px' }}>
-                                <span style={{ fontSize: '12px', color: '#92400e' }}>🔒 Mot de passe</span>
+                                <span style={{ fontSize: '12px', color: '#92400e', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Lock size={12} /> Mot de passe</span>
                                 <span style={{ fontSize: '13px', fontWeight: 700, color: '#78350f', fontFamily: 'monospace' }}>{createdInfo.mot_de_passe}</span>
                             </div>
                         </div>
@@ -334,7 +334,7 @@ export default function NouveauEnseignant() {
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} className="card" style={{ overflow: 'visible' }}>
                     <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-light)', display: 'flex', alignItems: 'center', gap: '12px', background: '#f8fafc' }}>
                         <div style={{ padding: '8px', background: '#3b82f6', color: 'white', borderRadius: '8px' }}>
-                            <span style={{ fontSize: '18px' }}>📄</span>
+                            <FileText size={18} />
                         </div>
                         <div>
                             <h2 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>Contrat & Rémunération</h2>
@@ -391,13 +391,13 @@ export default function NouveauEnseignant() {
                         </div>
                         <button type="button" onClick={generatePassword}
                             style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #d97706', background: 'rgba(245,158,11,0.1)', color: '#92400e', fontWeight: 600, fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            🎲 Générer un mot de passe
+                            <RefreshCw size={14} /> Générer un mot de passe
                         </button>
                     </div>
 
                     <div style={{ padding: '24px' }}>
                         <div style={{ padding: '14px 16px', background: '#eff6ff', borderRadius: '10px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px', border: '1px solid #bfdbfe' }}>
-                            <span style={{ fontSize: '16px' }}>💡</span>
+                            <Lightbulb size={16} />
                             <p style={{ margin: 0, fontSize: '12px', color: '#1e40af', lineHeight: 1.5 }}>
                                 L&apos;enseignant utilisera son <strong>numéro de téléphone</strong> et ce <strong>mot de passe</strong> pour se connecter au Portail Enseignant.
                                 Si vous ne définissez pas de mot de passe, l&apos;accès au portail sera désactivé.
@@ -406,7 +406,7 @@ export default function NouveauEnseignant() {
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                             <div>
-                                <label style={labelStyle}>🔒 Mot de passe</label>
+                                <label style={{ ...labelStyle, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Lock size={14} /> Mot de passe</label>
                                 <div style={{ position: 'relative' }}>
                                     <Lock size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                     <input
@@ -424,7 +424,7 @@ export default function NouveauEnseignant() {
                                 </div>
                             </div>
                             <div>
-                                <label style={labelStyle}>🔒 Confirmer le mot de passe</label>
+                                <label style={{ ...labelStyle, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Lock size={14} /> Confirmer le mot de passe</label>
                                 <div style={{ position: 'relative' }}>
                                     <Lock size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                     <input
@@ -443,7 +443,7 @@ export default function NouveauEnseignant() {
                             </div>
                         </div>
                         {pwdError && (
-                            <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#ef4444', fontWeight: 600 }}>⚠️ {pwdError}</p>
+                            <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#ef4444', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><AlertTriangle size={14} /> {pwdError}</p>
                         )}
                         {formData.mot_de_passe && formData.confirm_mot_de_passe && formData.mot_de_passe === formData.confirm_mot_de_passe && (
                             <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#10b981', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>

@@ -234,7 +234,7 @@ export default function EnseignantsPage() {
                     <button onClick={() => setViewMode('grid')} className="btn btn-outline btn-sm" style={{ color: '#10b981', borderColor: '#10b981' }}>
                         <UserCheck size={16} /> Toutes les Cartes
                     </button>
-                    <Link href="/galerie" className="btn btn-outline btn-sm">📷 Galerie Photos</Link>
+                    <Link href="/galerie" className="btn btn-outline btn-sm"><Camera size={16} /> Galerie Photos</Link>
                     <Link href="/enseignants/nouveau" className="btn btn-primary"><Plus size={18} /> Ajouter Enseignant</Link>
                 </div>
             </div>

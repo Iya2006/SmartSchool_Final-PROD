@@ -6,7 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Settings, ChevronRight, Loader2, UserCheck, Users,
-    CheckCircle2, AlertCircle, ArrowLeft, BookOpen, Crown, Search, Star
+    CheckCircle2, AlertCircle, ArrowLeft, BookOpen, Crown, Search, Star, AlertTriangle, School, GraduationCap
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -100,7 +100,7 @@ export default function ConfigurerClassePage() {
             const selectedStudents = classe.eleves.filter(e => chefDeClasse.includes(e.eleve_id));
             const hasGirl = selectedStudents.some(e => e.sexe === 'F');
             if (!hasGirl) {
-                setErrorMsg("⚠️ Il faut au moins une fille parmi les 3 chefs de classe !");
+                setErrorMsg("Il faut au moins une fille parmi les 3 chefs de classe !");
                 setTimeout(() => setErrorMsg(null), 5000);
                 return;
             }
@@ -113,7 +113,7 @@ export default function ConfigurerClassePage() {
                 professeur_principal_id: selectedProfId,
                 chefs_de_classe: chefDeClasse,
             });
-            setSuccessMsg("✅ Classe configurée avec succès !");
+            setSuccessMsg("Classe configurée avec succès !");
             setTimeout(() => {
                 setSuccessMsg(null);
                 router.push(`/classes/${classeId}`);
@@ -325,7 +325,7 @@ export default function ConfigurerClassePage() {
                                 background: nbFillesChefs > 0 ? '#dcfce7' : '#fef2f2',
                                 color: nbFillesChefs > 0 ? '#166534' : '#b91c1c'
                             }}>
-                                {nbFillesChefs > 0 ? `${nbFillesChefs} fille(s) ✓` : '⚠ Aucune fille'}
+                                {nbFillesChefs > 0 ? <>{nbFillesChefs} fille(s) <CheckCircle2 size={12} style={{display:'inline', verticalAlign:'middle'}}/></> : <><AlertTriangle size={12} style={{display:'inline', verticalAlign:'middle'}}/> Aucune fille</>}
                             </span>
                         )}
                     </div>
@@ -391,7 +391,7 @@ export default function ConfigurerClassePage() {
                                             {e.prenom} {e.nom}
                                         </p>
                                         <p style={{ margin: '1px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
-                                            {isFille ? '♀ Fille' : '♂ Garçon'} • {e.matricule}
+                                            {isFille ? 'Fille' : 'Garçon'} • {e.matricule}
                                         </p>
                                     </div>
                                 </motion.div>
@@ -429,9 +429,9 @@ export default function ConfigurerClassePage() {
                                     const res = await api.get(`/api/classes/${classeId}/profil`);
                                     setClasse(res.data);
                                     if (res.data.nb_matieres > 0) {
-                                        setSuccessMsg(`✅ ${res.data.nb_matieres} matières du programme guinéen attribuées !`);
+                                        setSuccessMsg(`${res.data.nb_matieres} matières du programme guinéen attribuées !`);
                                     } else {
-                                        setErrorMsg("⚠️ Aucune matière pour ce niveau. Vérifiez la config.");
+                                        setErrorMsg("Aucune matière pour ce niveau. Vérifiez la config.");
                                     }
                                     setTimeout(() => { setSuccessMsg(null); setErrorMsg(null); }, 5000);
                                 } catch (err: any) {
@@ -484,7 +484,7 @@ export default function ConfigurerClassePage() {
                 }}>
                     <AlertCircle size={20} style={{ flexShrink: 0, marginTop: '2px', color: '#d97706' }} />
                     <div style={{ flex: 1 }}>
-                        <strong>⚠️ Vérification nécessaire :</strong> Après avoir utilisé la génération automatique, veuillez valider que la liste des matières et leurs coefficients sont corrects pour cette classe. Utilisez le bouton <strong>« Ajouter manuellement »</strong> pour combler les manques, ou cliquez sur la croix <strong>(×)</strong> pour retirer des matières inappropriées.
+                        <strong><AlertTriangle size={14} style={{display:'inline', verticalAlign:'middle'}}/> Vérification nécessaire :</strong> Après avoir utilisé la génération automatique, veuillez valider que la liste des matières et leurs coefficients sont corrects pour cette classe. Utilisez le bouton <strong>« Ajouter manuellement »</strong> pour combler les manques, ou cliquez sur la croix <strong>(×)</strong> pour retirer des matières inappropriées.
                     </div>
                 </div>
 
@@ -553,10 +553,10 @@ export default function ConfigurerClassePage() {
 
                                 {/* Sections par Cycle */}
                                 {matieresGroupes.map((group: any) => {
-                                    const cycleColors: Record<string, { bg: string; border: string; text: string; badge: string }> = {
-                                        'PRM': { bg: '#fef3c7', border: '#fbbf24', text: '#92400e', badge: '🏫 Primaire' },
-                                        'CLG': { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af', badge: '📘 Collège' },
-                                        'LYC': { bg: '#ede9fe', border: '#8b5cf6', text: '#5b21b6', badge: '🎓 Lycée' },
+                                    const cycleColors: Record<string, { bg: string; border: string; text: string; badge: any }> = {
+                                        'PRM': { bg: '#fef3c7', border: '#fbbf24', text: '#92400e', badge: <><School size={12} style={{display:'inline', verticalAlign:'middle'}}/> Primaire</> },
+                                        'CLG': { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af', badge: <><BookOpen size={12} style={{display:'inline', verticalAlign:'middle'}}/> Collège</> },
+                                        'LYC': { bg: '#ede9fe', border: '#8b5cf6', text: '#5b21b6', badge: <><GraduationCap size={12} style={{display:'inline', verticalAlign:'middle'}}/> Lycée</> },
                                     };
                                     const colors = cycleColors[group.cycle_code] || { bg: '#f1f5f9', border: '#94a3b8', text: '#475569', badge: group.cycle_libelle };
                                     const availableMats = group.matieres.filter(
@@ -592,7 +592,7 @@ export default function ConfigurerClassePage() {
                                                             });
                                                             const res = await api.get(`/api/classes/${classeId}/profil`);
                                                             setClasse(res.data);
-                                                            setSuccessMsg(`✅ ${m.libelle} ajoutée !`);
+                                                            setSuccessMsg(`${m.libelle} ajoutée !`);
                                                             setTimeout(() => setSuccessMsg(null), 2000);
                                                         } catch (err: any) {
                                                             setErrorMsg(err.response?.data?.detail || "Erreur");

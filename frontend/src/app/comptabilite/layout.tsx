@@ -183,8 +183,24 @@ export default function ComptabiliteLayout({ children }: { children: React.React
     const [isAuthenticated, setIsAuthenticated] = useState(false);
 
     useEffect(() => {
-        // Simple session check for PIN
         const session = sessionStorage.getItem('comptabilite_auth');
+        const smartschoolUser = localStorage.getItem('smartschool_user');
+
+        if (smartschoolUser) {
+            try {
+                const parsed = JSON.parse(smartschoolUser);
+                if (parsed?.role === 'COMPTABLE') {
+                    setIsAuthenticated(true);
+                    if (pathname === '/comptabilite' || pathname === '/comptabilite/login') {
+                        router.push('/comptabilite/dashboard');
+                    }
+                    return;
+                }
+            } catch {
+                // ignore broken storage and fallback to PIN flow
+            }
+        }
+
         if (!session && pathname !== '/comptabilite/login') {
             router.push('/comptabilite/login');
         } else if (session) {

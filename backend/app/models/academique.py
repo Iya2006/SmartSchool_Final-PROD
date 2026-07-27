@@ -163,6 +163,43 @@ class Salle(Base):
     disponible = Column(String(1), default="O")
 
 
+class EquipementInformatique(Base):
+    """Inventaire du matériel informatique suivi par le responsable IT."""
+    __tablename__ = "ss_equipements_informatiques"
+    equipement_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    salle_id = Column(Integer, ForeignKey("ss_salles.salle_id"), nullable=True)
+    code = Column(String(50), nullable=False, index=True)
+    nom = Column(String(150), nullable=False)
+    type_equipement = Column(String(50), default="ORDINATEUR")
+    marque = Column(String(100), nullable=True)
+    modele = Column(String(100), nullable=True)
+    numero_serie = Column(String(120), nullable=True)
+    etat = Column(String(30), default="BON")
+    statut = Column(String(30), default="ACTIF")
+    derniere_maintenance = Column(Date, nullable=True)
+    observation = Column(Text, nullable=True)
+    created_by = Column(String(100), nullable=True)
+    created_date = Column(DateTime, server_default=func.now())
+
+
+class TicketInformatique(Base):
+    """Signalement et suivi des pannes informatiques."""
+    __tablename__ = "ss_tickets_informatiques"
+    ticket_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    equipement_id = Column(Integer, ForeignKey("ss_equipements_informatiques.equipement_id"), nullable=True)
+    titre = Column(String(180), nullable=False)
+    description = Column(Text, nullable=False)
+    priorite = Column(String(20), default="NORMALE")
+    statut = Column(String(30), default="OUVERT")
+    signale_par = Column(String(120), nullable=True)
+    assigne_a = Column(String(120), nullable=True)
+    resolution = Column(Text, nullable=True)
+    date_signalement = Column(DateTime, server_default=func.now())
+    date_resolution = Column(DateTime, nullable=True)
+
+
 class Classe(Base):
     __tablename__ = "ss_classes"
     classe_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -718,6 +755,85 @@ class PhotoEnAttente(Base):
 
 
 # ============================================================================
+# MODULE BIBLIOTHEQUE SCOLAIRE
+# ============================================================================
+
+class Ouvrage(Base):
+    """Catalogue central des ouvrages de la bibliothèque scolaire."""
+    __tablename__ = "ss_ouvrages"
+
+    ouvrage_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False, default=1)
+    isbn = Column(String(20), nullable=True)
+    code_interne = Column(String(30), nullable=False, index=True)
+    titre = Column(String(300), nullable=False, index=True)
+    auteur = Column(String(200), nullable=True)
+    editeur = Column(String(200), nullable=True)
+    annee_publication = Column(Integer, nullable=True)
+    categorie = Column(String(50), nullable=True)
+    sous_categorie = Column(String(50), nullable=True)
+    langue = Column(String(20), default="FRANCAIS")
+    niveau_cible = Column(String(50), nullable=True)
+    matiere_associee = Column(String(100), nullable=True)
+    nb_exemplaires = Column(Integer, default=0)
+    nb_disponibles = Column(Integer, default=0)
+    resume = Column(Text, nullable=True)
+    couverture_url = Column(String(500), nullable=True)
+    emplacement = Column(String(100), nullable=True)
+    statut = Column(String(20), default="DISPONIBLE", nullable=False)
+    created_by = Column(String(100), nullable=True)
+    created_date = Column(DateTime, server_default=func.now())
+    modified_by = Column(String(100), nullable=True)
+    modified_date = Column(DateTime, onupdate=func.now())
+
+    exemplaires = relationship("Exemplaire", back_populates="ouvrage", cascade="all, delete-orphan")
+
+
+class Exemplaire(Base):
+    """Exemplaire physique d'un ouvrage."""
+    __tablename__ = "ss_exemplaires"
+
+    exemplaire_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ouvrage_id = Column(Integer, ForeignKey("ss_ouvrages.ouvrage_id"), nullable=False)
+    code_exemplaire = Column(String(30), nullable=False, unique=True, index=True)
+    etat = Column(String(20), default="BON", nullable=False)
+    statut = Column(String(20), default="DISPONIBLE", nullable=False)
+    date_acquisition = Column(Date, nullable=True)
+    observation = Column(String(300), nullable=True)
+    created_by = Column(String(100), nullable=True)
+    created_date = Column(DateTime, server_default=func.now())
+
+    ouvrage = relationship("Ouvrage", back_populates="exemplaires")
+    emprunts = relationship("Emprunt", back_populates="exemplaire")
+
+
+class Emprunt(Base):
+    """Prêt d'un exemplaire à un élève ou à un enseignant."""
+    __tablename__ = "ss_emprunts"
+
+    emprunt_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    exemplaire_id = Column(Integer, ForeignKey("ss_exemplaires.exemplaire_id"), nullable=False)
+    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=True)
+    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    date_emprunt = Column(Date, server_default=func.current_date(), nullable=False)
+    date_retour_prevue = Column(Date, nullable=False)
+    date_retour_effective = Column(Date, nullable=True)
+    nb_jours_retard = Column(Integer, default=0)
+    nb_renouvellements = Column(Integer, default=0)
+    etat_retour = Column(String(20), nullable=True)
+    observation = Column(String(300), nullable=True)
+    statut = Column(String(20), default="EN_COURS", nullable=False)
+    rappel_envoye = Column(String(1), default="N")
+    date_rappel = Column(Date, nullable=True)
+    created_by = Column(String(100), nullable=True)
+    created_date = Column(DateTime, server_default=func.now())
+    modified_by = Column(String(100), nullable=True)
+    modified_date = Column(DateTime, onupdate=func.now())
+
+    exemplaire = relationship("Exemplaire", back_populates="emprunts")
+
+
+# ============================================================================
 # MODULE COMPTABILITE (PORTAIL COMPTABLE)
 # ============================================================================
 
@@ -818,3 +934,71 @@ class AuditLog(Base):
     details = Column(Text)
     ip_address = Column(String(45))
     created_date = Column(DateTime, server_default=func.now())
+
+
+# ============================================================================
+# MODULE : ÉVÉNEMENTS SCOLAIRES
+# ============================================================================
+
+class Evenement(Base):
+    """Événements scolaires : réunions, examens, fêtes, congés, etc."""
+    __tablename__ = "ss_evenements"
+    evenement_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    titre = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    type_evenement = Column(String(30), default="AUTRE", nullable=False)
+    # REUNION, EXAMEN, FETE, INTERCLASSE, CONGE, JOURNEE_PEDAGOGIQUE, SPORT, AUTRE
+    date_debut = Column(Date, nullable=False)
+    date_fin = Column(Date, nullable=True)
+    heure_debut = Column(String(10), nullable=True)
+    heure_fin = Column(String(10), nullable=True)
+    lieu = Column(String(200), nullable=True)
+    cible = Column(String(20), default="TOUS")
+    # TOUS, PARENTS, ENSEIGNANTS, ELEVES, PERSONNEL
+    couleur = Column(String(10), nullable=True)  # Couleur hex ex: #3b82f6
+    statut = Column(String(20), default="PLANIFIE", nullable=False)
+    # PLANIFIE, EN_COURS, TERMINE, ANNULE
+    created_by = Column(String(100), nullable=True)
+    created_date = Column(DateTime, server_default=func.now())
+
+
+# ============================================================================
+# MODULE : ACTIVITÉS DU JOUR
+# ============================================================================
+
+class ActiviteJour(Base):
+    """Activités quotidiennes / Programme de la journée ajoutés par l'administration."""
+    __tablename__ = "ss_activites_jour"
+    activite_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    titre = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    heure = Column(String(10), nullable=True)  # ex: 08:00, 10:30
+    type_activite = Column(String(30), default="GENERALE")  # ACADEMIQUE, PARASCOLAIRE, REUNION, PAUSE, AUTRE
+    icone = Column(String(50), default="Activity")  # UserPlus, CreditCard, Calendar, Activity, etc.
+    couleur = Column(String(20), default="#3b82f6")  # #3b82f6, #10b981, #f59e0b, #ef4444
+    date_activite = Column(Date, nullable=False, server_default=func.current_date())
+    est_actif = Column(String(1), default="O")
+    created_by = Column(String(100), nullable=True)
+    created_date = Column(DateTime, server_default=func.now())
+
+
+# ============================================================================
+# MODULE : POINTAGE ÉLÈVES (QR Code — Entrée/Sortie établissement)
+# ============================================================================
+
+class PointageEleve(Base):
+    """Pointage d'entrée/sortie de l'établissement pour les élèves via QR Code.
+    Distinct de Presence (appel en classe) : l'élève peut être pointé à l'entrée
+    de l'école mais absent d'un cours spécifique, et vice-versa."""
+    __tablename__ = "ss_pointage_eleves"
+    pointage_id      = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    eleve_id         = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=False)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
+    date_pointage    = Column(Date, nullable=False, server_default=func.current_date())
+    heure_arrivee    = Column(Time, nullable=True)
+    heure_depart     = Column(Time, nullable=True)
+    statut           = Column(String(20), default="PRESENT")  # PRESENT, PARTI
+    observations     = Column(String(255), nullable=True)
+    created_at       = Column(DateTime, server_default=func.now())

@@ -3,14 +3,16 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
+import { useUI } from '@/context/UIContext';
 import styles from './Sidebar.module.css';
 
 export default function Sidebar() {
     const pathname = usePathname();
     const { etablissementNom, etablissementLogo } = useApp();
+    const { sidebarCollapsed } = useUI();
     const [unreadCount, setUnreadCount] = useState(0);
 
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
@@ -40,11 +42,11 @@ export default function Sidebar() {
     }, []);
 
     return (
-        <nav id="sidebar" className={styles.sidebarWrapper}>
+        <nav id="sidebar" className={`${styles.sidebarWrapper} ${sidebarCollapsed ? styles.sidebarCollapsed : ''}`}>
 
             {/* App brand */}
             <div className={styles.appBrand}>
-                <Link href="/dashboard" className={styles.logoLink} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Link href="/dashboard" className={styles.logoLink} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     {etablissementLogo ? (
                         <img 
                             src={getPhotoUrl(etablissementLogo)!} 
@@ -54,10 +56,11 @@ export default function Sidebar() {
                     ) : (
                         <div className={styles.logoIcon}>{etablissementNom.charAt(0)}</div>
                     )}
-                    <span className={styles.logoText} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '140px' }}>
+                    <span className={styles.logoText} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>
                         {etablissementNom}
                     </span>
                 </Link>
+
             </div>
 
             {/* Sidebar menu starts */}
@@ -70,7 +73,7 @@ export default function Sidebar() {
                     <li className={pathname === '/dashboard' ? styles.currentPage : ''}>
                         <Link href="/dashboard">
                             <PieChart size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Admin</span>
+                            <span className={styles.menuText}>Dashboard</span>
                         </Link>
                     </li>
 
@@ -130,6 +133,18 @@ export default function Sidebar() {
                         <Link href="/emploi-du-temps">
                             <Calendar size={18} className={styles.menuIcon} />
                             <span className={styles.menuText}>Emploi du Temps</span>
+                        </Link>
+                    </li>
+                    <li className={pathname.startsWith('/evenements') ? styles.currentPage : ''}>
+                        <Link href="/evenements">
+                            <Calendar size={18} className={styles.menuIcon} />
+                            <span className={styles.menuText}>Événements</span>
+                        </Link>
+                    </li>
+                    <li className={pathname.startsWith('/activites') ? styles.currentPage : ''}>
+                        <Link href="/activites">
+                            <Activity size={18} className={styles.menuIcon} />
+                            <span className={styles.menuText}>Activités du Jour</span>
                         </Link>
                     </li>
                     <li className={pathname.startsWith('/communication') ? styles.currentPage : ''}>

@@ -97,13 +97,13 @@
 
 ## 📅 SECTION 2 : Gestion Années & Trimestres _(Priorité 6)_
 
-> ⚠️ Vérifié le 21/07/2026 : la page n'existe pas et le CRUD backend est incomplet. Sous-tâches recochées `[ ]`.
+> ✅ Implémenté le 27/07/2026 : page frontend créée, backend complété, mode de découpage et vacances stockés via `ss_parametres` catégorie `CALENDRIER`.
 
-- `[ ]` 2.1 — Page `/parametres/calendrier/page.tsx` (n'existe pas)
-- `[ ]` 2.2 — CRUD des années scolaires (créer, modifier, activer) — `create_annee`/`activer_annee` existent dans `parametrage.py`, mais pas de `update_annee`
-- `[ ]` 2.3 — CRUD des trimestres/semestres (dates de début/fin) — seul `list_trimestres` existe, pas de create/update/delete
-- `[ ]` 2.4 — Toggle mode Semestre vs Trimestre (absent)
-- `[ ]` 2.5 — Calendrier des vacances scolaires (dates configurables) (absent)
+- `[x]` 2.1 — Page `/parametres/calendrier/page.tsx`
+- `[x]` 2.2 — CRUD des années scolaires (créer, modifier, activer)
+- `[x]` 2.3 — CRUD des trimestres/semestres (dates de début/fin)
+- `[x]` 2.4 — Toggle mode Semestre vs Trimestre
+- `[x]` 2.5 — Calendrier des vacances scolaires (dates configurables)
 
 ---
 
@@ -186,9 +186,9 @@
 | Section 7 — Finance | 9 | 9 | 100% |
 | Section 6 — Documents | 9 | 9 | 100% |
 | Section 8 — Sécurité | 7 | 7 | 100% |
-| Section 2 — Calendrier | 5 | 0 | 0% |
+| Section 2 — Calendrier | 5 | 5 | 100% |
 | Section 9 — Notifications | 5 | 0 | 0% |
 | Section 10 — Emploi Temps | 6 | 0 | 0% |
 | Section 11 — Import/Export | 5 | 0 | 0% |
 | Section 12 — Multi-Tenant | 5 | 0 | 0% |
-| **TOTAL** | **101** | **75** | **74%** |
+| **TOTAL** | **101** | **80** | **79%** |

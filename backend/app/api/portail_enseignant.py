@@ -787,3 +787,100 @@ def delete_ressource_enseignant(enseignant_id: int, ressource_id: int, _auth: di
     db.commit()
     return {"message": "Ressource supprimée"}
 
+
+# ================================================================
+# SIGNALEMENT ET LIAISON PARENT D'ÉLÈVE
+# ================================================================
+
+class SignalerEnfantData(BaseModel):
+    nom_enfant: str
+    prenom_enfant: Optional[str] = ""
+    classe_detail: Optional[str] = ""
+    remarque: Optional[str] = ""
+
+
+@router.post("/{enseignant_id}/signaler-enfant")
+def signaler_enfant_enseignant(
+    enseignant_id: int,
+    data: SignalerEnfantData,
+    _auth: dict = Depends(_enseignant_auth),
+    db: Session = Depends(get_db)
+):
+    """Envoie une demande de raccordement Parent à l'Administration pour l'enfant de l'enseignant."""
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    if not ens:
+        raise HTTPException(404, "Enseignant non trouvé")
+
+    sujet = f"Signalement Enfant — Prof. {ens.prenom} {ens.nom}"
+    details = f"Nom: {data.nom_enfant}"
+    if data.prenom_enfant:
+        details += f" {data.prenom_enfant}"
+    if data.classe_detail:
+        details += f" ({data.classe_detail})"
+
+    contenu = (
+        f"L'enseignant {ens.prenom} {ens.nom} ({ens.specialite or 'Enseignant'}) "
+        f"déclare être le parent de l'élève : {details}.\n"
+        f"Remarque / Précisions : {data.remarque or 'Aucune'}.\n\n"
+        f"Merci d'effectuer le raccordement du compte Parent correspondant au système."
+    )
+
+    msg = Message(
+        expediteur_type="ENSEIGNANT",
+        expediteur_id=enseignant_id,
+        destinataire_type="ADMIN",
+        objet_type="GENERAL",
+        sujet=sujet,
+        contenu=contenu,
+    )
+    db.add(msg)
+    db.commit()
+
+    return {"message": "✅ Signalement transmis à la direction.", "message_id": msg.message_id}
+
+
+@router.get("/{enseignant_id}/mes-enfants")
+def get_enfants_enseignant(
+    enseignant_id: int,
+    _auth: dict = Depends(_enseignant_auth),
+    db: Session = Depends(get_db)
+):
+    """Retourne la liste des enfants raccordés à l'enseignant s'il a un profil Parent actif."""
+    from app.models.academique import Parent, EleveParent, Eleve, Inscription, Classe
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    if not ens:
+        raise HTTPException(404, "Enseignant non trouvé")
+
+    # Chercher un compte Parent ayant le même email ou numéro de téléphone
+    parent = None
+    if ens.email:
+        parent = db.query(Parent).filter(Parent.email == ens.email).first()
+    if not parent and ens.telephone:
+        parent = db.query(Parent).filter(
+            or_(Parent.telephone_1 == ens.telephone, Parent.telephone_2 == ens.telephone)
+        ).first()
+
+    if not parent:
+        return {"est_parent": False, "enfants": []}
+
+    liens = db.query(EleveParent, Eleve).join(Eleve, EleveParent.eleve_id == Eleve.eleve_id).filter(
+        EleveParent.parent_id == parent.parent_id
+    ).all()
+
+    enfants = []
+    for lien, el in liens:
+        insc = db.query(Inscription, Classe).join(Classe, Inscription.classe_id == Classe.classe_id).filter(
+            Inscription.eleve_id == el.eleve_id, Inscription.statut == "ACTIVE"
+        ).first()
+
+        enfants.append({
+            "eleve_id": el.eleve_id,
+            "nom": el.nom,
+            "prenom": el.prenom,
+            "matricule": el.matricule,
+            "lien_parente": lien.lien_parente,
+            "classe": insc[1].libelle if insc else "Non inscrit",
+        })
+
+    return {"est_parent": True, "parent_id": parent.parent_id, "enfants": enfants}
+

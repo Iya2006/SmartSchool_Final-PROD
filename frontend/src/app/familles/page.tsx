@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Search, Users, Phone, Mail, Briefcase, MapPin, ChevronRight, X, Edit3,
     Save, Loader2, Heart, GraduationCap, User2, Shield, Eye, CheckCircle,
-    AlertCircle, Calendar, Hash, UserCheck, Filter, ChevronLeft, UserPlus, Home, Lock, KeyRound, ArrowLeft, Camera
+    AlertCircle, Calendar, Hash, UserCheck, Filter, ChevronLeft, UserPlus, Home, Lock, KeyRound, ArrowLeft, Camera, ClipboardList
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -26,10 +26,10 @@ interface ParentItem {
 
 const avatarColors = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899', '#14b8a6', '#8b5cf6'];
 const LIEN_COLORS: Record<string, { bg: string; color: string; icon: string }> = {
-    PERE: { bg: '#dbeafe', color: '#2563eb', icon: '👨' },
-    MERE: { bg: '#fce7f3', color: '#db2777', icon: '👩' },
-    TUTEUR: { bg: '#fef3c7', color: '#d97706', icon: '🧑‍🏫' },
-    TUTRICE: { bg: '#ede9fe', color: '#7c3aed', icon: '👩‍🏫' },
+    PERE: { bg: '#dbeafe', color: '#2563eb', icon: '' },
+    MERE: { bg: '#fce7f3', color: '#db2777', icon: '' },
+    TUTEUR: { bg: '#fef3c7', color: '#d97706', icon: '' },
+    TUTRICE: { bg: '#ede9fe', color: '#7c3aed', icon: '' },
 };
 
 export default function FamillesPage() {
@@ -205,7 +205,7 @@ export default function FamillesPage() {
             {/* Parents Directory Table */}
             <motion.div className="card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
                 <div className="card-header">
-                    <h5>📋 Répertoire des Familles</h5>
+                    <h5 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><ClipboardList size={18} /> Répertoire des Familles</h5>
                     <div style={{ display: 'flex', alignItems: 'center', border: '1px solid var(--border-light)', borderRadius: '8px', padding: '8px 14px', gap: '8px' }}>
                         <Search size={16} color="var(--text-muted)" />
                         <input
@@ -284,7 +284,7 @@ export default function FamillesPage() {
                                             </td>
                                             <td>
                                                 <span className={`badge ${p.has_password ? 'badge-success' : 'badge-warning'}`}>
-                                                    {p.has_password ? '🔒 Sécurisé' : '⚠️ Non défini'}
+                                                    {p.has_password ? 'Sécurisé' : 'Non défini'}
                                                 </span>
                                             </td>
                                             <td>
@@ -495,7 +495,7 @@ export default function FamillesPage() {
                                             <KeyRound size={16} color="#f59e0b" />
                                             <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>Sécurité du compte</span>
                                             <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '6px', fontWeight: 700, background: editParent.has_password ? '#d1fae5' : '#fee2e2', color: editParent.has_password ? '#065f46' : '#dc2626' }}>
-                                                {editParent.has_password ? '✓ Configuré' : '⚠ Non configuré'}
+                                                {editParent.has_password ? 'Configuré' : 'Non configuré'}
                                             </span>
                                         </div>
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

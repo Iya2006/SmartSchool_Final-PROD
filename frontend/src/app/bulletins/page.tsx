@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     FileText, Search, Printer, Download, ChevronDown, Users,
-    Award, BarChart3, BookOpen, Eye, X, GraduationCap, Trophy, Save, Edit3, Send, CheckCircle, XCircle
+    Award, BarChart2, BookOpen, Eye, X, GraduationCap, Trophy, Save, Edit3, Send, CheckCircle2, XCircle, TrendingDown, ClipboardList, Clock, Loader2
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
@@ -37,6 +37,7 @@ function BulletinsContent() {
     const [savingDecision, setSavingDecision] = useState(false);
     const [decisionSaved, setDecisionSaved] = useState(false);
     const [initDone, setInitDone] = useState(false);
+    const [docSettings, setDocSettings] = useState<any>({});
     const printRef = useRef<HTMLDivElement>(null);
 
     // Infos de classe pour le bulletin
@@ -46,12 +47,35 @@ function BulletinsContent() {
     useEffect(() => {
         const loadInit = async () => {
             try {
-                const [clsRes, triRes] = await Promise.all([
+                const [clsRes, triRes, paramRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}`),
                     api.get('/api/portail-enseignant/referentiels/trimestres'),
+                    api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=DOCUMENTS`).catch(() => ({ data: [] }))
                 ]);
                 setClasses(clsRes.data);
                 setTrimestres(triRes.data);
+
+                const parsed: any = {
+                    champ_photo: true,
+                    champ_moyenne_classe: true,
+                    champ_min_max: true,
+                    champ_rang: true,
+                    champ_graphique: false,
+                    signature_directeur: true,
+                    signature_prof: true,
+                    signature_parent: true,
+                    filigrane_actif: false,
+                    filigrane_texte: "SMARTSCHOOL",
+                    filigrane_opacite: 0.1,
+                    filigrane_bulletins: true,
+                };
+                for (const p of paramRes.data) {
+                    const key = p.cle.replace('documents.', '');
+                    if (p.type_valeur === 'BOOLEAN') parsed[key] = p.valeur === 'true';
+                    else if (p.type_valeur === 'NUMBER') parsed[key] = parseFloat(p.valeur);
+                    else parsed[key] = p.valeur;
+                }
+                setDocSettings(parsed);
 
                 // Auto-select class & trimester from URL params (coming from Centralisation)
                 const urlClasseId = searchParams.get('classe_id');
@@ -212,7 +236,7 @@ function BulletinsContent() {
                     style={{ padding: '10px 16px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', fontWeight: 600, minWidth: '280px', background: 'white', cursor: 'pointer' }}>
                     <option value="">— Sélectionner une classe —</option>
                     {Object.entries(groupedClasses).map(([cycle, cls]: [string, any]) => (
-                        <optgroup key={cycle} label={`📚 ${cycle}`}>
+                        <optgroup key={cycle} label={`Cycle ${cycle}`}>
                             {cls.map((c: any) => <option key={c.classe_id} value={c.classe_id}>{c.libelle}</option>)}
                         </optgroup>
                     ))}
@@ -263,13 +287,13 @@ function BulletinsContent() {
                     {/* Stats Bar */}
                     <div style={{ display: 'flex', gap: '16px', marginBottom: '20px', flexWrap: 'wrap' }}>
                         {[
-                            { label: 'Effectif', value: filteredBulletins.length, icon: '👨‍🎓', bg: '#eef2ff' },
-                            { label: 'Moy. Classe', value: (filteredBulletins.reduce((s, b) => s + (b.moyenne_generale || 0), 0) / filteredBulletins.length).toFixed(2), icon: '📊', bg: '#ecfdf5' },
-                            { label: 'Meilleure Moy.', value: Math.max(...filteredBulletins.map(b => b.moyenne_generale || 0)).toFixed(2), icon: '🏆', bg: '#fffbeb' },
-                            { label: 'Plus Faible', value: Math.min(...filteredBulletins.map(b => b.moyenne_generale || 0)).toFixed(2), icon: '📉', bg: '#fef2f2' },
+                            { label: 'Effectif', value: filteredBulletins.length, icon: GraduationCap, bg: '#eef2ff', color: '#4f46e5' },
+                            { label: 'Moy. Classe', value: (filteredBulletins.reduce((s, b) => s + (b.moyenne_generale || 0), 0) / filteredBulletins.length).toFixed(2), icon: BarChart2, bg: '#ecfdf5', color: '#059669' },
+                            { label: 'Meilleure Moy.', value: Math.max(...filteredBulletins.map(b => b.moyenne_generale || 0)).toFixed(2), icon: Trophy, bg: '#fffbeb', color: '#d97706' },
+                            { label: 'Plus Faible', value: Math.min(...filteredBulletins.map(b => b.moyenne_generale || 0)).toFixed(2), icon: TrendingDown, bg: '#fef2f2', color: '#dc2626' },
                         ].map((s, i) => (
                             <div key={i} style={{ flex: '1 1 200px', padding: '14px 18px', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: s.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>{s.icon}</div>
+                                <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: s.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><s.icon size={20} color={s.color} /></div>
                                 <div>
                                     <div style={{ fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>{s.value}</div>
                                     <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>{s.label}</div>
@@ -279,23 +303,25 @@ function BulletinsContent() {
                     </div>
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 16px' }}>
-                        <p style={{ margin: 0, fontSize: '14px', color: '#64748b', fontWeight: 600 }}>
-                            📋 {filteredBulletins.length} bulletin(s) — {selectedClasseInfo?.libelle} — {selectedTrimestreInfo?.libelle || `Trimestre ${selectedTrimestre}`}
-                            {' '}<span style={{ padding: '2px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: 700, background: '#d1fae5', color: '#15803d' }}>
-                                ✅ {filteredBulletins.filter(b => b.statut === 'PUBLIE').length} publiés
+                        <h2 style={{ fontSize: '18px', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <ClipboardList size={20} color="#059669" /> {filteredBulletins.length} bulletin(s) — {selectedClasseInfo?.libelle} — {selectedTrimestreInfo?.libelle || `Trimestre ${selectedTrimestre}`}
+                        </h2>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <span style={{ background: '#f0fdf4', color: '#166534', padding: '6px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <CheckCircle2 size={14} /> {filteredBulletins.filter(b => b.statut === 'PUBLIE').length} publiés
                             </span>
                             {filteredBulletins.some(b => b.statut !== 'PUBLIE') && (
-                                <span style={{ padding: '2px 10px', borderRadius: '10px', fontSize: '11px', fontWeight: 700, background: '#fef3c7', color: '#a16207', marginLeft: '6px' }}>
-                                    ⏳ {filteredBulletins.filter(b => b.statut !== 'PUBLIE').length} brouillon(s)
+                                <span style={{ padding: '6px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, background: '#fef3c7', color: '#a16207', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <Clock size={14} /> {filteredBulletins.filter(b => b.statut !== 'PUBLIE').length} brouillon(s)
                                 </span>
                             )}
-                        </p>
-                        {filteredBulletins.some(b => b.statut !== 'PUBLIE') && (
-                            <button onClick={publishAll} disabled={publishing}
-                                style={{ padding: '10px 24px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #059669, #10b981)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 15px rgba(16,185,129,0.3)' }}>
-                                <Send size={16} /> {publishing ? 'Publication...' : '🚀 Publier Tout'}
-                            </button>
-                        )}
+                            {filteredBulletins.some(b => b.statut !== 'PUBLIE') && (
+                                <button onClick={publishAll} disabled={publishing}
+                                    style={{ padding: '8px 16px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #059669, #10b981)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 15px rgba(16,185,129,0.3)' }}>
+                                    <Send size={16} /> {publishing ? 'Publication...' : 'Publier Tout'}
+                                </button>
+                            )}
+                        </div>
                     </div>
 
                     {/* Cards Grid */}
@@ -312,7 +338,7 @@ function BulletinsContent() {
                                     <div style={{ padding: '18px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                                             <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: b.rang <= 3 ? 'linear-gradient(135deg, #f59e0b, #d97706)' : 'linear-gradient(135deg, #6366f1, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 800, fontSize: '14px' }}>
-                                                {b.rang <= 3 ? (b.rang === 1 ? '🥇' : b.rang === 2 ? '🥈' : '🥉') : `${b.rang}e`}
+                                                {b.rang}e
                                             </div>
                                             <div>
                                                 <div style={{ fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>{b.nom} {b.prenom}</div>
@@ -333,7 +359,9 @@ function BulletinsContent() {
                                                 {b.mention || 'Non défini'}
                                             </span>
                                             <span style={{ padding: '3px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700, background: b.statut === 'PUBLIE' ? '#d1fae5' : '#fef3c7', color: b.statut === 'PUBLIE' ? '#15803d' : '#a16207' }}>
-                                                {b.statut === 'PUBLIE' ? '✅ Publié' : '⏳ Brouillon'}
+                                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                    {b.statut === 'PUBLIE' ? <><CheckCircle2 size={14} /> Publié</> : <><Clock size={14} /> Brouillon</>}
+                                                </span>
                                             </span>
                                         </div>
                                         <button style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', fontSize: '12px', fontWeight: 700, cursor: 'pointer', color: '#059669', display: 'flex', alignItems: 'center', gap: '4px' }}
@@ -364,8 +392,8 @@ function BulletinsContent() {
                             <div style={{ padding: '12px 20px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                     <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>Aperçu du bulletin</span>
-                                    <span style={{ padding: '3px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700, background: selectedBulletin.statut === 'PUBLIE' ? '#d1fae5' : '#fef3c7', color: selectedBulletin.statut === 'PUBLIE' ? '#15803d' : '#a16207' }}>
-                                        {selectedBulletin.statut === 'PUBLIE' ? '✅ Publié' : '⏳ Brouillon'}
+                                    <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: 700, background: selectedBulletin.statut === 'PUBLIE' ? '#dcfce7' : '#fef3c7', color: selectedBulletin.statut === 'PUBLIE' ? '#16a34a' : '#d97706', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                        {selectedBulletin.statut === 'PUBLIE' ? <><CheckCircle2 size={14} /> Publié</> : <><Clock size={14} /> Brouillon</>}
                                     </span>
                                 </div>
                                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -393,7 +421,31 @@ function BulletinsContent() {
 
                             {/* ═══ BULLETIN CONTENT (PRINTABLE) ═══ */}
                             <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-                                <div ref={printRef}>
+                                <div ref={printRef} style={{ position: 'relative' }}>
+                                    {docSettings.filigrane_actif && docSettings.filigrane_bulletins && (
+                                        <div style={{
+                                            position: 'absolute',
+                                            top: 0, left: 0, right: 0, bottom: 0,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            pointerEvents: 'none',
+                                            zIndex: 10,
+                                            overflow: 'hidden'
+                                        }}>
+                                            <div style={{
+                                                fontSize: '120px',
+                                                fontWeight: 900,
+                                                color: 'black',
+                                                opacity: docSettings.filigrane_opacite || 0.1,
+                                                transform: 'rotate(-45deg)',
+                                                whiteSpace: 'nowrap',
+                                                fontFamily: 'Inter, sans-serif'
+                                            }}>
+                                                {docSettings.filigrane_texte || 'SMARTSCHOOL'}
+                                            </div>
+                                        </div>
+                                    )}
                                     <div style={{ background: 'white', borderRadius: '0', maxWidth: '794px', margin: '0 auto', boxShadow: '0 2px 15px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
 
                                         {/* ═══ EN-TÊTE OFFICIEL — 3 colonnes ═══ */}
@@ -403,16 +455,21 @@ function BulletinsContent() {
                                             
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1, gap: '12px' }}>
                                                 
-                                                {/* GAUCHE — Armoiries de la Guinée */}
+                                                {/* GAUCHE — Photo de l'élève */}
                                                 <div style={{ flexShrink: 0, textAlign: 'center' }}>
-                                                    <div style={{ width: '68px', height: '68px', borderRadius: '50%', background: 'rgba(255,255,255,0.15)', border: '2px solid rgba(255,255,255,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto', overflow: 'hidden' }}>
-                                                        <img 
-                                                            src="https://presidence.gov.gn/wp-content/uploads/2022/01/Coat_of_arms_of_Guinea-new.svg.png" 
-                                                            onError={(e: any) => { e.target.onerror = null; e.target.src = '/guinea_coat_of_arms.png'; }}
-                                                            alt="Armoiries de la République de Guinée" 
-                                                            style={{ width: '54px', height: '54px', objectFit: 'contain' }}
-                                                        />
-                                                    </div>
+                                                    {docSettings.champ_photo && (
+                                                        <div style={{ width: '68px', height: '68px', borderRadius: '50%', background: 'rgba(255,255,255,0.15)', border: '2px solid rgba(255,255,255,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto', overflow: 'hidden' }}>
+                                                            {selectedBulletin?.photo ? (
+                                                                <img 
+                                                                    src={getPhotoUrl(selectedBulletin.photo)!} 
+                                                                    alt="Photo Élève" 
+                                                                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                                                />
+                                                            ) : (
+                                                                <span style={{ fontSize: '9px', color: 'rgba(255,255,255,0.6)', fontWeight: 600, textAlign: 'center', lineHeight: 1.2 }}>Photo<br/>Élève</span>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
 
                                                 {/* CENTRE — Texte officiel */}
@@ -471,9 +528,13 @@ function BulletinsContent() {
                                                         <th style={{ padding: '10px 12px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'left', letterSpacing: '0.5px' }}>MATIÈRE</th>
                                                         <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '50px' }}>COEF</th>
                                                         <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: '#fbbf24', textAlign: 'center', width: '80px' }}>MOY. ÉLÈVE</th>
-                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '70px' }}>MOY. CL.</th>
-                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '45px' }}>MIN</th>
-                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '45px' }}>MAX</th>
+                                                        {docSettings.champ_moyenne_classe !== false && <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '70px' }}>MOY. CL.</th>}
+                                                        {docSettings.champ_min_max !== false && (
+                                                            <>
+                                                                <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '45px' }}>MIN</th>
+                                                                <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '45px' }}>MAX</th>
+                                                            </>
+                                                        )}
                                                         <th style={{ padding: '10px 12px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'left' }}>APPRÉCIATION</th>
                                                     </tr>
                                                 </thead>
@@ -495,15 +556,21 @@ function BulletinsContent() {
                                                                             {moyEleve !== null ? Number(moyEleve).toFixed(2) : '—'}
                                                                         </span>
                                                                     </td>
-                                                                    <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#64748b' }}>
-                                                                        {l.moyenne_classe !== null ? Number(l.moyenne_classe).toFixed(1) : '—'}
-                                                                    </td>
-                                                                    <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#94a3b8' }}>
-                                                                        {l.note_min !== null ? Number(l.note_min).toFixed(0) : '—'}
-                                                                    </td>
-                                                                    <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#059669', fontWeight: 600 }}>
-                                                                        {l.note_max !== null ? Number(l.note_max).toFixed(0) : '—'}
-                                                                    </td>
+                                                                    {docSettings.champ_moyenne_classe !== false && (
+                                                                        <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#64748b' }}>
+                                                                            {l.moyenne_classe !== null ? Number(l.moyenne_classe).toFixed(1) : '—'}
+                                                                        </td>
+                                                                    )}
+                                                                    {docSettings.champ_min_max !== false && (
+                                                                        <>
+                                                                            <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#94a3b8' }}>
+                                                                                {l.note_min !== null ? Number(l.note_min).toFixed(0) : '—'}
+                                                                            </td>
+                                                                            <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#059669', fontWeight: 600 }}>
+                                                                                {l.note_max !== null ? Number(l.note_max).toFixed(0) : '—'}
+                                                                            </td>
+                                                                        </>
+                                                                    )}
                                                                     <td style={{ padding: '9px 12px', fontSize: '11px', color: '#475569', fontStyle: 'italic' }}>
                                                                         {l.appreciation || '—'}
                                                                     </td>
@@ -539,13 +606,15 @@ function BulletinsContent() {
                                                 </div>
 
                                                 {/* Rang */}
-                                                <div style={{ flex: '1 1 120px', padding: '16px', borderRadius: '12px', background: 'linear-gradient(135deg, #fffbeb, #fef3c7)', border: '2px solid #fde68a', textAlign: 'center' }}>
-                                                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Rang</div>
-                                                    <div style={{ fontSize: '28px', fontWeight: 900, color: '#f59e0b' }}>
-                                                        {selectedBulletin.rang <= 3 ? (selectedBulletin.rang === 1 ? '🥇' : selectedBulletin.rang === 2 ? '🥈' : '🥉') : ''} {selectedBulletin.rang}<sup style={{ fontSize: '14px' }}>e</sup>
+                                                {docSettings.champ_rang !== false && (
+                                                    <div style={{ flex: '1 1 120px', padding: '16px', borderRadius: '12px', background: 'linear-gradient(135deg, #fffbeb, #fef3c7)', border: '2px solid #fde68a', textAlign: 'center' }}>
+                                                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#92400e', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Rang</div>
+                                                        <div style={{ fontSize: '28px', fontWeight: 900, color: '#f59e0b' }}>
+                                                            {selectedBulletin.rang}<sup style={{ fontSize: '14px' }}>e</sup>
+                                                        </div>
+                                                        <div style={{ fontSize: '11px', color: '#b45309', fontWeight: 600 }}>/ {selectedBulletin.effectif_classe} élèves</div>
                                                     </div>
-                                                    <div style={{ fontSize: '11px', color: '#b45309', fontWeight: 600 }}>/ {selectedBulletin.effectif_classe} élèves</div>
-                                                </div>
+                                                )}
 
                                                 {/* Mention */}
                                                 <div style={{
@@ -570,12 +639,34 @@ function BulletinsContent() {
                                             </div>
                                         </div>
 
+                                        {/* GRAPHIQUE D'ÉVOLUTION */}
+                                        {docSettings.champ_graphique && selectedBulletin.lignes && selectedBulletin.lignes.length > 0 && (
+                                            <div style={{ padding: '0 28px 20px' }}>
+                                                <div style={{ padding: '16px', borderRadius: '12px', background: 'white', border: '1px solid #e2e8f0' }}>
+                                                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>Profil de l'Élève par Matière</div>
+                                                    <div style={{ display: 'flex', alignItems: 'flex-end', height: '120px', gap: '4px' }}>
+                                                        {selectedBulletin.lignes.map((l: any, i: number) => {
+                                                            const height = l.moyenne_matiere ? (Number(l.moyenne_matiere) / 20) * 100 : 0;
+                                                            return (
+                                                                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', height: '100%' }}>
+                                                                    <div style={{ width: '100%', flex: 1, display: 'flex', alignItems: 'flex-end', background: '#f8fafc', borderRadius: '4px', overflow: 'hidden' }}>
+                                                                        <div style={{ width: '100%', height: `${Math.min(height, 100)}%`, background: getNoteColor(l.moyenne_matiere), borderRadius: '4px', transition: 'height 0.3s' }} />
+                                                                    </div>
+                                                                    <div style={{ fontSize: '7px', fontWeight: 700, color: '#64748b', writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: '50px', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>{l.matiere.substring(0, 15)}</div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {/* ═══ BANDE UNIQUE : DÉCISION + SIGNATURES ═══ */}
                                         <div style={{ padding: '0 28px 12px' }}>
-                                            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.2fr 1fr', borderRadius: '10px', border: '2px solid #d1d5db', overflow: 'hidden', background: 'white' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr', borderRadius: '10px', border: '2px solid #d1d5db', overflow: 'hidden', background: 'white' }}>
 
                                                 {/* GAUCHE : Décision du Conseil */}
-                                                <div style={{ padding: '14px 16px', borderRight: '1.5px solid #d1d5db', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                                                <div style={{ padding: '14px 16px', borderRight: '1.5px solid #d1d5db', display: 'flex', flexDirection: 'column', justifySelf: 'stretch', justifyContent: 'center' }}>
                                                     <div style={{ fontSize: '9px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
                                                         Décision du Conseil de Classe :
                                                     </div>
@@ -584,42 +675,56 @@ function BulletinsContent() {
                                                     </div>
                                                 </div>
 
-                                                {/* CENTRE : La Direction + Logo + Cachet + Signature */}
-                                                <div style={{ padding: '14px 12px', borderRight: '1.5px solid #d1d5db', display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'center' }}>
-                                                    {/* Partie signature */}
-                                                    <div style={{ textAlign: 'center', flex: '1' }}>
-                                                        <div style={{ fontSize: '9px', fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>La Direction</div>
-                                                        {etablissementDirecteur && (
-                                                            <div style={{ fontSize: '8px', color: '#475569', marginBottom: '4px' }}>{etablissementDirecteur}</div>
-                                                        )}
-                                                        {/* Signature numérisée */}
-                                                        {etablissementSignature ? (
-                                                            <img src={getPhotoUrl(etablissementSignature)!} alt="Signature" style={{ maxWidth: '80px', maxHeight: '35px', objectFit: 'contain', margin: '0 auto 2px' }} />
-                                                        ) : (
-                                                            <div style={{ borderBottom: '1.5px solid #334155', width: '90%', margin: '0 auto 3px', marginTop: '20px' }} />
-                                                        )}
-                                                        <div style={{ fontSize: '7px', color: '#94a3b8', fontStyle: 'italic' }}>Signature et cachet</div>
-                                                    </div>
-                                                    {/* Cachet ou Logo */}
-                                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
-                                                        <div style={{ width: '52px', height: '52px', borderRadius: '50%', border: etablissementCachet ? 'none' : '2px dashed #94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', overflow: 'hidden' }}>
-                                                            {etablissementCachet ? (
-                                                                <img src={getPhotoUrl(etablissementCachet)!} alt="Cachet" style={{ width: '52px', height: '52px', objectFit: 'contain' }} />
-                                                            ) : etablissementLogo ? (
-                                                                <img src={getPhotoUrl(etablissementLogo)!} alt="Logo" style={{ width: '42px', height: '42px', objectFit: 'contain' }} />
-                                                            ) : (
-                                                                <span style={{ fontSize: '8px', color: '#94a3b8', fontWeight: 600, textAlign: 'center', lineHeight: 1.1 }}>Logo<br/>École</span>
-                                                            )}
+                                                {/* SIGNATURES */}
+                                                <div style={{ display: 'flex', flexWrap: 'wrap' }}>
+                                                    {docSettings.signature_prof !== false && (
+                                                        <div style={{ padding: '14px 16px', flex: 1, borderRight: (docSettings.signature_directeur !== false || docSettings.signature_parent !== false) ? '1.5px solid #d1d5db' : 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                                                            <div style={{ fontSize: '9px', fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '20px' }}>Professeur Principal</div>
+                                                            <div style={{ borderBottom: '1.5px solid #334155', width: '90%', margin: '0 auto', marginBottom: '3px' }} />
+                                                            <div style={{ fontSize: '7px', color: '#94a3b8', fontStyle: 'italic' }}>Signature</div>
                                                         </div>
-                                                    </div>
+                                                    )}
+
+                                                    {docSettings.signature_directeur !== false && (
+                                                        <div style={{ padding: '14px 12px', flex: 1.2, borderRight: docSettings.signature_parent !== false ? '1.5px solid #d1d5db' : 'none', display: 'flex', alignItems: 'center', gap: '10px', justifyContent: 'center' }}>
+                                                            {/* Partie signature */}
+                                                            <div style={{ textAlign: 'center', flex: '1' }}>
+                                                                <div style={{ fontSize: '9px', fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>La Direction</div>
+                                                                {etablissementDirecteur && (
+                                                                    <div style={{ fontSize: '8px', color: '#475569', marginBottom: '4px' }}>{etablissementDirecteur}</div>
+                                                                )}
+                                                                {/* Signature numérisée */}
+                                                                {etablissementSignature ? (
+                                                                    <img src={getPhotoUrl(etablissementSignature)!} alt="Signature" style={{ maxWidth: '80px', maxHeight: '35px', objectFit: 'contain', margin: '0 auto 2px' }} />
+                                                                ) : (
+                                                                    <div style={{ borderBottom: '1.5px solid #334155', width: '90%', margin: '0 auto 3px', marginTop: '20px' }} />
+                                                                )}
+                                                                <div style={{ fontSize: '7px', color: '#94a3b8', fontStyle: 'italic' }}>Signature et cachet</div>
+                                                            </div>
+                                                            {/* Cachet ou Logo */}
+                                                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
+                                                                <div style={{ width: '52px', height: '52px', borderRadius: '50%', border: etablissementCachet ? 'none' : '2px dashed #94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', overflow: 'hidden' }}>
+                                                                    {etablissementCachet ? (
+                                                                        <img src={getPhotoUrl(etablissementCachet)!} alt="Cachet" style={{ width: '52px', height: '52px', objectFit: 'contain' }} />
+                                                                    ) : etablissementLogo ? (
+                                                                        <img src={getPhotoUrl(etablissementLogo)!} alt="Logo" style={{ width: '42px', height: '42px', objectFit: 'contain' }} />
+                                                                    ) : (
+                                                                        <span style={{ fontSize: '8px', color: '#94a3b8', fontWeight: 600, textAlign: 'center', lineHeight: 1.1 }}>Logo<br/>École</span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {docSettings.signature_parent !== false && (
+                                                        <div style={{ padding: '14px 16px', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                                                            <div style={{ fontSize: '9px', fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '20px' }}>Parent d&apos;Élève</div>
+                                                            <div style={{ borderBottom: '1.5px solid #334155', width: '90%', margin: '0 auto', marginBottom: '3px' }} />
+                                                            <div style={{ fontSize: '7px', color: '#94a3b8', fontStyle: 'italic' }}>Signature</div>
+                                                        </div>
+                                                    )}
                                                 </div>
 
-                                                {/* DROITE : Parent d'Élève */}
-                                                <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                                                    <div style={{ fontSize: '9px', fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '20px' }}>Parent d&apos;Élève</div>
-                                                    <div style={{ borderBottom: '1.5px solid #334155', width: '90%', margin: '0 auto', marginBottom: '3px' }} />
-                                                    <div style={{ fontSize: '7px', color: '#94a3b8', fontStyle: 'italic' }}>Signature</div>
-                                                </div>
                                             </div>
                                         </div>
 
@@ -634,9 +739,8 @@ function BulletinsContent() {
                                                         placeholder="Ex: ADMIS(E) — Félicitations du conseil. Excellent trimestre, poursuivez vos efforts."
                                                         style={{ flex: 1, padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontFamily: 'Inter, sans-serif', minHeight: '50px', resize: 'vertical', outline: 'none', background: 'white' }}
                                                     />
-                                                    <button onClick={saveDecision} disabled={savingDecision}
-                                                        style={{ padding: '10px 18px', borderRadius: '8px', border: 'none', background: decisionSaved ? 'linear-gradient(135deg, #059669, #10b981)' : 'linear-gradient(135deg, #f59e0b, #d97706)', color: 'white', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', transition: 'all 0.3s' }}>
-                                                        <Save size={14} /> {savingDecision ? '...' : decisionSaved ? '✅ Sauvé' : 'Enregistrer'}
+                                                    <button onClick={saveDecision} disabled={savingDecision} className="btn btn-primary" style={{ flex: 1, display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                                        <Save size={14} /> {savingDecision ? '...' : decisionSaved ? <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><CheckCircle2 size={14} /> Sauvé</span> : 'Enregistrer'}
                                                     </button>
                                                 </div>
                                             </div>

@@ -609,6 +609,7 @@ def get_bulletins_classe(classe_id: int, trimestre_id: int = 1, db: Session = De
             "prenom": eleve.prenom,
             "matricule": eleve.matricule,
             "sexe": eleve.sexe,
+            "photo": eleve.photo_url,
             "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
             "rang": bulletin.rang,
             "effectif_classe": bulletin.effectif_classe,

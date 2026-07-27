@@ -42,7 +42,10 @@ async def upload_sujet(
     demande_id: Optional[int] = Form(None),
     db: Session = Depends(get_db)
 ):
-    """Upload d'un sujet d'examen par un enseignant."""
+    """Upload d'un sujet d'examen par un enseignant.
+    Le sujet est immédiatement envoyé à l'administration (statut ENVOYE)
+    et un message de notification est créé pour l'admin.
+    """
     # Validate
     ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
     if not ens:
@@ -75,7 +78,8 @@ async def upload_sujet(
         content = await fichier.read()
         buffer.write(content)
 
-    # Create record
+    # Create record — directly ENVOYE (no draft step needed from portal)
+    now = datetime.now()
     sujet = SujetExamen(
         demande_id=demande_id,
         enseignant_id=enseignant_id,
@@ -88,17 +92,35 @@ async def upload_sujet(
         fichier_type=ext.replace(".", ""),
         fichier_taille=len(content),
         duree_minutes=duree_minutes,
-        statut="BROUILLON"
+        statut="ENVOYE",
+        date_envoi=now,
     )
     db.add(sujet)
+    db.flush()  # get sujet_id before creating message
+
+    # Create notification message to admin
+    msg = Message(
+        demande_id=demande_id,
+        expediteur_type="ENSEIGNANT",
+        expediteur_id=enseignant_id,
+        destinataire_type="ADMIN",
+        objet_type="EXAMENS",
+        sujet=f"Sujet déposé — {mat.libelle} (T{trimestre})",
+        contenu=(
+            f"{ens.prenom} {ens.nom} a déposé le sujet \u00ab {titre} \u00bb "
+            f"pour la matière {mat.libelle} — Trimestre {trimestre}, "
+            f"durée {duree_minutes} min (fichier : {fichier.filename or safe_name})."
+        )
+    )
+    db.add(msg)
     db.commit()
     db.refresh(sujet)
 
     return {
-        "message": f"Sujet '{titre}' téléversé avec succès.",
+        "message": f"Sujet \u00ab {titre} \u00bb envoyé à l'administration avec succès.",
         "sujet_id": sujet.sujet_id,
         "fichier_nom": sujet.fichier_nom,
-        "statut": "BROUILLON"
+        "statut": "ENVOYE"
     }
 
 
@@ -233,12 +255,12 @@ def rejeter_sujet(sujet_id: int, raison: str = "", db: Session = Depends(get_db)
 
 @router.delete("/sujets/{sujet_id}")
 def supprimer_sujet(sujet_id: int, db: Session = Depends(get_db)):
-    """Supprimer un sujet (brouillon uniquement)."""
+    """Supprimer un sujet (brouillon ou envoyé uniquement)."""
     sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
     if not sujet:
         raise HTTPException(404, "Sujet non trouvé")
-    if sujet.statut != "BROUILLON":
-        raise HTTPException(400, "Seuls les sujets en brouillon peuvent être supprimés.")
+    if sujet.statut not in ["BROUILLON", "ENVOYE"]:
+        raise HTTPException(400, "Seuls les sujets non validés peuvent être supprimés.")
 
     # Delete file
     file_path = os.path.join(UPLOAD_DIR, sujet.fichier_path)
@@ -248,6 +270,29 @@ def supprimer_sujet(sujet_id: int, db: Session = Depends(get_db)):
     db.delete(sujet)
     db.commit()
     return {"message": "Sujet supprimé."}
+
+
+class SujetModifier(BaseModel):
+    titre: str
+    duree_minutes: int
+    trimestre: int
+
+
+@router.put("/sujets/{sujet_id}/modifier")
+def modifier_sujet(sujet_id: int, data: SujetModifier, db: Session = Depends(get_db)):
+    """L'enseignant modifie les métadonnées d'un sujet non encore validé.
+    La modification est immédiatement visible côté admin (pas de re-notification).
+    """
+    sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
+    if not sujet:
+        raise HTTPException(404, "Sujet non trouvé")
+    if sujet.statut == "VALIDE":
+        raise HTTPException(400, "Un sujet validé ne peut plus être modifié.")
+    sujet.titre = data.titre
+    sujet.duree_minutes = data.duree_minutes
+    sujet.trimestre = data.trimestre
+    db.commit()
+    return {"message": "Sujet mis à jour.", "sujet_id": sujet_id}
 
 
 # Serve uploaded files

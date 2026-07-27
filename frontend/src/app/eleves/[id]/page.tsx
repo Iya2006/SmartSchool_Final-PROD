@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Phone, Mail, MapPin, Calendar, Activity, BookOpen, Clock, Award, Loader2, MessageSquare, Edit, Droplet, Users, CheckCircle, UserCheck, Scan, X } from 'lucide-react';
 import api from '@/lib/api';
@@ -13,6 +13,7 @@ import { AnimatePresence } from 'framer-motion';
 
 export default function ProfilEleve() {
     const { id } = useParams();
+    const router = useRouter();
     const [eleve, setEleve] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [badgeEleve, setBadgeEleve] = useState<any>(null);
@@ -144,7 +145,7 @@ export default function ProfilEleve() {
                     <Link href={`/eleves/modifier/${id}`} className="btn btn-outline btn-sm" style={{ fontSize: '13px' }}>
                         <Edit size={14} /> Modifier
                     </Link>
-                    <button className="btn btn-primary btn-sm" style={{ fontSize: '13px' }}>
+                    <button onClick={() => router.push(`/communication?dest_type=ELEVE&dest_id=${eleve.eleve_id}`)} className="btn btn-primary btn-sm" style={{ fontSize: '13px' }}>
                         <MessageSquare size={14} /> Contacter
                     </button>
                 </div>

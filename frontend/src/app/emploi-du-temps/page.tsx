@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Calendar, ChevronRight, Loader2, Plus, Trash2, Edit3, X, Clock,
-    BookOpen, Wand2, CheckCircle2, AlertCircle, Users, MapPin, Search, Zap
+    BookOpen, Wand2, CheckCircle2, AlertCircle, Users, MapPin, Search, Zap, Utensils, User
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -147,14 +147,14 @@ export default function EmploiDuTempsPage() {
                     jour: formJour, heure_debut: formHeure, heure_fin: heureSlot.fin,
                     matiere_id: formMatiereId, enseignant_id: formEnseignantId, salle: formSalle
                 });
-                showSuccess("✅ Créneau modifié !");
+                showSuccess("Créneau modifié !");
             } else {
                 await api.post('/api/emploi-du-temps', {
                     classe_id: selectedClasseId, matiere_id: formMatiereId,
                     jour: formJour, heure_debut: formHeure, heure_fin: heureSlot.fin,
                     enseignant_id: formEnseignantId, salle: formSalle
                 });
-                showSuccess("✅ Créneau créé !");
+                showSuccess("Créneau créé !");
             }
             closeModal();
             loadEmploi(selectedClasseId);
@@ -166,7 +166,7 @@ export default function EmploiDuTempsPage() {
     const handleDelete = async (creneauId: number) => {
         try {
             await api.delete(`/api/emploi-du-temps/${creneauId}`);
-            showSuccess("🗑 Créneau supprimé.");
+            showSuccess("Créneau supprimé.");
             if (selectedClasseId) loadEmploi(selectedClasseId);
         } catch (err: any) {
             showError(err.response?.data?.detail || "Erreur suppression.");
@@ -178,7 +178,7 @@ export default function EmploiDuTempsPage() {
         try {
             setGenerating(true);
             const res = await api.post(`/api/emploi-du-temps/auto-generation/${selectedClasseId}`);
-            showSuccess(`🪄 ${res.data.created} créneaux générés automatiquement !`);
+            showSuccess(`${res.data.created} créneaux générés automatiquement !`);
             loadEmploi(selectedClasseId);
         } catch (err: any) {
             showError(err.response?.data?.detail || "Erreur génération.");
@@ -339,7 +339,7 @@ export default function EmploiDuTempsPage() {
                                                         padding: '8px', textAlign: 'center', background: '#fef3c7',
                                                         borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
                                                     }}>
-                                                        🍽 12:00 — 14:00 • Pause Déjeuner
+                                                        <Utensils size={12} style={{display:'inline',verticalAlign:'middle',marginRight:'4px'}}/> 12:00 — 14:00 • Pause Déjeuner
                                                     </td>
                                                 </tr>
                                             )}
@@ -377,12 +377,12 @@ export default function EmploiDuTempsPage() {
                                                                     </p>
                                                                     {creneau.enseignant && (
                                                                         <p style={{ margin: '3px 0 0', fontSize: '9px', color: 'var(--text-muted)' }}>
-                                                                            👤 {creneau.enseignant.prenom} {creneau.enseignant.nom}
+                                                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><User size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {creneau.enseignant.prenom} {creneau.enseignant.nom}</span>
                                                                         </p>
                                                                     )}
                                                                     {creneau.salle && (
                                                                         <p style={{ margin: '2px 0 0', fontSize: '9px', color: 'var(--text-muted)' }}>
-                                                                            📍 {creneau.salle}
+                                                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><MapPin size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {creneau.salle}</span>
                                                                         </p>
                                                                     )}
                                                                     {/* Delete button micro */}

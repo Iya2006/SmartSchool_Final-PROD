@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Upload, Loader2, Lock, User, Shield } from 'lucide-react';
+import { Upload, Loader2, Lock, User, Shield, AlertTriangle } from 'lucide-react';
 import api from '@/lib/api';
 import BadgeCarte from '@/components/BadgeCarte';
 import styles from '../portail-eleve.module.css';
@@ -170,7 +170,7 @@ export default function EleveProfil({
                             { label: 'Classe active', value: eleveData.classe || '—' },
                             { label: 'Date de naissance', value: eleveData.date_naissance ? new Date(eleveData.date_naissance).toLocaleDateString('fr-FR') : '—' },
                             { label: 'Lieu de naissance', value: eleveData.lieu_naissance || '—' },
-                            { label: 'Sexe de l\'élève', value: eleveData.sexe === 'M' ? '♂ Masculin' : '♀ Féminin' },
+                            { label: 'Sexe de l\'élève', value: eleveData.sexe === 'M' ? 'Masculin' : 'Féminin' },
                         ].map((f, i) => (
                             <div key={i} style={{ background: '#f8fafc', borderRadius: '12px', padding: '14px 16px', border: '1px solid #f1f5f9' }}>
                                 <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -226,7 +226,7 @@ export default function EleveProfil({
                     </label>
 
                     {photoSuccess && <p style={{ margin: '12px 0 0', fontSize: '11.5px', color: '#10b981', fontWeight: 700 }}>✓ {photoSuccess}</p>}
-                    {photoError && <p style={{ margin: '12px 0 0', fontSize: '11.5px', color: '#ef4444', fontWeight: 700 }}>⚠️ {photoError}</p>}
+                    {photoError && <p style={{ margin: '12px 0 0', fontSize: '11.5px', color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}><AlertTriangle size={14} /> {photoError}</p>}
                 </div>
             </div>
 

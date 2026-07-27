@@ -303,7 +303,7 @@ export default function MatieresPage() {
                 await api.post('/api/matieres/batch-create', batch);
             }
 
-            showToast(`✅ ${items.length} matières déployées avec succès !`);
+            showToast(`${items.length} matières déployées avec succès !`);
             await fetchAll();
             setTab('manage');
         } catch (e: any) {
@@ -321,7 +321,7 @@ export default function MatieresPage() {
         setSaving(true);
         try {
             await api.post('/api/matieres', newSubject);
-            showToast(`✅ ${newSubject.libelle} créée !`);
+            showToast(`${newSubject.libelle} créée !`);
             setNewSubject({ code: '', libelle: '', categorie: 'Sciences', cycle_id: 0, coefficient_defaut: 2, nb_heures_semaine: 2, est_obligatoire: 'O' });
             setShowAddForm(false);
             await fetchAll();
@@ -341,7 +341,7 @@ export default function MatieresPage() {
             async () => {
                 try {
                     await api.delete(`/api/matieres/${id}`);
-                    showToast(`✅ Matière ${name} supprimée !`);
+                    showToast(`Matière ${name} supprimée !`);
                     await fetchAll();
                 } catch (e: any) {
                     showToast(e.response?.data?.detail || 'Erreur lors de la suppression', 'error');
@@ -361,7 +361,7 @@ export default function MatieresPage() {
                 setAssigning(true);
                 try {
                     const res = await api.post('/api/matieres/attribuer-programme');
-                    showToast(`✅ Attribution terminée : ${res.data.assigned} nouvelles matières attribuées.`);
+                    showToast(`Attribution terminée : ${res.data.assigned} nouvelles matières attribuées.`);
                     await fetchAll();
                 } catch (e: any) {
                     showToast(e.response?.data?.detail || 'Erreur d\'attribution', 'error');
@@ -484,7 +484,7 @@ export default function MatieresPage() {
                                 {/* Cycle Filter */}
                                 <div className={styles.filtersRow} style={{ marginTop: '1.5rem' }}>
                                     <div className={styles.filterGroup}>
-                                        {[{ key: 'ALL', label: '🌍 Tous' }, { key: 'PRM', label: '📚 Primaire' }, { key: 'CLG', label: '🏫 Collège' }, { key: 'LYC', label: '🎓 Lycée' }].map(f => (
+                                        {[{ key: 'ALL', label: 'Tous' }, { key: 'PRM', label: 'Primaire' }, { key: 'CLG', label: 'Collège' }, { key: 'LYC', label: 'Lycée' }].map(f => (
                                             <button key={f.key}
                                                 className={`${styles.filterBtn} ${deployFilter === f.key ? styles.filterBtnActive : ''}`}
                                                 onClick={() => setDeployFilter(f.key)}>
@@ -678,7 +678,7 @@ export default function MatieresPage() {
                                     <button key={f}
                                         className={`${styles.filterBtn} ${filterCycle === f ? styles.filterBtnActive : ''}`}
                                         onClick={() => setFilterCycle(f)}>
-                                        {f === 'ALL' ? '🌍 Tous' : f}
+                                        {f === 'ALL' ? 'Tous' : f}
                                     </button>
                                 ))}
                             </div>

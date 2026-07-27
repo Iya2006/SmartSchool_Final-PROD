@@ -47,11 +47,23 @@ def list_messages(
             Message.destinataire_type == "ADMIN"
         ))
     elif role == "ENSEIGNANT" and enseignant_id:
-        q = q.filter(or_(
-            Message.expediteur_id == enseignant_id,
+        # Récupérer les classes de l'enseignant pour les messages CLASSE_ENSEIGNANTS
+        classes_ens = db.query(Affectation.classe_id).filter(
+            Affectation.enseignant_id == enseignant_id,
+            Affectation.statut == "ACTIVE"
+        ).all()
+        classe_ids = [c[0] for c in classes_ens]
+
+        filters = [
+            (Message.expediteur_type == "ENSEIGNANT") & (Message.expediteur_id == enseignant_id),
             Message.destinataire_type == "TOUS_ENSEIGNANTS",
-            Message.destinataire_id == enseignant_id,
-        ))
+            Message.destinataire_type == "TOUS",
+            (Message.destinataire_type == "ENSEIGNANT") & (Message.destinataire_id == enseignant_id),
+        ]
+        for cid in classe_ids:
+            filters.append((Message.destinataire_type == "CLASSE_ENSEIGNANTS") & (Message.destinataire_id == cid))
+
+        q = q.filter(or_(*filters))
 
     if objet_type:
         q = q.filter(Message.objet_type == objet_type)

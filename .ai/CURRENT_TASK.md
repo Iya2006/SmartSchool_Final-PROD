@@ -1,39 +1,78 @@
 # 🎯 TÂCHE EN COURS
 
-Aucune tâche en cours.
+## Tâche active
+**Stabilisation urgente des portails enseignant / élève / parent / admin et parcours critiques (hors TODO.md)**
 
-## Dernière tâche réellement terminée et vérifiée
-- **Section :** 🔒 SECTION 8 — Sécurité & Gestion des Accès (Priorité 8)
-- **Terminée le :** 21/07/2026
-- **Sous-tâches :** 8.1 à 8.7 (7/7)
-- Sections 6 (Documents) et 7 (Finance) sont également terminées et vérifiées par lecture de code.
+### Objectif
+Corriger les dysfonctionnements signalés sur les portails déjà existants afin que le système soit prêt à l’usage : téléchargements de sujets/documents, ressources partagées enseignant→élève, messagerie, profils, paramètres, boutons de contact et parcours admin.
 
-## ⚠️ Correction importante (21/07/2026)
-Un conflit de fusion Git non résolu (marqueurs `<<<<<<< HEAD` / `=======` / `>>>>>>>`)
-a été trouvé dans `.ai/TODO.md`, `.ai/CURRENT_TASK.md` et `.ai/PROJECT_MEMORY.md`.
-En le résolvant, une vérification du code réel a montré que la **Section 2 —
-Gestion Années & Trimestres** avait été cochée `[x]` par erreur alors qu'elle
-n'est **pas implémentée** :
-- La page `frontend/src/app/parametres/calendrier/page.tsx` n'existe pas.
-- Le backend (`backend/app/api/parametrage.py`) ne contient que `list_annees`,
-  `create_annee`, `activer_annee`, `list_trimestres` — pas de update/delete
-  années, pas de CRUD trimestres complet, pas de stockage des vacances
-  scolaires, pas de toggle Semestre/Trimestre.
+### Décision de périmètre
+- Le chantier des rôles internes (`BIBLIOTHECAIRE`, `INFORMATICIEN`, `SURVEILLANT`, `OPERATEUR`) est mis en stand-by après les dernières refontes dynamiques.
+- Pour l’instant, les rôles système prioritaires restent : `FONDATEUR`, `DG`, `ADMIN` côté interface admin globale.
+- Les portails historiques à stabiliser sont prioritaires : enseignant, élève, parent et admin.
+- Ne pas travailler dans `.ai/TODO.md` pour cette tâche.
 
-`.ai/TODO.md` a été corrigé : Section 2 (2.1 à 2.5) recochée `[ ]`.
-Progression globale réelle : **75/101 tâches (74%)**.
+### Problèmes à traiter
+1. **Portail enseignant — documents / partages**
+   - Le téléchargement dans l’historique des sujets/documents ne fonctionne pas.
+   - Il manque une action pour ajouter des liens externes aux élèves.
+   - Les liens externes ajoutés par l’enseignant doivent apparaître automatiquement côté élève dans les ressources.
+   - Les informations de paiements/salaire de l’enseignant ne sont pas visibles.
 
-## Prochaine tâche à traiter
-**📅 SECTION 2 — Gestion Années & Trimestres (Priorité 6)**
-- Page à créer : `frontend/src/app/parametres/calendrier/page.tsx`
-- Backend à compléter dans `backend/app/api/parametrage.py` :
-  - Ajouter `update_annee` (PUT `/annees/{id}`)
-  - Ajouter CRUD complet des trimestres (create/update/delete)
-  - Ajouter un stockage des vacances scolaires (probablement via
-    `ss_parametres`, catégorie `CALENDRIER`, en JSON — même pattern que
-    `FINANCE`/`SECURITE`/`DOCUMENTS`)
-  - Ajouter un toggle Semestre vs Trimestre (même pattern `ss_parametres`)
+2. **Portail élève**
+   - Les ressources doivent afficher les liens externes envoyés par l’enseignant.
+   - L’historique des messages envoyés par l’élève ne s’affiche pas correctement dans la messagerie.
+   - Un message envoyé ne doit jamais disparaître.
 
-À remplir avec l'objectif détaillé, les fichiers concernés, les étapes prévues
-et les risques dès que cette tâche démarre réellement (voir RÈGLE 3 du
-protocole).
+3. **Portail parent**
+   - La page profil ne se charge pas.
+   - La page paramètres/profil est mal affichée et doit être redesignée proprement.
+
+4. **Admin**
+   - Les sujets envoyés par les enseignants donnent une erreur 404 au téléchargement.
+   - La page profil admin manque / ne fonctionne pas et doit être créée/refondue de façon professionnelle.
+   - Le bouton paramètres dans le menu utilisateur du header ne fonctionne pas.
+
+5. **Dossiers élèves / enseignants côté admin**
+   - Dans le dossier élève, le bouton `Contacter` doit ouvrir la messagerie avec l’élève ou son destinataire préselectionné.
+   - Dans le dossier enseignant, supprimer le bouton `Email`.
+   - Dans le dossier enseignant, le bouton message doit ouvrir la messagerie avec l’enseignant préselectionné.
+
+6. **Pointage tuteur / élèves**
+   - Le pointage personnel fonctionne, mais le pointage tuteur/élèves n’est pas encore géré. À auditer puis implémenter ou cadrer proprement selon l’existant.
+
+7. **Scalabilité / pagination**
+   - Vérifier que les pages concernées respectent la pagination et ne chargent pas inutilement des volumes énormes.
+   - Garder en tête le scénario multi-établissements avec millions de données.
+
+### Fichiers potentiellement concernés
+- `frontend/src/app/portail-enseignant/**`
+- `frontend/src/app/portail-eleve/**`
+- `frontend/src/app/portail-parent/**`
+- `frontend/src/app/enseignants/**`
+- `frontend/src/app/eleves/**`
+- `frontend/src/app/messages/**` ou pages de communication existantes
+- `frontend/src/components/Topbar*`
+- `frontend/src/app/profil/**` ou nouvelle route profil admin
+- `backend/app/api/portail_enseignant.py`
+- `backend/app/api/portail_eleve.py`
+- `backend/app/api/portail_parent.py`
+- `backend/app/api/examens.py`
+- `backend/app/api/communication.py`
+- `backend/app/api/devoirs.py`
+- `backend/app/api/photos.py`
+- éventuels modèles/schémas nécessaires
+- `.ai/CURRENT_TASK.md`
+- `.ai/PROJECT_MEMORY.md`
+
+### Stratégie
+1. Auditer les endpoints et pages existants avant modification.
+2. Corriger d’abord les téléchargements 404, car ils impactent enseignant/admin.
+3. Brancher les liens externes enseignant → ressources élève.
+4. Corriger la messagerie élève pour conserver et afficher l’historique.
+5. Corriger/redesigner profils et paramètres parent/admin.
+6. Corriger les boutons de contact admin.
+7. Vérifier pagination et validation TypeScript/backend.
+
+### Règle mémoire importante
+Mettre à jour `.ai/CURRENT_TASK.md` et `.ai/PROJECT_MEMORY.md` régulièrement, surtout avant une limite de contexte/tokens ou une interruption possible.

@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
     Users, BookOpen, ChevronRight, Loader2, Eye, Settings, UserCheck,
-    Clock, Hash, ArrowLeft, Phone, Crown, Calendar, TrendingUp, Award, Star
+    Clock, Hash, ArrowLeft, Phone, Crown, Calendar, TrendingUp, Award, Star, AlertTriangle, Utensils, User
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -395,8 +395,8 @@ export default function ClasseProfilPage() {
                                             </td>
                                             <td>
                                                 {isChef ? (
-                                                    <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '8px', background: '#fef3c7', color: '#92400e' }}>
-                                                        ⭐ Chef
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '8px', background: '#fef3c7', color: '#92400e' }}>
+                                                        <Star size={11} /> Chef
                                                     </span>
                                                 ) : (
                                                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>—</span>
@@ -479,7 +479,7 @@ export default function ClasseProfilPage() {
                                     color: creneaux.length > 0 ? '#166534' : '#92400e',
                                     border: `1px solid ${creneaux.length > 0 ? '#bbf7d0' : '#fde68a'}`
                                 }}>
-                                    {creneaux.length > 0 ? `📅 ${creneaux.length} créneaux` : '⚠ Non configuré'}
+                                    {creneaux.length > 0 ? <><Calendar size={12} style={{display:'inline', verticalAlign:'middle'}}/> {creneaux.length} créneaux</> : <><AlertTriangle size={12} style={{display:'inline', verticalAlign:'middle'}}/> Non configuré</>}
                                 </span>
                                 <Link href="/emploi-du-temps" style={{
                                     display: 'flex', alignItems: 'center', gap: '5px',
@@ -539,7 +539,7 @@ export default function ClasseProfilPage() {
                                                                     padding: '8px', textAlign: 'center', background: '#fef3c7',
                                                                     borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
                                                                 }}>
-                                                                    🍽 12:00 — 14:00 • Pause Déjeuner
+                                                                    <Utensils size={12} style={{display:'inline', verticalAlign:'middle'}}/> 12:00 — 14:00 • Pause Déjeuner
                                                                 </td>
                                                             </tr>
                                                         )}
@@ -570,7 +570,7 @@ export default function ClasseProfilPage() {
                                                                                 </p>
                                                                                 {cr.enseignant && (
                                                                                     <p style={{ margin: '3px 0 0', fontSize: '9px', color: 'var(--text-muted)' }}>
-                                                                                        👤 {cr.enseignant.prenom} {cr.enseignant.nom}
+                                                                                        <User size={10} style={{display:'inline', verticalAlign:'middle'}}/> {cr.enseignant.prenom} {cr.enseignant.nom}
                                                                                     </p>
                                                                                 )}
                                                                             </div>
@@ -700,7 +700,7 @@ export default function ClasseProfilPage() {
                     <div className="card" style={{ padding: '28px' }}>
                         <h3 style={{ fontSize: '17px', fontWeight: 700, margin: '0 0 6px', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)' }}>
                             <div style={{ padding: '8px', borderRadius: '10px', background: '#fef3c7', color: '#d97706' }}><Award size={18} /></div>
-                            🏆 Top 10 — Meilleurs Élèves
+                            Top 10 — Meilleurs Élèves
                         </h3>
                         <p style={{ color: 'var(--text-muted)', fontSize: '12px', margin: '0 0 24px' }}>
                             Classement basé sur les moyennes simulées (les notes réelles seront gérées plus tard).

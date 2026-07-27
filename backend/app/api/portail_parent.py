@@ -15,7 +15,7 @@ from app.models.academique import (
     Parent, EleveParent, Eleve, Inscription, Classe, Matiere,
     Note, Evaluation, Bulletin, BulletinLigne, Facture, Paiement, Presence,
     Incident, CreneauEmploi, Enseignant, Affectation, TypeEvaluation, Trimestre,
-    Message, EcheanceFacture, TypeFrais
+    Message, EcheanceFacture, TypeFrais, PhotoEnAttente
 )
 
 router = APIRouter(prefix="/api/portail-parent", tags=["Portail Parent"])
@@ -251,6 +251,7 @@ def parent_dashboard(parent_id: int, _auth: dict = Depends(_parent_auth), db: Se
             "nb_present": nb_present,
             "nb_absent": nb_absent,
             "statut": eleve.statut,
+            "has_pending_photo": db.query(PhotoEnAttente).filter_by(entity_type='eleve', entity_id=eleve.eleve_id, statut='EN_ATTENTE').first() is not None,
         })
     
     return {
@@ -262,6 +263,7 @@ def parent_dashboard(parent_id: int, _auth: dict = Depends(_parent_auth), db: Se
             "email": parent.email,
             "profession": parent.profession,
             "photo_url": parent.photo_url,
+            "has_pending_photo": db.query(PhotoEnAttente).filter_by(entity_type='parent', entity_id=parent.parent_id, statut='EN_ATTENTE').first() is not None,
         },
         "enfants": enfants,
         "finance_resume": {
@@ -527,6 +529,7 @@ def get_messages_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db:
     filters = [
         (Message.destinataire_type == "PARENT") & (Message.destinataire_id == parent_id),
         (Message.destinataire_type == "TOUS_PARENTS"),
+        (Message.destinataire_type == "TOUS"),
     ]
     for cid in children_classe_ids:
         filters.append(
@@ -581,6 +584,7 @@ def count_non_lus_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db
     filters = [
         (Message.destinataire_type == "PARENT") & (Message.destinataire_id == parent_id),
         (Message.destinataire_type == "TOUS_PARENTS"),
+        (Message.destinataire_type == "TOUS"),
     ]
     for cid in children_classe_ids:
         filters.append(

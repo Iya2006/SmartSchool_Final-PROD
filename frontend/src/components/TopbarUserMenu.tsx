@@ -8,11 +8,14 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Settings, LogOut, ChevronDown, User } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 export default function TopbarUserMenu() {
     const { user, logout } = useAuth();
+    const router = useRouter();
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -96,14 +99,45 @@ export default function TopbarUserMenu() {
                     {/* Items du menu */}
                     <div style={{ padding: '6px' }}>
                         <button
-                            id="topbar-settings-btn"
-                            onClick={() => setDropdownOpen(false)}
+                            id="topbar-profile-btn"
+                            onClick={() => { setDropdownOpen(false); router.push('/profil'); }}
                             style={{
                                 display: 'flex', alignItems: 'center', gap: '10px',
                                 width: '100%', padding: '10px 12px',
                                 background: 'none', border: 'none', cursor: 'pointer',
                                 borderRadius: '10px', fontSize: '13px', fontWeight: 500,
                                 color: 'var(--text-secondary)', transition: 'all 0.15s ease',
+                                textAlign: 'left'
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                        >
+                            <User size={16} /> Mon Profil
+                        </button>
+                        
+                        <button
+                            id="topbar-settings-btn"
+                            onClick={() => {
+                                setDropdownOpen(false);
+                                if (user?.role === 'ADMIN') {
+                                    router.push('/parametres');
+                                } else if (user?.role === 'ENSEIGNANT') {
+                                    router.push('/portail-enseignant?tab=profil');
+                                } else if (user?.role === 'ELEVE') {
+                                    router.push('/portail-eleve?tab=profil');
+                                } else if (user?.role === 'PARENT') {
+                                    router.push('/portail-parent?tab=profil');
+                                } else {
+                                    router.push('/parametres');
+                                }
+                            }}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '10px',
+                                width: '100%', padding: '10px 12px',
+                                background: 'none', border: 'none', cursor: 'pointer',
+                                borderRadius: '10px', fontSize: '13px', fontWeight: 500,
+                                color: 'var(--text-secondary)', transition: 'all 0.15s ease',
+                                textAlign: 'left'
                             }}
                             onMouseEnter={e => { e.currentTarget.style.background = '#f1f5f9'; e.currentTarget.style.color = 'var(--text-primary)'; }}
                             onMouseLeave={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--text-secondary)'; }}

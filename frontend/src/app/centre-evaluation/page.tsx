@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     ChevronRight, Loader2, FileText, Download, CheckCircle2, AlertCircle,
     X, Shield, Search, Filter, Clock, Users, BookOpen, Send, Eye,
-    XCircle, BarChart3, FileUp, Award, Printer
+    XCircle, BarChart3, FileUp, Award, Printer, PenLine, Inbox, Paperclip, UserCheck, Calendar
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -27,11 +27,11 @@ interface StatsData {
     total_enseignants: number; taux_soumission: number;
 }
 
-const STATUT_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
-    BROUILLON: { label: 'Brouillon', color: '#64748b', bg: '#f1f5f9', icon: '📝' },
-    ENVOYE: { label: 'Reçu', color: '#0d9488', bg: '#ccfbf1', icon: '📬' },
-    VALIDE: { label: 'Validé', color: '#16a34a', bg: '#dcfce7', icon: '✅' },
-    REJETE: { label: 'Rejeté', color: '#dc2626', bg: '#fee2e2', icon: '❌' },
+const STATUT_CONFIG: Record<string, { label: string; color: string; bg: string; icon: any }> = {
+    BROUILLON: { label: 'Brouillon', color: '#64748b', bg: '#f1f5f9', icon: PenLine },
+    ENVOYE: { label: 'Reçu', color: '#0d9488', bg: '#ccfbf1', icon: Inbox },
+    VALIDE: { label: 'Validé', color: '#16a34a', bg: '#dcfce7', icon: CheckCircle2 },
+    REJETE: { label: 'Rejeté', color: '#dc2626', bg: '#fee2e2', icon: XCircle },
 };
 
 export default function CentreEvaluationPage() {
@@ -50,6 +50,22 @@ export default function CentreEvaluationPage() {
     const showSuccess = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(null), 3500); };
     const showError = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(null), 4000); };
 
+    const handleDownloadSujet = async (sujetId: number, filename: string) => {
+        try {
+            const res = await api.get(`/api/examens/sujets/${sujetId}/fichier`, { responseType: 'blob' });
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', filename || `sujet_${sujetId}`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch {
+            alert('Erreur lors du téléchargement du fichier.');
+        }
+    };
+
     const loadData = useCallback(async () => {
         try {
             const [sujR, statsR] = await Promise.all([
@@ -67,7 +83,7 @@ export default function CentreEvaluationPage() {
     const handleValider = async (id: number) => {
         try {
             await api.put(`/api/examens/sujets/${id}/valider`);
-            showSuccess('✅ Sujet validé avec succès.');
+            showSuccess('Sujet validé avec succès.');
             loadData();
         } catch (err: any) { showError(err.response?.data?.detail || 'Erreur'); }
     };
@@ -218,8 +234,8 @@ export default function CentreEvaluationPage() {
                                 <button key={st} onClick={() => setFilterStatut(st)} style={{
                                     padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
                                     background: filterStatut === st ? cfg.color : '#f8fafc', color: filterStatut === st ? 'white' : '#64748b',
-                                    border: 'none', cursor: 'pointer'
-                                }}>{cfg.icon} {cfg.label}</button>
+                                    border: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px'
+                                }}><cfg.icon size={14} /> {cfg.label}</button>
                             );
                         })}
                     </div>
@@ -238,7 +254,7 @@ export default function CentreEvaluationPage() {
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '16px' }}>
                         {filtered.map((s, i) => {
                             const stCfg = STATUT_CONFIG[s.statut] || STATUT_CONFIG.ENVOYE;
-                            const fileIcon = s.fichier_type === 'pdf' ? '📄' : s.fichier_type === 'docx' || s.fichier_type === 'doc' ? '📝' : '📎';
+                            const fileIcon = s.fichier_type === 'pdf' ? <FileText size={22} /> : s.fichier_type === 'docx' || s.fichier_type === 'doc' ? <PenLine size={22} /> : <Paperclip size={22} />;
                             return (
                                 <motion.div key={s.sujet_id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
                                     className="card" style={{ padding: '20px', position: 'relative', overflow: 'hidden' }}>
@@ -256,19 +272,19 @@ export default function CentreEvaluationPage() {
                                                 <p style={{ margin: '2px 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>{s.fichier_nom} • {formatFileSize(s.fichier_taille)}</p>
                                             </div>
                                         </div>
-                                        <span style={{ padding: '4px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700, background: stCfg.bg, color: stCfg.color, whiteSpace: 'nowrap' }}>{stCfg.icon} {stCfg.label}</span>
+                                        <span style={{ padding: '4px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700, background: stCfg.bg, color: stCfg.color, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><stCfg.icon size={12} /> {stCfg.label}</span>
                                     </div>
 
                                     {/* Info rows */}
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px' }}>
                                         <div style={{ display: 'flex', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                                            <span style={{ fontWeight: 600 }}>👨‍🏫</span> {s.enseignant_nom}
+                                            <span style={{ fontWeight: 600, display: 'inline-flex', alignItems: 'center' }}><UserCheck size={14} style={{ marginRight: '4px' }} /></span> {s.enseignant_nom}
                                             {s.enseignant_specialite && <span style={{ color: 'var(--text-muted)' }}>({s.enseignant_specialite})</span>}
                                         </div>
                                         <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-                                            <span>📚 {s.matiere_libelle}</span>
-                                            <span>🕐 {s.duree_minutes} min</span>
-                                            <span>📅 T{s.trimestre}</span>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BookOpen size={14} /> {s.matiere_libelle}</span>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Clock size={14} /> {s.duree_minutes} min</span>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> T{s.trimestre}</span>
                                         </div>
                                         {s.date_envoi && (
                                             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
@@ -279,15 +295,10 @@ export default function CentreEvaluationPage() {
 
                                     {/* Actions */}
                                     <div style={{ display: 'flex', gap: '8px' }}>
-                                        <a href={`/api/examens/sujets/${s.sujet_id}/fichier`} target="_blank" rel="noreferrer"
-                                            style={{
-                                                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px',
-                                                padding: '9px', borderRadius: '10px', fontSize: '12px', fontWeight: 600,
-                                                border: '1px solid var(--border-light)', color: 'var(--text-secondary)',
-                                                textDecoration: 'none', cursor: 'pointer'
-                                            }}>
+                                        <button onClick={() => handleDownloadSujet(s.sujet_id, s.fichier_nom || `sujet_${s.sujet_id}`)}
+                                            style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', padding: '6px 14px', borderRadius: '8px', border: '1px solid #3b82f6', background: '#eff6ff', color: '#3b82f6', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
                                             <Download size={13} /> Télécharger
-                                        </a>
+                                        </button>
                                         {s.statut === 'ENVOYE' && (
                                             <>
                                                 <button onClick={() => handleValider(s.sujet_id)} style={{

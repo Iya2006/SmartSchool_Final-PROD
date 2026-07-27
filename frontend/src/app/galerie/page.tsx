@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Camera, Users, GraduationCap, Heart, Loader2, Clock,
     Search, ChevronRight, Image, CheckCircle, X,
-    Eye, Edit, Upload
+    Eye, Edit, Upload, AlertTriangle
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -108,23 +108,30 @@ function Lightbox({ person, onClose }: {
 /* ═══════════════════════════════════════════════════════════
    PHOTO CARD — click = preview, hover = actions
    ═══════════════════════════════════════════════════════════ */
-function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted }: {
+function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted, pendingPhoto }: {
     person: PersonPhoto; type: 'eleve' | 'enseignant' | 'parent';
     onUploaded: () => void; onPreview: () => void; isHighlighted?: boolean;
+    pendingPhoto?: PendingPhoto;
 }) {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const [uploading, setUploading] = useState(false);
+    const [actionLoading, setActionLoading] = useState(false);
     const [justUploaded, setJustUploaded] = useState(false);
     const [hovered, setHovered] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
     const id = person.eleve_id || person.enseignant_id || person.parent_id || 0;
-    const rawPhotoSrc = person.photo_url ? `${API_BASE}${person.photo_url}` : null;
+    
+    // Use validated photo_url if exists, else pending photo file_path if exists
+    const displayUrl = person.photo_url || pendingPhoto?.file_path || null;
+    const rawPhotoSrc = displayUrl ? `${API_BASE}${displayUrl}` : null;
     const [imgError, setImgError] = useState(false);
     const photoSrc = imgError ? null : rawPhotoSrc;
     const initials = `${(person.prenom || '').charAt(0)}${(person.nom || '').charAt(0)}`;
     const color = avatarColors[id % avatarColors.length];
+    const hasValidatedPhoto = !!person.photo_url;
+    const hasPendingPhoto = !!pendingPhoto;
     const hasPhoto = !!photoSrc;
     const profileUrl = type === 'eleve' ? `/eleves/${id}` : type === 'enseignant' ? `/enseignants/${id}` : `/familles/${id}`;
 
@@ -141,28 +148,54 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted }: {
         finally { setUploading(false); if (inputRef.current) inputRef.current.value = ''; }
     };
 
-    const handleAssignClick = (e: any) => {
+    const handleValidatePending = async (e: any) => {
         e.stopPropagation();
-        if(inputRef.current) inputRef.current.click();
+        if (!pendingPhoto) return;
+        setActionLoading(true);
+        try {
+            await api.post(`/api/photos/validate/${pendingPhoto.photo_id}`);
+            setJustUploaded(true);
+            setTimeout(() => setJustUploaded(false), 2000);
+            onUploaded();
+        } catch (err) {
+            alert('Erreur lors de la validation de la photo');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleRejectPending = async (e: any) => {
+        e.stopPropagation();
+        if (!pendingPhoto) return;
+        if (!confirm(`Rejeter la photo soumise pour ${person.prenom} ${person.nom} ?`)) return;
+        setActionLoading(true);
+        try {
+            await api.post(`/api/photos/reject/${pendingPhoto.photo_id}`);
+            onUploaded();
+        } catch (err) {
+            alert('Erreur lors du rejet de la photo');
+        } finally {
+            setActionLoading(false);
+        }
     };
 
     return (
         <motion.div
             id={isHighlighted ? `highlight-${type}-${id}` : undefined}
             initial={{ opacity: 0, scale: 0.9 }}
-            animate={isHighlighted ? { opacity: 1, scale: [1, 1.03, 1], boxShadow: '0 0 0 3px rgba(239, 68, 68, 0.4)' } : { opacity: 1, scale: 1 }}
-            transition={isHighlighted ? { repeat: Infinity, duration: 1.5 } : {}}
+            animate={isHighlighted ? { opacity: 1, scale: [1, 1.04, 1], boxShadow: '0 0 0 4px #ef4444' } : { opacity: 1, scale: 1 }}
+            transition={isHighlighted ? { repeat: Infinity, duration: 1.2 } : {}}
             whileHover={{ y: -4, boxShadow: '0 12px 28px rgba(0,0,0,0.1)' }}
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
             style={{
                 borderRadius: '16px', overflow: 'hidden',
-                border: `2px solid ${isHighlighted ? '#ef4444' : (hasPhoto ? '#d1fae5' : '#fee2e2')}`,
+                border: `2px solid ${isHighlighted ? '#ef4444' : (hasValidatedPhoto ? '#d1fae5' : (hasPendingPhoto ? '#fde68a' : '#fee2e2'))}`,
                 background: 'white', cursor: 'pointer', position: 'relative',
             }}>
-            {isHighlighted && (
-                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, background: '#ef4444', color: 'white', fontSize: '10px', fontWeight: 800, textAlign: 'center', padding: '4px 0', zIndex: 10, letterSpacing: '0.5px' }}>
-                    ⚠️ PHOTO À ATTRIBUER
+            {(isHighlighted || hasPendingPhoto) && (
+                <div style={{ position: 'absolute', top: 0, left: 0, right: 0, background: isHighlighted ? '#ef4444' : '#d97706', color: 'white', fontSize: '9.5px', fontWeight: 800, textAlign: 'center', padding: '3px 0', zIndex: 10, letterSpacing: '0.5px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                    <AlertTriangle size={10} /> {hasPendingPhoto ? 'PHOTO EN ATTENTE' : 'PHOTO À ATTRIBUER'}
                 </div>
             )}
             <input ref={inputRef} type="file" accept="image/*" hidden onChange={handleUpload} />
@@ -185,26 +218,48 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted }: {
 
                 {/* Status badge */}
                 <div style={{
-                    position: 'absolute', top: '8px', right: '8px',
+                    position: 'absolute', top: (isHighlighted || hasPendingPhoto) ? '22px' : '8px', right: '8px',
                     padding: '3px 8px', borderRadius: '8px', fontSize: '10px', fontWeight: 700,
-                    background: hasPhoto ? '#d1fae5' : '#fee2e2',
-                    color: hasPhoto ? '#065f46' : '#dc2626',
+                    background: hasValidatedPhoto ? '#d1fae5' : (hasPendingPhoto ? '#fef3c7' : '#fee2e2'),
+                    color: hasValidatedPhoto ? '#065f46' : (hasPendingPhoto ? '#92400e' : '#dc2626'),
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
                 }}>
-                    {hasPhoto ? '✓ Photo' : '✗ Manquante'}
+                    {hasValidatedPhoto ? 'Photo' : (hasPendingPhoto ? 'En attente' : 'Manquante')}
                 </div>
 
-                {/* Hover overlay — click anywhere to preview, Attribuer button for highlighted */}
+                {/* Hover overlay — click anywhere to preview, Attribuer / Valider buttons */}
                 <AnimatePresence>
-                    {(hovered || isHighlighted) && (
+                    {(hovered || isHighlighted || hasPendingPhoto) && (
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                             onClick={(e) => { e.stopPropagation(); onPreview(); }}
                             style={{
                                 position: 'absolute', inset: 0,
-                                background: isHighlighted ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.45)',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '10px',
-                                cursor: 'zoom-in',
+                                background: (isHighlighted || hasPendingPhoto) ? 'rgba(15,23,42,0.65)' : 'rgba(0,0,0,0.45)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '8px',
+                                cursor: 'zoom-in', padding: '10px',
                             }}>
-                            {isHighlighted ? (
+                            {hasPendingPhoto ? (
+                                <>
+                                    <button onClick={handleValidatePending} disabled={actionLoading}
+                                        style={{
+                                            width: '100%', padding: '7px 12px', borderRadius: '8px', border: 'none',
+                                            background: '#10b981', color: 'white', cursor: 'pointer',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '11px', fontWeight: 700,
+                                            boxShadow: '0 4px 12px rgba(16, 185, 129, 0.4)',
+                                        }}>
+                                        {actionLoading ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle size={13} />}
+                                        Valider la photo
+                                    </button>
+                                    <button onClick={handleRejectPending} disabled={actionLoading}
+                                        style={{
+                                            width: '100%', padding: '5px 12px', borderRadius: '8px', border: 'none',
+                                            background: '#ef4444', color: 'white', cursor: 'pointer',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', fontSize: '10px', fontWeight: 700,
+                                        }}>
+                                        Rejeter
+                                    </button>
+                                </>
+                            ) : isHighlighted ? (
                                 <>
                                     <button onClick={(e) => {
                                         e.stopPropagation();
@@ -237,12 +292,12 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted }: {
                             ) : (
                                 <button onClick={(e) => { e.stopPropagation(); onPreview(); }}
                                     style={{
-                                        width: '48px', height: '48px', borderRadius: '50%', border: 'none',
+                                        width: '44px', height: '44px', borderRadius: '50%', border: 'none',
                                         background: 'rgba(255,255,255,0.9)', cursor: 'pointer',
                                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                                         boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
                                     }} title="Voir la photo">
-                                    <Eye size={22} color="#6366f1" />
+                                    <Eye size={20} color="#6366f1" />
                                 </button>
                             )}
                         </motion.div>
@@ -254,8 +309,8 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted }: {
                     {justUploaded && (
                         <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}
                             style={{
-                                position: 'absolute', inset: 0, background: 'rgba(16,185,129,0.7)',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                position: 'absolute', inset: 0, background: 'rgba(16,185,129,0.85)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 20,
                             }}>
                             <CheckCircle size={40} color="white" />
                         </motion.div>
@@ -498,8 +553,8 @@ function GalerieContent() {
                     <div style={{ display: 'flex', gap: '3px', background: '#f1f5f9', borderRadius: '10px', padding: '3px' }}>
                         {[
                             { key: 'all' as const, label: 'Tous' },
-                            { key: 'with' as const, label: '✓ Photos' },
-                            { key: 'without' as const, label: '✗ Manquantes' },
+                            { key: 'with' as const, label: 'Photos' },
+                            { key: 'without' as const, label: 'Manquantes' },
                         ].map(f => (
                             <button key={f.key} onClick={() => setFilterPhoto(f.key)} style={{
                                 padding: '6px 12px', borderRadius: '8px', border: 'none', cursor: 'pointer',
@@ -550,11 +605,14 @@ function GalerieContent() {
                                     </div>
                                     <div style={{ padding: '16px 20px' }}>
                                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
-                                            {filtered.map(eleve => (
-                                                <PhotoCard key={eleve.eleve_id} person={eleve} type="eleve" onUploaded={fetchData}
-                                                    isHighlighted={eleve.eleve_id?.toString() === highlightId}
-                                                    onPreview={() => setPreviewPerson({ person: eleve, type: 'eleve' })} />
-                                            ))}
+                                            {filtered.map(eleve => {
+                                                const pending = pendingPhotos.find(p => p.entity_type === 'eleve' && p.entity_id === eleve.eleve_id);
+                                                return (
+                                                    <PhotoCard key={eleve.eleve_id} person={eleve} type="eleve" pendingPhoto={pending} onUploaded={fetchData}
+                                                        isHighlighted={eleve.eleve_id?.toString() === highlightId}
+                                                        onPreview={() => setPreviewPerson({ person: eleve, type: 'eleve' })} />
+                                                );
+                                            })}
                                         </div>
                                     </div>
                                 </motion.div>
@@ -632,11 +690,14 @@ function GalerieContent() {
                     </div>
                     <div style={{ padding: '16px 20px' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
-                            {data.enseignants.filter(e => matchSearch(e) && matchFilter(e)).map(ens => (
-                                <PhotoCard key={ens.enseignant_id} person={ens} type="enseignant" onUploaded={fetchData}
-                                    isHighlighted={ens.enseignant_id?.toString() === highlightId}
-                                    onPreview={() => setPreviewPerson({ person: ens, type: 'enseignant' })} />
-                            ))}
+                            {data.enseignants.filter(e => matchSearch(e) && matchFilter(e)).map(ens => {
+                                const pending = pendingPhotos.find(p => p.entity_type === 'enseignant' && p.entity_id === ens.enseignant_id);
+                                return (
+                                    <PhotoCard key={ens.enseignant_id} person={ens} type="enseignant" pendingPhoto={pending} onUploaded={fetchData}
+                                        isHighlighted={ens.enseignant_id?.toString() === highlightId}
+                                        onPreview={() => setPreviewPerson({ person: ens, type: 'enseignant' })} />
+                                );
+                            })}
                         </div>
                     </div>
                 </motion.div>
@@ -657,11 +718,14 @@ function GalerieContent() {
                     </div>
                     <div style={{ padding: '16px 20px' }}>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
-                            {data.parents.filter(p => matchSearch(p) && matchFilter(p)).map(par => (
-                                <PhotoCard key={par.parent_id} person={par} type="parent" onUploaded={fetchData}
-                                    isHighlighted={par.parent_id?.toString() === highlightId}
-                                    onPreview={() => setPreviewPerson({ person: par, type: 'parent' })} />
-                            ))}
+                            {data.parents.filter(p => matchSearch(p) && matchFilter(p)).map(par => {
+                                const pending = pendingPhotos.find(p => p.entity_type === 'parent' && p.entity_id === par.parent_id);
+                                return (
+                                    <PhotoCard key={par.parent_id} person={par} type="parent" pendingPhoto={pending} onUploaded={fetchData}
+                                        isHighlighted={par.parent_id?.toString() === highlightId}
+                                        onPreview={() => setPreviewPerson({ person: par, type: 'parent' })} />
+                                );
+                            })}
                         </div>
                     </div>
                 </motion.div>

@@ -3,13 +3,13 @@ import React from 'react';
 import { useApp } from '@/context/AppContext';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     ArrowLeft, Phone, Mail, Briefcase, GraduationCap, Clock, Award,
     CheckCircle, Loader2, Edit, Calendar, BookOpen, Plus,
     X, Trash2, Camera, User, MapPin, Building, Star, TrendingUp, FileText,
-    UserCheck, Scan
+    UserCheck, Scan, MessageSquare
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -48,6 +48,7 @@ const HEURES = [
 
 export default function ProfilEnseignant() {
     const { id } = useParams();
+    const router = useRouter();
     const [ens, setEns] = useState<any>(null);
     const [affectations, setAffectations] = useState<Affectation[]>([]);
     const [creneaux, setCreneaux] = useState<Creneau[]>([]);
@@ -221,7 +222,7 @@ export default function ProfilEnseignant() {
                                 background: ens.statut === 'ACTIF' ? '#10b98120' : '#ef444420',
                                 color: ens.statut === 'ACTIF' ? '#10b981' : '#ef4444',
                                 border: `1px solid ${ens.statut === 'ACTIF' ? '#10b98140' : '#ef444440'}`,
-                            }}>{ens.statut === 'ACTIF' ? '● Actif' : '● Inactif'}</span>
+                            }}>{ens.statut === 'ACTIF' ? 'Actif' : 'Inactif'}</span>
                         </div>
                         {ens.email && (
                             <p style={{ margin: '10px 0 0', fontSize: '13px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
@@ -232,11 +233,8 @@ export default function ProfilEnseignant() {
 
                     {/* Quick action buttons */}
                     <div style={{ display: 'flex', gap: '10px', flexShrink: 0 }}>
-                        <button className="btn btn-primary btn-sm" style={{ borderRadius: '10px', fontSize: '13px' }}>
-                            💬 Message
-                        </button>
-                        <button className="btn btn-outline btn-sm" style={{ borderRadius: '10px', fontSize: '13px' }}>
-                            ✉️ Email
+                        <button onClick={() => router.push(`/communication?dest_type=ENSEIGNANT&dest_id=${ens.enseignant_id}`)} className="btn btn-primary btn-sm" style={{ borderRadius: '10px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <MessageSquare size={14} /> Message
                         </button>
                     </div>
                 </div>
@@ -493,8 +491,8 @@ export default function ProfilEnseignant() {
                                                                         onMouseOut={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = 'none'; }}
                                                                         >
                                                                             <p style={{ margin: 0, fontSize: '11px', fontWeight: 700, color: c.text }}>{slot.matiere}</p>
-                                                                            <p style={{ margin: '1px 0 0', fontSize: '10px', color: c.text, opacity: 0.7, fontWeight: 500 }}>
-                                                                                📍 {slot.classe_code} {slot.salle ? `• ${slot.salle}` : ''}
+                                                                            <p style={{ margin: '1px 0 0', fontSize: '10px', color: c.text, opacity: 0.7, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                                                <MapPin size={10} /> {slot.classe_code} {slot.salle ? `• ${slot.salle}` : ''}
                                                                             </p>
                                                                         </div>
                                                                     )}

@@ -6,7 +6,7 @@ import api from '@/lib/api';
 import {
     PlusCircle, Trash2, Edit2, CheckCircle2, AlertTriangle, XCircle,
     Search, RefreshCw, FileText, DollarSign, Users, Calendar,
-    ChevronDown, ChevronRight, Banknote, CreditCard, Smartphone, X
+    ChevronDown, ChevronRight, Banknote, CreditCard, Smartphone, X, Coins, Lightbulb
 } from 'lucide-react';
 
 
@@ -41,10 +41,10 @@ const CATEGORIES_FRAIS = [
 const FREQUENCES = ['ANNUEL', 'TRIMESTRIEL', 'MENSUEL', 'UNIQUE'];
 
 const MODES_PAIEMENT = [
-    { value: 'ESPECES', label: '💵 Espèces', icon: Banknote },
-    { value: 'CHEQUE', label: '📋 Chèque', icon: FileText },
-    { value: 'MOBILE_MONEY', label: '📱 Mobile Money', icon: Smartphone },
-    { value: 'VIREMENT', label: '🏦 Virement bancaire', icon: CreditCard },
+    { value: 'ESPECES', label: 'Espèces', icon: Banknote },
+    { value: 'CHEQUE', label: 'Chèque', icon: FileText },
+    { value: 'MOBILE_MONEY', label: 'Mobile Money', icon: Smartphone },
+    { value: 'VIREMENT', label: 'Virement bancaire', icon: CreditCard },
 ];
 
 const STATUT_COLORS: Record<string, { bg: string; color: string; label: string }> = {
@@ -358,8 +358,8 @@ function FraisScolaritePage() {
                                                 <div>
                                                     <p style={{ margin: '0 0 2px 0', fontWeight: '600', color: '#0f172a', fontSize: '14px' }}>{tf.libelle}</p>
                                                     <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>
-                                                        {tf.frequence} · {tf.est_obligatoire === 'O' ? '⚠️ Obligatoire' : '✓ Facultatif'}
-                                                        {tf.montant_defaut > 0 && ` · 💰 ${tf.montant_defaut.toLocaleString('fr-FR')} GNF`}
+                                                        {tf.frequence} · {tf.est_obligatoire === 'O' ? <><AlertTriangle size={12} style={{display:'inline', verticalAlign:'middle'}}/> Obligatoire</> : '✓ Facultatif'}
+                                                        {tf.montant_defaut > 0 && <><Coins size={12} style={{display:'inline', verticalAlign:'middle'}}/> {' ' + tf.montant_defaut.toLocaleString('fr-FR') + ' GNF'}</>}
                                                     </p>
                                                 </div>
                                             </div>
@@ -638,7 +638,7 @@ function FraisScolaritePage() {
                             <button onClick={() => setShowFactureModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><X size={20} /></button>
                         </div>
                         <div style={{ padding: '12px', backgroundColor: '#eff6ff', borderRadius: '8px', marginBottom: '16px', fontSize: '13px', color: '#2563eb' }}>
-                            💡 Génère automatiquement une facture pour chaque élève actif de la classe sélectionnée, sans double saisie.
+                            <Lightbulb size={16} color="#d97706" style={{display:'inline', verticalAlign:'middle'}}/> Génère automatiquement une facture pour chaque élève actif de la classe sélectionnée, sans double saisie.
                         </div>
                         <form onSubmit={submitFacture} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div>
