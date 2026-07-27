@@ -380,7 +380,7 @@ function FraisScolaritePage() {
 
                     {typesFrais.length === 0 && (
                         <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>
-                            <DollarSign size={40} style={{ margin: '0 auto 12px auto' }} />
+                            <Coins size={40} style={{ margin: '0 auto 12px auto' }} />
                             <p style={{ fontWeight: '600' }}>Aucun type de frais configuré</p>
                             <p style={{ fontSize: '13px' }}>Commencez par créer vos catégories de frais (Inscription, Scolarité, etc.)</p>
                         </div>

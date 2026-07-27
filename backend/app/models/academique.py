@@ -837,6 +837,21 @@ class Emprunt(Base):
 # MODULE COMPTABILITE (PORTAIL COMPTABLE)
 # ============================================================================
 
+class Comptable(Base):
+    __tablename__ = "ss_comptables"
+    comptable_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    nom_utilisateur = Column(String(100), unique=True, nullable=False, index=True)
+    mot_de_passe = Column(String(255), nullable=False)
+    nom = Column(String(100), nullable=False)
+    prenom = Column(String(150), nullable=False)
+    email = Column(String(150), unique=True, nullable=True)
+    telephone = Column(String(20), unique=True, nullable=True)
+    statut = Column(String(20), default="ACTIF", nullable=False)
+    created_date = Column(DateTime, server_default=func.now())
+
+    etablissement = relationship("Etablissement")
+
 class ParametreComptabilite(Base):
     __tablename__ = "ss_parametres_comptabilite"
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -868,6 +883,7 @@ class CompteComptable(Base):
 class EcritureComptable(Base):
     __tablename__ = "ss_ecritures_comptables"
     ecriture_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
     date_ecriture = Column(Date, nullable=False)
     journal_id = Column(Integer, ForeignKey("ss_journaux_comptables.journal_id"), nullable=False)
     reference = Column(String(50))
@@ -875,6 +891,7 @@ class EcritureComptable(Base):
     exercice_id = Column(Integer, ForeignKey("ss_exercices_comptables.exercice_id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     
+    etablissement = relationship("Etablissement")
     lignes = relationship("LigneEcriture", back_populates="ecriture", cascade="all, delete-orphan")
 
 class LigneEcriture(Base):
@@ -885,9 +902,107 @@ class LigneEcriture(Base):
     debit = Column(Numeric(15, 2), default=0.00)
     credit = Column(Numeric(15, 2), default=0.00)
     description = Column(String(255))
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
+    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=True)
+    fournisseur_id = Column(Integer, ForeignKey("ss_fournisseurs.fournisseur_id"), nullable=True)
+    departement = Column(String(100), nullable=True)
     
     ecriture = relationship("EcritureComptable", back_populates="lignes")
     compte = relationship("CompteComptable")
+    classe = relationship("Classe")
+    eleve = relationship("Eleve")
+    fournisseur = relationship("Fournisseur")
+
+class Fournisseur(Base):
+    __tablename__ = "ss_fournisseurs"
+    fournisseur_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    code = Column(String(50), unique=True, nullable=False, index=True)
+    nom = Column(String(200), nullable=False)
+    telephone = Column(String(50))
+    email = Column(String(150))
+    adresse = Column(String(500))
+    statut = Column(String(20), default="ACTIF", nullable=False)
+    created_date = Column(DateTime, server_default=func.now())
+
+class Budget(Base):
+    __tablename__ = "ss_budgets"
+    budget_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    code = Column(String(50), nullable=False, index=True)
+    libelle = Column(String(200), nullable=False)
+    montant_alloue = Column(Numeric(15, 2), nullable=False, default=0.00)
+    montant_depense = Column(Numeric(15, 2), nullable=False, default=0.00)
+    created_date = Column(DateTime, server_default=func.now())
+
+class Immobilisation(Base):
+    __tablename__ = "ss_immobilisations"
+    immobilisation_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    code = Column(String(50), nullable=False, index=True)
+    libelle = Column(String(200), nullable=False)
+    categorie = Column(String(50), nullable=False) # ex: 'MATERIEL_INFORMATIQUE', 'VEHICULE', 'BATIMENT', 'MOBILIER'
+    date_acquisition = Column(Date, nullable=False)
+    valeur_acquisition = Column(Numeric(15, 2), nullable=False)
+    duree_vie_ans = Column(Integer, nullable=False)
+    type_amortissement = Column(String(30), default="LINEAIRE", nullable=False) # 'LINEAIRE', 'DEGRESSIF'
+    amortissements_cumules = Column(Numeric(15, 2), default=0.00, nullable=False)
+    valeur_nette_comptable = Column(Numeric(15, 2), nullable=False)
+    statut = Column(String(20), default="ACTIF", nullable=False)
+
+class Employe(Base):
+    __tablename__ = "ss_employes"
+    employe_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    nom = Column(String(100), nullable=False)
+    prenom = Column(String(150), nullable=False)
+    poste = Column(String(100), nullable=False) # Enseignant / Directeur / Surveillant / Agent...
+    salaire_base = Column(Numeric(15, 2), nullable=False, default=0.00)
+    type_contrat = Column(String(50), default="CDI")
+    date_embauche = Column(Date, server_default=func.current_date())
+    mobile_money = Column(String(50), nullable=True)
+    statut = Column(String(20), default="ACTIF") # ACTIF / INACTIF
+
+class Avance(Base):
+    __tablename__ = "ss_avances"
+    avance_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
+    montant = Column(Numeric(15, 2), nullable=False)
+    date_avance = Column(Date, server_default=func.current_date())
+    mois_concerne = Column(String(7), nullable=False) # YYYY-MM
+    statut = Column(String(20), default="EN_ATTENTE") # EN_ATTENTE / DEDUITE
+
+class AbsencePersonnel(Base):
+    __tablename__ = "ss_absences_personnel"
+    absence_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
+    date_absence = Column(Date, nullable=False)
+    motif = Column(String(200), nullable=True)
+    est_justifie = Column(String(1), default="N") # Y / N
+
+class Prime(Base):
+    __tablename__ = "ss_primes"
+    prime_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
+    montant = Column(Numeric(15, 2), nullable=False)
+    motif = Column(String(200), nullable=False)
+    mois_concerne = Column(String(7), nullable=False) # YYYY-MM
+
+class BulletinPaie(Base):
+    __tablename__ = "ss_bulletins_paie"
+    bulletin_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
+    mois_concerne = Column(String(7), nullable=False) # YYYY-MM
+    salaire_base = Column(Numeric(15, 2), nullable=False)
+    total_primes = Column(Numeric(15, 2), default=0.00)
+    total_absences = Column(Numeric(15, 2), default=0.00)
+    total_avances = Column(Numeric(15, 2), default=0.00)
+    net_a_payer = Column(Numeric(15, 2), nullable=False)
+    date_paiement = Column(Date, nullable=True)
+    mode_paiement = Column(String(50), nullable=True) # Cash / Mobile Money
+    statut = Column(String(20), default="BROUILLON") # BROUILLON / PAYE
+
 
 
 class PresenceAgent(Base):

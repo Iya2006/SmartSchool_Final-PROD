@@ -5,7 +5,8 @@ import { useApp } from '@/context/AppContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Search, RefreshCw, Download, Loader2, ChevronRight, Users, X,
-    CheckCircle2, AlertTriangle, XCircle, TrendingUp, FileText, CreditCard
+    CheckCircle2, AlertTriangle, XCircle, TrendingUp, FileText, CreditCard,
+    ArrowUpDown, ArrowUp, ArrowDown
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -43,6 +44,23 @@ function Badge({ statut, map }: { statut: string; map: Record<string, { bg: stri
 
 const fmt = (n: number) => n.toLocaleString('fr-GN');
 
+/* ─── Sorting ─── */
+type SortKeySolv = 'eleve' | 'classe' | 'total_facture' | 'total_restant' | 'taux_paiement' | 'indicateur';
+type SortDir = 'asc' | 'desc';
+function SortHeaderS({ label, sortKey, currentKey, currentDir, onSort }: {
+    label: string; sortKey: SortKeySolv; currentKey: SortKeySolv; currentDir: SortDir; onSort: (k: SortKeySolv) => void;
+}) {
+    const active = currentKey === sortKey;
+    return (
+        <th onClick={() => onSort(sortKey)} style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                {label}
+                {active ? (currentDir === 'asc' ? <ArrowUp size={13} color="#3b82f6" /> : <ArrowDown size={13} color="#3b82f6" />) : <ArrowUpDown size={13} style={{ opacity: 0.3 }} />}
+            </div>
+        </th>
+    );
+}
+
 export default function ScolairePage() {
     const { etablissementId, anneeId } = useApp();
     const [tab, setTab] = useState<'solvabilite' | 'solde'>('solvabilite');
@@ -52,6 +70,8 @@ export default function ScolairePage() {
     const [search, setSearch] = useState('');
     const [filterClasse, setFilterClasse] = useState('');
     const [filterInd, setFilterInd] = useState('');
+    const [sortK, setSortK] = useState<SortKeySolv>('total_restant');
+    const [sortD, setSortD] = useState<SortDir>('desc');
 
     // Solde élève
     const [soldeData, setSoldeData] = useState<SoldeData | null>(null);
@@ -88,6 +108,23 @@ export default function ScolairePage() {
         if (!search) return true;
         const q = search.toLowerCase();
         return `${d.eleve_prenom} ${d.eleve_nom}`.toLowerCase().includes(q) || d.eleve_matricule.toLowerCase().includes(q) || d.classe_nom.toLowerCase().includes(q);
+    });
+
+    const handleSortS = (key: SortKeySolv) => {
+        if (sortK === key) setSortD(p => p === 'asc' ? 'desc' : 'asc');
+        else { setSortK(key); setSortD('desc'); }
+    };
+    const sorted = [...filtered].sort((a, b) => {
+        const dir = sortD === 'asc' ? 1 : -1;
+        switch (sortK) {
+            case 'eleve': return dir * `${a.eleve_prenom} ${a.eleve_nom}`.localeCompare(`${b.eleve_prenom} ${b.eleve_nom}`);
+            case 'classe': return dir * a.classe_nom.localeCompare(b.classe_nom);
+            case 'total_facture': return dir * (a.total_facture - b.total_facture);
+            case 'total_restant': return dir * (a.total_restant - b.total_restant);
+            case 'taux_paiement': return dir * (a.taux_paiement - b.taux_paiement);
+            case 'indicateur': return dir * a.indicateur.localeCompare(b.indicateur);
+            default: return 0;
+        }
     });
 
     const counts = { SOLVABLE: 0, PARTIEL: 0, NON_SOLVABLE: 0, CRITIQUE: 0 };
@@ -178,15 +215,20 @@ export default function ScolairePage() {
                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                             <thead>
                                 <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                                    {['Élève', 'Matricule', 'Classe', 'Total Facturé', 'Total Payé', 'Reste', 'Taux', 'Indicateur'].map(h => (
-                                        <th key={h} style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>{h}</th>
-                                    ))}
+                                    <SortHeaderS label="Élève" sortKey="eleve" currentKey={sortK} currentDir={sortD} onSort={handleSortS} />
+                                    <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Matricule</th>
+                                    <SortHeaderS label="Classe" sortKey="classe" currentKey={sortK} currentDir={sortD} onSort={handleSortS} />
+                                    <SortHeaderS label="Total Facturé" sortKey="total_facture" currentKey={sortK} currentDir={sortD} onSort={handleSortS} />
+                                    <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Total Payé</th>
+                                    <SortHeaderS label="Reste" sortKey="total_restant" currentKey={sortK} currentDir={sortD} onSort={handleSortS} />
+                                    <SortHeaderS label="Taux" sortKey="taux_paiement" currentKey={sortK} currentDir={sortD} onSort={handleSortS} />
+                                    <SortHeaderS label="Indicateur" sortKey="indicateur" currentKey={sortK} currentDir={sortD} onSort={handleSortS} />
                                 </tr>
                             </thead>
                             <tbody>
-                                {filtered.length === 0 ? (
+                                {sorted.length === 0 ? (
                                     <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Aucun résultat</td></tr>
-                                ) : filtered.map(d => (
+                                ) : sorted.map(d => (
                                     <tr key={d.eleve_id} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', transition: 'background 0.15s' }}
                                         onClick={() => openSolde(d.eleve_id)}
                                         onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
@@ -203,7 +245,7 @@ export default function ScolairePage() {
                                 ))}
                             </tbody>
                         </table>
-                        <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', fontSize: 13, color: '#64748b' }}>{filtered.length} élève(s)</div>
+                        <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', fontSize: 13, color: '#64748b' }}>{sorted.length} élève(s)</div>
                     </div>
                 </>
             )}

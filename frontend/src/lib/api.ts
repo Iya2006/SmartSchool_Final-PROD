@@ -46,8 +46,14 @@ api.interceptors.response.use(
             const currentPath = window.location.pathname;
 
             if (status === 401) {
-                // Token expiré ou invalide → déconnexion complète et retour à la page de connexion
-                if (currentPath !== '/login') {
+                if (currentPath.startsWith('/comptabilite')) {
+                    sessionStorage.removeItem('comptabilite_auth');
+                    localStorage.removeItem('smartschool_token');
+                    localStorage.removeItem('smartschool_user');
+                    if (currentPath !== '/comptabilite/login') {
+                        window.location.href = '/comptabilite/login';
+                    }
+                } else if (currentPath !== '/login') {
                     localStorage.clear();
                     sessionStorage.clear();
                     window.location.href = '/login';

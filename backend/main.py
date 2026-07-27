@@ -139,7 +139,6 @@ app.include_router(evaluations_router, dependencies=[Depends(get_current_user)])
 app.include_router(notes_router, dependencies=[Depends(get_current_user)])
 # ── Routes COMPTABILITÉ / FINANCE / RH / PRÉSENCES AGENTS (rôles restreints) ──
 app.include_router(finance_router, dependencies=[Depends(require_roles(*FINANCE_ROLES))])
-app.include_router(comptabilite_router, dependencies=[Depends(require_roles(*FINANCE_ROLES))])
 app.include_router(vie_scolaire_router, dependencies=[Depends(get_current_user)])
 app.include_router(parametrage_router, dependencies=[Depends(get_current_user)])
 app.include_router(securite_router, dependencies=[Depends(get_current_user)])
@@ -163,6 +162,7 @@ app.include_router(auth_router)           # Login admin → retourne le JWT
 app.include_router(parent_portal_router)  # Login parent → son propre JWT
 app.include_router(teacher_portal_router) # Login enseignant → son propre JWT
 app.include_router(eleve_portal_router)   # Login élève → son propre JWT
+app.include_router(comptabilite_router)   # Login PIN comptable → son propre mécanisme
 app.include_router(parametrage_public_router) # GET établissement + settings (sans JWT)
 
 # Servir les fichiers uploadés avec support CORS pour permettre l'exportation PDF/canvas côté client
