@@ -4,9 +4,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '@/context/AppContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    AlertTriangle, Search, RefreshCw, Download, Users, DollarSign,
+    AlertTriangle, Search, RefreshCw, Download, Users, Banknote,
     TrendingUp, Loader2, Eye, Bell, X, Printer, ChevronRight,
-    Phone, FileText, CheckCircle2, XCircle, Filter
+    Phone, FileText, CheckCircle2, XCircle, Filter,
+    ArrowUpDown, ArrowUp, ArrowDown
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -45,6 +46,35 @@ function RetardBadge({ jours }: { jours: number }) {
 
 const fmt = (n: number) => n.toLocaleString('fr-GN') + ' GNF';
 
+/* ───── Sorting ───── */
+type SortKeyImp = 'eleve' | 'classe' | 'montant_restant' | 'jours_retard' | 'statut' | 'montant_total';
+type SortDir = 'asc' | 'desc';
+
+function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
+    label: string; sortKey: SortKeyImp; currentKey: SortKeyImp; currentDir: SortDir;
+    onSort: (key: SortKeyImp) => void;
+}) {
+    const active = currentKey === sortKey;
+    return (
+        <th
+            onClick={() => onSort(sortKey)}
+            style={{
+                padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569',
+                cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap',
+            }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                {label}
+                {active ? (
+                    currentDir === 'asc' ? <ArrowUp size={13} color="#3b82f6" /> : <ArrowDown size={13} color="#3b82f6" />
+                ) : (
+                    <ArrowUpDown size={13} style={{ opacity: 0.3 }} />
+                )}
+            </div>
+        </th>
+    );
+}
+
 export default function ImpayesPage() {
     const { etablissementId, anneeId } = useApp();
     const [impayes, setImpayes] = useState<Impaye[]>([]);
@@ -57,6 +87,10 @@ export default function ImpayesPage() {
     const [filterStatut, setFilterStatut] = useState('');
     const [filterTypeFrais, setFilterTypeFrais] = useState('');
     const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+    // Sorting
+    const [sortKeyImp, setSortKeyImp] = useState<SortKeyImp>('jours_retard');
+    const [sortDirImp, setSortDirImp] = useState<SortDir>('desc');
 
     // Modal avis
     const [showAvis, setShowAvis] = useState(false);
@@ -135,7 +169,30 @@ export default function ImpayesPage() {
         link.click();
     };
 
-    const totalRestant = filtered.reduce((s, i) => s + i.montant_restant, 0);
+    // Sorting logic
+    const handleSortImp = (key: SortKeyImp) => {
+        if (sortKeyImp === key) {
+            setSortDirImp(prev => prev === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortKeyImp(key);
+            setSortDirImp('desc');
+        }
+    };
+
+    const sorted = [...filtered].sort((a, b) => {
+        const dir = sortDirImp === 'asc' ? 1 : -1;
+        switch (sortKeyImp) {
+            case 'eleve': return dir * (`${a.eleve_prenom} ${a.eleve_nom}`).localeCompare(`${b.eleve_prenom} ${b.eleve_nom}`);
+            case 'classe': return dir * a.classe_nom.localeCompare(b.classe_nom);
+            case 'montant_restant': return dir * (a.montant_restant - b.montant_restant);
+            case 'montant_total': return dir * (a.montant_total - b.montant_total);
+            case 'jours_retard': return dir * (a.jours_retard - b.jours_retard);
+            case 'statut': return dir * a.statut.localeCompare(b.statut);
+            default: return 0;
+        }
+    });
+
+    const totalRestant = sorted.reduce((s, i) => s + i.montant_restant, 0);
 
     if (loading) return (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', flexDirection: 'column', gap: 16 }}>
@@ -169,7 +226,7 @@ export default function ImpayesPage() {
                     { label: 'Total Impayés', value: fmt(totalRestant), icon: AlertTriangle, color: '#ef4444' },
                     { label: 'Élèves Concernés', value: filtered.length, icon: Users, color: '#f59e0b' },
                     { label: 'Taux Recouvrement', value: `${stats?.taux_recouvrement || 0}%`, icon: TrendingUp, color: '#10b981' },
-                    { label: 'Total Facturé', value: fmt(stats?.total_facture || 0), icon: DollarSign, color: '#3b82f6' },
+                    { label: 'Total Facturé', value: fmt(stats?.total_facture || 0), icon: Banknote, color: '#3b82f6' },
                 ].map((kpi, i) => (
                     <motion.div key={i} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
                         style={{ background: '#fff', borderRadius: 12, padding: '20px 24px', boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
@@ -230,18 +287,27 @@ export default function ImpayesPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                         <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                            {['Élève', 'Matricule', 'Classe', 'Type de Facture', 'Parent', 'Tél. Parent', 'Montant Dû', 'Payé', 'Reste', 'Retard', 'Statut', 'Actions'].map(h => (
-                                <th key={h} style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>{h}</th>
-                            ))}
+                            <SortHeader label="Élève" sortKey="eleve" currentKey={sortKeyImp} currentDir={sortDirImp} onSort={handleSortImp} />
+                            <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Matricule</th>
+                            <SortHeader label="Classe" sortKey="classe" currentKey={sortKeyImp} currentDir={sortDirImp} onSort={handleSortImp} />
+                            <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Type de Facture</th>
+                            <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Parent</th>
+                            <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Tél. Parent</th>
+                            <SortHeader label="Montant Dû" sortKey="montant_total" currentKey={sortKeyImp} currentDir={sortDirImp} onSort={handleSortImp} />
+                            <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Payé</th>
+                            <SortHeader label="Reste" sortKey="montant_restant" currentKey={sortKeyImp} currentDir={sortDirImp} onSort={handleSortImp} />
+                            <SortHeader label="Retard" sortKey="jours_retard" currentKey={sortKeyImp} currentDir={sortDirImp} onSort={handleSortImp} />
+                            <SortHeader label="Statut" sortKey="statut" currentKey={sortKeyImp} currentDir={sortDirImp} onSort={handleSortImp} />
+                            <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {filtered.length === 0 ? (
-                            <tr><td colSpan={11} style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+                        {sorted.length === 0 ? (
+                            <tr><td colSpan={12} style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
                                 <AlertTriangle size={32} style={{ margin: '0 auto 8px', display: 'block', opacity: 0.5 }} />
                                 Aucun impayé trouvé
                             </td></tr>
-                        ) : filtered.map((imp, idx) => (
+                        ) : sorted.map((imp, idx) => (
                             <tr key={imp.facture_id} style={{
                                 borderBottom: '1px solid #f1f5f9',
                                 background: imp.jours_retard > 30 ? '#fef2f2' : imp.jours_retard > 7 ? '#fffbeb' : 'transparent',
@@ -255,15 +321,15 @@ export default function ImpayesPage() {
                                 <td style={{ padding: '12px 14px', color: '#3b82f6', fontWeight: 500 }}>{imp.type_frais_libelle || '—'}</td>
                                 <td style={{ padding: '12px 14px' }}>{imp.parent_nom || '—'}</td>
                                 <td style={{ padding: '12px 14px', color: '#64748b' }}>{imp.parent_telephone || '—'}</td>
-                                <td style={{ padding: '12px 14px', fontWeight: 600 }}>{imp.montant_total.toLocaleString()}</td>
-                                <td style={{ padding: '12px 14px', color: '#10b981', fontWeight: 600 }}>{imp.montant_paye.toLocaleString()}</td>
-                                <td style={{ padding: '12px 14px', color: '#ef4444', fontWeight: 700 }}>{imp.montant_restant.toLocaleString()}</td>
+                                <td style={{ padding: '12px 14px', fontWeight: 600 }}>{fmt(imp.montant_total)}</td>
+                                <td style={{ padding: '12px 14px', color: '#10b981', fontWeight: 600 }}>{fmt(imp.montant_paye)}</td>
+                                <td style={{ padding: '12px 14px', color: '#ef4444', fontWeight: 700 }}>{fmt(imp.montant_restant)}</td>
                                 <td style={{ padding: '12px 14px' }}>{imp.jours_retard > 0 ? <RetardBadge jours={imp.jours_retard} /> : '—'}</td>
                                 <td style={{ padding: '12px 14px' }}><Badge statut={imp.statut} /></td>
                                 <td style={{ padding: '12px 14px', display: 'flex', gap: 6 }}>
-                                    <Link href={`/comptabilite/scolaire?eleve_id=${imp.eleve_id}`} title="Voir Profil Scolaire"
-                                        style={{ padding: '6px 10px', borderRadius: 6, background: '#f8fafc', color: '#475569', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, textDecoration: 'none', border: '1px solid #e2e8f0' }}>
-                                        <Users size={13} /> Scolaire
+                                    <Link href={`/comptabilite/encaissement?eleve_id=${imp.eleve_id}`} title="Encaisser un paiement"
+                                        style={{ padding: '6px 10px', borderRadius: 6, background: '#ecfdf5', color: '#059669', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, textDecoration: 'none', border: '1px solid #a7f3d0' }}>
+                                        <Banknote size={13} /> Encaisser
                                     </Link>
                                     <button onClick={() => openAvis(imp.facture_id)} title="Voir avis de paiement"
                                         style={{ padding: '6px 10px', borderRadius: 6, background: '#eff6ff', color: '#3b82f6', fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, border: 'none', cursor: 'pointer' }}>
@@ -275,8 +341,8 @@ export default function ImpayesPage() {
                     </tbody>
                 </table>
                 <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#64748b' }}>
-                    <span>{filtered.length} impayé(s) affiché(s)</span>
-                    <span style={{ fontWeight: 700, color: '#ef4444' }}>Total restant : {totalRestant.toLocaleString()} GNF</span>
+                    <span>{sorted.length} impayé(s) affiché(s)</span>
+                    <span style={{ fontWeight: 700, color: '#ef4444' }}>Total restant : {fmt(totalRestant)}</span>
                 </div>
             </motion.div>
 
