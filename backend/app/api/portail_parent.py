@@ -420,33 +420,37 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
     lignes = db.query(BulletinLigne).filter(
         BulletinLigne.bulletin_id == bulletin.bulletin_id
     ).all()
+    matiere_ids = {l.matiere_id for l in lignes}
+    matieres_by_id = {m.matiere_id: m for m in db.query(Matiere).filter(Matiere.matiere_id.in_(matiere_ids)).all()}
+
+    # Info classe
+    cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    from app.api.evaluations import get_bulletin_display_flags
+    flags = get_bulletin_display_flags(db, cl.etablissement_id if cl else 1)
 
     matieres = []
     total_coef = 0
     for ligne in lignes:
-        mat = db.query(Matiere).filter(Matiere.matiere_id == ligne.matiere_id).first()
+        mat = matieres_by_id.get(ligne.matiere_id)
         matieres.append({
             "matiere": mat.libelle if mat else "?",
             "coefficient": float(ligne.coefficient) if ligne.coefficient else 1,
             "moyenne_eleve": float(ligne.moyenne_matiere) if ligne.moyenne_matiere is not None else None,
-            "moyenne_classe": float(ligne.moyenne_classe) if ligne.moyenne_classe is not None else None,
-            "note_min": float(ligne.note_min) if ligne.note_min is not None else None,
-            "note_max": float(ligne.note_max) if ligne.note_max is not None else None,
-            "appreciation": ligne.appreciation,
+            "moyenne_classe": float(ligne.moyenne_classe) if ligne.moyenne_classe is not None and flags["show_stats_matiere"] else None,
+            "note_min": float(ligne.note_min) if ligne.note_min is not None and flags["show_stats_matiere"] else None,
+            "note_max": float(ligne.note_max) if ligne.note_max is not None and flags["show_stats_matiere"] else None,
+            "appreciation": ligne.appreciation if flags["show_appreciation"] else None,
         })
         total_coef += float(ligne.coefficient) if ligne.coefficient else 1
-
-    # Info classe
-    cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
 
     return {
         "bulletin_id": bulletin.bulletin_id,
         "classe": cl.libelle if cl else "?",
         "trimestre_id": trimestre_id,
         "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
-        "rang": bulletin.rang,
-        "effectif_classe": bulletin.effectif_classe,
-        "mention": bulletin.mention,
+        "rang": bulletin.rang if flags["show_rang"] else None,
+        "effectif_classe": bulletin.effectif_classe if flags["show_rang"] and flags["show_effectif"] else None,
+        "mention": bulletin.mention if flags["show_mention"] else None,
         "decision": bulletin.decision,
         "total_coefficient": total_coef,
         "matieres": matieres,

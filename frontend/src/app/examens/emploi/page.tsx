@@ -173,6 +173,14 @@ export default function EmploiExamenPage() {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <style>{`
+                @media print {
+                    body * { visibility: hidden; }
+                    #emploi-print, #emploi-print * { visibility: visible !important; }
+                    #emploi-print { position: absolute; left: 0; top: 0; width: 100%; }
+                    .no-print { display: none !important; }
+                }
+            `}</style>
             {/* Breadcrumb */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                 <div className="breadcrumb">
@@ -257,14 +265,14 @@ export default function EmploiExamenPage() {
                 {/* Right: Detail */}
                 {selectedEmploi && (
                     <motion.div initial={{ opacity: 0, x: 15 }} animate={{ opacity: 1, x: 0 }}
-                        className="card" style={{ overflow: 'hidden' }}>
+                        id="emploi-print" className="card" style={{ overflow: 'hidden' }}>
                         {/* Header */}
                         <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                                 <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>{selectedEmploi.titre}</h3>
                                 <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>T{selectedEmploi.trimestre} • {selectedEmploi.date_debut} → {selectedEmploi.date_fin} • {creneaux.length} créneaux</p>
                             </div>
-                            <div style={{ display: 'flex', gap: '8px' }}>
+                            <div className="no-print" style={{ display: 'flex', gap: '8px' }}>
                                 {selectedEmploi.statut === 'BROUILLON' && (
                                     <>
                                         <button onClick={() => { setShowAddCreneau(true); if (selectedEmploi) setCrDate(selectedEmploi.date_debut); }}

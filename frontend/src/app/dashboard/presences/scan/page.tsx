@@ -67,8 +67,8 @@ export default function ScanPage() {
         if (isScanning && !scanResult && !isProcessing) {
             scannerRef.current = new Html5QrcodeScanner(
                 "reader",
-                { 
-                    fps: 15, 
+                {
+                    fps: 15,
                     qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
                         const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
                         return {
@@ -77,9 +77,19 @@ export default function ScanPage() {
                         };
                     },
                     rememberLastUsedCamera: true,
+                    // Restreindre au format QR (au lieu de tester tous les formats
+                    // supportés — codes-barres 1D, etc. — à chaque frame) : c'est le
+                    // réglage le plus impactant contre la lenteur de scan signalée,
+                    // les badges de l'école n'utilisant que des QR codes.
+                    formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
                     experimentalFeatures: {
                         useBarCodeDetectorIfSupported: true
-                    }
+                    },
+                    videoConstraints: {
+                        width: { ideal: 720 },
+                        height: { ideal: 720 },
+                        facingMode: 'environment',
+                    },
                 },
                 /* verbose= */ false
             );

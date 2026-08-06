@@ -533,6 +533,11 @@ class TypeFraisOut(OrmBase, TypeFraisBase):
     type_frais_id: int
     statut: str
 
+class TarifClasseEntry(BaseModel):
+    type_frais_id: int
+    classe_id: int
+    montant: float  # <= 0 supprime le tarif existant pour ce couple type/classe
+
 class EcheanceFactureBase(BaseModel):
     libelle: str
     date_limite: date
@@ -552,6 +557,7 @@ class GenererFacturesClasseRequest(BaseModel):
     montant: float
     echeances: List[EcheanceFactureCreate] = []
     appliquer_reductions: bool = False  # Applique la réduction fratrie configurée (paramètres FINANCE)
+    forcer_optionnel: bool = False  # Confirme la facturation d'un frais FACULTATIF à toute la classe
 
 class FactureCreate(BaseModel):
     inscription_id: int
@@ -595,12 +601,23 @@ class DepenseBase(BaseModel):
     libelle: str
     montant: float
     fournisseur: Optional[str] = None
+    mode_paiement: Optional[str] = None
+    facture_url: Optional[str] = None
+    source_fonds: Optional[str] = None
+    classe_id: Optional[int] = None
+    eleve_id: Optional[int] = None
+    departement: Optional[str] = None
 
 class DepenseCreate(DepenseBase): pass
 class DepenseOut(OrmBase, DepenseBase):
     depense_id: int
     date_depense: Optional[date] = None
     statut: str
+    reference: Optional[str] = None
+    # Alias en lecture : le frontend (Centre de Décaissement) affiche ce champ sous
+    # le nom "description" (cohérent avec le payload d'écriture de
+    # /reglements-fournisseurs), alors que la colonne réelle s'appelle `libelle`.
+    description: str = Field(validation_alias="libelle")
 
 
 # ============================================================================

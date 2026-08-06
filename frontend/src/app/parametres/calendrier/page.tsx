@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     CalendarDays, Plus, Save, CheckCircle, Loader2, Pencil, Trash2,
-    Power, PlaneTakeoff, Settings2, AlertTriangle, RotateCcw, X
+    Power, PlaneTakeoff, Settings2, AlertTriangle, RotateCcw, X, Lock, Coins
 } from 'lucide-react';
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
 import styles from './Calendrier.module.css';
+import { useApp } from '@/context/AppContext';
 
 const ETABLISSEMENT_ID = 1;
 const CATEGORIE = 'CALENDRIER';
@@ -55,6 +56,8 @@ interface CalendrierSettings {
 
 type ToastState = { msg: string; type: 'success' | 'error' } | null;
 type DeleteDialogState = { id: number; label: string } | null;
+type TarifsModalState = { nouvelleAnneeId: number; nouvelleAnneeLibelle: string } | null;
+type TarifsMode = 'copier' | 'copier_editer' | 'vide';
 
 const DEFAULT_SETTINGS: CalendrierSettings = {
     mode_decoupage: 'TRIMESTRE',
@@ -139,6 +142,7 @@ function normalizeVacances(vacances: Vacance[] | undefined): Vacance[] {
 }
 
 export default function CalendrierPage() {
+    const { refreshAnnee } = useApp();
     const [loading, setLoading] = useState(true);
     const [savingSettings, setSavingSettings] = useState(false);
     const [toast, setToast] = useState<ToastState>(null);
@@ -161,6 +165,11 @@ export default function CalendrierPage() {
     const [editPeriode, setEditPeriode] = useState<Partial<Trimestre>>({});
     const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>(null);
     const [deletingPeriode, setDeletingPeriode] = useState(false);
+
+    const [tarifsModal, setTarifsModal] = useState<TarifsModalState>(null);
+    const [tarifsAnneeSourceId, setTarifsAnneeSourceId] = useState<number | null>(null);
+    const [tarifsMode, setTarifsMode] = useState<TarifsMode>('copier');
+    const [tarifsLoading, setTarifsLoading] = useState(false);
 
     const labelPeriode = useMemo(() => settings.mode_decoupage === 'SEMESTRE' ? 'semestre' : 'trimestre', [settings.mode_decoupage]);
 
@@ -250,7 +259,12 @@ export default function CalendrierPage() {
             return;
         }
         try {
-            await api.post('/api/parametrage/annees', {
+            // L'année la plus récente avant création est le choix par défaut le
+            // plus utile comme source de tarifs (le cas le plus fréquent : on
+            // vient de clôturer l'année en cours et on ouvre la suivante).
+            const anneeSourceParDefaut = annees.find(a => a.est_courante === 'O') || annees[0] || null;
+
+            const res = await api.post('/api/parametrage/annees', {
                 etablissement_id: ETABLISSEMENT_ID,
                 ...newAnnee,
             });
@@ -258,9 +272,48 @@ export default function CalendrierPage() {
             setShowAnneeForm(false);
             await loadAll();
             showToast('La nouvelle année scolaire a été créée avec succès.', 'success');
+
+            const nouvelleAnnee = res.data;
+            if (nouvelleAnnee?.annee_id && anneeSourceParDefaut) {
+                setTarifsAnneeSourceId(anneeSourceParDefaut.annee_id);
+                setTarifsMode('copier');
+                setTarifsModal({ nouvelleAnneeId: nouvelleAnnee.annee_id, nouvelleAnneeLibelle: nouvelleAnnee.libelle });
+            }
         } catch (e) {
             console.error(e);
             showToast('La création de l’année scolaire a échoué. Vérifiez les informations saisies puis réessayez.', 'error');
+        }
+    };
+
+    const confirmerTarifsModal = async () => {
+        if (!tarifsModal) return;
+        if (tarifsMode !== 'vide' && !tarifsAnneeSourceId) {
+            showToast('Sélectionnez l’année source des tarifs à reprendre.', 'error');
+            return;
+        }
+        setTarifsLoading(true);
+        try {
+            await api.post('/api/finance/tarifs/copier', {
+                annee_source_id: tarifsAnneeSourceId,
+                annee_cible_id: tarifsModal.nouvelleAnneeId,
+                mode: tarifsMode,
+            });
+            showToast(
+                tarifsMode === 'vide'
+                    ? 'Grille tarifaire laissée vide pour la nouvelle année.'
+                    : 'Les tarifs ont été copiés vers la nouvelle année.',
+                'success'
+            );
+            const ouvrirTarifsApresCoup = tarifsMode === 'copier_editer';
+            setTarifsModal(null);
+            if (ouvrirTarifsApresCoup) {
+                window.location.href = '/comptabilite/frais';
+            }
+        } catch (e: any) {
+            console.error(e);
+            showToast(e.response?.data?.detail || 'La copie des tarifs a échoué.', 'error');
+        } finally {
+            setTarifsLoading(false);
         }
     };
 
@@ -281,6 +334,11 @@ export default function CalendrierPage() {
         try {
             await api.put(`/api/parametrage/annees/${anneeId}/activer`);
             await loadAll();
+            // Propage immédiatement à TOUTE l'app (en-tête, filtres comptabilité,
+            // page Classes...) — sans ça, seule cette page se mettait à jour et
+            // le reste de l'app restait bloqué sur l'ancienne année jusqu'à un
+            // rechargement manuel de la page.
+            await refreshAnnee();
             showToast('Cette année scolaire est maintenant définie comme année en cours.', 'success');
         } catch (e) {
             console.error(e);
@@ -322,6 +380,18 @@ export default function CalendrierPage() {
         } catch (e) {
             console.error(e);
             showToast(`La mise à jour du ${labelPeriode} a échoué. Veuillez réessayer.`, 'error');
+        }
+    };
+
+    const cloturerPeriode = async (trimestreId: number, libelle: string) => {
+        if (!confirm(`Clôturer "${libelle}" ? Plus aucune évaluation ni note ne pourra être ajoutée pour cette période, et la période suivante démarrera automatiquement.`)) return;
+        try {
+            const res = await api.put(`/api/parametrage/trimestres/${trimestreId}/cloturer`);
+            if (selectedAnneeId) await loadTrimestres(selectedAnneeId);
+            showToast(res.data?.message || `${libelle} a été clôturé avec succès.`, 'success');
+        } catch (e: any) {
+            console.error(e);
+            showToast(e.response?.data?.detail || `La clôture de ${libelle} a échoué.`, 'error');
         }
     };
 
@@ -448,6 +518,100 @@ export default function CalendrierPage() {
                                     >
                                         {deletingPeriode ? <Loader2 className={styles.spinInline} size={16} /> : <Trash2 size={16} />}
                                         <span>Supprimer</span>
+                                    </button>
+                                </div>
+                            </motion.div>
+                        </motion.div>
+                    )}
+                    {tarifsModal && (
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className={styles.modalOverlay}
+                            onClick={() => !tarifsLoading && setTarifsModal(null)}
+                        >
+                            <motion.div
+                                initial={{ opacity: 0, y: 16, scale: 0.96 }}
+                                animate={{ opacity: 1, y: 0, scale: 1 }}
+                                exit={{ opacity: 0, y: 16, scale: 0.96 }}
+                                transition={{ type: 'spring', stiffness: 280, damping: 24 }}
+                                className={styles.modalCard}
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <div className={styles.modalHeader}>
+                                    <div className={styles.modalIconWrap}>
+                                        <Coins size={18} />
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className={styles.modalClose}
+                                        onClick={() => setTarifsModal(null)}
+                                        disabled={tarifsLoading}
+                                        aria-label="Fermer"
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                </div>
+
+                                <div className={styles.modalBody}>
+                                    <h3>Grille tarifaire de {tarifsModal.nouvelleAnneeLibelle}</h3>
+                                    <p>
+                                        Cette nouvelle année ne contient encore aucun tarif. Comment voulez-vous
+                                        démarrer sa grille tarifaire (frais par classe) ?
+                                    </p>
+
+                                    <div className={styles.formGrid} style={{ marginTop: 12 }}>
+                                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            <span style={{ fontSize: 12, color: '#64748b' }}>Reprendre les tarifs de l’année</span>
+                                            <select
+                                                className={styles.input}
+                                                value={tarifsAnneeSourceId ?? ''}
+                                                disabled={tarifsMode === 'vide'}
+                                                onChange={e => setTarifsAnneeSourceId(e.target.value ? Number(e.target.value) : null)}
+                                            >
+                                                <option value="">— Sélectionner —</option>
+                                                {annees.filter(a => a.annee_id !== tarifsModal.nouvelleAnneeId).map(a => (
+                                                    <option key={a.annee_id} value={a.annee_id}>{a.libelle}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
+                                        {([
+                                            { value: 'copier' as const, label: 'Reprendre automatiquement', desc: 'Copie les tarifs existants tels quels vers la nouvelle année.' },
+                                            { value: 'copier_editer' as const, label: 'Reprendre puis modifier', desc: 'Copie les tarifs, puis ouvre l’écran de modification.' },
+                                            { value: 'vide' as const, label: 'Grille vide', desc: 'Ne rien copier — vous configurerez les tarifs manuellement.' },
+                                        ]).map(opt => (
+                                            <label key={opt.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: 8, border: `1px solid ${tarifsMode === opt.value ? '#10b981' : '#e2e8f0'}`, background: tarifsMode === opt.value ? '#ecfdf5' : '#fff', cursor: 'pointer' }}>
+                                                <input type="radio" name="tarifsMode" checked={tarifsMode === opt.value} onChange={() => setTarifsMode(opt.value)} style={{ marginTop: 3 }} />
+                                                <span>
+                                                    <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#1e293b' }}>{opt.label}</span>
+                                                    <span style={{ display: 'block', fontSize: 12, color: '#64748b' }}>{opt.desc}</span>
+                                                </span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className={styles.modalActions}>
+                                    <button
+                                        type="button"
+                                        className={styles.modalSecondaryBtn}
+                                        onClick={() => setTarifsModal(null)}
+                                        disabled={tarifsLoading}
+                                    >
+                                        Plus tard
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={styles.primaryBtn}
+                                        onClick={confirmerTarifsModal}
+                                        disabled={tarifsLoading}
+                                    >
+                                        {tarifsLoading ? <Loader2 className={styles.spinInline} size={16} /> : <Save size={16} />}
+                                        <span>Confirmer</span>
                                     </button>
                                 </div>
                             </motion.div>
@@ -622,6 +786,9 @@ export default function CalendrierPage() {
                                         )}
 
                                         <div className={styles.itemActions}>
+                                            {periode.statut !== 'CLOTURE' && (
+                                                <button className={styles.iconBtn} title="Clôturer cette période" onClick={() => cloturerPeriode(periode.trimestre_id, periode.libelle)}><Lock size={16} /></button>
+                                            )}
                                             <button className={styles.iconBtn} onClick={() => { setEditingPeriodeId(periode.trimestre_id); setEditPeriode(periode); }}><Pencil size={16} /></button>
                                             <button className={styles.iconBtnDanger} onClick={() => askDeletePeriode(periode.trimestre_id, periode.libelle)}><Trash2 size={16} /></button>
                                         </div>

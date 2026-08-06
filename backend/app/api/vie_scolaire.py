@@ -7,6 +7,7 @@ from sqlalchemy import func
 from typing import List, Optional
 from datetime import date as date_type
 from app.core.database import get_db
+from app.core.annee_lock import verifier_annee_modifiable
 from app.models.academique import Presence, Incident, Inscription, Classe, Eleve
 from app.schemas.schemas import (
     PresenceCreate, PresenceOut, IncidentCreate, IncidentOut
@@ -66,6 +67,12 @@ def list_presences(
 @router.post("/presences/batch")
 def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depends(get_db)):
     """Saisie en lot des présences pour une classe"""
+    if presences:
+        premiere_inscription = db.query(Inscription).filter(
+            Inscription.inscription_id == presences[0].inscription_id
+        ).first()
+        verifier_annee_modifiable(db, premiere_inscription.annee_id if premiere_inscription else None)
+
     count = 0
     for p in presences:
         existing = db.query(Presence).filter(

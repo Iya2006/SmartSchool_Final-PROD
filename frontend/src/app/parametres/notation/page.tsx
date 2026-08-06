@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Hash, Award, BookOpen, ToggleRight, Save, CheckCircle,
     Loader2, TrendingUp, Eye, Pencil, Check, ClipboardList,
-    Plus, Trash2, RotateCcw, Settings, Type as TypeIcon, Microscope, Info, BarChart3, GraduationCap, CheckCircle2, AlertTriangle, Zap, Trophy, Medal, MessageSquare, Users
+    Plus, Trash2, RotateCcw, Settings, Type as TypeIcon, Microscope, Info, BarChart3, GraduationCap, CheckCircle2, AlertTriangle, Zap, Trophy, Medal, MessageSquare, Users, Calculator
 } from 'lucide-react';
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
@@ -147,6 +147,9 @@ export default function NotationPage() {
     });
     const [rangMode, setRangMode] = useState('classe');
 
+    // ── Pondération Écrit/Oral/Composition (moteur de calcul réel — voir guide) ──
+    const [poidsEval, setPoidsEval] = useState({ ecrit: 1, oral: 1, composition: 2 });
+
     // ── Mentions par cycle ──
     const [mentionCycle, setMentionCycle] = useState('college');
     const [mentions, setMentions] = useState<Record<string, Record<string,number>>>({
@@ -243,6 +246,11 @@ export default function NotationPage() {
                         lycee:    (s['passage.lycee'] as number)    ?? 10,
                     });
                     setRangMode((s['rang_mode'] as string) ?? 'classe');
+                    setPoidsEval({
+                        ecrit:       (s['poids_ecrit'] as number)       ?? 1,
+                        oral:        (s['poids_oral'] as number)        ?? 1,
+                        composition: (s['poids_composition'] as number) ?? 2,
+                    });
                     setMentions({
                         primaire: { 
                             tb: (s['mention.primaire.tb'] as number) ?? 9,  
@@ -375,6 +383,9 @@ export default function NotationPage() {
                 buildParam('passage.college',  passages.college),
                 buildParam('passage.lycee',    passages.lycee),
                 buildParam('rang_mode', rangMode),
+                buildParam('poids_ecrit', poidsEval.ecrit),
+                buildParam('poids_oral', poidsEval.oral),
+                buildParam('poids_composition', poidsEval.composition),
                 ...(['primaire','college','lycee'] as const).flatMap(cycle =>
                     ['tb','b','ab','p'].map(mk => buildParam(`mention.${cycle}.${mk}`, mentions[cycle][mk]))
                 ),
@@ -1159,25 +1170,59 @@ export default function NotationPage() {
                     <motion.div initial={{ opacity:0, y:10 }} animate={{ opacity:1, y:0 }} transition={{ duration: 0.25 }}>
                         <section className={styles.section}>
                             <div className={styles.sectionHeader}>
+                                <Calculator size={20} className={styles.sectionIcon} />
+                                <h3>Pondération de la moyenne — Écrit / Oral / Composition</h3>
+                                <span className={styles.sectionSubtitle}>
+                                    C&apos;est CETTE pondération qui détermine réellement le calcul des moyennes.
+                                    Formule : moyenne de matière = (Écrit×{poidsEval.ecrit} + Oral×{poidsEval.oral} + Composition×{poidsEval.composition}) ÷ ({poidsEval.ecrit} + {poidsEval.oral} + {poidsEval.composition}).
+                                    Si une catégorie n&apos;a aucune note pour une matière (ex : pas d&apos;oral), elle est automatiquement exclue et la moyenne se recalcule sur les catégories restantes.
+                                </span>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '0.5rem' }}>
+                                {([
+                                    { key: 'ecrit' as const, label: 'Écrit', hint: 'Meilleure note parmi devoirs/interros/examens' },
+                                    { key: 'oral' as const, label: 'Oral', hint: 'Meilleure note orale' },
+                                    { key: 'composition' as const, label: 'Composition', hint: 'Examen de fin de trimestre' },
+                                ]).map(f => (
+                                    <div key={f.key} style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'white', border: '1px solid #e2e8f0' }}>
+                                        <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '0.4rem' }}>{f.label}</label>
+                                        <input type="number" min={0} step={0.5} value={poidsEval[f.key]}
+                                            onChange={e => { setPoidsEval(p => ({ ...p, [f.key]: Number(e.target.value) })); markChanged(); }}
+                                            style={{ width: '100%', padding: '0.5rem', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '1rem', fontWeight: 800, textAlign: 'center' }} />
+                                        <span style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginTop: '0.3rem' }}>{f.hint}</span>
+                                    </div>
+                                ))}
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button type="button" onClick={() => { setPoidsEval({ ecrit: 1, oral: 1, composition: 2 }); markChanged(); }}
+                                    style={{ padding: '0.4rem 0.8rem', borderRadius: '8px', background: '#f1f5f9', border: '1px solid #e2e8f0', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    <RotateCcw size={13} /> Réinitialiser au standard guinéen (1 / 1 / 2)
+                                </button>
+                            </div>
+                        </section>
+
+                        <section className={styles.section} style={{ marginTop: '1.5rem' }}>
+                            <div className={styles.sectionHeader}>
                                 <ClipboardList size={20} className={styles.sectionIcon} />
-                                <h3>Types d&apos;Évaluation &amp; Pondération</h3>
-                                <span className={styles.sectionSubtitle}>Définissez les types d&apos;évaluation et leur poids dans le calcul de la moyenne</span>
+                                <h3>Types d&apos;Évaluation</h3>
+                                <span className={styles.sectionSubtitle}>
+                                    Gestion des libellés (Devoir, Interrogation, Composition, Oral...) — chaque type est rattaché
+                                    à l&apos;une des 3 catégories ci-dessus via son code. Le pourcentage ci-dessous est informatif
+                                    (utile pour vos propres statistiques) : il n&apos;intervient PAS dans le calcul de la moyenne,
+                                    contrairement à la pondération Écrit/Oral/Composition définie plus haut.
+                                </span>
                             </div>
 
-                            {/* Weight progress bar */}
+                            {/* Total informatif (n'a plus besoin de faire 100 — n'affecte pas le calcul) */}
                             {(() => {
                                 const total = typesEval.filter(t => t.statut === 'ACTIF').reduce((s, t) => s + Number(t.poids_pourcentage), 0);
-                                const isValid = Math.abs(total - 100) < 0.01;
                                 return (
-                                    <div style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem', borderRadius: '12px', background: isValid ? '#f0fdf4' : '#fef2f2', border: `1px solid ${isValid ? '#bbf7d0' : '#fecaca'}` }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: isValid ? '#166534' : '#991b1b' }}>
-                                                {isValid ? <><CheckCircle2 size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Pondération valide</> : <><AlertTriangle size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> La somme des poids doit être égale à 100%</>}
+                                    <div style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem', borderRadius: '12px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#64748b' }}>
+                                                <Info size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Total informatif (libre — n&apos;a pas besoin de faire 100%)
                                             </span>
-                                            <span style={{ fontWeight: 800, fontSize: '1rem', color: isValid ? '#166534' : '#991b1b' }}>{total.toFixed(1)}%</span>
-                                        </div>
-                                        <div style={{ height: '8px', borderRadius: '99px', background: '#e5e7eb', overflow: 'hidden' }}>
-                                            <div style={{ height: '100%', width: `${Math.min(total, 100)}%`, borderRadius: '99px', background: isValid ? '#22c55e' : '#ef4444', transition: 'width 0.4s' }} />
+                                            <span style={{ fontWeight: 800, fontSize: '1rem', color: '#334155' }}>{total.toFixed(1)}%</span>
                                         </div>
                                     </div>
                                 );

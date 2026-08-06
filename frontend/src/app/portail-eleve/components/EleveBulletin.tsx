@@ -26,7 +26,15 @@ export default function EleveBulletin({
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <style>{`
+                @media print {
+                    body * { visibility: hidden; }
+                    #bulletin-print, #bulletin-print * { visibility: visible !important; }
+                    #bulletin-print { position: absolute; left: 0; top: 0; width: 100%; }
+                    .no-print { display: none !important; }
+                }
+            `}</style>
+            <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: '200px' }}>
                     <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800 }}>Bulletin Scolaire</h2>
                     <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>Téléchargez et imprimez vos bulletins scolaires officiels.</p>
@@ -66,7 +74,7 @@ export default function EleveBulletin({
                     <p style={{ fontSize: '13px', margin: '4px 0 0' }}>Les notes de ce trimestre n'ont pas encore été publiées par l'administration.</p>
                 </div>
             ) : (
-                <div className={styles.card} style={{ border: '1px solid #cbd5e1', boxShadow: '0 8px 30px rgba(0,0,0,0.05)' }}>
+                <div id="bulletin-print" className={styles.card} style={{ border: '1px solid #cbd5e1', boxShadow: '0 8px 30px rgba(0,0,0,0.05)' }}>
                     {/* Header bulletin style document officiel */}
                     <div style={{ padding: '28px', borderBottom: '2px solid #e2e8f0', background: '#fafafa', position: 'relative' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '20px' }}>
@@ -81,7 +89,7 @@ export default function EleveBulletin({
                                     Établissement Scolaire SmartSchool
                                 </p>
                             </div>
-                            <div style={{ textAlign: 'right' }}>
+                            <div className="no-print" style={{ textAlign: 'right' }}>
                                 <button 
                                     onClick={handlePrint}
                                     style={{ 
@@ -188,6 +196,12 @@ export default function EleveBulletin({
                             </div>
                         )}
                     </div>
+
+                    {/* Note explicative du calcul — transparence pédagogique */}
+                    <p style={{ margin: 0, padding: '10px 24px 16px', fontSize: '11px', color: '#94a3b8', fontStyle: 'italic', lineHeight: 1.5 }}>
+                        Moyenne de chaque matière = (meilleure note écrite + meilleure note orale + note de composition × coefficient) ÷ (1 + 1 + coefficient).
+                        Moyenne générale = somme (moyenne matière × coefficient matière) ÷ somme des coefficients matières.
+                    </p>
                 </div>
             )}
         </div>

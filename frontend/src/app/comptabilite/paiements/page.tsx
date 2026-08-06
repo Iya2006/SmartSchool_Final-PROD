@@ -1,6 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import {
     CreditCard, DollarSign, FileText, Users, Search, RefreshCw,
@@ -11,6 +13,10 @@ import {
     CircleDollarSign, Landmark, Percent, Award, Ban, Clock, ChevronRight, CheckCircle,
     AlertCircle, Loader2, Store, Package, Wrench, Monitor, Bus, Signal, ClipboardList
 } from 'lucide-react';
+import Pagination from '@/components/Pagination';
+import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
+import { useApp } from '@/context/AppContext';
+import AnneeFilter from '@/components/AnneeFilter';
 
 /* ═══════════════════════════════════════════════════════════════════════
    TYPES
@@ -25,7 +31,7 @@ type Paiement = {
 type Facture = {
     facture_id: number; numero_facture: string; date_facture: string;
     montant_total: number; montant_paye: number; montant_restant: number;
-    statut: string; type_frais_libelle: string; eleve_nom: string;
+    statut: string; type_frais_libelle: string; eleve_id: number; eleve_nom: string;
     eleve_prenom: string; classe_nom: string; classe_id: number;
     inscription_id: number; type_frais_id: number; echeances: any[];
 };
@@ -60,27 +66,28 @@ type EmployeSalaire = {
 };
 
 type SoldeEleve = {
-    eleve: any; factures: any[]; paiements: any[];
-    total_facture: number; total_paye: number; solde_restant: number;
+    eleve_id: number; eleve_nom: string; eleve_prenom: string; eleve_matricule: string;
+    factures: any[];
+    total_facture: number; total_paye: number; total_restant: number; taux_paiement: number;
 };
 
 /* ═══════════════════════════════════════════════════════════════════════
    CONSTANTES
    ═══════════════════════════════════════════════════════════════════════ */
-const MODES_PAIEMENT = [
-    { value: 'ESPECES', label: 'Especes', icon: Banknote, color: '#10b981' },
-    { value: 'ORANGE_MONEY', label: 'Orange Money', icon: Smartphone, color: '#f97316' },
-    { value: 'MTN_MONEY', label: 'MTN Money', icon: Smartphone, color: '#eab308' },
-    { value: 'VIREMENT', label: 'Virement bancaire', icon: Landmark, color: '#3b82f6' },
-    { value: 'CHEQUE', label: 'Cheque', icon: FileText, color: '#8b5cf6' },
-    { value: 'CARTE_BANCAIRE', label: 'Carte bancaire', icon: CreditCard, color: '#ec4899' },
-];
-
-const MODE_LABELS: Record<string, string> = {
-    ESPECES: 'Especes', ORANGE_MONEY: 'Orange Money', MTN_MONEY: 'MTN Money',
-    VIREMENT: 'Virement', CHEQUE: 'Cheque', CARTE_BANCAIRE: 'Carte',
-    MOBILE_MONEY: 'Mobile Money', AUTRE: 'Autre',
+// Icônes/couleurs pour les modes de paiement CONNUS — la liste réellement
+// proposée dans les formulaires vient de Paramètres > Finance & Comptabilité
+// (voir modesPaiementDisponibles state + fetchModesPaiement), pas d'ici. Un
+// mode ajouté dans Paramètres sans entrée ici retombe sur l'icône par défaut.
+const MODE_ICONS: Record<string, { icon: typeof Banknote; color: string }> = {
+    ESPECES: { icon: Banknote, color: '#10b981' },
+    ORANGE_MONEY: { icon: Smartphone, color: '#f97316' },
+    MTN_MONEY: { icon: Smartphone, color: '#eab308' },
+    VIREMENT: { icon: Landmark, color: '#3b82f6' },
+    CHEQUE: { icon: FileText, color: '#8b5cf6' },
+    CARTE_BANCAIRE: { icon: CreditCard, color: '#ec4899' },
+    MOBILE_MONEY: { icon: Smartphone, color: '#f97316' },
 };
+const MODE_ICON_DEFAUT = { icon: Wallet, color: '#64748b' };
 
 const STATUT_COLORS: Record<string, { bg: string; color: string; label: string }> = {
     'VALIDE': { bg: '#d1fae5', color: '#059669', label: 'Valide' },
@@ -130,7 +137,15 @@ function formatDate(d: string | null) {
 /* ═══════════════════════════════════════════════════════════════════════
    COMPOSANT PRINCIPAL
    ═══════════════════════════════════════════════════════════════════════ */
-export default function GestionPaiements() {
+function GestionPaiements() {
+    const searchParams = useSearchParams();
+    const router = useRouter();
+    const queryClient = useQueryClient();
+    const { anneeId: anneeCouranteId } = useApp();
+    // Année scolaire consultée — par défaut l'année en cours ; le comptable
+    // peut basculer sur une année clôturée pour consulter l'historique.
+    const [filterAnnee, setFilterAnnee] = useState<number>(anneeCouranteId);
+    useEffect(() => { setFilterAnnee(anneeCouranteId); }, [anneeCouranteId]);
     const [activeTab, setActiveTab] = useState<'overview' | 'encaissements' | 'recus' | 'fournisseurs' | 'decaissements' | 'reductions'>('overview');
 
     // ── Donnees globales ──
@@ -141,9 +156,23 @@ export default function GestionPaiements() {
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
 
+    // ── Modes de paiement configurés (Paramètres > Finance & Comptabilité) ──
+    // Source unique de vérité pour tous les sélecteurs de mode de paiement de
+    // cette page (encaissement, décaissement) — avant ce fetch, la liste était
+    // codée en dur ici et ne reflétait jamais les modes ajoutés dans Paramètres.
+    const [modesPaiementConfig, setModesPaiementConfig] = useState<string[]>(DEFAULT_MODES_PAIEMENT);
+    useEffect(() => { fetchModesPaiement().then(setModesPaiementConfig); }, []);
+    const modesAffichables = modesPaiementConfig.map(value => ({
+        value,
+        label: modePaiementLabel(value),
+        icon: (MODE_ICONS[value] || MODE_ICON_DEFAUT).icon,
+        color: (MODE_ICONS[value] || MODE_ICON_DEFAUT).color,
+    }));
+
     // ── Dashboard KPIs ──
-    const [kpis, setKpis] = useState({ total_encaisse: 0, total_depense: 0, nb_paiements: 0, nb_impayes: 0 });
-    const [parMode, setParMode] = useState<{ mode: string; total: number; count: number }[]>([]);
+    const [kpis, setKpis] = useState({ total_encaisse: 0, total_depense: 0, nb_impayes: 0 });
+    const [parMode, setParMode] = useState<{ mode: string; total: number; nb: number }[]>([]);
+    const [depensesStats, setDepensesStats] = useState<{ total_depenses: number; total_valide: number; total_en_attente: number; par_categorie: { categorie: string; total: number; nb: number }[] }>({ total_depenses: 0, total_valide: 0, total_en_attente: 0, par_categorie: [] });
 
     // ── Modal paiement ──
     const [showPayModal, setShowPayModal] = useState(false);
@@ -168,9 +197,12 @@ export default function GestionPaiements() {
     const [showFournisseurForm, setShowFournisseurForm] = useState(false);
     const [decaisFormCategorie, setDecaisFormCategorie] = useState('FOURNISSEUR');
     const [fournisseurForm, setFournisseurForm] = useState({
-        fournisseur: '', montant: '', description: '', reference: '', mode_paiement: 'ESPECES'
+        fournisseur: '', montant: '', description: '', reference: '', mode_paiement: 'ESPECES',
+        source_fonds: 'CAISSE_PRINCIPALE', classe_id: '', departement: '',
     });
     const [fournisseurLoading, setFournisseurLoading] = useState(false);
+    const [justificatifFile, setJustificatifFile] = useState<File | null>(null);
+    const [classes, setClasses] = useState<{ classe_id: number; libelle: string }[]>([]);
 
     // ── Module Salaires ──
     const [showSalaireModal, setShowSalaireModal] = useState(false);
@@ -181,7 +213,35 @@ export default function GestionPaiements() {
     const [salaireSearch, setSalaireSearch] = useState('');
     const [salaireLoading, setSalaireLoading] = useState(false);
     const [selectedEns, setSelectedEns] = useState<EmployeSalaire | null>(null);
-    const [salaireForm, setSalaireForm] = useState({ montant: '', description: '' });
+    // Arriérés multi-mois : le backend calcule et impose son propre net_a_payer par
+    // mois (base + primes - absences - avances) — jamais un montant libre. On liste
+    // ici TOUS les mois en retard (pas seulement le mois sélectionné dans le
+    // calendrier), pour permettre de régler un mois précis ou la totalité en un clic.
+    const [arrieres, setArrieres] = useState<{ mois_du: any[]; total_du: number } | null>(null);
+    const [arrieresLoading, setArrieresLoading] = useState(false);
+    const [arrieresError, setArrieresError] = useState(false);
+    const [moisSelectionnes, setMoisSelectionnes] = useState<string[]>([]);
+
+    useEffect(() => {
+        if (!selectedEns) { setArrieres(null); setMoisSelectionnes([]); setArrieresError(false); return; }
+        setArrieresLoading(true);
+        setArrieresError(false);
+        api.get(`/api/finance/salaires/arrieres/${selectedEns.id}?etablissement_id=1&nb_mois=12`)
+            .then(res => {
+                setArrieres(res.data);
+                setMoisSelectionnes((res.data?.mois_du || []).map((m: any) => m.mois_concerne));
+            })
+            .catch(() => { setArrieres(null); setMoisSelectionnes([]); setArrieresError(true); })
+            .finally(() => setArrieresLoading(false));
+    }, [selectedEns]);
+
+    const toggleMoisSelectionne = (mois: string) => {
+        setMoisSelectionnes(prev => prev.includes(mois) ? prev.filter(m => m !== mois) : [...prev, mois]);
+    };
+
+    const montantSelectionne = (arrieres?.mois_du || [])
+        .filter((m: any) => moisSelectionnes.includes(m.mois_concerne))
+        .reduce((s: number, m: any) => s + m.net_a_payer, 0);
     const [salairePaying, setSalairePaying] = useState<string | null>(null); // employe_id (ex: ENS_1) en cours
 
     // ── Filtres decaissements ──
@@ -189,36 +249,83 @@ export default function GestionPaiements() {
     const [decaisDateDebut, setDecaisDateDebut] = useState('');
     const [decaisDateFin, setDecaisDateFin] = useState('');
 
+    // ── Pagination (paiements & decaissements) ──
+    const pageSize = 25;
+    const [pagePaiements, setPagePaiements] = useState(1);
+    const [totalPaiements, setTotalPaiements] = useState(0);
+    const [pageDepenses, setPageDepenses] = useState(1);
+    const [totalDepenses, setTotalDepenses] = useState(0);
+
     /* ═══ CHARGEMENT DES DONNEES ═══ */
-    const loadData = useCallback(async () => {
+    const loadPaiements = useCallback(async (page: number) => {
+        try {
+            const skip = (page - 1) * pageSize;
+            const res = await api.get(`/api/finance/paiements?skip=${skip}&limit=${pageSize}&annee_id=${filterAnnee}`);
+            setPaiements(res.data || []);
+            const totalCount = res.headers?.['x-total-count'];
+            setTotalPaiements(totalCount !== undefined ? Number(totalCount) : (res.data || []).length);
+        } catch (err) {
+            console.error('Erreur chargement paiements:', err);
+        }
+    }, [filterAnnee]);
+
+    const loadDepensesList = useCallback(async (page: number) => {
+        try {
+            const skip = (page - 1) * pageSize;
+            const res = await api.get(`/api/finance/depenses?skip=${skip}&limit=${pageSize}&annee_id=${filterAnnee}`);
+            setDepenses(res.data || []);
+            const totalCount = res.headers?.['x-total-count'];
+            setTotalDepenses(totalCount !== undefined ? Number(totalCount) : (res.data || []).length);
+        } catch (err) {
+            console.error('Erreur chargement depenses:', err);
+        }
+    }, [filterAnnee]);
+
+    const loadOverview = useCallback(async () => {
         setLoading(true);
         try {
-            const [paiRes, facRes, depRes, dashRes, fournRes] = await Promise.all([
-                api.get('/api/finance/paiements?limit=500'),
-                api.get('/api/finance/factures'),
-                api.get('/api/finance/depenses?limit=200'),
-                api.get('/api/finance/dashboard'),
+            const [facRes, dashRes, fournRes, depStatsRes, classRes] = await Promise.all([
+                api.get(`/api/finance/factures?annee_id=${filterAnnee}`),
+                api.get(`/api/finance/dashboard?annee_id=${filterAnnee}`),
                 api.get('/api/finance/fournisseurs').catch(() => ({ data: [] })),
+                api.get(`/api/finance/depenses/stats?annee_id=${filterAnnee}`).catch(() => ({ data: null })),
+                api.get(`/api/classes?etablissement_id=1&annee_id=${filterAnnee}`).catch(() => ({ data: [] })),
             ]);
-            setPaiements(paiRes.data || []);
             setFactures(facRes.data || []);
-            setDepenses(depRes.data || []);
             setFournisseurs(fournRes.data || []);
+            if (depStatsRes.data) setDepensesStats(depStatsRes.data);
+            setClasses(classRes.data || []);
 
+            // GET /api/finance/dashboard renvoie {kpis: {...}, repartition_modes: [...]}
+            // (pas de total_encaisse/nb_paiements/par_mode à plat — les anciennes
+            // clés lues ici n'existaient nulle part dans la vraie réponse, donc
+            // ces KPIs "Vue d'ensemble" restaient toujours à 0/vide).
             const dash = dashRes.data || {};
             setKpis({
-                total_encaisse: dash.total_encaisse || dash.kpis?.total_encaisse || 0,
-                total_depense: dash.total_depenses || dash.kpis?.total_depenses || 0,
-                nb_paiements: dash.nb_paiements || dash.kpis?.nb_paiements || 0,
-                nb_impayes: dash.nb_impayes || dash.kpis?.nb_impayes || 0,
+                total_encaisse: dash.kpis?.total_paye || 0,
+                total_depense: dash.kpis?.total_depenses || 0,
+                nb_impayes: dash.kpis?.nb_impayes || 0,
             });
-            setParMode(dash.par_mode_paiement || dash.par_mode || []);
+            setParMode(dash.repartition_modes || []);
         } catch (err) {
             console.error('Erreur chargement données paiements:', err);
         } finally { setLoading(false); }
-    }, []);
+    }, [filterAnnee]);
 
-    useEffect(() => { loadData(); }, [loadData]);
+    // Rafraichissement combine (utilise apres les mutations et par les boutons "Actualiser")
+    const loadData = useCallback(() => {
+        loadOverview();
+        loadPaiements(pagePaiements);
+        loadDepensesList(pageDepenses);
+    }, [loadOverview, loadPaiements, loadDepensesList, pagePaiements, pageDepenses]);
+
+    useEffect(() => { loadOverview(); }, [loadOverview]);
+    useEffect(() => { loadPaiements(pagePaiements); }, [pagePaiements, loadPaiements]);
+    useEffect(() => { loadDepensesList(pageDepenses); }, [pageDepenses, loadDepensesList]);
+
+    // Reinitialiser la pagination quand un filtre change, pour eviter une page vide
+    useEffect(() => { setPagePaiements(1); }, [searchTerm]);
+    useEffect(() => { setPageDepenses(1); }, [decaisFilterCat, decaisDateDebut, decaisDateFin]);
 
     /* ═══ AUTO-DISMISS TOAST après 4 secondes ═══ */
     useEffect(() => {
@@ -298,47 +405,118 @@ export default function GestionPaiements() {
         }
     };
 
+    /* ═══ REJETER UNE DEPENSE (EN_ATTENTE) ═══ */
+    const rejeterDepense = async (depenseId: number) => {
+        if (!confirm('Rejeter ce décaissement ? Cette action ne peut plus être annulée depuis cet écran.')) return;
+        try {
+            await api.put(`/api/finance/depenses/${depenseId}/statut?statut=REJETEE`);
+            setPayResult({ type: 'success', msg: 'Décaissement rejeté' });
+            loadData();
+        } catch (err: any) {
+            setPayResult({ type: 'error', msg: err.response?.data?.detail || 'Erreur lors du rejet' });
+        }
+    };
+
     /* ═══ CHARGER LES ENSEIGNANTS AVEC SALAIRES ═══ */
     const loadEnseignantsSalaires = async (mois: string) => {
         setSalaireLoading(true);
         try {
-            const res = await api.get(`/api/finance/salaires/employes?etablissement_id=1&annee_id=1&mois=${mois}`);
+            const res = await api.get(`/api/finance/salaires/employes?etablissement_id=1&annee_id=${filterAnnee}&mois=${mois}`);
             setEmployesSalaires(res.data || []);
         } catch { setEmployesSalaires([]); }
         finally { setSalaireLoading(false); }
     };
 
-    /* ═══ PAYER LE SALAIRE D'UN ENSEIGNANT ═══ */
-    const payerSalaireEnseignant = async (ens: EmployeSalaire) => {
-        if (!salaireForm.montant || parseFloat(salaireForm.montant) <= 0) {
-            setPayResult({ type: 'error', msg: 'Veuillez saisir un montant valide' });
+    /* ═══ PAYER UNE LISTE DE MOIS PRÉCISE POUR UN EMPLOYÉ DONNÉ ═══
+       Helper partagé : ne lit JAMAIS un état partagé (moisSelectionnes) au nom d'un
+       autre employé — la liste des mois à payer est toujours passée explicitement
+       par l'appelant, pour éviter qu'un bouton "rapide" sur une ligne de la liste
+       paie accidentellement les mois cochés dans le panneau d'un AUTRE employé. */
+    const payerMoisPourEmploye = async (ens: EmployeSalaire, moisList: string[]) => {
+        if (moisList.length === 0) {
+            setPayResult({ type: 'error', msg: 'Sélectionnez au moins un mois à payer' });
             return;
+        }
+        // Si le mois en cours fait partie de la sélection, on vérifie que sa date de
+        // paie officielle (Calendrier de paie) est bien arrivée ; sinon on demande
+        // confirmation avant de payer en avance plutôt que de bloquer purement.
+        const moisActuel = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+        if (moisList.includes(moisActuel)) {
+            try {
+                const dpRes = await api.get(`/api/finance/salaires/date-paie?etablissement_id=1&mois_concerne=${moisActuel}`);
+                const datePaie = dpRes.data?.date_paie;
+                if (datePaie && new Date().toISOString().split('T')[0] < datePaie) {
+                    const ok = confirm(`La date de paie officielle du mois en cours (${datePaie}) n'est pas encore arrivée. Payer quand même ?`);
+                    if (!ok) return;
+                }
+            } catch { /* si la vérification échoue, on ne bloque pas le paiement */ }
         }
         setSalairePaying(ens.id);
         try {
-            await api.post('/api/finance/salaires/payer', {
+            const res = await api.post('/api/finance/salaires/payer-plusieurs-mois', {
                 enseignant_id: ens.id,
-                montant: parseFloat(salaireForm.montant),
-                mois: salairesMois,
-                description: salaireForm.description || `Salaire ${ens.prenom} ${ens.nom} — ${salairesMois}`,
+                mois_list: moisList,
+                mode_paiement: 'Cash',
                 etablissement_id: 1,
-                annee_id: 1,
+                annee_id: filterAnnee,
             });
-            setPayResult({ type: 'success', msg: `Salaire de ${ens.prenom} ${ens.nom} enregistré !` });
+            setPayResult({ type: res.data?.erreurs?.length ? 'error' : 'success', msg: res.data?.message || `Salaire de ${ens.prenom} ${ens.nom} enregistré !` });
             setSelectedEns(null);
-            setSalaireForm({ montant: '', description: '' });
             await loadEnseignantsSalaires(salairesMois);
             loadData();
+            // La page Salaires lit ces mêmes données via React Query — sans invalidation
+            // ici, un paiement effectué depuis ce module (redirigé) laissait "Non payé"
+            // affiché là-bas jusqu'à un refresh manuel.
+            queryClient.invalidateQueries({ queryKey: ['salaires-employes'] });
+            queryClient.invalidateQueries({ queryKey: ['salaires-calculer'] });
         } catch (err: any) {
             setPayResult({ type: 'error', msg: err.response?.data?.detail || 'Erreur paiement salaire' });
         } finally { setSalairePaying(null); }
     };
+
+    // Panneau détaillé (arriérés multi-mois cochés par le comptable pour l'employé
+    // actuellement sélectionné) :
+    const payerSalaireEnseignant = (ens: EmployeSalaire) => payerMoisPourEmploye(ens, moisSelectionnes);
+
+    // Bouton rapide "Payer ce mois" sur chaque ligne de la liste : ne doit payer QUE
+    // le mois actuellement affiché dans le sélecteur de mois (salairesMois) pour
+    // CETTE ligne, jamais la sélection multi-mois d'un autre employé dont le
+    // panneau serait resté ouvert.
+    const payerMoisCourantRapide = (ens: EmployeSalaire) => payerMoisPourEmploye(ens, [salairesMois]);
 
     /* ═══ OUVRIR LE MODULE SALAIRES ═══ */
     const openSalaireModal = () => {
         setShowSalaireModal(true);
         loadEnseignantsSalaires(salairesMois);
     };
+
+    /* ═══ ARRIVÉE DEPUIS SALAIRES > CALCUL DES SALAIRES ═══
+       Le bouton "Payer" de cet onglet ne paie plus sur place : il redirige ici
+       (?tab=fournisseurs&payerSalaire=ENS_7&mois=2026-07) pour que TOUT paiement
+       de salaire passe par ce même formulaire (Centre de Décaissement), qui affiche
+       le net à payer réel calculé par le backend plutôt qu'un montant libre. */
+    useEffect(() => {
+        const tab = searchParams.get('tab');
+        if (tab === 'fournisseurs') setActiveTab('fournisseurs');
+
+        const payerSalaireId = searchParams.get('payerSalaire');
+        if (!payerSalaireId) return;
+
+        const mois = searchParams.get('mois');
+        const moisCible = mois || salairesMois;
+        if (mois && mois !== salairesMois) setSalairesMois(mois);
+        setShowSalaireModal(true);
+        api.get(`/api/finance/salaires/employes?etablissement_id=1&annee_id=${filterAnnee}&mois=${moisCible}`)
+            .then(res => {
+                setEmployesSalaires(res.data || []);
+                const match = (res.data || []).find((e: any) => e.id === payerSalaireId);
+                if (match) setSelectedEns(match);
+            })
+            .catch(() => {});
+        // Nettoie l'URL pour ne pas rouvrir le modal à chaque rafraîchissement de page.
+        router.replace('/comptabilite/paiements?tab=fournisseurs');
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     /* ═══ IMPRIMER RECU PDF ═══ */
     const printRecuPDF = async (paiementId: number) => {
@@ -361,13 +539,18 @@ export default function GestionPaiements() {
         setSoldeLoading(true);
         setShowSoldeModal(true);
         try {
-            const res = await api.get(`/api/finance/solde-eleve/${eleveId}`);
+            const res = await api.get(`/api/finance/solde-eleve/${eleveId}?annee_id=${filterAnnee}`);
             setSoldeData(res.data);
         } catch { setSoldeData(null); }
         finally { setSoldeLoading(false); }
     };
 
     /* ═══ ENREGISTREMENT DECAISSEMENT (toutes catégories) ═══ */
+    const resetFournisseurForm = () => {
+        setFournisseurForm({ fournisseur: '', montant: '', description: '', reference: '', mode_paiement: 'ESPECES', source_fonds: 'CAISSE_PRINCIPALE', classe_id: '', departement: '' });
+        setJustificatifFile(null);
+    };
+
     const handleFournisseurPayment = async () => {
         if (!fournisseurForm.montant || parseFloat(fournisseurForm.montant) <= 0) {
             setPayResult({ type: 'error', msg: 'Veuillez saisir un montant valide' });
@@ -375,6 +558,22 @@ export default function GestionPaiements() {
         }
         setFournisseurLoading(true);
         try {
+            let factureUrl: string | null = null;
+            if (justificatifFile) {
+                try {
+                    const formData = new FormData();
+                    formData.append('file', justificatifFile);
+                    const uploadRes = await api.post('/api/finance/upload-justificatif', formData, {
+                        headers: { 'Content-Type': 'multipart/form-data' }
+                    });
+                    factureUrl = uploadRes.data.facture_url || null;
+                } catch {
+                    setPayResult({ type: 'error', msg: "Le justificatif n'a pas pu être téléversé — décaissement non enregistré." });
+                    setFournisseurLoading(false);
+                    return;
+                }
+            }
+            const isFournisseur = decaisFormCategorie === 'FOURNISSEUR';
             await api.post('/api/finance/reglements-fournisseurs', {
                 categorie: decaisFormCategorie,
                 fournisseur: fournisseurForm.fournisseur,
@@ -383,9 +582,13 @@ export default function GestionPaiements() {
                 description: fournisseurForm.description,
                 reference: fournisseurForm.reference,
                 mode_paiement: fournisseurForm.mode_paiement,
+                facture_url: isFournisseur ? factureUrl : null,
+                source_fonds: isFournisseur ? fournisseurForm.source_fonds : null,
+                classe_id: isFournisseur && fournisseurForm.classe_id ? parseInt(fournisseurForm.classe_id) : null,
+                departement: isFournisseur ? (fournisseurForm.departement || null) : null,
             });
             setShowFournisseurForm(false);
-            setFournisseurForm({ fournisseur: '', montant: '', description: '', reference: '', mode_paiement: 'ESPECES' });
+            resetFournisseurForm();
             const catLabel = CATEGORIE_INFO[decaisFormCategorie]?.label || decaisFormCategorie;
             setPayResult({ type: 'success', msg: `Décaissement "${catLabel}" enregistré avec succès !` });
             loadData();
@@ -409,9 +612,11 @@ export default function GestionPaiements() {
 
     const facturesImpayees = factures.filter(f => ['EN_ATTENTE', 'PARTIELLEMENT_PAYEE', 'EN_RETARD'].includes(f.statut));
 
-    // KPIs calcules
-    const totalEncaisse = paiements.filter(p => p.statut === 'VALIDE').reduce((s, p) => s + p.montant, 0);
-    const totalDecaisse = depenses.reduce((s, d) => s + d.montant, 0);
+    // KPIs Vue d'ensemble : issus de `kpis`/`parMode` (GET /api/finance/dashboard,
+    // non paginé, voir loadOverview) plutôt que recalculés depuis `paiements`/
+    // `depenses`, qui ne contiennent chacun que la page courante (25 lignes).
+    const totalEncaisse = kpis.total_encaisse;
+    const totalDecaisse = kpis.total_depense;
     const soldeNet = totalEncaisse - totalDecaisse;
 
     /* ═══ STYLES COMMUNS ═══ */
@@ -490,17 +695,25 @@ export default function GestionPaiements() {
             <style>{`@keyframes slideIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}`}</style>
 
             {/* ── EN-TETE ── */}
-            <div style={{ marginBottom: '24px' }}>
-                <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: 'linear-gradient(135deg, #10b981, #059669)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <CreditCard size={22} color="white" />
-                    </div>
-                    Gestion des Paiements
-                </h1>
-                <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '14px' }}>
-                    Encaissements, recus, fournisseurs, decaissements et reductions
-                </p>
+            <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                    <h1 style={{ fontSize: '24px', fontWeight: 800, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: 'linear-gradient(135deg, #10b981, #059669)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <CreditCard size={22} color="white" />
+                        </div>
+                        Gestion des Paiements
+                    </h1>
+                    <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '14px' }}>
+                        Encaissements, recus, fournisseurs, decaissements et reductions
+                    </p>
+                </div>
+                <AnneeFilter value={filterAnnee} onChange={setFilterAnnee} />
             </div>
+            {filterAnnee !== anneeCouranteId && (
+                <div style={{ padding: '10px 16px', borderRadius: 10, background: '#fef3c7', color: '#92400e', fontSize: 13, fontWeight: 600, marginBottom: '16px' }}>
+                    Vous consultez une année scolaire archivée.
+                </div>
+            )}
 
             {/* ── ONGLETS ── */}
             <div style={{ display: 'flex', gap: '4px', marginBottom: '24px', background: '#f1f5f9', borderRadius: '14px', padding: '4px', overflowX: 'auto' }}>
@@ -535,8 +748,8 @@ export default function GestionPaiements() {
                             { label: 'Total Encaisse', value: totalEncaisse, icon: TrendingUp, color: '#10b981', bg: '#ecfdf5' },
                             { label: 'Total Decaisse', value: totalDecaisse, icon: TrendingDown, color: '#ef4444', bg: '#fef2f2' },
                             { label: 'Solde Net', value: soldeNet, icon: Wallet, color: soldeNet >= 0 ? '#10b981' : '#ef4444', bg: soldeNet >= 0 ? '#ecfdf5' : '#fef2f2' },
-                            { label: 'Paiements', value: paiements.filter(p => p.statut === 'VALIDE').length, icon: CheckCircle2, color: '#3b82f6', bg: '#eff6ff', isMoney: false },
-                            { label: 'Factures Impayees', value: facturesImpayees.length, icon: AlertTriangle, color: '#f59e0b', bg: '#fffbeb', isMoney: false },
+                            { label: 'Paiements', value: totalPaiements, icon: CheckCircle2, color: '#3b82f6', bg: '#eff6ff', isMoney: false },
+                            { label: 'Factures Impayees', value: kpis.nb_impayes, icon: AlertTriangle, color: '#f59e0b', bg: '#fffbeb', isMoney: false },
                         ].map((kpi, i) => (
                             <div key={i} style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: '16px' }}>
                                 <div style={{ width: '48px', height: '48px', borderRadius: '14px', background: kpi.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
@@ -558,8 +771,8 @@ export default function GestionPaiements() {
                             <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <BarChart3 size={18} color="#10b981" /> Repartition par Mode
                             </h3>
-                            {MODES_PAIEMENT.map(mode => {
-                                const modeTotal = paiements.filter(p => p.mode_paiement === mode.value && p.statut === 'VALIDE').reduce((s, p) => s + p.montant, 0);
+                            {modesAffichables.map(mode => {
+                                const modeTotal = parMode.find(m => m.mode === mode.value)?.total || 0;
                                 const pct = totalEncaisse > 0 ? (modeTotal / totalEncaisse) * 100 : 0;
                                 return (
                                     <div key={mode.value} style={{ marginBottom: '12px' }}>
@@ -650,7 +863,7 @@ export default function GestionPaiements() {
                                         <td style={{ padding: '12px 16px', color: '#64748b' }}>{formatDate(p.date_paiement)}</td>
                                         <td style={{ padding: '12px 16px', fontWeight: 500, color: '#0f172a' }}>{p.eleve_prenom} {p.eleve_nom}</td>
                                         <td style={{ padding: '12px 16px', fontWeight: 700, color: p.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(p.montant)}</td>
-                                        <td style={{ padding: '12px 16px', color: '#475569' }}>{MODE_LABELS[p.mode_paiement] || p.mode_paiement}</td>
+                                        <td style={{ padding: '12px 16px', color: '#475569' }}>{modePaiementLabel(p.mode_paiement)}</td>
                                         <td style={{ padding: '12px 16px', color: '#3b82f6', fontWeight: 500 }}>{p.numero_facture}</td>
                                         <td style={{ padding: '12px 16px' }}><Badge statut={p.statut} /></td>
                                         <td style={{ padding: '12px 16px' }}>
@@ -679,6 +892,7 @@ export default function GestionPaiements() {
                                 )}
                             </tbody>
                         </table>
+                        <Pagination page={pagePaiements} pageSize={pageSize} total={totalPaiements} onPageChange={setPagePaiements} />
                     </div>
                 </div>
             )}
@@ -710,13 +924,8 @@ export default function GestionPaiements() {
                                 .map(f => (
                                     <div key={f.facture_id}
                                         onClick={() => {
-                                            const eleve = paiements.find(p => p.eleve_nom === f.eleve_nom && p.eleve_prenom === f.eleve_prenom);
-                                            // Use facture info to find eleve
-                                            if (f.inscription_id) {
-                                                api.get(`/api/finance/solde-eleve/${f.inscription_id}`).then(res => {
-                                                    setSoldeData(res.data);
-                                                    setShowSoldeModal(true);
-                                                }).catch(() => {});
+                                            if (f.eleve_id) {
+                                                fetchSoldeEleve(f.eleve_id);
                                             }
                                         }}
                                         style={{
@@ -784,7 +993,7 @@ export default function GestionPaiements() {
                             <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>💸 Centre de Décaissements</h2>
                             <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>Gérez toutes les sorties de fonds de l'école par catégorie</p>
                         </div>
-                        <button style={btnPrimary} onClick={() => { setDecaisFormCategorie('FOURNISSEUR'); setShowFournisseurForm(true); }}>
+                        <button style={btnPrimary} onClick={() => { resetFournisseurForm(); setDecaisFormCategorie('FOURNISSEUR'); setShowFournisseurForm(true); }}>
                             <Plus size={16} /> Nouveau Décaissement
                         </button>
                     </div>
@@ -793,13 +1002,16 @@ export default function GestionPaiements() {
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '16px', marginBottom: '28px' }}>
                         {CATEGORIE_DEPENSES.map(cat => {
                             const info = CATEGORIE_INFO[cat];
-                            const total = depenses.filter(d => d.categorie === cat).reduce((s, d) => s + d.montant, 0);
-                            const nb = depenses.filter(d => d.categorie === cat).length;
+                            // Totaux réels (toutes pages confondues) via /api/finance/depenses/stats,
+                            // pas seulement les dépenses de la page courante (25 lignes).
+                            const catStats = depensesStats.par_categorie.find(c => c.categorie === cat);
+                            const total = catStats?.total || 0;
+                            const nb = catStats?.nb || 0;
                             return (
                                 <div key={cat}
                                     onClick={() => {
                                         if (cat === 'SALAIRES') { openSalaireModal(); }
-                                        else { setDecaisFormCategorie(cat); setShowFournisseurForm(true); }
+                                        else { resetFournisseurForm(); setDecaisFormCategorie(cat); setShowFournisseurForm(true); }
                                     }}
                                     style={{
                                         ...cardStyle, cursor: 'pointer', borderLeft: `4px solid ${info.color}`,
@@ -835,19 +1047,19 @@ export default function GestionPaiements() {
                             <div>
                                 <p style={{ margin: 0, fontSize: '13px', color: '#94a3b8', fontWeight: 500 }}>Total Général Décaissements</p>
                                 <p style={{ margin: '4px 0 0', fontSize: '28px', fontWeight: 800, color: '#ef4444' }}>
-                                    {formatMoney(depenses.reduce((s, d) => s + d.montant, 0))}
+                                    {formatMoney(depensesStats.total_depenses)}
                                 </p>
                             </div>
                             <div style={{ textAlign: 'right' }}>
                                 <p style={{ margin: 0, fontSize: '13px', color: '#94a3b8' }}>Validés</p>
                                 <p style={{ margin: '4px 0 0', fontSize: '20px', fontWeight: 700, color: '#10b981' }}>
-                                    {formatMoney(depenses.filter(d => d.statut === 'VALIDE').reduce((s, d) => s + d.montant, 0))}
+                                    {formatMoney(depensesStats.total_valide)}
                                 </p>
                             </div>
                             <div style={{ textAlign: 'right' }}>
                                 <p style={{ margin: 0, fontSize: '13px', color: '#94a3b8' }}>En attente</p>
                                 <p style={{ margin: '4px 0 0', fontSize: '20px', fontWeight: 700, color: '#f59e0b' }}>
-                                    {formatMoney(depenses.filter(d => d.statut === 'EN_ATTENTE').reduce((s, d) => s + d.montant, 0))}
+                                    {formatMoney(depensesStats.total_en_attente)}
                                 </p>
                             </div>
                         </div>
@@ -881,11 +1093,17 @@ export default function GestionPaiements() {
                                                 <p style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#ef4444' }}>{formatMoney(d.montant)}</p>
                                                 <Badge statut={d.statut} />
                                             </div>
-                                            {d.statut === 'EN_ATTENTE' && (
-                                                <button onClick={e => { e.stopPropagation(); validerDepense(d.depense_id); }}
-                                                    style={{ padding: '5px 10px', fontSize: '11px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                    <CheckCircle size={12} /> Valider
-                                                </button>
+                                            {(d.statut === 'EN_ATTENTE' || d.statut === 'APPROUVEE') && (
+                                                <>
+                                                    <button onClick={e => { e.stopPropagation(); validerDepense(d.depense_id); }}
+                                                        style={{ padding: '5px 10px', fontSize: '11px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                        <CheckCircle size={12} /> Valider
+                                                    </button>
+                                                    <button onClick={e => { e.stopPropagation(); rejeterDepense(d.depense_id); }}
+                                                        style={{ padding: '5px 10px', fontSize: '11px', background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                        <XCircle size={12} /> Rejeter
+                                                    </button>
+                                                </>
                                             )}
                                         </div>
                                     </div>
@@ -929,7 +1147,7 @@ export default function GestionPaiements() {
                     {/* Resume par categorie */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px', marginBottom: '20px' }}>
                         {CATEGORIE_DEPENSES.map(cat => {
-                            const total = depenses.filter(d => d.categorie === cat).reduce((s, d) => s + d.montant, 0);
+                            const total = depensesStats.par_categorie.find(c => c.categorie === cat)?.total || 0;
                             if (total === 0) return null;
                             return (
                                 <div key={cat} style={{ ...cardStyle, padding: '16px', cursor: 'pointer', transition: 'all 0.15s', borderLeft: '4px solid #ef4444' }}
@@ -966,11 +1184,17 @@ export default function GestionPaiements() {
                                         <td style={{ padding: '12px 16px', fontWeight: 700, color: '#ef4444' }}>{formatMoney(d.montant)}</td>
                                         <td style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                             <Badge statut={d.statut} />
-                                            {d.statut === 'EN_ATTENTE' && (
-                                                <button onClick={() => validerDepense(d.depense_id)}
-                                                    style={{ padding: '4px 8px', fontSize: '11px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                    <CheckCircle size={12} /> Valider
-                                                </button>
+                                            {(d.statut === 'EN_ATTENTE' || d.statut === 'APPROUVEE') && (
+                                                <>
+                                                    <button onClick={() => validerDepense(d.depense_id)}
+                                                        style={{ padding: '4px 8px', fontSize: '11px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                        <CheckCircle size={12} /> Valider
+                                                    </button>
+                                                    <button onClick={() => rejeterDepense(d.depense_id)}
+                                                        style={{ padding: '4px 8px', fontSize: '11px', background: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                        <XCircle size={12} /> Rejeter
+                                                    </button>
+                                                </>
                                             )}
                                         </td>
                                     </tr>
@@ -980,6 +1204,7 @@ export default function GestionPaiements() {
                                 )}
                             </tbody>
                         </table>
+                        <Pagination page={pageDepenses} pageSize={pageSize} total={totalDepenses} onPageChange={setPageDepenses} />
                     </div>
 
                     {/* Total */}
@@ -1056,7 +1281,7 @@ export default function GestionPaiements() {
                                 <CreditCard size={18} color="#10b981" /> Modes de Paiement Acceptes
                             </h3>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                {MODES_PAIEMENT.map(m => (
+                                {modesAffichables.map(m => (
                                     <div key={m.value} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', background: '#f8fafc' }}>
                                         <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: `${m.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                             <m.icon size={16} color={m.color} />
@@ -1143,7 +1368,7 @@ export default function GestionPaiements() {
                         <div style={{ marginBottom: '16px' }}>
                             <label style={labelStyle}>Mode de paiement *</label>
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-                                {MODES_PAIEMENT.map(m => (
+                                {modesAffichables.map(m => (
                                     <button key={m.value} onClick={() => setPayForm({ ...payForm, mode_paiement: m.value })}
                                         style={{
                                             padding: '10px', borderRadius: '10px', border: `2px solid ${payForm.mode_paiement === m.value ? m.color : '#e2e8f0'}`,
@@ -1213,7 +1438,12 @@ export default function GestionPaiements() {
                 <div style={modalOverlay} onClick={() => setShowSoldeModal(false)}>
                     <div style={{ ...modalBox, maxWidth: '700px' }} onClick={e => e.stopPropagation()}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>Fiche Financiere de l'Eleve</h2>
+                            <div>
+                                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>Fiche Financiere de l'Eleve</h2>
+                                {soldeData && (
+                                    <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>{soldeData.eleve_prenom} {soldeData.eleve_nom} — {soldeData.eleve_matricule}</p>
+                                )}
+                            </div>
                             <button onClick={() => setShowSoldeModal(false)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '10px', padding: '8px', cursor: 'pointer' }}>
                                 <X size={18} />
                             </button>
@@ -1232,9 +1462,9 @@ export default function GestionPaiements() {
                                         <p style={{ margin: 0, fontSize: '12px', color: '#064e3b' }}>Total paye</p>
                                         <p style={{ margin: '4px 0 0', fontSize: '18px', fontWeight: 800, color: '#059669' }}>{formatMoney(soldeData.total_paye)}</p>
                                     </div>
-                                    <div style={{ padding: '16px', background: soldeData.solde_restant > 0 ? '#fef2f2' : '#ecfdf5', borderRadius: '12px', textAlign: 'center' }}>
-                                        <p style={{ margin: 0, fontSize: '12px', color: soldeData.solde_restant > 0 ? '#991b1b' : '#064e3b' }}>Solde restant</p>
-                                        <p style={{ margin: '4px 0 0', fontSize: '18px', fontWeight: 800, color: soldeData.solde_restant > 0 ? '#dc2626' : '#059669' }}>{formatMoney(soldeData.solde_restant)}</p>
+                                    <div style={{ padding: '16px', background: soldeData.total_restant > 0 ? '#fef2f2' : '#ecfdf5', borderRadius: '12px', textAlign: 'center' }}>
+                                        <p style={{ margin: 0, fontSize: '12px', color: soldeData.total_restant > 0 ? '#991b1b' : '#064e3b' }}>Solde restant</p>
+                                        <p style={{ margin: '4px 0 0', fontSize: '18px', fontWeight: 800, color: soldeData.total_restant > 0 ? '#dc2626' : '#059669' }}>{formatMoney(soldeData.total_restant)}</p>
                                     </div>
                                 </div>
 
@@ -1248,7 +1478,7 @@ export default function GestionPaiements() {
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', alignItems: 'center' }}>
                                                         <div>
                                                             <strong style={{ fontSize: '14px', color: '#3b82f6' }}>{f.numero_facture}</strong>
-                                                            <span style={{ marginLeft: '8px', color: '#64748b', fontSize: '12px' }}>— {f.libelle_frais}</span>
+                                                            <span style={{ marginLeft: '8px', color: '#64748b', fontSize: '12px' }}>— {f.type_frais_libelle}</span>
                                                         </div>
                                                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                                             <Badge statut={f.statut} />
@@ -1265,23 +1495,27 @@ export default function GestionPaiements() {
                                     </div>
                                 )}
 
-                                {/* Historique paiements */}
-                                {soldeData.paiements?.length > 0 && (
-                                    <>
-                                        <h4 style={{ margin: '0 0 10px', fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>Historique des Paiements</h4>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                            {soldeData.paiements.map((p: any, i: number) => (
-                                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: '#f8fafc', borderRadius: '8px', fontSize: '13px' }}>
-                                                    <div>
-                                                        <span style={{ fontWeight: 600 }}>{p.numero_recu}</span>
-                                                        <span style={{ color: '#94a3b8', marginLeft: '8px' }}>{formatDate(p.date_paiement)}</span>
+                                {/* Historique paiements — aplati depuis chaque facture (la réponse
+                                    backend n'a pas de tableau `paiements` à plat au niveau racine) */}
+                                {(() => {
+                                    const tousPaiements = (soldeData.factures || []).flatMap((f: any) => f.paiements || []);
+                                    return tousPaiements.length > 0 && (
+                                        <>
+                                            <h4 style={{ margin: '0 0 10px', fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>Historique des Paiements</h4>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                {tousPaiements.map((p: any, i: number) => (
+                                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 14px', background: '#f8fafc', borderRadius: '8px', fontSize: '13px' }}>
+                                                        <div>
+                                                            <span style={{ fontWeight: 600 }}>{p.numero_recu}</span>
+                                                            <span style={{ color: '#94a3b8', marginLeft: '8px' }}>{formatDate(p.date_paiement)}</span>
+                                                        </div>
+                                                        <span style={{ fontWeight: 700, color: '#059669' }}>{formatMoney(p.montant)}</span>
                                                     </div>
-                                                    <span style={{ fontWeight: 700, color: '#059669' }}>{formatMoney(p.montant)}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </>
-                                )}
+                                                ))}
+                                            </div>
+                                        </>
+                                    );
+                                })()}
                             </div>
                         ) : (
                             <p style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Impossible de charger les donnees</p>
@@ -1296,7 +1530,7 @@ export default function GestionPaiements() {
             {showFournisseurForm && (() => {
                 const info = CATEGORIE_INFO[decaisFormCategorie] || CATEGORIE_INFO['AUTRE'];
                 return (
-                    <div style={modalOverlay} onClick={() => setShowFournisseurForm(false)}>
+                    <div style={modalOverlay} onClick={() => { setShowFournisseurForm(false); resetFournisseurForm(); }}>
                         <div style={modalBox} onClick={e => e.stopPropagation()}>
                             {/* Header coloré selon la catégorie */}
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', padding: '16px 20px', borderRadius: '12px', background: info.bg, border: `1px solid ${info.color}30` }}>
@@ -1304,7 +1538,7 @@ export default function GestionPaiements() {
                                     {info.icon && <info.icon size={22} />}
                                     Nouveau Décaissement — {info.label}
                                 </h2>
-                                <button onClick={() => setShowFournisseurForm(false)} style={{ background: 'white', border: 'none', borderRadius: '10px', padding: '8px', cursor: 'pointer' }}>
+                                <button onClick={() => { setShowFournisseurForm(false); resetFournisseurForm(); }} style={{ background: 'white', border: 'none', borderRadius: '10px', padding: '8px', cursor: 'pointer' }}>
                                     <X size={18} />
                                 </button>
                             </div>
@@ -1313,11 +1547,21 @@ export default function GestionPaiements() {
                             <div style={{ marginBottom: '20px' }}>
                                 <label style={labelStyle}>Catégorie de dépense</label>
                                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                    {CATEGORIE_DEPENSES.map(cat => {
+                                    {/* SALAIRES exclu ici : les salaires se paient uniquement via la carte
+                                        "Salaires" (qui ouvre le formulaire dédié affichant le net à payer
+                                        réel), jamais via ce formulaire générique à montant libre. */}
+                                    {CATEGORIE_DEPENSES.filter(cat => cat !== 'SALAIRES').map(cat => {
                                         const ci = CATEGORIE_INFO[cat];
                                         const isActive = decaisFormCategorie === cat;
                                         return (
-                                            <button key={cat} onClick={() => setDecaisFormCategorie(cat)}
+                                            <button key={cat} onClick={() => {
+                                                setDecaisFormCategorie(cat);
+                                                // Le justificatif et le suivi analytique sont spécifiques à
+                                                // FOURNISSEUR : on les efface pour ne jamais rattacher le
+                                                // fichier/la classe d'une catégorie précédente à celle-ci.
+                                                setJustificatifFile(null);
+                                                setFournisseurForm(f => ({ ...f, source_fonds: 'CAISSE_PRINCIPALE', classe_id: '', departement: '' }));
+                                            }}
                                                 style={{ padding: '6px 12px', borderRadius: '8px', border: `2px solid ${isActive ? ci.color : '#e2e8f0'}`, background: isActive ? ci.bg : 'white', color: isActive ? ci.color : '#64748b', fontSize: '12px', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s' }}>
                                                 {ci.icon && <ci.icon size={14} />} {ci.label}
                                             </button>
@@ -1353,7 +1597,7 @@ export default function GestionPaiements() {
                                         <select value={fournisseurForm.mode_paiement}
                                             onChange={e => setFournisseurForm({ ...fournisseurForm, mode_paiement: e.target.value })}
                                             style={selectStyle}>
-                                            {MODES_PAIEMENT.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                                            {modesAffichables.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                                         </select>
                                     </div>
                                     <div>
@@ -1363,10 +1607,48 @@ export default function GestionPaiements() {
                                             placeholder="N° facture, bon de caisse..." style={inputStyle} />
                                     </div>
                                 </div>
+
+                                {decaisFormCategorie === 'FOURNISSEUR' && (
+                                    <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px', display: 'grid', gap: '14px' }}>
+                                        <div>
+                                            <label style={labelStyle}>Justificatif (facture / reçu)</label>
+                                            <input type="file" accept="image/*,.pdf"
+                                                onChange={e => setJustificatifFile(e.target.files?.[0] || null)}
+                                                style={{ ...inputStyle, padding: '8px' }} />
+                                        </div>
+                                        <div>
+                                            <label style={labelStyle}>Sortie de fonds depuis</label>
+                                            <select value={fournisseurForm.source_fonds}
+                                                onChange={e => setFournisseurForm({ ...fournisseurForm, source_fonds: e.target.value })}
+                                                style={selectStyle}>
+                                                <option value="CAISSE_PRINCIPALE">Caisse Principale (espèces)</option>
+                                                <option value="BANQUE">Compte Bancaire</option>
+                                                <option value="MOBILE_MONEY">Mobile Money (OM / MTN)</option>
+                                            </select>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                            <div>
+                                                <label style={labelStyle}>Suivi analytique — Classe</label>
+                                                <select value={fournisseurForm.classe_id}
+                                                    onChange={e => setFournisseurForm({ ...fournisseurForm, classe_id: e.target.value })}
+                                                    style={selectStyle}>
+                                                    <option value="">— Non affecté —</option>
+                                                    {classes.map(c => <option key={c.classe_id} value={c.classe_id}>{c.libelle}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label style={labelStyle}>Suivi analytique — Département</label>
+                                                <input value={fournisseurForm.departement}
+                                                    onChange={e => setFournisseurForm({ ...fournisseurForm, departement: e.target.value })}
+                                                    placeholder="Ex: Administration, Pédagogie..." style={inputStyle} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
 
                             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
-                                <button onClick={() => setShowFournisseurForm(false)} style={btnSecondary}>Annuler</button>
+                                <button onClick={() => { setShowFournisseurForm(false); resetFournisseurForm(); }} style={btnSecondary}>Annuler</button>
                                 <button onClick={handleFournisseurPayment} disabled={fournisseurLoading}
                                     style={{ ...btnPrimary, background: `linear-gradient(135deg, ${info.color}, ${info.color}cc)`, opacity: fournisseurLoading ? 0.6 : 1 }}>
                                     {fournisseurLoading ? 'Enregistrement...' : `Enregistrer le Décaissement`}
@@ -1485,7 +1767,7 @@ export default function GestionPaiements() {
                                                         </button>
                                                         {!ens.paye_ce_mois && (ens.salaire_base + ens.prime_mensuelle) > 0 && (
                                                             <button
-                                                                onClick={() => payerSalaireEnseignant(ens)}
+                                                                onClick={() => payerMoisCourantRapide(ens)}
                                                                 disabled={salairePaying === ens.id}
                                                                 style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: 'white', fontSize: '13px', fontWeight: 600, cursor: salairePaying === ens.id ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
                                                             >
@@ -1533,32 +1815,63 @@ export default function GestionPaiements() {
                                         </p>
                                     </div>
 
-                                    {/* Formulaire de paiement */}
+                                    {/* Arriérés multi-mois — calculés par le backend (base + primes - absences
+                                        - avances par mois), jamais un montant libre saisi ici. Le comptable
+                                        coche le(s) mois qu'il veut régler (tous par défaut), ou décoche pour
+                                        ne payer qu'un mois précis. */}
                                     <div style={{ display: 'grid', gap: '12px' }}>
-                                        <div>
-                                            <label style={labelStyle}>Montant du salaire (GNF) *</label>
-                                            <input type="number" value={salaireForm.montant}
-                                                onChange={e => setSalaireForm({ ...salaireForm, montant: e.target.value })}
-                                                placeholder="Ex: 2 500 000"
-                                                style={{ ...inputStyle, fontSize: '16px', fontWeight: 600 }} />
-                                        </div>
-                                        <div>
-                                            <label style={labelStyle}>Description (optionnel)</label>
-                                            <input value={salaireForm.description}
-                                                onChange={e => setSalaireForm({ ...salaireForm, description: e.target.value })}
-                                                style={inputStyle} />
-                                        </div>
+                                        {arrieresLoading ? (
+                                            <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>Calcul des arriérés...</p>
+                                        ) : arrieresError ? (
+                                            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px', padding: '14px 16px' }}>
+                                                <p style={{ margin: 0, fontSize: '13px', color: '#991b1b', fontWeight: 600 }}>
+                                                    Impossible de calculer les arriérés pour cet employé. Réessayez ou vérifiez sa fiche.
+                                                </p>
+                                            </div>
+                                        ) : arrieres && arrieres.mois_du.length > 0 ? (
+                                            <div style={{ background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '10px', padding: '12px 14px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                                    <p style={{ margin: 0, fontSize: '12px', color: '#0891b2', fontWeight: 700 }}>
+                                                        Mois en retard ({arrieres.mois_du.length}) — Total dû : {formatMoney(arrieres.total_du)}
+                                                    </p>
+                                                    <button type="button" onClick={() => setMoisSelectionnes(
+                                                        moisSelectionnes.length === arrieres.mois_du.length ? [] : arrieres.mois_du.map((m: any) => m.mois_concerne)
+                                                    )} style={{ background: 'none', border: 'none', color: '#0891b2', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                                                        {moisSelectionnes.length === arrieres.mois_du.length ? 'Tout décocher' : 'Tout cocher'}
+                                                    </button>
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '180px', overflowY: 'auto' }}>
+                                                    {arrieres.mois_du.map((m: any) => (
+                                                        <label key={m.mois_concerne} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '6px 8px', background: 'white', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
+                                                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                                <input type="checkbox" checked={moisSelectionnes.includes(m.mois_concerne)} onChange={() => toggleMoisSelectionne(m.mois_concerne)} />
+                                                                {m.mois_concerne}
+                                                            </span>
+                                                            <span style={{ fontWeight: 700, color: '#0e7490' }}>{formatMoney(m.net_a_payer)}</span>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                                <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #99f6e4', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                                    <span style={{ fontSize: '12px', color: '#64748b' }}>Total sélectionné ({moisSelectionnes.length} mois)</span>
+                                                    <span style={{ fontSize: '20px', fontWeight: 800, color: '#0e7490' }}>{formatMoney(montantSelectionne)}</span>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '14px 16px' }}>
+                                                <p style={{ margin: 0, fontSize: '13px', color: '#166534', fontWeight: 600 }}>À jour — aucun mois en retard sur les 12 derniers mois.</p>
+                                            </div>
+                                        )}
                                         <button
                                             onClick={() => payerSalaireEnseignant(selectedEns)}
-                                            disabled={salairePaying === selectedEns.id}
+                                            disabled={salairePaying === selectedEns.id || arrieresLoading || moisSelectionnes.length === 0}
                                             style={{
                                                 ...btnPrimary, background: 'linear-gradient(135deg, #0891b2, #0e7490)',
-                                                opacity: salairePaying === selectedEns.id ? 0.6 : 1,
+                                                opacity: (salairePaying === selectedEns.id || arrieresLoading || moisSelectionnes.length === 0) ? 0.6 : 1,
                                                 justifyContent: 'center', fontSize: '14px'
                                             }}>
                                             {salairePaying === selectedEns.id
                                                 ? 'Enregistrement...'
-                                                : <span style={{display: 'inline-flex', alignItems: 'center', gap: '4px'}}><Banknote size={14} /> Payer le Salaire</span>
+                                                : <span style={{display: 'inline-flex', alignItems: 'center', gap: '4px'}}><Banknote size={14} /> Payer {moisSelectionnes.length > 1 ? `${moisSelectionnes.length} mois` : 'le mois coché'} ({formatMoney(montantSelectionne)})</span>
                                             }
                                         </button>
                                     </div>
@@ -1591,5 +1904,13 @@ export default function GestionPaiements() {
                 </div>
             )}
         </div>
+    );
+}
+
+export default function Page() {
+    return (
+        <Suspense fallback={<div style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>Chargement...</div>}>
+            <GestionPaiements />
+        </Suspense>
     );
 }

@@ -162,7 +162,7 @@ export default function ProfilEnseignant() {
                     <h1 style={{ fontSize: '22px', fontWeight: 800, margin: 0 }}>Profil Enseignant</h1>
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
-                    <button onClick={() => setBadgeEns(ens)} className="btn btn-primary btn-sm" style={{ fontSize: '13px', background: '#10b981', borderColor: '#10b981' }}>
+                    <button onClick={() => setBadgeEns({ ...ens, role: 'ENSEIGNANT' })} className="btn btn-primary btn-sm" style={{ fontSize: '13px', background: '#10b981', borderColor: '#10b981' }}>
                         <UserCheck size={14} /> Voir la Carte
                     </button>
                     <button onClick={() => setQrEns(ens)} className="btn btn-outline btn-sm" style={{ fontSize: '13px', color: '#3b82f6', borderColor: '#3b82f6' }}>

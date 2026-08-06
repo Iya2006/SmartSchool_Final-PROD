@@ -105,6 +105,7 @@ export default function NouveauEleve() {
                 groupe_sanguin: formData.groupe_sanguin || null,
                 statut: formData.statut,
                 etablissement_id: etablissementId,
+                annee_id: anneeId,
                 classe_id: formData.classe_id ? parseInt(formData.classe_id) : null,
                 eleve_mot_de_passe: formData.eleve_mot_de_passe.trim() || null,
             };

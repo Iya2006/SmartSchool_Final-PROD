@@ -83,6 +83,13 @@ class Etablissement(Base):
 
 
 class AnneeScolaire(Base):
+    """Entité racine du cycle de vie d'une année scolaire — unifie ce qui était
+    avant séparé entre AnneeScolaire (pédagogique) et ExerciceComptable
+    (comptable, retiré : jamais réellement relié à Facture/Paiement). Cycle de
+    `statut` : PLANIFIEE (future, pas encore commencée) -> EN_COURS (active) ->
+    CLOTURE_COMPTABLE (comptabilité verrouillée en lecture seule, voir
+    app/api/annee_scolaire.py) -> ARCHIVEE (Phase 2 : archivage complet).
+    """
     __tablename__ = "ss_annees_scolaires"
     annee_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
@@ -91,6 +98,7 @@ class AnneeScolaire(Base):
     date_debut = Column(Date, nullable=False)
     date_fin = Column(Date, nullable=False)
     statut = Column(String(20), default="PLANIFIEE", nullable=False)
+    date_cloture_comptable = Column(Date, nullable=True)
     est_courante = Column(String(1), default="N", nullable=False)
     created_by = Column(String(100))
     created_date = Column(DateTime, server_default=func.now())
@@ -215,7 +223,11 @@ class Classe(Base):
     statut = Column(String(20), default="ACTIVE", nullable=False)
 
     etablissement = relationship("Etablissement", back_populates="classes")
-    inscriptions = relationship("Inscription", back_populates="classe")
+    # foreign_keys explicite : Inscription a DEUX FK vers Classe depuis la Phase 2
+    # (classe_id = inscription réelle, classe_cible_id = proposition de promotion
+    # non encore matérialisée) — sans ça, SQLAlchemy ne peut plus déterminer quelle
+    # colonne utiliser pour cette relation (AmbiguousForeignKeysError).
+    inscriptions = relationship("Inscription", back_populates="classe", foreign_keys="Inscription.classe_id")
     prof_principal = relationship("Enseignant", foreign_keys=[professeur_principal])
 
 
@@ -391,12 +403,27 @@ class Inscription(Base):
     type_inscription = Column(String(30), default="NOUVELLE")
     statut = Column(String(20), default="ACTIVE", nullable=False)
     role_classe = Column(String(20))  # CHEF_1, CHEF_2, CHEF_3 ou NULL
-    decision_fin_annee = Column(String(30))
+    decision_fin_annee = Column(String(30))  # ADMIS | REDOUBLANT | EXCLU | DIPLOME
     rang_final = Column(Integer)
     moyenne_annuelle = Column(Numeric(5, 2))
+    total_points = Column(Numeric(7, 2))
+
+    # Promotion V2 (Phase 2) : la proposition pour l'année suivante vit sur
+    # CETTE inscription (celle qui se termine) tant qu'elle n'est pas
+    # matérialisée par la réinscription — voir statut_reinscription.
+    niveau_cible_id = Column(Integer, ForeignKey("ss_niveaux.niveau_id"), nullable=True)
+    classe_cible_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
+    statut_promotion = Column(String(20), nullable=True)  # PROPOSE | VALIDE
+
+    # Réinscription V2 (Phase 2) : indépendante de la promotion — ne devient
+    # non-NULL qu'après validation de la promotion (A_REINSCRIRE), puis
+    # évolue vers REINSCRIT (crée la nouvelle Inscription + les frais, voir
+    # app/api/reinscription.py) ou un statut terminal sans suite
+    # (NON_REINSCRIT | TRANSFERE | ABANDON).
+    statut_reinscription = Column(String(20), nullable=True)
 
     eleve = relationship("Eleve", back_populates="inscriptions")
-    classe = relationship("Classe", back_populates="inscriptions")
+    classe = relationship("Classe", back_populates="inscriptions", foreign_keys=[classe_id])
 
 
 # ============================================================================
@@ -435,6 +462,10 @@ class Note(Base):
     valeur = Column(Numeric(5, 2))
     est_absent = Column(String(1), default="N")
     observation = Column(String(300))
+    # Module offline-first (sync.py) : détection de conflit à la resynchronisation
+    # (Last-Write-Wins comparé à `base_updated_at` envoyé par le client).
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_by = Column(String(100), nullable=True)
 
 
 class Bulletin(Base):
@@ -448,6 +479,7 @@ class Bulletin(Base):
     effectif_classe = Column(Integer)
     mention = Column(String(30))
     decision = Column(String(200))
+    appreciation_generale = Column(String(500))
     statut = Column(String(20), default="BROUILLON")
 
     lignes = relationship("BulletinLigne", back_populates="bulletin", cascade="all, delete-orphan")
@@ -485,11 +517,32 @@ class TypeFrais(Base):
     statut = Column(String(20), default="ACTIF")
 
 
+class TarifClasse(Base):
+    """
+    Montant d'un type de frais pour une classe précise (une école n'a pas la même
+    scolarité en maternelle qu'en terminale). Table pivot éditable indifféremment
+    depuis la page Comptabilité (par type de frais, toutes les classes) ou depuis la
+    fiche de configuration d'une classe (par classe, tous les types de frais) — les
+    deux écrans lisent/écrivent la même table, donc restent automatiquement synchronisés.
+    """
+    __tablename__ = "ss_tarifs_classe"
+    tarif_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    type_frais_id = Column(Integer, ForeignKey("ss_types_frais.type_frais_id"), nullable=False)
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    montant = Column(Numeric(12, 2), nullable=False)
+
+
 class Facture(Base):
     __tablename__ = "ss_factures"
     facture_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
     type_frais_id = Column(Integer, ForeignKey("ss_types_frais.type_frais_id"), nullable=True)
+    # Dénormalisé depuis Inscription.annee_id — avant, la seule façon de savoir
+    # à quelle année une facture appartient était de remonter par la jointure
+    # Inscription, ce qui rendait le verrouillage par année (clôture comptable)
+    # coûteux à vérifier. Nullable : backfillé pour les lignes existantes par
+    # script de migration, jamais recalculé après coup.
+    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=True)
     numero_facture = Column(String(30), unique=True, nullable=False)
     date_facture = Column(Date, server_default=func.current_date())
     montant_total = Column(Numeric(12, 2), default=0, nullable=False)
@@ -517,6 +570,8 @@ class Paiement(Base):
     __tablename__ = "ss_paiements"
     paiement_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     facture_id = Column(Integer, ForeignKey("ss_factures.facture_id"), nullable=False)
+    # Dénormalisé depuis Facture.annee_id — même raison que Facture.annee_id.
+    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=True)
     echeance_id = Column(Integer, ForeignKey("ss_echeances_factures.echeance_id"), nullable=True)
     numero_recu = Column(String(30), unique=True, nullable=False)
     date_paiement = Column(Date, server_default=func.current_date())
@@ -542,6 +597,12 @@ class Depense(Base):
     fournisseur = Column(String(200))
     reference = Column(String(150), nullable=True)
     statut = Column(String(20), default="EN_ATTENTE")
+    mode_paiement = Column(String(30), nullable=True)
+    facture_url = Column(String(500), nullable=True)
+    source_fonds = Column(String(30), nullable=True)
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
+    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=True)
+    departement = Column(String(100), nullable=True)
 
 
 # ============================================================================
@@ -557,6 +618,10 @@ class Presence(Base):
     statut_presence = Column(String(20), nullable=False)
     est_justifie = Column(String(1), default="N")
     motif = Column(String(300))
+    # Module offline-first (sync.py) : détection de conflit à la resynchronisation
+    # (Last-Write-Wins comparé à `base_updated_at` envoyé par le client).
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_by = Column(String(100), nullable=True)
 
 
 class Incident(Base):
@@ -963,6 +1028,10 @@ class Employe(Base):
     date_embauche = Column(Date, server_default=func.current_date())
     mobile_money = Column(String(50), nullable=True)
     statut = Column(String(20), default="ACTIF") # ACTIF / INACTIF
+    # Référence externe optionnelle vers le vrai dossier RH ("ENS_3"/"PERS_5"),
+    # utilisée par le module Paie pour faire de SS_EMPLOYES un miroir synchronisé
+    # de SS_ENSEIGNANTS/SS_UTILISATEURS au lieu d'une table disjointe.
+    source_ref = Column(String(20), nullable=True, unique=True)
 
 class Avance(Base):
     __tablename__ = "ss_avances"
@@ -1002,6 +1071,7 @@ class BulletinPaie(Base):
     date_paiement = Column(Date, nullable=True)
     mode_paiement = Column(String(50), nullable=True) # Cash / Mobile Money
     statut = Column(String(20), default="BROUILLON") # BROUILLON / PAYE
+    details_absences = Column(String(500), nullable=True) # Explication textuelle des absences QR et manuelles
 
 
 

@@ -1,0 +1,21 @@
+{
+  "name": "SMARTSCHOOL ERP",
+  "short_name": "SMARTSCHOOL",
+  "description": "Système de Gestion Scolaire — République de Guinée",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {
+      "src": "/guinea_coat_of_arms.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/guinea_coat_of_arms.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

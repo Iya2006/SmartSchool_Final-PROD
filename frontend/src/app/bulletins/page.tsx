@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
+import Pagination from '@/components/Pagination';
 
 
 
@@ -40,6 +41,14 @@ function BulletinsContent() {
     const [docSettings, setDocSettings] = useState<any>({});
     const printRef = useRef<HTMLDivElement>(null);
 
+    // Pagination + KPIs classe entière (une classe réelle peut dépasser 150
+    // élèves — sans ça, tous les bulletins s'affichaient sur une seule page).
+    const [bulletinsPage, setBulletinsPage] = useState(1);
+    const [bulletinsTotal, setBulletinsTotal] = useState(0);
+    const [classeKpis, setClasseKpis] = useState<{ moyenne: number | null; meilleure: number | null; plusFaible: number | null }>({ moyenne: null, meilleure: null, plusFaible: null });
+    const BULLETINS_PAGE_SIZE = 24;
+    const [poids, setPoids] = useState({ ecrit: 1, oral: 1, composition: 2 });
+
     // Infos de classe pour le bulletin
     const selectedClasseInfo = classes.find(c => c.classe_id === selectedClasse);
     const selectedTrimestreInfo = trimestres.find((t: any) => t.trimestre_id === selectedTrimestre);
@@ -47,13 +56,23 @@ function BulletinsContent() {
     useEffect(() => {
         const loadInit = async () => {
             try {
-                const [clsRes, triRes, paramRes] = await Promise.all([
+                const [clsRes, triRes, paramRes, notationRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}`),
                     api.get('/api/portail-enseignant/referentiels/trimestres'),
-                    api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=DOCUMENTS`).catch(() => ({ data: [] }))
+                    api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=DOCUMENTS`).catch(() => ({ data: [] })),
+                    api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=NOTATION`).catch(() => ({ data: [] })),
                 ]);
                 setClasses(clsRes.data);
                 setTrimestres(triRes.data);
+                const getPoids = (cle: string, fb: number) => {
+                    const p = (notationRes.data || []).find((s: any) => s.cle === cle);
+                    return p ? parseFloat(p.valeur) : fb;
+                };
+                setPoids({
+                    ecrit: getPoids('notation.poids_ecrit', 1),
+                    oral: getPoids('notation.poids_oral', 1),
+                    composition: getPoids('notation.poids_composition', 2),
+                });
 
                 const parsed: any = {
                     champ_photo: true,
@@ -74,6 +93,22 @@ function BulletinsContent() {
                     if (p.type_valeur === 'BOOLEAN') parsed[key] = p.valeur === 'true';
                     else if (p.type_valeur === 'NUMBER') parsed[key] = parseFloat(p.valeur);
                     else parsed[key] = p.valeur;
+                }
+                // Paramètres > Notation > Affichage Bulletins (`notation.display.*`)
+                // prend le dessus sur son équivalent `documents.champ_*` quand
+                // présent — même règle de fusion que le backend (voir
+                // get_bulletin_display_flags), pour que CETTE modale reste
+                // synchronisée quelle que soit la page utilisée pour configurer.
+                const notationDisplay: Record<string, string> = {};
+                for (const p of (notationRes.data || [])) {
+                    if (p.cle.startsWith('notation.display.')) {
+                        notationDisplay[p.cle.replace('notation.display.', '')] = p.valeur;
+                    }
+                }
+                if ('rang' in notationDisplay) parsed.champ_rang = notationDisplay.rang === 'true';
+                if ('stats_matiere' in notationDisplay) {
+                    parsed.champ_moyenne_classe = notationDisplay.stats_matiere === 'true';
+                    parsed.champ_min_max = notationDisplay.stats_matiere === 'true';
                 }
                 setDocSettings(parsed);
 
@@ -96,15 +131,26 @@ function BulletinsContent() {
         if (!selectedClasse) return;
         setLoading(true);
         try {
-            const res = await api.get(`/api/evaluations/classe/${selectedClasse}/bulletins?trimestre_id=${selectedTrimestre}`);
+            const skip = (bulletinsPage - 1) * BULLETINS_PAGE_SIZE;
+            const res = await api.get(`/api/evaluations/classe/${selectedClasse}/bulletins?trimestre_id=${selectedTrimestre}&skip=${skip}&limit=${BULLETINS_PAGE_SIZE}`);
             setBulletins(res.data);
-        } catch (e) { console.error(e); setBulletins([]); }
+            const h = res.headers || {};
+            setBulletinsTotal(h['x-total-count'] !== undefined ? Number(h['x-total-count']) : res.data.length);
+            setClasseKpis({
+                moyenne: h['x-moyenne-classe'] !== undefined ? Number(h['x-moyenne-classe']) : null,
+                meilleure: h['x-meilleure-moyenne'] !== undefined ? Number(h['x-meilleure-moyenne']) : null,
+                plusFaible: h['x-plus-faible-moyenne'] !== undefined ? Number(h['x-plus-faible-moyenne']) : null,
+            });
+        } catch (e) { console.error(e); setBulletins([]); setBulletinsTotal(0); }
         setLoading(false);
-    }, [selectedClasse, selectedTrimestre]);
+    }, [selectedClasse, selectedTrimestre, bulletinsPage]);
 
     useEffect(() => {
         if (selectedClasse) loadBulletins();
     }, [selectedClasse, selectedTrimestre, loadBulletins]);
+
+    // Revenir à la page 1 en changeant de classe/trimestre
+    useEffect(() => { setBulletinsPage(1); }, [selectedClasse, selectedTrimestre]);
 
     const groupedClasses = classes.reduce((acc: any, cls: any) => {
         const cycle = cls.libelle?.includes('Année') ? 'Primaire' :
@@ -230,6 +276,14 @@ function BulletinsContent() {
                 </div>
             </div>
 
+            {/* ═══ EXPLICATION DU CALCUL — transparence pour l'admin ═══ */}
+            <div style={{ padding: '12px 18px', borderRadius: '12px', background: '#f5f3ff', border: '1px solid #ddd6fe', marginBottom: '20px', fontSize: '12.5px', color: '#5b21b6', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                <ClipboardList size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
+                <span>
+                    <strong>Comment ces moyennes sont calculées :</strong> pour chaque matière, moyenne = (meilleure note Écrite×{poids.ecrit} + meilleure note Orale×{poids.oral} + Composition×{poids.composition}) ÷ ({poids.ecrit} + {poids.oral} + {poids.composition}) — une catégorie sans note est exclue. Moyenne générale = somme (moyenne matière × coefficient matière) ÷ somme des coefficients. Pondération configurable dans Paramètres &gt; Notation.
+                </span>
+            </div>
+
             {/* ═══ SÉLECTEURS ═══ */}
             <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <select value={selectedClasse || ''} onChange={e => setSelectedClasse(Number(e.target.value) || null)}
@@ -256,7 +310,7 @@ function BulletinsContent() {
                 {filteredBulletins.length > 0 && (
                     <div style={{ position: 'relative', marginLeft: 'auto' }}>
                         <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                        <input type="text" placeholder="Rechercher un élève..." value={search} onChange={e => setSearch(e.target.value)}
+                        <input type="text" placeholder="Rechercher sur cette page..." value={search} onChange={e => setSearch(e.target.value)}
                             style={{ padding: '10px 12px 10px 36px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '250px' }} />
                     </div>
                 )}
@@ -287,10 +341,10 @@ function BulletinsContent() {
                     {/* Stats Bar */}
                     <div style={{ display: 'flex', gap: '16px', marginBottom: '20px', flexWrap: 'wrap' }}>
                         {[
-                            { label: 'Effectif', value: filteredBulletins.length, icon: GraduationCap, bg: '#eef2ff', color: '#4f46e5' },
-                            { label: 'Moy. Classe', value: (filteredBulletins.reduce((s, b) => s + (b.moyenne_generale || 0), 0) / filteredBulletins.length).toFixed(2), icon: BarChart2, bg: '#ecfdf5', color: '#059669' },
-                            { label: 'Meilleure Moy.', value: Math.max(...filteredBulletins.map(b => b.moyenne_generale || 0)).toFixed(2), icon: Trophy, bg: '#fffbeb', color: '#d97706' },
-                            { label: 'Plus Faible', value: Math.min(...filteredBulletins.map(b => b.moyenne_generale || 0)).toFixed(2), icon: TrendingDown, bg: '#fef2f2', color: '#dc2626' },
+                            { label: 'Effectif', value: bulletinsTotal, icon: GraduationCap, bg: '#eef2ff', color: '#4f46e5' },
+                            { label: 'Moy. Classe', value: classeKpis.moyenne !== null ? classeKpis.moyenne.toFixed(2) : '—', icon: BarChart2, bg: '#ecfdf5', color: '#059669' },
+                            { label: 'Meilleure Moy.', value: classeKpis.meilleure !== null ? classeKpis.meilleure.toFixed(2) : '—', icon: Trophy, bg: '#fffbeb', color: '#d97706' },
+                            { label: 'Plus Faible', value: classeKpis.plusFaible !== null ? classeKpis.plusFaible.toFixed(2) : '—', icon: TrendingDown, bg: '#fef2f2', color: '#dc2626' },
                         ].map((s, i) => (
                             <div key={i} style={{ flex: '1 1 200px', padding: '14px 18px', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '12px' }}>
                                 <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: s.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><s.icon size={20} color={s.color} /></div>
@@ -304,15 +358,15 @@ function BulletinsContent() {
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 16px' }}>
                         <h2 style={{ fontSize: '18px', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <ClipboardList size={20} color="#059669" /> {filteredBulletins.length} bulletin(s) — {selectedClasseInfo?.libelle} — {selectedTrimestreInfo?.libelle || `Trimestre ${selectedTrimestre}`}
+                            <ClipboardList size={20} color="#059669" /> {bulletinsTotal} bulletin(s) — {selectedClasseInfo?.libelle} — {selectedTrimestreInfo?.libelle || `Trimestre ${selectedTrimestre}`}
                         </h2>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                             <span style={{ background: '#f0fdf4', color: '#166534', padding: '6px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <CheckCircle2 size={14} /> {filteredBulletins.filter(b => b.statut === 'PUBLIE').length} publiés
+                                <CheckCircle2 size={14} /> {filteredBulletins.filter(b => b.statut === 'PUBLIE').length} publiés (page)
                             </span>
                             {filteredBulletins.some(b => b.statut !== 'PUBLIE') && (
                                 <span style={{ padding: '6px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, background: '#fef3c7', color: '#a16207', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <Clock size={14} /> {filteredBulletins.filter(b => b.statut !== 'PUBLIE').length} brouillon(s)
+                                    <Clock size={14} /> {filteredBulletins.filter(b => b.statut !== 'PUBLIE').length} brouillon(s) (page)
                                 </span>
                             )}
                             {filteredBulletins.some(b => b.statut !== 'PUBLIE') && (
@@ -372,6 +426,9 @@ function BulletinsContent() {
                                 </motion.div>
                             );
                         })}
+                    </div>
+                    <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', marginTop: '4px' }}>
+                        <Pagination page={bulletinsPage} pageSize={BULLETINS_PAGE_SIZE} total={bulletinsTotal} onPageChange={setBulletinsPage} />
                     </div>
                 </motion.div>
             )}

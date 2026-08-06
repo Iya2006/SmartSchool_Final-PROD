@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useApp } from '@/context/AppContext';
 import { motion } from 'framer-motion';
 import {
@@ -14,38 +15,31 @@ import {
 } from 'recharts';
 import api from '@/lib/api';
 import Link from 'next/link';
+import { modePaiementLabel } from '@/lib/modesPaiement';
 
 const COLORS = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#64748b'];
-const fmt = (n: number) => n.toLocaleString('fr-GN') + ' GNF';
-
-const MODE_LABELS: Record<string, string> = {
-    'ESPECES': 'Espèces', 'CHEQUE': 'Chèque', 'MOBILE_MONEY': 'Mobile Money',
-    'VIREMENT': 'Virement', 'ORANGE_MONEY': 'Orange Money', 'MTN_MONEY': 'MTN Money',
-};
+const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN') + ' GNF';
 
 export default function DashboardFinancierPage() {
     const { etablissementId, anneeId } = useApp();
-    const [data, setData] = useState<any>(null);
-    const [loading, setLoading] = useState(true);
-    const [period, setPeriod] = useState<'ANNEE' | 'TRIMESTRE' | 'MOIS'>('ANNEE');
+    const [period, setPeriod] = React.useState<'ANNEE' | 'TRIMESTRE' | 'MOIS'>('ANNEE');
 
-    const fetchDashboard = () => {
-        setLoading(true);
-        api.get(`/api/finance/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`)
-            .then(res => {
-                setData(res.data);
-                setLoading(false);
-            })
-            .catch(() => {
-                setLoading(false);
-            });
-    };
+    // React Query : les données sont mises en cache (localStorage) et servies
+    // immédiatement même hors-ligne (networkMode: 'offlineFirst'), avec un
+    // rafraîchissement en arrière-plan dès que la connexion le permet. Le
+    // backend met lui-même en cache cette réponse côté Redis (TTL 60s).
+    const { data, isLoading } = useQuery({
+        queryKey: ['finance-dashboard', etablissementId, anneeId],
+        queryFn: async () => {
+            const res = await api.get(`/api/finance/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
+            return res.data;
+        },
+        // Le cache Redis backend a lui-même un TTL de 60s : on repolle au même
+        // rythme pour qu'un onglet resté ouvert ne reste jamais figé indéfiniment.
+        refetchInterval: 60_000,
+    });
 
-    useEffect(() => {
-        fetchDashboard();
-    }, [etablissementId, anneeId]);
-
-    if (loading) return (
+    if (isLoading && !data) return (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', flexDirection: 'column', gap: 16 }}>
             <Loader2 size={40} className="animate-spin" color="#10b981" />
             <p style={{ color: '#64748b' }}>Chargement du tableau de bord financier...</p>
@@ -55,10 +49,12 @@ export default function DashboardFinancierPage() {
     if (!data) return <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Erreur de chargement</div>;
 
     const kpis = data.kpis;
-    
-    // Simulate period calculations if frontend-filtered (e.g. Month = revenues_mois, Year = total_paye)
-    const displayRevenu = period === 'MOIS' ? kpis.revenus_mois : period === 'TRIMESTRE' ? kpis.revenus_mois * 2.8 : kpis.total_paye;
-    const displayDepense = period === 'MOIS' ? kpis.total_depenses * 0.15 : period === 'TRIMESTRE' ? kpis.total_depenses * 0.45 : kpis.total_depenses;
+
+    // Les trois périodes sont désormais calculées côté backend à partir de
+    // vraies requêtes datées (voir GET /api/finance/dashboard), plus de
+    // multiplicateurs arbitraires côté client.
+    const displayRevenu = period === 'MOIS' ? kpis.revenus_mois : period === 'TRIMESTRE' ? kpis.revenus_trimestre : kpis.total_paye;
+    const displayDepense = period === 'MOIS' ? kpis.depenses_mois : period === 'TRIMESTRE' ? kpis.depenses_trimestre : kpis.total_depenses;
     const displaySolde = displayRevenu - displayDepense;
 
     const mainKpis = [
@@ -89,7 +85,7 @@ export default function DashboardFinancierPage() {
     ];
 
     const pieData = (data.repartition_modes || []).map((m: any) => ({
-        name: MODE_LABELS[m.mode] || m.mode, value: m.total
+        name: modePaiementLabel(m.mode), value: m.total
     }));
 
     return (
@@ -246,7 +242,7 @@ export default function DashboardFinancierPage() {
                     <p style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Factures non réglées</p>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
                         <span style={{ fontSize: 24, fontWeight: 800, color: '#ef4444' }}>{kpis.nb_impayes || 0}</span>
-                        <span style={{ fontSize: 12, color: '#64748b' }}>élèves</span>
+                        <span style={{ fontSize: 12, color: '#64748b' }}>factures ({kpis.nb_eleves_impayes || 0} élève(s))</span>
                     </div>
                 </div>
                 <div style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0' }}>

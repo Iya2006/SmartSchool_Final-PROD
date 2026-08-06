@@ -2,7 +2,7 @@
 
 import { useApp } from '@/context/AppContext';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     MessageCircle, ChevronRight, Loader2, Plus, Send, Eye, X, Calendar,
@@ -74,7 +74,7 @@ const OBJET_CONFIG: Record<string, { label: string; icon: string; color: string;
 };
 const JOURS_L: Record<string, string> = { LUNDI: 'Lun', MARDI: 'Mar', MERCREDI: 'Mer', JEUDI: 'Jeu', VENDREDI: 'Ven' };
 
-export default function CommunicationAdminPage() {
+function CommunicationAdminPageInner() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [tab, setTab] = useState<'messages' | 'demandes' | 'parents'>('demandes');
@@ -108,7 +108,7 @@ export default function CommunicationAdminPage() {
     const [parentMessages, setParentMessages] = useState<ParentMsgItem[]>([]);
     const [parentMsgLoading, setParentMsgLoading] = useState(false);
     const [showNewParentMsg, setShowNewParentMsg] = useState(false);
-    const [pmDestType, setPmDestType] = useState<'TOUS_PARENTS'|'CLASSE_PARENTS'|'PARENT'|'TOUS_ENSEIGNANTS'|'ENSEIGNANT'|'TOUS_ELEVES'|'CLASSE_ELEVES'|'ELEVE'>('TOUS_PARENTS');
+    const [pmDestType, setPmDestType] = useState<'TOUS_PARENTS'|'CLASSE_PARENTS'|'PARENT'|'TOUS_ENSEIGNANTS'|'CLASSE_ENSEIGNANTS'|'ENSEIGNANT'|'TOUS_ELEVES'|'CLASSE_ELEVES'|'ELEVE'>('TOUS_PARENTS');
     const [pmDestId, setPmDestId] = useState<number|null>(null);
     const [pmObjet, setPmObjet] = useState('GENERAL');
     const [pmSujet, setPmSujet] = useState('');
@@ -157,7 +157,7 @@ export default function CommunicationAdminPage() {
             setElevesList(elvR.data);
         } catch (err) { console.error(err); }
         finally { setLoading(false); }
-    }, []);
+    }, [etablissementId, anneeId]);
 
     const loadParentMessages = useCallback(async () => {
         setParentMsgLoading(true);
@@ -174,17 +174,34 @@ export default function CommunicationAdminPage() {
         if (!pmSujet.trim()) { showError('Le sujet est requis'); return; }
         setPmSending(true);
         try {
-            await api.post('/api/communication/messages-parents', {
-                destinataire_type: pmDestType,
-                destinataire_id: pmDestId,
-                objet_type: pmObjet,
-                sujet: pmSujet,
-                contenu: pmContenu,
-            });
+            // /messages-parents n'accepte QUE les destinataires PARENT/TOUS_PARENTS/
+            // CLASSE_PARENTS (rejette tout le reste avec "destinataire_type invalide")
+            // — pourtant ce même modal sert aussi à écrire à un enseignant ou un élève
+            // (pré-rempli depuis leur fiche profil). On route donc vers l'endpoint
+            // générique /messages pour tout destinataire non-parent.
+            const estParent = pmDestType === 'PARENT' || pmDestType === 'TOUS_PARENTS' || pmDestType === 'CLASSE_PARENTS';
+            if (estParent) {
+                await api.post('/api/communication/messages-parents', {
+                    destinataire_type: pmDestType,
+                    destinataire_id: pmDestId,
+                    objet_type: pmObjet,
+                    sujet: pmSujet,
+                    contenu: pmContenu,
+                });
+            } else {
+                await api.post('/api/communication/messages', {
+                    expediteur_type: 'ADMIN',
+                    destinataire_type: pmDestType,
+                    destinataire_id: pmDestId,
+                    objet_type: pmObjet,
+                    sujet: pmSujet,
+                    contenu: pmContenu,
+                });
+            }
             showSuccess('Message envoyé avec succès !');
             setShowNewParentMsg(false);
             setPmSujet(''); setPmContenu('');
-            loadParentMessages();
+            if (estParent) loadParentMessages();
         } catch (err: any) { showError(err.response?.data?.detail || 'Erreur'); }
         finally { setPmSending(false); }
     };
@@ -1069,5 +1086,13 @@ export default function CommunicationAdminPage() {
                 )}
             </AnimatePresence>
         </div>
+    );
+}
+
+export default function CommunicationAdminPage() {
+    return (
+        <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}><Loader2 size={32} style={{ animation: 'spin 1s linear infinite' }} /></div>}>
+            <CommunicationAdminPageInner />
+        </Suspense>
     );
 }

@@ -1,12 +1,15 @@
 'use client';
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, Suspense } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { 
-    Banknote, AlertTriangle, Wallet, LayoutDashboard, 
-    FileText, Users, LogOut, Menu, ChevronDown, ChevronRight
+import {
+    Banknote, AlertTriangle, LayoutDashboard,
+    FileText, Users, LogOut, Menu, ChevronDown, ChevronRight,
+    CreditCard, Building2, Zap, Receipt, GraduationCap, Download, UserCheck
 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { useApp } from '@/context/AppContext';
 
 const MODULES = [
     { 
@@ -15,12 +18,26 @@ const MODULES = [
         icon: Banknote, 
         path: '/comptabilite/encaissement',
     },
+    {
+        id: 'frais', label: 'Frais Scolaires', icon: Receipt, path: '/comptabilite/frais',
+        subItems: [
+            { id: 'frais-types', label: 'Tarifs & Types de frais', path: '/comptabilite/frais?tab=types', tab: 'types' },
+            { id: 'frais-factures', label: 'Factures', path: '/comptabilite/frais?tab=factures', tab: 'factures' },
+            { id: 'frais-echeances', label: 'Échéanciers', path: '/comptabilite/frais?tab=echeances', tab: 'echeances' },
+            { id: 'frais-paiements', label: 'Encaissements', path: '/comptabilite/frais?tab=paiements', tab: 'paiements' },
+        ]
+    },
     { id: 'impayes', label: 'Suivi des Impayés', icon: AlertTriangle, path: '/comptabilite/impayes' },
-    { id: 'depenses', label: 'Dépenses', icon: Wallet, path: '/comptabilite/depenses' },
+    { id: 'reinscription', label: 'Réinscriptions', icon: UserCheck, path: '/comptabilite/reinscription' },
+    { id: 'paiements', label: 'Gestion des Paiements', icon: CreditCard, path: '/comptabilite/paiements' },
+    { id: 'auxiliaire', label: 'Comptabilité Auxiliaire', icon: Building2, path: '/comptabilite/auxiliaire' },
+    { id: 'automatisations', label: 'Automatisations', icon: Zap, path: '/comptabilite/automatisations' },
+    { id: 'scolaire', label: 'Solvabilité Scolaire', icon: GraduationCap, path: '/comptabilite/scolaire' },
     { id: 'dashboard', label: 'Tableau de Bord', icon: LayoutDashboard, path: '/comptabilite/dashboard' },
-    { id: 'rapports', label: 'Rapports et Exports', icon: FileText, path: '/comptabilite/rapports' },
-    { 
-        id: 'salaires', 
+    { id: 'rapports', label: 'Rapports Financiers', icon: FileText, path: '/comptabilite/rapports' },
+    { id: 'exports', label: 'Journal & Exports CSV', icon: Download, path: '/comptabilite/exports' },
+    {
+        id: 'salaires',
         label: 'Salaires et Personnel', 
         icon: Users, 
         path: '/comptabilite/salaires',
@@ -173,61 +190,18 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
 }
 
 export default function ComptabiliteLayout({ children }: { children: React.ReactNode }) {
-    const router = useRouter();
     const pathname = usePathname();
     const [isSidebarOpen, setSidebarOpen] = useState(true);
-    const [isAuthenticated, setIsAuthenticated] = useState(false);
-    const [comptableInfo, setComptableInfo] = useState<{
-        nom?: string;
-        prenom?: string;
-        etablissement_nom?: string;
-    } | null>(null);
+    const { user, isAuthenticated, logout } = useAuth();
+    const { etablissementNom } = useApp();
 
-    useEffect(() => {
-        const session = sessionStorage.getItem('comptabilite_auth');
-        const token = localStorage.getItem('smartschool_token');
-        const smartschoolUser = localStorage.getItem('smartschool_user');
-
-        let isAuth = false;
-        if (smartschoolUser) {
-            try {
-                const parsed = JSON.parse(smartschoolUser);
-                if (parsed?.role === 'COMPTABLE' || parsed?.role === 'ADMIN') {
-                    isAuth = true;
-                }
-            } catch {}
-        }
-        if (session || token) {
-            isAuth = true;
-        }
-
-        if (!isAuth && pathname !== '/comptabilite/login') {
-            router.push('/comptabilite/login');
-        } else if (isAuth) {
-            setIsAuthenticated(true);
-            if (pathname === '/comptabilite') {
-                router.push('/comptabilite/dashboard');
-            }
-            if (session) {
-                try {
-                    const data = JSON.parse(session);
-                    setComptableInfo(data);
-                } catch (e) {
-                    setComptableInfo({
-                        nom: 'Comptable',
-                        prenom: 'Admin',
-                        etablissement_nom: 'Portail Financier'
-                    });
-                }
-            }
-        }
-    }, [pathname, router]);
-
-    if (!isAuthenticated && pathname === '/comptabilite/login') {
-        return <>{children}</>;
-    }
-
-    if (!isAuthenticated) return null;
+    // L'authentification et le contrôle d'accès par rôle sont déjà gérés
+    // globalement par AuthProvider (voir frontend/src/context/AuthContext.tsx +
+    // frontend/src/lib/roleAccess.ts), exactement comme les autres sections
+    // admin (/parametres, /eleves, ...). Ce layout n'a plus besoin de sa propre
+    // session parallèle (ancien PIN/login comptable) : on affiche simplement un
+    // état de chargement tant que le contexte global n'a pas confirmé l'accès.
+    if (!isAuthenticated || !user) return null;
 
     return (
         <div style={{ display: 'flex', height: '100vh', backgroundColor: '#f8fafc', overflow: 'hidden' }}>
@@ -280,24 +254,19 @@ export default function ComptabiliteLayout({ children }: { children: React.React
                                 border: '1px solid #d1fae5',
                                 fontSize: '14px'
                             }}>
-                                {comptableInfo?.prenom?.[0] || 'C'}
+                                {user.prenom?.[0] || 'C'}
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column' }}>
                                 <p style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#0f172a', lineHeight: '1.2' }}>
-                                    {comptableInfo ? `${comptableInfo.prenom} ${comptableInfo.nom}` : 'Admin Comptable'}
+                                    {user.prenom} {user.nom}
                                 </p>
                                 <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#64748b', fontWeight: '500', lineHeight: '1.1' }}>
-                                    {comptableInfo?.etablissement_nom || 'Portail Financier'}
+                                    {etablissementNom || 'Portail Financier'}
                                 </p>
                             </div>
                         </div>
                         <button 
-                            onClick={() => {
-                                sessionStorage.removeItem('comptabilite_auth');
-                                localStorage.removeItem('smartschool_token');
-                                localStorage.removeItem('smartschool_user');
-                                router.push('/comptabilite/login');
-                            }}
+                            onClick={logout}
                             style={{
                                 background: '#fee2e2',
                                 color: '#ef4444',

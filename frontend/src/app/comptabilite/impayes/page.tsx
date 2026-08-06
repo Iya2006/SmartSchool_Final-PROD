@@ -11,6 +11,9 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
+import Pagination from '@/components/Pagination';
+import AnneeFilter from '@/components/AnneeFilter';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 /* ───── Types ───── */
 type Impaye = {
@@ -44,7 +47,7 @@ function RetardBadge({ jours }: { jours: number }) {
     return <span style={{ padding: '3px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, backgroundColor: bg, color }}>{jours}j</span>;
 }
 
-const fmt = (n: number) => n.toLocaleString('fr-GN') + ' GNF';
+const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN') + ' GNF';
 
 /* ───── Sorting ───── */
 type SortKeyImp = 'eleve' | 'classe' | 'montant_restant' | 'jours_retard' | 'statut' | 'montant_total';
@@ -77,16 +80,18 @@ function SortHeader({ label, sortKey, currentKey, currentDir, onSort }: {
 
 export default function ImpayesPage() {
     const { etablissementId, anneeId } = useApp();
-    const [impayes, setImpayes] = useState<Impaye[]>([]);
-    const [classes, setClasses] = useState<any[]>([]);
-    const [typesFrais, setTypesFrais] = useState<any[]>([]);
-    const [stats, setStats] = useState<any>(null);
-    const [loading, setLoading] = useState(true);
+    // Année consultée — par défaut l'année en cours ; filtrable pour l'historique.
+    const [filterAnnee, setFilterAnnee] = useState<number>(anneeId);
+    useEffect(() => { setFilterAnnee(anneeId); }, [anneeId]);
     const [search, setSearch] = useState('');
     const [filterClasse, setFilterClasse] = useState('');
     const [filterStatut, setFilterStatut] = useState('');
     const [filterTypeFrais, setFilterTypeFrais] = useState('');
     const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+    // Pagination
+    const pageSize = 25;
+    const [page, setPage] = useState(1);
 
     // Sorting
     const [sortKeyImp, setSortKeyImp] = useState<SortKeyImp>('jours_retard');
@@ -100,43 +105,71 @@ export default function ImpayesPage() {
     // Notification
     const [notifying, setNotifying] = useState(false);
 
-    const showMsg = (text: string, type: 'success' | 'error') => {
-        setMessage({ text, type });
+    const showMsg = (text: any, type: 'success' | 'error') => {
+        let messageText = typeof text === 'string' ? text : 'Erreur inattendue';
+        if (Array.isArray(text)) {
+            messageText = text.map((t: any) => t.msg || JSON.stringify(t)).join(', ');
+        } else if (typeof text === 'object' && text !== null) {
+            messageText = text.msg || text.message || JSON.stringify(text);
+        }
+        setMessage({ text: messageText, type });
         setTimeout(() => setMessage(null), 4000);
     };
 
-    const fetchData = useCallback(async () => {
-        setLoading(true);
-        try {
-            const params = new URLSearchParams({ etablissement_id: String(etablissementId), annee_id: String(anneeId) });
-            if (filterClasse) params.set('classe_id', filterClasse);
-            if (filterStatut) params.set('statut', filterStatut);
-            if (filterTypeFrais) params.set('type_frais_id', filterTypeFrais);
+    const queryClient = useQueryClient();
+
+    const { data: pageData, isLoading: loading, refetch: fetchData } = useQuery({
+        queryKey: ['impayes', etablissementId, filterAnnee, page, filterClasse, filterStatut, filterTypeFrais, search],
+        queryFn: async () => {
+            const skip = (page - 1) * pageSize;
+            const params = new URLSearchParams({
+                etablissement_id: String(etablissementId),
+                annee_id: String(filterAnnee),
+                skip: String(skip),
+                limit: String(pageSize),
+            });
+            const statsParams = new URLSearchParams({
+                etablissement_id: String(etablissementId),
+                annee_id: String(filterAnnee),
+            });
+            if (filterClasse) { params.set('classe_id', filterClasse); statsParams.set('classe_id', filterClasse); }
+            if (filterStatut) { params.set('statut', filterStatut); statsParams.set('statut', filterStatut); }
+            if (filterTypeFrais) { params.set('type_frais_id', filterTypeFrais); statsParams.set('type_frais_id', filterTypeFrais); }
+            if (search) params.set('search', search);
 
             const [impRes, statsRes, classRes, tfRes] = await Promise.all([
                 api.get(`/api/finance/impayes?${params}`),
-                api.get(`/api/finance/factures/stats?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
-                api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
+                api.get(`/api/finance/factures/stats?${statsParams}`),
+                api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${filterAnnee}`),
                 api.get('/api/finance/types-frais').catch(() => ({ data: [] }))
             ]);
-            setImpayes(impRes.data);
-            setStats(statsRes.data);
-            setClasses(classRes.data || []);
-            setTypesFrais(tfRes.data || []);
-        } catch { showMsg('Erreur de chargement des données', 'error'); }
-        setLoading(false);
-    }, [etablissementId, anneeId, filterClasse, filterStatut, filterTypeFrais]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+            const totalCount = impRes.headers?.['x-total-count'];
 
-    const filtered = impayes.filter(i => {
-        if (!search) return true;
-        const q = search.toLowerCase();
-        return `${i.eleve_prenom} ${i.eleve_nom}`.toLowerCase().includes(q) ||
-            i.eleve_matricule.toLowerCase().includes(q) ||
-            i.classe_nom.toLowerCase().includes(q) ||
-            i.parent_nom.toLowerCase().includes(q);
+            return {
+                impayes: impRes.data,
+                total: totalCount !== undefined ? Number(totalCount) : impRes.data.length,
+                stats: statsRes.data,
+                classes: classRes.data || [],
+                typesFrais: tfRes.data || []
+            };
+        }
     });
+
+    const impayes = pageData?.impayes || [];
+    const total = pageData?.total || 0;
+    const stats = pageData?.stats || null;
+    const classes = pageData?.classes || [];
+    const typesFrais = pageData?.typesFrais || [];
+
+    // Réinitialiser la pagination quand un filtre change, pour éviter une page vide
+    useEffect(() => { setPage(1); }, [filterClasse, filterStatut, filterTypeFrais, search]);
+
+    // La recherche est désormais envoyée au backend (voir queryKey ci-dessus) :
+    // `impayes` ne contient déjà que les lignes de la page courante correspondant
+    // à la recherche active. `filtered` reste défini par souci de compatibilité
+    // avec le reste du fichier (tri, export...).
+    const filtered = impayes;
 
     const openAvis = async (factureId: number) => {
         setAvisLoading(true); setShowAvis(true);
@@ -151,7 +184,7 @@ export default function ImpayesPage() {
         if (!confirm('Envoyer les rappels de paiement à tous les parents concernés ?')) return;
         setNotifying(true);
         try {
-            const res = await api.post(`/api/finance/communication/notifier-impayes?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
+            const res = await api.post(`/api/finance/communication/notifier-impayes?etablissement_id=${etablissementId}&annee_id=${filterAnnee}`);
             showMsg(`${res.data.nb_notifies} notification(s) envoyée(s) aux parents`, 'success');
         } catch { showMsg('Erreur lors de l\'envoi', 'error'); }
         setNotifying(false);
@@ -159,7 +192,7 @@ export default function ImpayesPage() {
 
     const exportCSV = () => {
         const header = 'Élève,Matricule,Classe,Parent,Tél. Parent,Montant Dû,Payé,Reste,Jours Retard,Statut\n';
-        const rows = filtered.map(i =>
+        const rows = filtered.map((i: any) =>
             `"${i.eleve_prenom} ${i.eleve_nom}",${i.eleve_matricule},"${i.classe_nom}","${i.parent_nom}",${i.parent_telephone},${i.montant_total},${i.montant_paye},${i.montant_restant},${i.jours_retard},${i.statut}`
         ).join('\n');
         const blob = new Blob(['\ufeff' + header + rows], { type: 'text/csv;charset=utf-8;' });
@@ -192,7 +225,10 @@ export default function ImpayesPage() {
         }
     });
 
-    const totalRestant = sorted.reduce((s, i) => s + i.montant_restant, 0);
+    // Total réel sur tout le jeu de résultats filtré (pas seulement la page
+    // affichée) — voir stats_factures côté backend, appelé avec les mêmes filtres.
+    const totalRestant = stats?.total_restant ?? sorted.reduce((s, i) => s + i.montant_restant, 0);
+    const nbElevesConcernes = stats?.nb_eleves_impayes ?? filtered.length;
 
     if (loading) return (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', flexDirection: 'column', gap: 16 }}>
@@ -214,17 +250,20 @@ export default function ImpayesPage() {
             </AnimatePresence>
 
             {/* Breadcrumb */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
-                <Link href="/comptabilite" style={{ color: '#3b82f6' }}>Comptabilité</Link>
-                <ChevronRight size={14} />
-                <span style={{ fontWeight: 600, color: '#1e293b' }}>Suivi des Impayés</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
+                    <Link href="/comptabilite" style={{ color: '#3b82f6' }}>Comptabilité</Link>
+                    <ChevronRight size={14} />
+                    <span style={{ fontWeight: 600, color: '#1e293b' }}>Suivi des Impayés</span>
+                </div>
+                <AnneeFilter value={filterAnnee} onChange={setFilterAnnee} />
             </div>
 
             {/* KPI Cards */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
                 {[
                     { label: 'Total Impayés', value: fmt(totalRestant), icon: AlertTriangle, color: '#ef4444' },
-                    { label: 'Élèves Concernés', value: filtered.length, icon: Users, color: '#f59e0b' },
+                    { label: 'Élèves Concernés', value: nbElevesConcernes, icon: Users, color: '#f59e0b' },
                     { label: 'Taux Recouvrement', value: `${stats?.taux_recouvrement || 0}%`, icon: TrendingUp, color: '#10b981' },
                     { label: 'Total Facturé', value: fmt(stats?.total_facture || 0), icon: Banknote, color: '#3b82f6' },
                 ].map((kpi, i) => (
@@ -268,7 +307,7 @@ export default function ImpayesPage() {
                     <option value="PARTIELLEMENT_PAYEE">Partielle</option>
                     <option value="EN_RETARD">En retard</option>
                 </select>
-                <button onClick={fetchData} style={{ padding: '10px 14px', borderRadius: 8, background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600 }}>
+                <button onClick={() => fetchData()} style={{ padding: '10px 14px', borderRadius: 8, background: '#f1f5f9', color: '#475569', display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600 }}>
                     <RefreshCw size={14} /> Actualiser
                 </button>
                 <button onClick={sendNotifications} disabled={notifying}
@@ -344,6 +383,7 @@ export default function ImpayesPage() {
                     <span>{sorted.length} impayé(s) affiché(s)</span>
                     <span style={{ fontWeight: 700, color: '#ef4444' }}>Total restant : {fmt(totalRestant)}</span>
                 </div>
+                <Pagination page={page} pageSize={pageSize} total={total} onPageChange={setPage} />
             </motion.div>
 
             {/* Modal Avis de Paiement */}
@@ -406,8 +446,8 @@ export default function ImpayesPage() {
                                                 {avisData.echeances.map((e: any) => (
                                                     <tr key={e.echeance_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                                                         <td style={{ padding: '10px 12px' }}>{e.libelle} — {e.date_limite}</td>
-                                                        <td style={{ padding: '10px 12px', textAlign: 'right' }}>{e.montant_attendu.toLocaleString()} GNF</td>
-                                                        <td style={{ padding: '10px 12px', textAlign: 'right', color: '#10b981' }}>{e.montant_paye.toLocaleString()} GNF</td>
+                                                        <td style={{ padding: '10px 12px', textAlign: 'right' }}>{fmt(e.montant_attendu)}</td>
+                                                        <td style={{ padding: '10px 12px', textAlign: 'right', color: '#10b981' }}>{fmt(e.montant_paye)}</td>
                                                         <td style={{ padding: '10px 12px', textAlign: 'center' }}><Badge statut={e.statut} /></td>
                                                     </tr>
                                                 ))}
@@ -415,9 +455,9 @@ export default function ImpayesPage() {
                                         </table>
                                         {/* Résumé */}
                                         <div style={{ background: '#f8fafc', borderRadius: 10, padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, textAlign: 'center' }}>
-                                            <div><p style={{ fontSize: 11, color: '#94a3b8' }}>Total Facturé</p><p style={{ fontSize: 18, fontWeight: 800, color: '#1e293b' }}>{avisData.facture.montant_net.toLocaleString()} GNF</p></div>
-                                            <div><p style={{ fontSize: 11, color: '#94a3b8' }}>Total Payé</p><p style={{ fontSize: 18, fontWeight: 800, color: '#10b981' }}>{avisData.facture.montant_paye.toLocaleString()} GNF</p></div>
-                                            <div><p style={{ fontSize: 11, color: '#94a3b8' }}>Reste à Payer</p><p style={{ fontSize: 18, fontWeight: 800, color: '#ef4444' }}>{avisData.facture.montant_restant.toLocaleString()} GNF</p></div>
+                                            <div><p style={{ fontSize: 11, color: '#94a3b8' }}>Total Facturé</p><p style={{ fontSize: 18, fontWeight: 800, color: '#1e293b' }}>{fmt(avisData.facture.montant_net)}</p></div>
+                                            <div><p style={{ fontSize: 11, color: '#94a3b8' }}>Total Payé</p><p style={{ fontSize: 18, fontWeight: 800, color: '#10b981' }}>{fmt(avisData.facture.montant_paye)}</p></div>
+                                            <div><p style={{ fontSize: 11, color: '#94a3b8' }}>Reste à Payer</p><p style={{ fontSize: 18, fontWeight: 800, color: '#ef4444' }}>{fmt(avisData.facture.montant_restant)}</p></div>
                                         </div>
                                         {avisData.parent?.nom && (
                                             <div style={{ marginTop: 16, padding: 12, background: '#eff6ff', borderRadius: 8, fontSize: 12, color: '#1e40af' }}>

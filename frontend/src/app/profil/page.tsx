@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { 
     User, Mail, Phone, Shield, Building, Edit2, Loader2, Save, X, 
-    Key, Bell, CheckCircle2, AlertCircle, MegaPhone, Lock, Activity,
+    Key, Bell, CheckCircle2, AlertCircle, Megaphone, Lock, Activity,
     Calendar, Sparkles, LogOut, Check, Eye, EyeOff, FileText, Send, Trash2
 } from 'lucide-react';
 import api from '@/lib/api';
@@ -42,7 +42,9 @@ export default function ProfilPage() {
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPass, setShowPass] = useState(false);
-    const [pinAccess, setPinAccess] = useState('123123');
+    const [ancienPin, setAncienPin] = useState('');
+    const [pinAccess, setPinAccess] = useState(''); // nouveau PIN à définir
+    const [pinConfigured, setPinConfigured] = useState<boolean | null>(null);
     const [isSavingSecurity, setIsSavingSecurity] = useState(false);
 
     // Announcements State
@@ -114,6 +116,12 @@ export default function ProfilPage() {
         loadProfileData();
     }, [user]);
 
+    useEffect(() => {
+        api.get('/api/comptabilite/pin/status')
+            .then(res => setPinConfigured(!!res.data?.configured))
+            .catch(() => setPinConfigured(null));
+    }, []);
+
     const handleSaveProfile = async () => {
         setIsSaving(true);
         try {
@@ -169,18 +177,25 @@ export default function ProfilPage() {
     };
 
     const handleSavePin = async () => {
+        if (!ancienPin) {
+            toast.error("Veuillez saisir le code PIN actuel.");
+            return;
+        }
         if (!pinAccess || pinAccess.length < 4) {
-            toast.error("Le code PIN doit contenir au moins 4 chiffres.");
+            toast.error("Le nouveau code PIN doit contenir au moins 4 chiffres.");
             return;
         }
         try {
             await api.put('/api/comptabilite/pin', {
-                ancien_pin: '123123',
+                ancien_pin: ancienPin,
                 nouveau_pin: pinAccess
-            }).catch(() => {});
-            toast.success(`Code PIN mis à jour : ${pinAccess}`);
-        } catch (err) {
-            toast.success("Code PIN enregistré localement !");
+            });
+            toast.success('Code PIN mis à jour avec succès.');
+            setPinConfigured(true);
+            setAncienPin('');
+            setPinAccess('');
+        } catch (err: any) {
+            toast.error(err.response?.data?.detail || "Erreur lors de la modification du PIN.");
         }
     };
 
@@ -211,34 +226,32 @@ export default function ProfilPage() {
         toast.success("Annonce supprimée.");
     };
 
-    if (loading) {
-        return (
-            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '70vh', gap: '16px' }}>
-                <Loader2 size={44} color="#3b82f6" className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
-                <p style={{ color: '#64748b', fontWeight: 600, fontSize: '15px' }}>Chargement du Profil Administrateur...</p>
-                <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-            </div>
-        );
-    }
-
-    const initials = `${prenom.charAt(0)}${nom.charAt(0)}`.toUpperCase();
+    const initials = `${prenom ? prenom.charAt(0) : 'A'}${nom ? nom.charAt(0) : 'D'}`.toUpperCase();
 
     return (
         <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '24px 20px', fontFamily: '"Inter", sans-serif' }}>
+            <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
             
-            {/* ════════════════════════════════════════════════════════════ */}
-            {/* HERO HEADER — BADGE ADMIN EXECUTIVE                        */}
-            {/* ════════════════════════════════════════════════════════════ */}
-            <div style={{
-                background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%)',
-                borderRadius: '24px',
-                padding: '36px',
-                color: 'white',
-                marginBottom: '32px',
-                boxShadow: '0 20px 40px rgba(15, 23, 42, 0.25)',
-                position: 'relative',
-                overflow: 'hidden'
-            }}>
+            {loading ? (
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '70vh', gap: '16px' }}>
+                    <Loader2 size={44} color="#3b82f6" className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
+                    <p style={{ color: '#64748b', fontWeight: 600, fontSize: '15px' }}>Chargement du Profil Administrateur...</p>
+                </div>
+            ) : (
+                <>
+                    {/* ════════════════════════════════════════════════════════════ */}
+                    {/* HERO HEADER — BADGE ADMIN EXECUTIVE                        */}
+                    {/* ════════════════════════════════════════════════════════════ */}
+                    <div style={{
+                        background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%)',
+                        borderRadius: '24px',
+                        padding: '36px',
+                        color: 'white',
+                        marginBottom: '32px',
+                        boxShadow: '0 20px 40px rgba(15, 23, 42, 0.25)',
+                        position: 'relative',
+                        overflow: 'hidden'
+                    }}>
                 {/* Visual Background Ornaments */}
                 <div style={{
                     position: 'absolute', right: '-40px', top: '-40px',
@@ -261,11 +274,10 @@ export default function ProfilPage() {
                             }}>
                                 {!photoUrl && initials}
                             </div>
-                            <div style={{
+                            <div title="En ligne" style={{
                                 position: 'absolute', bottom: '-4px', right: '-4px',
                                 background: '#10b981', width: '22px', height: '22px',
-                                borderRadius: '50%', border: '3px solid #0f172a',
-                                title: 'En ligne'
+                                borderRadius: '50%', border: '3px solid #0f172a'
                             }} />
                         </div>
 
@@ -342,7 +354,7 @@ export default function ProfilPage() {
                     <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '14px', padding: '14px 18px' }}>
                         <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '4px' }}>Code PIN Comptabilité</div>
                         <div style={{ fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <Lock size={16} color="#34d399" /> {pinAccess} (Actif)
+                            <Lock size={16} color="#34d399" /> {pinConfigured === false ? 'Non configuré' : 'Configuré'}
                         </div>
                     </div>
                     <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '14px', padding: '14px 18px' }}>
@@ -384,7 +396,7 @@ export default function ProfilPage() {
                         display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', whiteSpace: 'nowrap'
                     }}
                 >
-                    <MegaPhone size={18} /> Mes Annonces Officielles ({announcements.length})
+                    <Megaphone size={18} /> Mes Annonces Officielles ({announcements.length})
                 </button>
 
                 <button
@@ -564,7 +576,7 @@ export default function ProfilPage() {
                     {/* Formulaire de publication */}
                     <div style={{ background: 'white', borderRadius: '20px', padding: '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
                         <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 8px 0', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <MegaPhone color="#3b82f6" size={22} /> Publier une nouvelle annonce
+                            <Megaphone color="#3b82f6" size={22} /> Publier une nouvelle annonce
                         </h2>
                         <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '24px' }}>Diffuser une communication officielle aux enseignants, élèves ou parents.</p>
 
@@ -744,18 +756,32 @@ export default function ProfilPage() {
                         <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '24px' }}>Ce code PIN permet d'accéder au module financier et aux actions sensibles.</p>
 
                         <div style={{ background: '#ecfdf5', padding: '20px', borderRadius: '16px', border: '1px solid #a7f3d0', marginBottom: '24px' }}>
-                            <div style={{ fontSize: '13px', color: '#047857', fontWeight: 600, marginBottom: '4px' }}>Code PIN d'Accès Actuel</div>
-                            <div style={{ fontSize: '28px', fontWeight: 800, color: '#065f46', letterSpacing: '4px' }}>{pinAccess}</div>
+                            <div style={{ fontSize: '13px', color: '#047857', fontWeight: 600, marginBottom: '4px' }}>Statut</div>
+                            <div style={{ fontSize: '20px', fontWeight: 800, color: '#065f46' }}>
+                                {pinConfigured === null ? '...' : pinConfigured ? 'PIN configuré' : 'Aucun PIN configuré'}
+                            </div>
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div>
-                                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Modifier le code PIN</label>
+                                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Code PIN actuel</label>
+                                <input
+                                    type="text"
+                                    maxLength={6}
+                                    value={ancienPin}
+                                    onChange={e => setAncienPin(e.target.value)}
+                                    placeholder="PIN actuel"
+                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '18px', fontWeight: 700, letterSpacing: '3px' }}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Nouveau code PIN</label>
                                 <input
                                     type="text"
                                     maxLength={6}
                                     value={pinAccess}
                                     onChange={e => setPinAccess(e.target.value)}
+                                    placeholder="Nouveau PIN"
                                     style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '18px', fontWeight: 700, letterSpacing: '3px' }}
                                 />
                             </div>
@@ -857,6 +883,8 @@ export default function ProfilPage() {
                         ))}
                     </div>
                 </div>
+            )}
+                </>
             )}
         </div>
     );

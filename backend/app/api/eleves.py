@@ -8,8 +8,12 @@ from typing import List, Optional
 from app.core.database import get_db
 from app.core.security import hash_password
 from datetime import date as date_type
-from app.models.academique import Eleve, Inscription, Classe, Niveau, Parent, EleveParent, Facture, EcheanceFacture, TypeFrais
+from app.models.academique import (
+    Eleve, Inscription, Classe, Niveau, Parent, EleveParent, Facture, EcheanceFacture, TypeFrais, TarifClasse,
+    AnneeScolaire, Bulletin, Trimestre, Presence, Incident,
+)
 from app.schemas.schemas import EleveCreate, EleveUpdate, EleveOut, EleveListOut
+from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
@@ -73,14 +77,33 @@ def list_eleves(
 
 
 @router.get("/count")
-def count_eleves(etablissement_id: int = 1, db: Session = Depends(get_db)):
+def count_eleves(etablissement_id: int = 1, annee_id: Optional[int] = None, db: Session = Depends(get_db)):
     total = db.query(func.count(Eleve.eleve_id)).filter(
         Eleve.etablissement_id == etablissement_id
     ).scalar()
     actifs = db.query(func.count(Eleve.eleve_id)).filter(
         Eleve.etablissement_id == etablissement_id, Eleve.statut == "ACTIF"
     ).scalar()
-    return {"total": total, "actifs": actifs, "inactifs": total - actifs}
+
+    # Nouvelles inscriptions de l'année (type_inscription == "NOUVELLE", donc les
+    # admissions réelles, à distinguer des réinscriptions d'élèves déjà présents
+    # l'an dernier) — remplace un ancien placeholder côté frontend
+    # (Math.round(total * 0.14), une valeur fictive sans lien avec les données).
+    nouvelles_inscriptions = 0
+    if annee_id is not None:
+        nouvelles_inscriptions = db.query(func.count(Inscription.inscription_id)).join(
+            Eleve, Inscription.eleve_id == Eleve.eleve_id
+        ).filter(
+            Eleve.etablissement_id == etablissement_id,
+            Inscription.annee_id == annee_id,
+            Inscription.statut == "ACTIVE",
+            Inscription.type_inscription == "NOUVELLE",
+        ).scalar()
+
+    return {
+        "total": total, "actifs": actifs, "inactifs": total - actifs,
+        "nouvelles_inscriptions": nouvelles_inscriptions,
+    }
 
 
 @router.get("/{eleve_id}", response_model=EleveOut)
@@ -167,6 +190,14 @@ def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db)
     return eleve
 
 
+# NOTE : l'ancien flux de réinscription (GET /reinscription/classe/{id},
+# PUT /{id}/reactiver) a été retiré — remplacé par app/api/reinscription.py
+# (Phase 2 de la refonte clôture/réinscription/tarifs), un système indépendant
+# de la promotion piloté par Inscription.statut_reinscription (5 statuts),
+# qui crée lui-même la nouvelle Inscription à la confirmation plutôt que de
+# réactiver un compte dont l'inscription existait déjà.
+
+
 # ================================================================
 # INSCRIPTION COMPLÈTE : Élève + Parent en une seule opération
 # ================================================================
@@ -198,6 +229,7 @@ class InscriptionCompleteData(BaseModel):
     email: Optional[str] = None
     statut: str = "ACTIF"
     etablissement_id: int = 1
+    annee_id: int = 1
     classe_id: Optional[int] = None
     eleve_mot_de_passe: Optional[str] = None  # MDP portail élève (optionnel, défaut: smartschool)
     # Parent
@@ -209,6 +241,7 @@ class InscriptionCompleteData(BaseModel):
 @router.post("/inscription-complete", status_code=201)
 def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(get_db)):
     """Inscription complète : crée l'élève, l'inscription et le parent en une seule opération."""
+    _verifier_annee_modifiable(db, data.annee_id)
     try:
         # 1. Créer l'élève
         count = db.query(func.count(Eleve.eleve_id)).scalar() or 0
@@ -236,7 +269,7 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
             inscription = Inscription(
                 eleve_id=eleve.eleve_id,
                 classe_id=data.classe_id,
-                annee_id=1,
+                annee_id=data.annee_id,
                 statut="ACTIVE",
             )
             db.add(inscription)
@@ -303,40 +336,56 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
                 "is_new": not bool(existing_parent),
             }
 
-        # 5. Créer les factures initiales (si applicables)
+        # 5. Créer les factures initiales (si applicables) — le montant envoyé
+        # par le frontend n'est fait confiance QUE s'il n'existe aucun tarif
+        # configuré pour ce couple (classe, type de frais) ; dès qu'un
+        # TarifClasse existe, c'est LUI la source de vérité (même correction
+        # que generer_factures_classe, Phase 1 de la refonte tarifs) — évite
+        # qu'un montant incohérent soit facturé à l'inscription.
         factures_generees = 0
         if inscription and data.frais_scolaires:
+            f_count = db.query(func.count(Facture.facture_id)).scalar() or 0
             for frais in data.frais_scolaires:
-                if frais.montant > 0:
-                    # Générer numéro de facture
-                    f_count = db.query(func.count(Facture.facture_id)).scalar() or 0
-                    numero_facture = f"FAC-{f_count + 1:06d}"
-                    
-                    facture = Facture(
-                        inscription_id=inscription.inscription_id,
-                        type_frais_id=frais.type_frais_id,
-                        numero_facture=numero_facture,
-                        montant_total=frais.montant,
-                        montant_remise=0,
-                        montant_net=frais.montant,
-                        montant_paye=0,
-                        montant_restant=frais.montant,
-                        statut="EN_ATTENTE"
+                if frais.montant <= 0:
+                    continue
+                tarif = db.query(TarifClasse).filter(
+                    TarifClasse.classe_id == data.classe_id, TarifClasse.type_frais_id == frais.type_frais_id
+                ).first()
+                montant = float(tarif.montant) if tarif is not None else frais.montant
+                if tarif is not None and abs(float(tarif.montant) - frais.montant) > 0.01:
+                    raise HTTPException(
+                        400,
+                        f"Le montant envoyé ({frais.montant:,.0f} GNF) ne correspond pas au tarif configuré "
+                        f"pour cette classe ({float(tarif.montant):,.0f} GNF).",
                     )
-                    db.add(facture)
-                    db.flush()
-                    
-                    # Créer une échéance unique par défaut
-                    echeance = EcheanceFacture(
-                        facture_id=facture.facture_id,
-                        libelle="Paiement unique",
-                        date_limite=date_type.today(),
-                        montant_attendu=frais.montant,
-                        montant_paye=0,
-                        statut="EN_ATTENTE"
-                    )
-                    db.add(echeance)
-                    factures_generees += 1
+
+                numero_facture = f"FAC-{f_count + factures_generees + 1:06d}"
+                facture = Facture(
+                    inscription_id=inscription.inscription_id,
+                    annee_id=inscription.annee_id,
+                    type_frais_id=frais.type_frais_id,
+                    numero_facture=numero_facture,
+                    montant_total=montant,
+                    montant_remise=0,
+                    montant_net=montant,
+                    montant_paye=0,
+                    montant_restant=montant,
+                    statut="EN_ATTENTE"
+                )
+                db.add(facture)
+                db.flush()
+
+                # Créer une échéance unique par défaut
+                echeance = EcheanceFacture(
+                    facture_id=facture.facture_id,
+                    libelle="Paiement unique",
+                    date_limite=date_type.today(),
+                    montant_attendu=montant,
+                    montant_paye=0,
+                    statut="EN_ATTENTE"
+                )
+                db.add(echeance)
+                factures_generees += 1
 
         db.commit()
         db.refresh(eleve)
@@ -356,6 +405,9 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
             "classe_id": data.classe_id,
             "message": "Inscription complète réussie !"
         }
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Erreur lors de l'inscription : {str(e)}")
@@ -369,6 +421,113 @@ def delete_eleve(eleve_id: int, db: Session = Depends(get_db)):
     db.delete(eleve)
     db.commit()
     return {"message": "Élève supprimé"}
+
+
+# ════════════════════════════════════════════════════════════
+# CENTRE D'HISTORIQUE — Dossier archive d'un élève (Phase 3)
+# ════════════════════════════════════════════════════════════
+
+@router.get("/{eleve_id}/inscriptions")
+def get_historique_inscriptions(eleve_id: int, db: Session = Depends(get_db)):
+    """
+    Historique complet des inscriptions d'un élève, toutes années confondues
+    — alimente le centre d'historique (page /archive/eleve/{id}). Remplace
+    les données précédemment simulées côté frontend.
+    """
+    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    if not eleve:
+        raise HTTPException(status_code=404, detail="Élève non trouvé")
+
+    rows = db.query(Inscription, Classe, AnneeScolaire).join(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).join(
+        AnneeScolaire, Inscription.annee_id == AnneeScolaire.annee_id
+    ).filter(
+        Inscription.eleve_id == eleve_id
+    ).order_by(AnneeScolaire.date_debut.desc()).all()
+
+    return [
+        {
+            "inscription_id": insc.inscription_id,
+            "annee_id": annee.annee_id,
+            "annee": annee.libelle,
+            "annee_statut": annee.statut,
+            "en_cours": annee.statut in ("PLANIFIEE", "EN_COURS"),
+            "classe_id": classe.classe_id,
+            "classe": classe.libelle,
+            "statut_inscription": insc.statut,
+            "type_inscription": insc.type_inscription,
+            "moyenne_annuelle": float(insc.moyenne_annuelle) if insc.moyenne_annuelle is not None else None,
+            "total_points": float(insc.total_points) if insc.total_points is not None else None,
+            "rang_final": insc.rang_final,
+            "decision_fin_annee": insc.decision_fin_annee,
+        }
+        for insc, classe, annee in rows
+    ]
+
+
+@router.get("/{eleve_id}/dossier/{inscription_id}")
+def get_dossier_annee(eleve_id: int, inscription_id: int, db: Session = Depends(get_db)):
+    """
+    Dossier complet d'UNE année pour cet élève : bulletins de tous les
+    trimestres, résumé de présence, incidents disciplinaires — alimente les
+    onglets Bulletins/Discipline du centre d'historique (lecture seule).
+    """
+    insc = db.query(Inscription).filter(
+        Inscription.inscription_id == inscription_id, Inscription.eleve_id == eleve_id
+    ).first()
+    if not insc:
+        raise HTTPException(status_code=404, detail="Inscription non trouvée pour cet élève")
+
+    bulletins = db.query(Bulletin, Trimestre).join(
+        Trimestre, Bulletin.trimestre_id == Trimestre.trimestre_id
+    ).filter(
+        Bulletin.inscription_id == inscription_id
+    ).order_by(Trimestre.numero).all()
+
+    presences = db.query(Presence).filter(Presence.inscription_id == inscription_id).all()
+    presence_resume = {
+        "total": len(presences),
+        "absences": sum(1 for p in presences if p.statut_presence == "ABSENT"),
+        "retards": sum(1 for p in presences if p.statut_presence == "RETARD"),
+    }
+
+    incidents = []
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == insc.annee_id).first()
+    if annee:
+        incidents = db.query(Incident).filter(
+            Incident.eleve_id == eleve_id,
+            Incident.date_incident >= annee.date_debut,
+            Incident.date_incident <= annee.date_fin,
+        ).order_by(Incident.date_incident.desc()).all()
+
+    return {
+        "bulletins": [
+            {
+                "bulletin_id": b.bulletin_id,
+                "trimestre": t.libelle,
+                "moyenne_generale": float(b.moyenne_generale) if b.moyenne_generale is not None else None,
+                "rang": b.rang,
+                "effectif_classe": b.effectif_classe,
+                "mention": b.mention,
+                "statut": b.statut,
+            }
+            for b, t in bulletins
+        ],
+        "presence": presence_resume,
+        "incidents": [
+            {
+                "incident_id": i.incident_id,
+                "date": str(i.date_incident),
+                "type": i.type_incident,
+                "gravite": i.gravite,
+                "description": i.description,
+                "statut": i.statut,
+            }
+            for i in incidents
+        ],
+    }
+
 
 # ════════════════════════════════════════════════════════════
 # GÉNÉRATION PDF — Certificat de Scolarité

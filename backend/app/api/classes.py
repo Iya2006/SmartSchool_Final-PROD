@@ -268,12 +268,26 @@ def get_classe_profil(classe_id: int, db: Session = Depends(get_db)):
         Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE"
     ).order_by(Eleve.nom, Eleve.prenom).all()
     
+    # Historique de redoublement — compté en UNE requête groupée (pas une par
+    # élève) sur TOUTES les inscriptions passées de cette classe, quelle que
+    # soit l'année, marquées REDOUBLANT par une clôture précédente (voir
+    # app/api/promotion.py). Sert à afficher un badge "redoublant Nx" côté
+    # admin sur la fiche classe.
+    eleve_ids = [e.eleve_id for e in eleves_data]
+    nb_redoublements = {}
+    if eleve_ids:
+        rows = db.query(Inscription.eleve_id, func.count(Inscription.inscription_id)).filter(
+            Inscription.eleve_id.in_(eleve_ids), Inscription.decision_fin_annee == "REDOUBLANT"
+        ).group_by(Inscription.eleve_id).all()
+        nb_redoublements = {eid: n for eid, n in rows}
+
     eleves = [{
         "eleve_id": e.eleve_id, "matricule": e.matricule,
         "nom": e.nom, "prenom": e.prenom, "sexe": e.sexe,
         "date_naissance": str(e.date_naissance),
         "statut_inscription": e.statut_inscription,
-        "role_classe": e.role_classe
+        "role_classe": e.role_classe,
+        "nb_redoublements": nb_redoublements.get(e.eleve_id, 0),
     } for e in eleves_data]
     
     # Chefs de classe

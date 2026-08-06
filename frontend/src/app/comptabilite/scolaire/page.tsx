@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
+import Pagination from '@/components/Pagination';
 
 type SolvEntry = {
     eleve_id: number; eleve_nom: string; eleve_prenom: string; eleve_matricule: string;
@@ -42,7 +43,7 @@ function Badge({ statut, map }: { statut: string; map: Record<string, { bg: stri
     return <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, backgroundColor: s.bg, color: s.color }}>{s.label}</span>;
 }
 
-const fmt = (n: number) => n.toLocaleString('fr-GN');
+const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN');
 
 /* ─── Sorting ─── */
 type SortKeySolv = 'eleve' | 'classe' | 'total_facture' | 'total_restant' | 'taux_paiement' | 'indicateur';
@@ -72,6 +73,8 @@ export default function ScolairePage() {
     const [filterInd, setFilterInd] = useState('');
     const [sortK, setSortK] = useState<SortKeySolv>('total_restant');
     const [sortD, setSortD] = useState<SortDir>('desc');
+    const [solvPage, setSolvPage] = useState(1);
+    const SOLV_PAGE_SIZE = 50;
 
     // Solde élève
     const [soldeData, setSoldeData] = useState<SoldeData | null>(null);
@@ -96,10 +99,15 @@ export default function ScolairePage() {
 
     const openSolde = async (eleveId: number) => {
         setTab('solde'); setSoldeLoading(true);
+        // Toujours repartir de zéro : si la requête échoue, on ne doit jamais
+        // laisser affiché le solde du précédent élève consulté avec succès.
+        setSoldeData(null);
         try {
             const res = await api.get(`/api/finance/solde-eleve/${eleveId}?annee_id=${anneeId}`);
             setSoldeData(res.data);
-        } catch { }
+        } catch (e) {
+            console.error(e);
+        }
         setSoldeLoading(false);
     };
 
@@ -109,6 +117,8 @@ export default function ScolairePage() {
         const q = search.toLowerCase();
         return `${d.eleve_prenom} ${d.eleve_nom}`.toLowerCase().includes(q) || d.eleve_matricule.toLowerCase().includes(q) || d.classe_nom.toLowerCase().includes(q);
     });
+
+    useEffect(() => { setSolvPage(1); }, [search, filterInd, filterClasse]);
 
     const handleSortS = (key: SortKeySolv) => {
         if (sortK === key) setSortD(p => p === 'asc' ? 'desc' : 'asc');
@@ -228,7 +238,7 @@ export default function ScolairePage() {
                             <tbody>
                                 {sorted.length === 0 ? (
                                     <tr><td colSpan={8} style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Aucun résultat</td></tr>
-                                ) : sorted.map(d => (
+                                ) : sorted.slice((solvPage - 1) * SOLV_PAGE_SIZE, solvPage * SOLV_PAGE_SIZE).map(d => (
                                     <tr key={d.eleve_id} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', transition: 'background 0.15s' }}
                                         onClick={() => openSolde(d.eleve_id)}
                                         onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
@@ -245,7 +255,7 @@ export default function ScolairePage() {
                                 ))}
                             </tbody>
                         </table>
-                        <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', fontSize: 13, color: '#64748b' }}>{sorted.length} élève(s)</div>
+                        <Pagination page={solvPage} pageSize={SOLV_PAGE_SIZE} total={sorted.length} onPageChange={setSolvPage} />
                     </div>
                 </>
             )}

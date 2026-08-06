@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
+import Pagination from '@/components/Pagination';
+import Link from 'next/link';
 
 
 
@@ -49,25 +51,67 @@ export default function CentralisationNotesPage() {
     const [viewMode, setViewMode] = useState<'overview' | 'detail'>('overview');
     const [successMsg, setSuccessMsg] = useState('');
     const [search, setSearch] = useState('');
+    const [evalsPage, setEvalsPage] = useState(1);
+    const [evalsTotal, setEvalsTotal] = useState(0);
+    const EVALS_PAGE_SIZE = 50;
 
-    // Load initial data
+    // Élèves de la vue détail classe — paginés côté client (une seule réponse
+    // imbriquée matrice élèves × matières, jusqu'à ~160 lignes par classe).
+    const [classeElevesPage, setClasseElevesPage] = useState(1);
+    const CLASSE_ELEVES_PAGE_SIZE = 25;
+
+    // Pondération Écrit/Oral/Composition réellement configurée (Paramètres >
+    // Notation) — affichée en clair pour que l'admin voie EXACTEMENT comment
+    // les moyennes ci-dessous ont été calculées, avec les vraies valeurs.
+    const [poids, setPoids] = useState({ ecrit: 1, oral: 1, composition: 2 });
+
+    // Load initial data (classes/trimestres/stats une seule fois)
     useEffect(() => {
         const loadInit = async () => {
             try {
-                const [clsRes, triRes, statsRes, evalsRes] = await Promise.all([
+                const [clsRes, triRes, statsRes, paramRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}`),
                     api.get('/api/portail-enseignant/referentiels/trimestres'),
                     api.get('/api/evaluations/centralisation/stats'),
-                    api.get('/api/evaluations/centralisees'),
+                    api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=NOTATION`).catch(() => ({ data: [] })),
                 ]);
                 setClasses(clsRes.data);
                 setTrimestres(triRes.data);
                 setStats(statsRes.data);
-                setEvalsCentralisees(evalsRes.data);
+                const get = (cle: string, fb: number) => {
+                    const p = (paramRes.data || []).find((s: any) => s.cle === cle);
+                    return p ? parseFloat(p.valeur) : fb;
+                };
+                setPoids({
+                    ecrit: get('notation.poids_ecrit', 1),
+                    oral: get('notation.poids_oral', 1),
+                    composition: get('notation.poids_composition', 2),
+                });
             } catch (e) { console.error(e); }
         };
         loadInit();
     }, [etablissementId]);
+
+    // Liste des évaluations centralisées — paginée côté serveur (avant : un seul
+    // fetch sans limite qui, avec 998 évaluations réelles, faisait timeout la
+    // page entière — X-Total-Count lu pour piloter la pagination).
+    useEffect(() => {
+        const loadEvals = async () => {
+            try {
+                const skip = (evalsPage - 1) * EVALS_PAGE_SIZE;
+                const res = await api.get(`/api/evaluations/centralisees?skip=${skip}&limit=${EVALS_PAGE_SIZE}`);
+                setEvalsCentralisees(res.data);
+                const totalCount = res.headers?.['x-total-count'];
+                setEvalsTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
+            } catch (e) { console.error(e); }
+        };
+        loadEvals();
+    }, [evalsPage]);
+
+    // Revenir à la page 1 quand la recherche change
+    useEffect(() => { setEvalsPage(1); }, [search]);
+    // Revenir à la page 1 des élèves quand on change de classe/trimestre
+    useEffect(() => { setClasseElevesPage(1); }, [selectedClasse, selectedTrimestre]);
 
     // Load classe detail view
     const loadClasseDetail = useCallback(async () => {
@@ -107,7 +151,9 @@ export default function CentralisationNotesPage() {
         return acc;
     }, {});
 
-    // Filter evals
+    // Filtre texte — s'applique uniquement à la page actuellement chargée
+    // (la liste complète est paginée côté serveur ; utilisez le sélecteur de
+    // classe ci-dessus pour filtrer sur l'ensemble des évaluations).
     const filteredEvals = evalsCentralisees.filter(ev =>
         ev.libelle.toLowerCase().includes(search.toLowerCase()) ||
         ev.classe.toLowerCase().includes(search.toLowerCase()) ||
@@ -164,6 +210,16 @@ export default function CentralisationNotesPage() {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            {/* ═══ EXPLICATION DU CALCUL ═══ — transparence pour l'admin : c'est
+                exactement la pondération configurée dans Paramètres > Notation
+                qui est utilisée ici, pas une formule figée dans le code. */}
+            <div style={{ padding: '12px 18px', borderRadius: '12px', background: '#f5f3ff', border: '1px solid #ddd6fe', marginBottom: '20px', fontSize: '12.5px', color: '#5b21b6', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+                <ClipboardList size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
+                <span>
+                    <strong>Comment les moyennes sont calculées :</strong> pour chaque matière, moyenne = (meilleure note Écrite×{poids.ecrit} + meilleure note Orale×{poids.oral} + Composition×{poids.composition}) ÷ ({poids.ecrit} + {poids.oral} + {poids.composition}) — une catégorie sans note est exclue du calcul. La moyenne générale = somme (moyenne matière × coefficient matière) ÷ somme des coefficients. Cette pondération est modifiable dans <Link href="/parametres/notation" style={{ color: '#5b21b6', fontWeight: 700 }}>Paramètres &gt; Notation</Link> (onglet « Évaluations &amp; Poids »).
+                </span>
+            </div>
 
             {/* ═══ KPI STATS ═══ */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
@@ -224,7 +280,7 @@ export default function CentralisationNotesPage() {
                             <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><ClipboardList size={18} /> Évaluations Centralisées par les Enseignants</h3>
                             <div style={{ position: 'relative' }}>
                                 <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                                <input type="text" placeholder="Rechercher..." value={search} onChange={e => setSearch(e.target.value)}
+                                <input type="text" placeholder="Rechercher dans cette page..." value={search} onChange={e => setSearch(e.target.value)}
                                     style={{ padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '240px' }} />
                             </div>
                         </div>
@@ -277,6 +333,7 @@ export default function CentralisationNotesPage() {
                                 </table>
                             </div>
                         )}
+                        <Pagination page={evalsPage} pageSize={EVALS_PAGE_SIZE} total={evalsTotal} onPageChange={setEvalsPage} />
                     </motion.div>
                 </>
             ) : classeData ? (
@@ -344,12 +401,12 @@ export default function CentralisationNotesPage() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {classeData.eleves.map((eleve, idx) => (
+                                    {classeData.eleves.slice((classeElevesPage - 1) * CLASSE_ELEVES_PAGE_SIZE, classeElevesPage * CLASSE_ELEVES_PAGE_SIZE).map((eleve, idx) => (
                                         <tr key={eleve.eleve_id}
                                             style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.1s' }}
                                             onMouseEnter={e => (e.currentTarget.style.background = '#fafbff')}
                                             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                                            <td style={{ padding: '10px 16px', fontSize: '12px', color: '#94a3b8', textAlign: 'center', fontWeight: 600, position: 'sticky', left: 0, background: 'inherit', zIndex: 1, borderRight: '2px solid #e2e8f0' }}>{idx + 1}</td>
+                                            <td style={{ padding: '10px 16px', fontSize: '12px', color: '#94a3b8', textAlign: 'center', fontWeight: 600, position: 'sticky', left: 0, background: 'inherit', zIndex: 1, borderRight: '2px solid #e2e8f0' }}>{(classeElevesPage - 1) * CLASSE_ELEVES_PAGE_SIZE + idx + 1}</td>
                                             <td style={{ padding: '10px 16px', position: 'sticky', left: '40px', background: 'inherit', zIndex: 1, borderRight: '2px solid #e2e8f0' }}>
                                                 <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>{eleve.nom} {eleve.prenom}</div>
                                                 <div style={{ fontSize: '10px', color: '#94a3b8' }}>{eleve.matricule}</div>
@@ -397,6 +454,7 @@ export default function CentralisationNotesPage() {
                                 </tbody>
                             </table>
                         </div>
+                        <Pagination page={classeElevesPage} pageSize={CLASSE_ELEVES_PAGE_SIZE} total={classeData.eleves.length} onPageChange={setClasseElevesPage} />
                     </motion.div>
                 </>
             ) : loading ? (

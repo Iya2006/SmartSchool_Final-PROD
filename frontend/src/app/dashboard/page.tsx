@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '@/context/AppContext';
@@ -182,8 +183,6 @@ function getHealthStatus(data: DashboardData) {
 
 export default function DashboardPage() {
   const { etablissementId, anneeId } = useApp();
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [showImpayesModal, setShowImpayesModal] = useState<ImpayeModalState>(false);
   const [impayesSearch, setImpayesSearch] = useState('');
   const [impayesPage, setImpayesPage] = useState(1);
@@ -191,24 +190,20 @@ export default function DashboardPage() {
 
   const IMPAYES_PER_PAGE = 8;
 
-  useEffect(() => {
-    let mounted = true;
-    api
-      .get(`/api/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`)
-      .then((res) => {
-        if (!mounted) return;
-        setData(res.data);
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!mounted) return;
-        setLoading(false);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [etablissementId, anneeId]);
+  // React Query (cache persisté + offline-first, voir components/QueryProvider.tsx) :
+  // le tableau de bord affiche instantanément les derniers chiffres connus
+  // puis revalide en arrière-plan — plus besoin de recharger la page pour
+  // voir des données à jour après une connexion/déconnexion (voir le
+  // correctif AppContext fait plus tôt cette session, qui règle la cause
+  // racine ; ceci ajoute en plus la résilience hors-ligne/connexion lente).
+  const { data, isError } = useQuery({
+    queryKey: ['dashboard', etablissementId, anneeId],
+    queryFn: async () => {
+      const res = await api.get(`/api/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
+      return res.data as DashboardData;
+    },
+    enabled: !!etablissementId && !!anneeId,
+  });
 
   const filteredImpayes = useMemo(() => {
     if (!data) return [];
@@ -312,22 +307,28 @@ export default function DashboardPage() {
     ];
   }, [data]);
 
-  if (loading) {
+  // Tant que `data` est absent, on affiche TOUJOURS le même état "chargement"
+  // (jamais l'état d'erreur) sauf en cas d'échec confirmé (`isError`) — avant
+  // ce correctif, la branche affichée dépendait de `isLoading`, qui vaut
+  // `false` tant que la requête est simplement "enabled: false" (le temps que
+  // etablissementId/anneeId se résolvent) : le serveur (SSR, `isLoading`
+  // vrai) et le client (première passe, `isLoading` déjà faux) rendaient donc
+  // deux arbres DOM différents, provoquant un mismatch d'hydratation React.
+  if (!data) {
+    if (isError) {
+      return (
+        <div className="card" style={{ padding: 28, textAlign: 'center' }}>
+          <h3 style={{ marginBottom: 8 }}>Impossible de charger le dashboard</h3>
+          <p style={{ color: 'var(--text-muted)', marginBottom: 0 }}>Les données de supervision ne sont pas disponibles pour le moment.</p>
+        </div>
+      );
+    }
     return (
       <div style={{ minHeight: '72vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
           <Loader2 size={42} className="animate-spin" color="var(--brand-primary)" />
           <p style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Chargement du centre de contrôle...</p>
         </div>
-      </div>
-    );
-  }
-
-  if (!data) {
-    return (
-      <div className="card" style={{ padding: 28, textAlign: 'center' }}>
-        <h3 style={{ marginBottom: 8 }}>Impossible de charger le dashboard</h3>
-        <p style={{ color: 'var(--text-muted)', marginBottom: 0 }}>Les données de supervision ne sont pas disponibles pour le moment.</p>
       </div>
     );
   }

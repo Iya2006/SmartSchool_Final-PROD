@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.core.database import get_db
+from app.core.annee_lock import verifier_annee_modifiable
 from app.models.academique import (
     CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau
 )
@@ -83,6 +84,9 @@ def create_creneau(data: dict, db: Session = Depends(get_db)):
     if jour not in JOURS:
         raise HTTPException(400, f"Jour invalide. Choix: {', '.join(JOURS)}")
 
+    classe = db.query(Classe).filter(Classe.classe_id == data["classe_id"]).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+
     # Vérifier conflit horaire
     conflict = db.query(CreneauEmploi).filter(
         CreneauEmploi.classe_id == data["classe_id"],
@@ -104,7 +108,7 @@ def create_creneau(data: dict, db: Session = Depends(get_db)):
         heure_debut=data["heure_debut"],
         heure_fin=data["heure_fin"],
         salle=data.get("salle", ""),
-        annee_id=data.get("annee_id", 1),
+        annee_id=classe.annee_id if classe else data.get("annee_id", 1),
     )
     db.add(creneau)
     db.commit()
@@ -119,6 +123,7 @@ def update_creneau(creneau_id: int, data: dict, db: Session = Depends(get_db)):
     c = db.query(CreneauEmploi).filter(CreneauEmploi.creneau_id == creneau_id).first()
     if not c:
         raise HTTPException(404, "Créneau non trouvé")
+    verifier_annee_modifiable(db, c.annee_id)
 
     if "jour" in data:
         jour = data["jour"].upper()
@@ -158,6 +163,7 @@ def delete_creneau(creneau_id: int, db: Session = Depends(get_db)):
     c = db.query(CreneauEmploi).filter(CreneauEmploi.creneau_id == creneau_id).first()
     if not c:
         raise HTTPException(404, "Créneau non trouvé")
+    verifier_annee_modifiable(db, c.annee_id)
     db.delete(c)
     db.commit()
     return {"message": "Créneau supprimé"}
@@ -176,6 +182,7 @@ def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db)):
     classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
     if not classe:
         raise HTTPException(404, "Classe non trouvée")
+    verifier_annee_modifiable(db, classe.annee_id)
 
     # Récupérer les matières de la classe
     associations = db.query(ClasseMatiere).filter(

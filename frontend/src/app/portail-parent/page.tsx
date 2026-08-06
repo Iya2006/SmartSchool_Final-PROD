@@ -313,6 +313,24 @@ export default function PortailParent() {
         }
     };
 
+    // Téléchargement du reçu d'un paiement précis — l'historique des paiements
+    // n'offrait jusqu'ici aucun moyen de télécharger le reçu lui-même (seule la
+    // facture globale était téléchargeable).
+    const downloadRecuPDF = async (e: React.MouseEvent, paiementId: number, numeroRecu: string) => {
+        e.stopPropagation();
+        try {
+            const res = await api.get(`/api/finance/paiements/${paiementId}/recu-pdf`, { responseType: 'blob' });
+            const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `recu_${numeroRecu}.pdf`;
+            link.click();
+            URL.revokeObjectURL(url);
+        } catch {
+            alert('Erreur lors du téléchargement du reçu');
+        }
+    };
+
     const doLogin = async () => {
         /*
         if (!phone.trim()) { setLoginError('Entrez votre numéro de téléphone'); return; }
@@ -976,14 +994,21 @@ export default function PortailParent() {
                                                                             </p>
                                                                         </div>
                                                                     </div>
-                                                                    <div style={{ textAlign: 'right' }}>
-                                                                        <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: primaryColor }}>
-                                                                            {formatGNF(p.montant)}
-                                                                        </p>
-                                                                        <span style={{
-                                                                            fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '8px',
-                                                                            background: '#d1fae5', color: '#15803d',
-                                                                        }}>{p.statut}</span>
+                                                                    <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                                        <div>
+                                                                            <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: primaryColor }}>
+                                                                                {formatGNF(p.montant)}
+                                                                            </p>
+                                                                            <span style={{
+                                                                                fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '8px',
+                                                                                background: '#d1fae5', color: '#15803d',
+                                                                            }}>{p.statut}</span>
+                                                                        </div>
+                                                                        <button onClick={(e) => downloadRecuPDF(e, p.paiement_id, p.numero_recu)}
+                                                                            title="Télécharger le reçu"
+                                                                            style={{ border: '1px solid #e2e8f0', background: 'white', borderRadius: '10px', width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+                                                                            <Download size={15} color="#64748b" />
+                                                                        </button>
                                                                     </div>
                                                                 </div>
                                                             ))}
@@ -1098,7 +1123,7 @@ export default function PortailParent() {
                                                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
                                                             {[
                                                                 { label: 'Moyenne', value: bulletinData.moyenne_generale !== null ? `${bulletinData.moyenne_generale}/20` : '—', color: bulletinData.moyenne_generale >= 10 ? '#10b981' : '#ef4444' },
-                                                                { label: 'Rang', value: `${bulletinData.rang}e / ${bulletinData.effectif_classe}`, color: '#6366f1' },
+                                                                { label: 'Rang', value: (bulletinData.rang && bulletinData.effectif_classe) ? `${bulletinData.rang}e / ${bulletinData.effectif_classe}` : '—', color: '#6366f1' },
                                                                 { label: 'Mention', value: bulletinData.mention || '—', color: '#f59e0b' },
                                                                 { label: 'Total Coef.', value: String(bulletinData.total_coefficient), color: '#8b5cf6' },
                                                             ].map((k, i) => (

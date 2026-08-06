@@ -142,7 +142,7 @@ export default function ElevesPage() {
     // ✅ Logique API déléguée au hook
     const {
         eleves, classes, loading, error,
-        totalCount, activeCount, inactiveCount,
+        totalCount, activeCount, inactiveCount, nouvellesInscriptions,
         totalPages, fetchEleves, deleteEleve,
     } = useEleves({
         etablissementId,
@@ -186,7 +186,7 @@ export default function ElevesPage() {
 
     const kpis = [
         { label: 'Total Élèves',          value: totalCount.toLocaleString(), icon: Users,      color: '#3b82f6' },
-        { label: 'Nouvelles Inscriptions', value: Math.round(totalCount * 0.14), icon: UserCheck, color: '#10b981' },
+        { label: 'Nouvelles Inscriptions', value: nouvellesInscriptions.toLocaleString(), icon: UserCheck, color: '#10b981' },
         { label: "Absents Aujourd'hui",    value: inactiveCount,               icon: UserX,      color: '#ef4444' },
         { label: "Présents Aujourd'hui",   value: activeCount.toLocaleString(), icon: Clock,      color: '#6366f1' },
     ];

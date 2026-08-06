@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Html5QrcodeScanner } from 'html5-qrcode';
+import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { ScanLine, CheckCircle, AlertTriangle, Clock, LogOut, Users, GraduationCap } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
@@ -142,8 +142,8 @@ export default function ScanElevesPage() {
             
             scannerRef.current = new Html5QrcodeScanner(
                 "qr-reader",
-                { 
-                    fps: 15, 
+                {
+                    fps: 15,
                     qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
                         const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
                         return {
@@ -152,9 +152,19 @@ export default function ScanElevesPage() {
                         };
                     },
                     rememberLastUsedCamera: true,
+                    // Restreindre au format QR (au lieu de tester tous les formats
+                    // supportés à chaque frame) : réglage le plus impactant contre la
+                    // lenteur de scan signalée, les badges de l'école n'utilisant que
+                    // des QR codes.
+                    formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
                     experimentalFeatures: {
                         useBarCodeDetectorIfSupported: true
-                    }
+                    },
+                    videoConstraints: {
+                        width: { ideal: 720 },
+                        height: { ideal: 720 },
+                        facingMode: 'environment',
+                    },
                 },
                 /* verbose= */ false
             );

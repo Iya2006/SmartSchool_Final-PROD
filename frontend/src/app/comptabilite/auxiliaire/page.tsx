@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Search, UserPlus, FileText, ArrowRightLeft, ArrowUpRight, ArrowDownLeft, Calendar, ShieldCheck, User } from 'lucide-react';
 import api from '@/lib/api';
+import Pagination from '@/components/Pagination';
 
 // Reusable styles matching the main theme
 const CARD = { backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' } as const;
@@ -50,49 +51,123 @@ export default function ComptabiliteAuxiliaire() {
     const [newFournEmail, setNewFournEmail] = useState('');
     const [newFournAdr, setNewFournAdr] = useState('');
 
+    // Ajouter un frais individuellement à un élève (ex: adhésion tardive à la
+    // cantine, frais de réinscription...) — sans imposer ce frais à toute sa
+    // classe, contrairement à la génération de factures groupée de la page Frais.
+    const [typesFraisOptions, setTypesFraisOptions] = useState<any[]>([]);
+    const [showAjouterFrais, setShowAjouterFrais] = useState(false);
+    const [ajouterFraisTypeId, setAjouterFraisTypeId] = useState('');
+    const [ajouterFraisMontant, setAjouterFraisMontant] = useState('');
+    const [ajouterFraisSaving, setAjouterFraisSaving] = useState(false);
+
     useEffect(() => {
-        loadParents();
-        loadFournisseurs();
+        api.get('/api/finance/types-frais').then(res => setTypesFraisOptions(res.data || [])).catch(() => {});
     }, []);
+
+    // Pagination
+    const pageSize = 25;
+    const [pageParents, setPageParents] = useState(1);
+    const [totalParents, setTotalParents] = useState(0);
+    const [pageFournisseurs, setPageFournisseurs] = useState(1);
+    const [totalFournisseurs, setTotalFournisseurs] = useState(0);
 
     const showMessage = (text: string, type: 'success' | 'error') => {
         setMessage({ text, type });
         setTimeout(() => setMessage({ text: '', type: '' }), 4000);
     };
 
-    const loadParents = async () => {
+    const loadParents = useCallback(async (page: number = pageParents) => {
         setIsLoading(true);
         try {
-            const res = await api.get('/api/comptabilite/auxiliaire/parents-eleves');
+            const skip = (page - 1) * pageSize;
+            const params = new URLSearchParams({ skip: String(skip), limit: String(pageSize) });
+            if (searchParents) params.set('search', searchParents);
+            const res = await api.get(`/api/comptabilite/auxiliaire/parents-eleves?${params.toString()}`);
             setParentsList(res.data);
+            const totalCount = res.headers?.['x-total-count'];
+            setTotalParents(totalCount !== undefined ? Number(totalCount) : res.data.length);
         } catch (error) {
             console.error("Erreur chargement comptes parents:", error);
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [pageParents, searchParents]);
 
-    const loadFournisseurs = async () => {
+    const loadFournisseurs = useCallback(async (page: number = pageFournisseurs) => {
         setIsLoading(true);
         try {
-            const res = await api.get('/api/comptabilite/auxiliaire/fournisseurs');
+            const skip = (page - 1) * pageSize;
+            const params = new URLSearchParams({ skip: String(skip), limit: String(pageSize) });
+            if (searchFournisseurs) params.set('search', searchFournisseurs);
+            const res = await api.get(`/api/comptabilite/auxiliaire/fournisseurs?${params.toString()}`);
             setFournisseursList(res.data);
+            const totalCount = res.headers?.['x-total-count'];
+            setTotalFournisseurs(totalCount !== undefined ? Number(totalCount) : res.data.length);
         } catch (error) {
             console.error("Erreur chargement fournisseurs:", error);
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [pageFournisseurs, searchFournisseurs]);
+
+    useEffect(() => {
+        loadParents(pageParents);
+    }, [pageParents, searchParents]);
+
+    useEffect(() => {
+        loadFournisseurs(pageFournisseurs);
+    }, [pageFournisseurs, searchFournisseurs]);
+
+    // Réinitialiser la pagination quand la recherche change, pour éviter une page vide
+    useEffect(() => { setPageParents(1); }, [searchParents]);
+    useEffect(() => { setPageFournisseurs(1); }, [searchFournisseurs]);
 
     // Load detailed ledger for student
     const handleSelectEleve = async (eleve: any) => {
         setSelectedEleve(eleve);
         setSelectedFournisseur(null);
+        setEleveMouvements(null);
         try {
             const res = await api.get(`/api/comptabilite/auxiliaire/parents-eleves/${eleve.eleve_id}/compte`);
             setEleveMouvements(res.data);
         } catch (error) {
             console.error("Erreur lors de la récupération de l'historique élève:", error);
+            setSelectedEleve(null);
+            showMessage("Impossible de charger la fiche de compte de cet élève.", "error");
+        }
+    };
+
+    // Facturer un frais individuellement à l'élève sélectionné (ex: adhésion
+    // tardive à un service facultatif, frais de réinscription ponctuel...),
+    // sans passer par la génération groupée pour toute une classe.
+    const handleAjouterFrais = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedEleve || !eleveMouvements?.eleve?.inscription_id) {
+            showMessage("Impossible de déterminer l'inscription active de cet élève.", "error");
+            return;
+        }
+        const montant = parseFloat(ajouterFraisMontant);
+        if (!ajouterFraisTypeId || !montant || montant <= 0) {
+            showMessage("Sélectionnez un type de frais et un montant valide.", "error");
+            return;
+        }
+        setAjouterFraisSaving(true);
+        try {
+            await api.post('/api/finance/factures', {
+                inscription_id: eleveMouvements.eleve.inscription_id,
+                type_frais_id: parseInt(ajouterFraisTypeId),
+                montant_total: montant,
+                echeances: [{ libelle: 'Paiement unique', montant_attendu: montant, date_limite: new Date().toISOString().split('T')[0] }],
+            });
+            showMessage('Frais facturé avec succès à cet élève.', 'success');
+            setShowAjouterFrais(false);
+            setAjouterFraisTypeId('');
+            setAjouterFraisMontant('');
+            await handleSelectEleve(selectedEleve);
+        } catch (err: any) {
+            showMessage(err.response?.data?.detail || 'Erreur lors de la facturation', 'error');
+        } finally {
+            setAjouterFraisSaving(false);
         }
     };
 
@@ -100,11 +175,14 @@ export default function ComptabiliteAuxiliaire() {
     const handleSelectFournisseur = async (fourn: any) => {
         setSelectedFournisseur(fourn);
         setSelectedEleve(null);
+        setFournisseurMouvements(null);
         try {
             const res = await api.get(`/api/comptabilite/auxiliaire/fournisseurs/${fourn.fournisseur_id}/compte`);
             setFournisseurMouvements(res.data);
         } catch (error) {
             console.error("Erreur lors de la récupération de l'historique fournisseur:", error);
+            setSelectedFournisseur(null);
+            showMessage("Impossible de charger la fiche de compte de ce fournisseur.", "error");
         }
     };
 
@@ -129,28 +207,7 @@ export default function ComptabiliteAuxiliaire() {
         }
     };
 
-    // Filters
-    const filteredParents = useMemo(() => {
-        if (!searchParents) return parentsList;
-        const q = searchParents.toLowerCase();
-        return parentsList.filter(p => 
-            p.nom.toLowerCase().includes(q) || 
-            p.prenom.toLowerCase().includes(q) || 
-            p.classe.toLowerCase().includes(q) ||
-            p.matricule.toLowerCase().includes(q)
-        );
-    }, [parentsList, searchParents]);
-
-    const filteredFournisseurs = useMemo(() => {
-        if (!searchFournisseurs) return fournisseursList;
-        const q = searchFournisseurs.toLowerCase();
-        return fournisseursList.filter(f => 
-            f.nom.toLowerCase().includes(q) || 
-            f.code.toLowerCase().includes(q)
-        );
-    }, [fournisseursList, searchFournisseurs]);
-
-    const fmt = (n: number) => n.toLocaleString('fr-FR');
+    const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-FR');
     const fmtGNF = (n: number) => `${fmt(n)} GNF`;
 
     return (
@@ -168,8 +225,8 @@ export default function ComptabiliteAuxiliaire() {
                 
                 {/* Tab selectors */}
                 <div style={{ display: 'flex', gap: '8px', backgroundColor: '#f1f5f9', padding: '4px', borderRadius: '8px' }}>
-                    <button 
-                        onClick={() => { setSubTab('parents'); setSelectedEleve(null); }} 
+                    <button
+                        onClick={() => { setSubTab('parents'); setSelectedEleve(null); setSelectedFournisseur(null); }}
                         style={{
                             padding: '8px 16px', borderRadius: '6px', border: 'none', fontWeight: '600', fontSize: '13px', cursor: 'pointer',
                             backgroundColor: subTab === 'parents' ? 'white' : 'transparent',
@@ -177,10 +234,10 @@ export default function ComptabiliteAuxiliaire() {
                             boxShadow: subTab === 'parents' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
                         }}
                     >
-                        Parents & Élèves ({parentsList.length})
+                        Parents & Élèves ({totalParents})
                     </button>
-                    <button 
-                        onClick={() => { setSubTab('fournisseurs'); setSelectedFournisseur(null); }} 
+                    <button
+                        onClick={() => { setSubTab('fournisseurs'); setSelectedFournisseur(null); setSelectedEleve(null); }}
                         style={{
                             padding: '8px 16px', borderRadius: '6px', border: 'none', fontWeight: '600', fontSize: '13px', cursor: 'pointer',
                             backgroundColor: subTab === 'fournisseurs' ? 'white' : 'transparent',
@@ -188,7 +245,7 @@ export default function ComptabiliteAuxiliaire() {
                             boxShadow: subTab === 'fournisseurs' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none'
                         }}
                     >
-                        Fournisseurs ({fournisseursList.length})
+                        Fournisseurs ({totalFournisseurs})
                     </button>
                 </div>
             </div>
@@ -233,7 +290,7 @@ export default function ComptabiliteAuxiliaire() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredParents.map(p => {
+                                        {parentsList.map(p => {
                                             const isSelected = selectedEleve?.eleve_id === p.eleve_id;
                                             return (
                                                 <tr key={p.eleve_id} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', backgroundColor: isSelected ? '#ecfdf5' : 'white' }} onClick={() => handleSelectEleve(p)}>
@@ -253,12 +310,13 @@ export default function ComptabiliteAuxiliaire() {
                                                 </tr>
                                             );
                                         })}
-                                        {filteredParents.length === 0 && (
+                                        {parentsList.length === 0 && (
                                             <tr><td colSpan={6} style={{ padding: '30px', textAlign: 'center', color: '#64748b', fontSize: '14px' }}>Aucun élève trouvé ou mouvementé.</td></tr>
                                         )}
                                     </tbody>
                                 </table>
                             </div>
+                            <Pagination page={pageParents} pageSize={pageSize} total={totalParents} onPageChange={setPageParents} />
                         </div>
                     )}
 
@@ -330,7 +388,7 @@ export default function ComptabiliteAuxiliaire() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredFournisseurs.map(f => {
+                                        {fournisseursList.map(f => {
                                             const isSelected = selectedFournisseur?.fournisseur_id === f.fournisseur_id;
                                             return (
                                                 <tr key={f.fournisseur_id} style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', backgroundColor: isSelected ? '#ecfdf5' : 'white' }} onClick={() => handleSelectFournisseur(f)}>
@@ -350,12 +408,13 @@ export default function ComptabiliteAuxiliaire() {
                                                 </tr>
                                             );
                                         })}
-                                        {filteredFournisseurs.length === 0 && (
+                                        {fournisseursList.length === 0 && (
                                             <tr><td colSpan={6} style={{ padding: '30px', textAlign: 'center', color: '#64748b', fontSize: '14px' }}>Aucun fournisseur enregistré.</td></tr>
                                         )}
                                     </tbody>
                                 </table>
                             </div>
+                            <Pagination page={pageFournisseurs} pageSize={pageSize} total={totalFournisseurs} onPageChange={setPageFournisseurs} />
                         </div>
                     )}
                 </div>
@@ -372,8 +431,38 @@ export default function ComptabiliteAuxiliaire() {
                                         <h3 style={{ margin: '6px 0 2px 0', fontSize: '18px', color: '#0f172a' }}>{eleveMouvements.eleve.prenom} {eleveMouvements.eleve.nom}</h3>
                                         <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>Matricule: {eleveMouvements.eleve.matricule}</p>
                                     </div>
-                                    <button onClick={() => setSelectedEleve(null)} style={{ ...BTN_OUTLINE, padding: '4px 10px', fontSize: '12px' }}>Fermer</button>
+                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                        <button onClick={() => setShowAjouterFrais(!showAjouterFrais)} style={{ ...BTN_OUTLINE, padding: '4px 10px', fontSize: '12px', borderColor: '#10b981', color: '#10b981' }}>
+                                            + Ajouter un frais
+                                        </button>
+                                        <button onClick={() => setSelectedEleve(null)} style={{ ...BTN_OUTLINE, padding: '4px 10px', fontSize: '12px' }}>Fermer</button>
+                                    </div>
                                 </div>
+
+                                {/* Facturer un frais individuellement — utile pour une adhésion tardive
+                                    à un service facultatif (cantine...) sans l'imposer à toute la classe. */}
+                                {showAjouterFrais && (
+                                    <form onSubmit={handleAjouterFrais} style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px', marginBottom: '20px' }}>
+                                        <div style={{ flex: '2 1 220px' }}>
+                                            <label style={{ display: 'block', fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>Type de frais</label>
+                                            <select value={ajouterFraisTypeId} onChange={e => setAjouterFraisTypeId(e.target.value)} required style={{ ...INPUT, width: '100%' }}>
+                                                <option value="">-- Choisir --</option>
+                                                {typesFraisOptions.map(tf => (
+                                                    <option key={tf.type_frais_id} value={tf.type_frais_id}>
+                                                        {tf.libelle}{tf.est_obligatoire !== 'O' ? ' (Facultatif)' : ''}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div style={{ flex: '1 1 140px' }}>
+                                            <label style={{ display: 'block', fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>Montant (GNF)</label>
+                                            <input type="number" min="1" value={ajouterFraisMontant} onChange={e => setAjouterFraisMontant(e.target.value)} required style={{ ...INPUT, width: '100%' }} />
+                                        </div>
+                                        <button type="submit" disabled={ajouterFraisSaving} style={{ ...BTN_GREEN, opacity: ajouterFraisSaving ? 0.6 : 1 }}>
+                                            {ajouterFraisSaving ? 'Enregistrement...' : 'Facturer'}
+                                        </button>
+                                    </form>
+                                )}
 
                                 {/* Summary KPIs */}
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px', marginBottom: '20px' }}>

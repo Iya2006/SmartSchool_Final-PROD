@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import {
@@ -8,6 +9,10 @@ import {
     Search, RefreshCw, FileText, DollarSign, Users, Calendar,
     ChevronDown, ChevronRight, Banknote, CreditCard, Smartphone, X, Coins, Lightbulb
 } from 'lucide-react';
+import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
+import { useApp } from '@/context/AppContext';
+import AnneeFilter from '@/components/AnneeFilter';
+import Pagination from '@/components/Pagination';
 
 
 // --- Types ---
@@ -40,12 +45,18 @@ const CATEGORIES_FRAIS = [
 
 const FREQUENCES = ['ANNUEL', 'TRIMESTRIEL', 'MENSUEL', 'UNIQUE'];
 
-const MODES_PAIEMENT = [
-    { value: 'ESPECES', label: 'Espèces', icon: Banknote },
-    { value: 'CHEQUE', label: 'Chèque', icon: FileText },
-    { value: 'MOBILE_MONEY', label: 'Mobile Money', icon: Smartphone },
-    { value: 'VIREMENT', label: 'Virement bancaire', icon: CreditCard },
-];
+// Icônes pour les modes de paiement CONNUS — la liste réellement proposée dans
+// le formulaire d'encaissement vient de Paramètres > Finance & Comptabilité
+// (voir modesPaiementConfig state + fetchModesPaiement), pas d'ici.
+const MODE_ICONS: Record<string, typeof Banknote> = {
+    ESPECES: Banknote,
+    CHEQUE: FileText,
+    MOBILE_MONEY: Smartphone,
+    ORANGE_MONEY: Smartphone,
+    MTN_MONEY: Smartphone,
+    VIREMENT: CreditCard,
+};
+const MODE_ICON_DEFAUT = CreditCard;
 
 const STATUT_COLORS: Record<string, { bg: string; color: string; label: string }> = {
     'EN_ATTENTE': { bg: '#fef3c7', color: '#d97706', label: 'En attente' },
@@ -67,20 +78,23 @@ function FraisScolaritePage() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const tabParam = searchParams.get('tab') || 'types';
+    const { anneeId: anneeCouranteId } = useApp();
 
-    // Data
-    const [typesFrais, setTypesFrais] = useState<TypeFrais[]>([]);
-    const [factures, setFactures] = useState<Facture[]>([]);
-    const [paiements, setPaiements] = useState<Paiement[]>([]);
-    const [classes, setClasses] = useState<any[]>([]);
-    const [stats, setStats] = useState<any>(null);
+    // Data loaded via React Query
+    const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+    const queryClient = useQueryClient();
+
+    // Année scolaire consultée — par défaut l'année en cours ; le comptable
+    // peut consulter une année archivée sans que ça n'affecte les nouvelles factures.
+    const [filterAnnee, setFilterAnnee] = useState<number>(anneeCouranteId);
+    useEffect(() => { setFilterAnnee(anneeCouranteId); }, [anneeCouranteId]);
 
     // UI State
-    const [loading, setLoading] = useState(false);
-    const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
     const [searchFacture, setSearchFacture] = useState('');
     const [activeTab, setActiveTab] = useState('Scolarité');
     const [filterStatut, setFilterStatut] = useState('');
+    const [facturesPage, setFacturesPage] = useState(1);
+    const FACTURES_PAGE_SIZE = 25;
 
     // Modals
     const [showTypeFraisModal, setShowTypeFraisModal] = useState(false);
@@ -98,11 +112,125 @@ function FraisScolaritePage() {
     const [tfFrequence, setTfFrequence] = useState('ANNUEL');
 
     // Form States - Facture
-    const [factClasseId, setFactClasseId] = useState('');
+    // Une classe cochée = une entrée { montant } — chaque classe peut avoir un
+    // montant différent (une école n'a pas la même scolarité en maternelle qu'en
+    // terminale), au lieu d'un seul montant partagé appliqué à toutes les classes.
+    const [factClasseMontants, setFactClasseMontants] = useState<Record<string, string>>({});
     const [factTypeFraisId, setFactTypeFraisId] = useState('');
     const [factMontant, setFactMontant] = useState('');
     const [factNbEcheances, setFactNbEcheances] = useState('1');
-    const [factEcheances, setFactEcheances] = useState<any[]>([]);
+
+    // Le nombre de mois "facturables" d'une année scolaire type (utilisé pour
+    // pré-remplir le fractionnement MENSUEL — l'admin peut toujours l'ajuster).
+    const MOIS_ANNEE_SCOLAIRE = 10;
+
+    // Génère l'échéancier pour UN montant donné (même fractionnement/dates pour
+    // toutes les classes, mais calculé sur le montant propre à chaque classe).
+    const genererEcheances = (montantTotal: number, nb: number) => {
+        if (montantTotal <= 0) return [];
+        if (nb <= 1) {
+            return [{ libelle: 'Paiement unique', montant_attendu: montantTotal, date_limite: new Date().toISOString().split('T')[0] }];
+        }
+        const tranches = [];
+        const splitAmount = Math.round(montantTotal / nb);
+        for (let i = 0; i < nb; i++) {
+            const d = new Date();
+            d.setMonth(d.getMonth() + i);
+            tranches.push({
+                libelle: `Tranche ${i + 1}/${nb}`,
+                montant_attendu: i === nb - 1 ? montantTotal - (splitAmount * (nb - 1)) : splitAmount,
+                date_limite: d.toISOString().split('T')[0]
+            });
+        }
+        return tranches;
+    };
+
+    // Sélectionner un type de frais pré-remplit montant + fractionnement à partir
+    // de sa configuration (montant_defaut / fréquence), au lieu de tout ressaisir
+    // à la main à chaque génération de factures. Pré-coche aussi les classes qui ont
+    // déjà un tarif configuré (Comptabilité > Frais ou fiche de classe), avec leur
+    // propre montant.
+    const onSelectTypeFrais = async (id: string) => {
+        setFactTypeFraisId(id);
+        const tf = typesFrais.find(t => String(t.type_frais_id) === id);
+        if (!tf) return;
+        if (tf.montant_defaut) setFactMontant(String(tf.montant_defaut));
+        if (tf.frequence === 'MENSUEL') setFactNbEcheances(String(MOIS_ANNEE_SCOLAIRE));
+        else if (tf.frequence === 'TRIMESTRIEL') setFactNbEcheances('3');
+        else setFactNbEcheances('1');
+        try {
+            const res = await api.get(`/api/finance/tarifs-classe?type_frais_id=${id}`);
+            const next: Record<string, string> = {};
+            (res.data || []).forEach((t: any) => { next[String(t.classe_id)] = String(t.montant); });
+            setFactClasseMontants(next);
+        } catch { /* pas de tarifs préconfigurés, l'admin coche manuellement */ }
+    };
+
+    // --- Tarifs par classe (gérés depuis "Types de Frais", visibles/éditables
+    //     aussi depuis la fiche de configuration de chaque classe — même table). ---
+    const [showTarifsModal, setShowTarifsModal] = useState(false);
+    const [tarifsTypeFrais, setTarifsTypeFrais] = useState<TypeFrais | null>(null);
+    const [tarifsMontants, setTarifsMontants] = useState<Record<string, string>>({});
+    const [tarifsSaving, setTarifsSaving] = useState(false);
+
+    const openTarifsModal = async (tf: TypeFrais) => {
+        setTarifsTypeFrais(tf);
+        setShowTarifsModal(true);
+        try {
+            const res = await api.get(`/api/finance/tarifs-classe?type_frais_id=${tf.type_frais_id}`);
+            const next: Record<string, string> = {};
+            (res.data || []).forEach((t: any) => { next[String(t.classe_id)] = String(t.montant); });
+            setTarifsMontants(next);
+        } catch {
+            setTarifsMontants({});
+        }
+    };
+
+    const saveTarifs = async () => {
+        if (!tarifsTypeFrais) return;
+        setTarifsSaving(true);
+        try {
+            const entries = classes.map((c: any) => ({
+                type_frais_id: tarifsTypeFrais.type_frais_id,
+                classe_id: c.classe_id,
+                montant: parseFloat(tarifsMontants[String(c.classe_id)] || '0') || 0,
+            }));
+            await api.put('/api/finance/tarifs-classe', entries);
+            showMsg('Tarifs par classe enregistrés', 'success');
+            setShowTarifsModal(false);
+        } catch (err: any) {
+            showMsg(err.response?.data?.detail || 'Erreur', 'error');
+        } finally {
+            setTarifsSaving(false);
+        }
+    };
+
+    const toggleFactClasse = (classeId: string, checked: boolean) => {
+        setFactClasseMontants(prev => {
+            const next = { ...prev };
+            if (checked) next[classeId] = prev[classeId] ?? factMontant ?? '';
+            else delete next[classeId];
+            return next;
+        });
+    };
+
+    const appliquerMontantATous = () => {
+        setFactClasseMontants(prev => {
+            const next: Record<string, string> = {};
+            for (const id of Object.keys(prev)) next[id] = factMontant;
+            return next;
+        });
+    };
+
+    // Modes de paiement configurés (Paramètres > Finance & Comptabilité) —
+    // source unique de vérité pour ce sélecteur.
+    const [modesPaiementConfig, setModesPaiementConfig] = useState<string[]>(DEFAULT_MODES_PAIEMENT);
+    useEffect(() => { fetchModesPaiement().then(setModesPaiementConfig); }, []);
+    const modesAffichables = modesPaiementConfig.map(value => ({
+        value,
+        label: modePaiementLabel(value),
+        icon: MODE_ICONS[value] || MODE_ICON_DEFAUT,
+    }));
 
     // Form States - Paiement
     const [payMontant, setPayMontant] = useState('');
@@ -110,59 +238,68 @@ function FraisScolaritePage() {
     const [payReference, setPayReference] = useState('');
     const [payEcheanceId, setPayEcheanceId] = useState('');
 
-    const showMsg = (text: string, type: 'success' | 'error') => {
-        setMessage({ text, type });
+    const showMsg = (text: any, type: 'success' | 'error') => {
+        let messageText = typeof text === 'string' ? text : 'Erreur inattendue';
+        if (Array.isArray(text)) {
+            messageText = text.map((t: any) => t.msg || JSON.stringify(t)).join(', ');
+        } else if (typeof text === 'object' && text !== null) {
+            messageText = text.msg || text.message || JSON.stringify(text);
+        }
+        setMessage({ text: messageText, type });
         setTimeout(() => setMessage(null), 4000);
     };
 
-    useEffect(() => {
-        const total = parseFloat(factMontant) || 0;
-        const nb = parseInt(factNbEcheances) || 1;
-        if (total > 0) {
-            if (nb === 1) {
-                setFactEcheances([{ libelle: 'Paiement unique', montant_attendu: total, date_limite: new Date().toISOString().split('T')[0] }]);
-            } else {
-                const tranches = [];
-                const splitAmount = Math.round(total / nb);
-                for(let i=0; i<nb; i++){
-                    const d = new Date();
-                    d.setMonth(d.getMonth() + i);
-                    tranches.push({
-                        libelle: `Tranche ${i+1}/${nb}`,
-                        montant_attendu: i === nb-1 ? total - (splitAmount * (nb-1)) : splitAmount,
-                        date_limite: d.toISOString().split('T')[0]
-                    });
-                }
-                setFactEcheances(tranches);
-            }
-        } else {
-            setFactEcheances([]);
-        }
-    }, [factMontant, factNbEcheances]);
-
-    const loadAll = useCallback(async () => {
-        setLoading(true);
-        try {
+    const { data: fraisData, isLoading: loading } = useQuery({
+        queryKey: ['frais-all', filterAnnee],
+        queryFn: async () => {
             const [tfRes, factRes, payRes, statsRes, classRes] = await Promise.all([
                 api.get('/api/finance/types-frais'),
-                api.get('/api/finance/factures?etablissement_id=1&annee_id=1&limit=200'),
-                api.get('/api/finance/paiements?etablissement_id=1&limit=200'),
-                api.get('/api/finance/factures/stats?etablissement_id=1&annee_id=1'),
-                api.get('/api/classes?etablissement_id=1&annee_id=1&limit=100'),
+                api.get(`/api/finance/factures?etablissement_id=1&annee_id=${filterAnnee}&limit=5000`),
+                api.get(`/api/finance/paiements?etablissement_id=1&annee_id=${filterAnnee}&limit=5000`),
+                api.get(`/api/finance/factures/stats?etablissement_id=1&annee_id=${filterAnnee}`),
+                api.get(`/api/classes?etablissement_id=1&annee_id=${filterAnnee}&limit=100`),
             ]);
-            setTypesFrais(tfRes.data);
-            setFactures(factRes.data);
-            setPaiements(payRes.data);
-            setStats(statsRes.data);
-            setClasses(classRes.data);
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
 
-    useEffect(() => { loadAll(); }, [loadAll]);
+            // La liste était plafonnée à `limit=200` en dur — silencieusement
+            // tronquée dès que l'année dépassait 200 factures (bug signalé : 263
+            // factures réelles affichées comme 200). `X-Total-Count` permet de
+            // détecter une troncature et de rattraper avec le vrai total au lieu
+            // de deviner une limite "assez grande".
+            let factures = factRes.data as Facture[];
+            const factTotal = parseInt(factRes.headers?.['x-total-count'] || '0', 10);
+            if (factTotal > factures.length) {
+                const full = await api.get(`/api/finance/factures?etablissement_id=1&annee_id=${filterAnnee}&limit=${factTotal}`);
+                factures = full.data as Facture[];
+            }
+
+            let paiements = payRes.data as Paiement[];
+            const payTotal = parseInt(payRes.headers?.['x-total-count'] || '0', 10);
+            if (payTotal > paiements.length) {
+                const full = await api.get(`/api/finance/paiements?etablissement_id=1&annee_id=${filterAnnee}&limit=${payTotal}`);
+                paiements = full.data as Paiement[];
+            }
+
+            return {
+                typesFrais: tfRes.data as TypeFrais[],
+                factures,
+                paiements,
+                stats: statsRes.data,
+                classes: classRes.data as any[],
+            };
+        },
+        staleTime: 1000 * 60 * 3,
+        enabled: !!filterAnnee,
+    });
+
+    const typesFrais: TypeFrais[] = fraisData?.typesFrais || [];
+    const factures: Facture[] = fraisData?.factures || [];
+    const paiements: Paiement[] = fraisData?.paiements || [];
+    const stats = fraisData?.stats || null;
+    const classes: any[] = fraisData?.classes || [];
+
+    const loadAll = useCallback(async () => {
+        await queryClient.invalidateQueries({ queryKey: ['frais-all'] });
+    }, [queryClient]);
 
     // --- TypeFrais CRUD ---
     const openNewTypeFrais = () => {
@@ -212,31 +349,72 @@ function FraisScolaritePage() {
     // --- Facture creation ---
     const submitFacture = async (e: React.FormEvent) => {
         e.preventDefault();
-        try {
-            // Validate the sum
-            const totalEcheances = factEcheances.reduce((acc, ech) => acc + parseFloat(ech.montant_attendu || 0), 0);
-            if (Math.abs(totalEcheances - parseFloat(factMontant)) > 1) {
-                showMsg('Le total des échéances doit correspondre au montant total.', 'error');
-                return;
-            }
-
-            const res = await api.post('/api/finance/factures/generer-classe', {
-                classe_id: parseInt(factClasseId),
-                annee_id: 1,
-                type_frais_id: parseInt(factTypeFraisId),
-                montant: parseFloat(factMontant),
-                echeances: factEcheances.map(ech => ({
-                    libelle: ech.libelle,
-                    montant_attendu: parseFloat(ech.montant_attendu),
-                    date_limite: ech.date_limite
-                }))
-            });
-            showMsg('Factures générées avec succès', 'success');
-            setShowFactureModal(false);
-            loadAll();
-        } catch (err: any) {
-            showMsg(err.response?.data?.detail || 'Erreur', 'error');
+        const entries = Object.entries(factClasseMontants);
+        if (entries.length === 0) {
+            showMsg('Sélectionnez au moins une classe.', 'error');
+            return;
         }
+        if (entries.some(([, m]) => !m || parseFloat(m) <= 0)) {
+            showMsg('Chaque classe cochée doit avoir un montant supérieur à 0.', 'error');
+            return;
+        }
+
+        // Un frais FACULTATIF (ex: cantine) facturé à toute une classe imposerait
+        // le paiement à des familles qui n'y ont jamais adhéré — le backend refuse
+        // ce cas par défaut (voir generer_factures_classe). On demande donc une
+        // confirmation explicite avant de forcer, plutôt que de facturer en silence
+        // tout le monde comme c'était le cas auparavant (bug signalé).
+        const typeFraisSelectionne = typesFrais.find(t => String(t.type_frais_id) === factTypeFraisId);
+        let forcerOptionnel = false;
+        if (typeFraisSelectionne && typeFraisSelectionne.est_obligatoire !== 'O') {
+            const ok = confirm(
+                `"${typeFraisSelectionne.libelle}" est un frais FACULTATIF. Le facturer à toute la classe l'imposera aussi aux familles qui n'y ont pas adhéré. ` +
+                `Pour ne facturer que les familles concernées, préférez la fiche de compte de chaque élève (Auxiliaire). Continuer quand même pour toute la classe ?`
+            );
+            if (!ok) return;
+            forcerOptionnel = true;
+        }
+
+        // Chaque classe a son propre montant (et donc son propre échéancier, calculé
+        // avec le même fractionnement pour toutes) — un appel par classe, l'endpoint
+        // étant déjà idempotent (il ignore les factures déjà existantes via skipped_count).
+        const nb = parseInt(factNbEcheances) || 1;
+        let totalCreated = 0, totalSkipped = 0, erreurs = 0;
+        for (const [classeId, montantStr] of entries) {
+            const montant = parseFloat(montantStr);
+            try {
+                const res = await api.post('/api/finance/factures/generer-classe', {
+                    classe_id: parseInt(classeId),
+                    annee_id: filterAnnee,
+                    type_frais_id: parseInt(factTypeFraisId),
+                    montant,
+                    forcer_optionnel: forcerOptionnel,
+                    echeances: genererEcheances(montant, nb).map(ech => ({
+                        libelle: ech.libelle,
+                        montant_attendu: ech.montant_attendu,
+                        date_limite: ech.date_limite
+                    }))
+                });
+                totalCreated += res.data.created || 0;
+                totalSkipped += res.data.skipped || 0;
+            } catch {
+                erreurs += 1;
+            }
+        }
+
+        if (erreurs > 0) {
+            showMsg(`${totalCreated} facture(s) générée(s), ${erreurs} classe(s) en erreur`, 'error');
+        } else {
+            showMsg(`${totalCreated} facture(s) générée(s) sur ${entries.length} classe(s) (${totalSkipped} déjà existante(s))`, 'success');
+            setShowFactureModal(false);
+        }
+        loadAll();
+        // Sans ça, les nouvelles factures n'apparaissent nulle part ailleurs :
+        // Encaissement restait bloqué sur "élève déjà réglé" (cache solvabilité
+        // vieux de 5 min ne voyant pas les factures qu'on vient de créer ici).
+        queryClient.invalidateQueries({ queryKey: ['encaissement-solvabilite'] });
+        queryClient.invalidateQueries({ queryKey: ['impayes'] });
+        queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] });
     };
 
     // --- Paiement ---
@@ -262,10 +440,13 @@ function FraisScolaritePage() {
             });
             showMsg(res.data.message, 'success');
             setShowPaiementModal(false);
-            // Non-blocking refresh
-            api.get('/api/finance/factures?etablissement_id=1&annee_id=1&limit=200').then(r => setFactures(r.data));
-            api.get('/api/finance/paiements?etablissement_id=1&limit=200').then(r => setPaiements(r.data));
-            api.get('/api/finance/factures/stats?etablissement_id=1&annee_id=1').then(r => setStats(r.data));
+            // Refresh via React Query
+            // Même correction que sur l'écran d'Encaissement : un paiement ici doit
+            // aussi invalider Impayés et le Dashboard financier, pas seulement cette page.
+            queryClient.invalidateQueries({ queryKey: ['frais-all'] });
+            queryClient.invalidateQueries({ queryKey: ['impayes'] });
+            queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] });
+            queryClient.invalidateQueries({ queryKey: ['encaissement-solvabilite'] });
         } catch (err: any) {
             showMsg(err.response?.data?.detail || 'Erreur', 'error');
         }
@@ -278,6 +459,8 @@ function FraisScolaritePage() {
     if (!categories.includes('Inscription')) categories.push('Inscription');
 
     // Filtered factures
+    useEffect(() => { setFacturesPage(1); }, [searchFacture, filterStatut, activeTab]);
+
     const filteredFactures = factures.filter(f => {
         const tf = typesFrais.find(t => t.type_frais_id === f.type_frais_id);
         const cat = tf ? tf.categorie : 'Scolarité';
@@ -294,10 +477,19 @@ function FraisScolaritePage() {
         return true;
     });
 
-    const fmtMoney = (n: number) => n.toLocaleString('fr-FR') + ' GNF';
+    const fmtMoney = (n: number | null | undefined) => (n || 0).toLocaleString('fr-FR') + ' GNF';
 
     return (
         <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+            {/* Filtre année scolaire */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '14px' }}>
+                <AnneeFilter value={filterAnnee} onChange={setFilterAnnee} />
+            </div>
+            {filterAnnee !== anneeCouranteId && (
+                <div style={{ padding: '10px 16px', borderRadius: 10, background: '#fef3c7', color: '#92400e', fontSize: 13, fontWeight: 600, marginBottom: '16px' }}>
+                    Vous consultez une année scolaire archivée — les nouvelles factures générées ici seront rattachées à CETTE année, pas à l'année en cours.
+                </div>
+            )}
             {/* Message */}
             {message && (
                 <div style={{ padding: '12px 16px', borderRadius: '8px', marginBottom: '20px', backgroundColor: message.type === 'error' ? '#fee2e2' : '#d1fae5', color: message.type === 'error' ? '#ef4444' : '#10b981', display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
@@ -359,11 +551,15 @@ function FraisScolaritePage() {
                                                     <p style={{ margin: '0 0 2px 0', fontWeight: '600', color: '#0f172a', fontSize: '14px' }}>{tf.libelle}</p>
                                                     <p style={{ margin: 0, color: '#94a3b8', fontSize: '12px' }}>
                                                         {tf.frequence} · {tf.est_obligatoire === 'O' ? <><AlertTriangle size={12} style={{display:'inline', verticalAlign:'middle'}}/> Obligatoire</> : '✓ Facultatif'}
-                                                        {tf.montant_defaut > 0 && <><Coins size={12} style={{display:'inline', verticalAlign:'middle'}}/> {' ' + tf.montant_defaut.toLocaleString('fr-FR') + ' GNF'}</>}
+                                                        {tf.montant_defaut > 0 && <><Coins size={12} style={{display:'inline', verticalAlign:'middle'}}/> {' ' + fmtMoney(tf.montant_defaut)}</>}
                                                     </p>
                                                 </div>
                                             </div>
                                             <div style={{ display: 'flex', gap: '8px' }}>
+                                                <button onClick={() => openTarifsModal(tf)} title="Tarifs par classe"
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 10px', background: '#ecfdf5', color: '#059669', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+                                                    <Coins size={14} /> Tarifs par classe
+                                                </button>
                                                 <button onClick={() => openEditTypeFrais(tf)} style={{ padding: '6px 10px', background: '#eff6ff', color: '#3b82f6', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
                                                     <Edit2 size={14} />
                                                 </button>
@@ -396,7 +592,10 @@ function FraisScolaritePage() {
                             <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', color: '#0f172a' }}>Gestion des Factures</h3>
                             <p style={{ margin: 0, color: '#64748b', fontSize: '13px' }}>{filteredFactures.length} facture(s) trouvée(s)</p>
                         </div>
-                        <button onClick={() => setShowFactureModal(true)} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>
+                        <button onClick={() => {
+                            setFactClasseMontants({}); setFactTypeFraisId(''); setFactMontant(''); setFactNbEcheances('1');
+                            setShowFactureModal(true);
+                        }} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>
                             <PlusCircle size={16} /> Facturer une classe
                         </button>
                     </div>
@@ -450,7 +649,7 @@ function FraisScolaritePage() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {filteredFactures.map(f => (
+                                {filteredFactures.slice((facturesPage - 1) * FACTURES_PAGE_SIZE, facturesPage * FACTURES_PAGE_SIZE).map(f => (
                                     <tr key={f.facture_id} style={{ borderBottom: '1px solid #f1f5f9' }} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f8fafc')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = '')}>
                                         <td style={{ padding: '10px 12px', fontWeight: '600', color: '#3b82f6' }}>{f.numero_facture}</td>
                                         <td style={{ padding: '10px 12px', fontWeight: '500', color: '#0f172a' }}>{f.eleve_prenom} {f.eleve_nom}</td>
@@ -474,6 +673,7 @@ function FraisScolaritePage() {
                         {filteredFactures.length === 0 && (
                             <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Aucune facture trouvée</div>
                         )}
+                        <Pagination page={facturesPage} pageSize={FACTURES_PAGE_SIZE} total={filteredFactures.length} onPageChange={setFacturesPage} />
                     </div>
                 </div>
             )}
@@ -557,11 +757,15 @@ function FraisScolaritePage() {
                                         <td style={{ padding: '10px 12px', fontWeight: '700', color: '#0f172a' }}>{fmtMoney(p.montant)}</td>
                                         <td style={{ padding: '10px 12px' }}>
                                             <span style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '12px', backgroundColor: '#f1f5f9', color: '#475569' }}>
-                                                {MODES_PAIEMENT.find(m => m.value === p.mode_paiement)?.label || p.mode_paiement}
+                                                {modePaiementLabel(p.mode_paiement)}
                                             </span>
                                         </td>
                                         <td style={{ padding: '10px 12px' }}>
-                                            <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', backgroundColor: '#d1fae5', color: '#059669' }}>✓ Validé</span>
+                                            {p.statut === 'ANNULE' ? (
+                                                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', backgroundColor: '#fee2e2', color: '#dc2626' }}>Annulé</span>
+                                            ) : (
+                                                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', backgroundColor: '#d1fae5', color: '#059669' }}>✓ Validé</span>
+                                            )}
                                         </td>
                                     </tr>
                                 ))}
@@ -634,34 +838,27 @@ function FraisScolaritePage() {
                 <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
                     <div style={{ backgroundColor: 'white', borderRadius: '16px', padding: '28px', width: '500px', maxWidth: '95vw', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                            <h3 style={{ margin: 0, fontSize: '18px', color: '#0f172a' }}>Facturer une Classe</h3>
+                            <h3 style={{ margin: 0, fontSize: '18px', color: '#0f172a' }}>Facturer des Classes</h3>
                             <button onClick={() => setShowFactureModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><X size={20} /></button>
                         </div>
                         <div style={{ padding: '12px', backgroundColor: '#eff6ff', borderRadius: '8px', marginBottom: '16px', fontSize: '13px', color: '#2563eb' }}>
-                            <Lightbulb size={16} color="#d97706" style={{display:'inline', verticalAlign:'middle'}}/> Génère automatiquement une facture pour chaque élève actif de la classe sélectionnée, sans double saisie.
+                            <Lightbulb size={16} color="#d97706" style={{display:'inline', verticalAlign:'middle'}}/> Génère automatiquement une facture pour chaque élève actif de chaque classe cochée, sans double saisie (les classes déjà facturées pour ce type sont ignorées).
                         </div>
                         <form onSubmit={submitFacture} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             <div>
-                                <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Classe *</label>
-                                <select value={factClasseId} onChange={e => setFactClasseId(e.target.value)} required style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
-                                    <option value="">-- Sélectionner une classe --</option>
-                                    {classes.map((c: any) => <option key={c.classe_id} value={c.classe_id}>{c.libelle}</option>)}
-                                </select>
-                            </div>
-                            <div>
                                 <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Type de frais *</label>
-                                <select value={factTypeFraisId} onChange={e => setFactTypeFraisId(e.target.value)} required style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
+                                <select value={factTypeFraisId} onChange={e => onSelectTypeFrais(e.target.value)} required style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
                                     <option value="">-- Sélectionner un type --</option>
                                     {typesFrais.map(tf => <option key={tf.type_frais_id} value={tf.type_frais_id}>{tf.libelle} ({tf.categorie})</option>)}
                                 </select>
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Montant (GNF) *</label>
-                                    <input type="number" value={factMontant} onChange={e => setFactMontant(e.target.value)} required min="1" placeholder="ex: 500000" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
+                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Montant par défaut (GNF)</label>
+                                    <input type="number" value={factMontant} onChange={e => setFactMontant(e.target.value)} min="1" placeholder="ex: 500000" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Fractionnement</label>
+                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Fractionnement (toutes classes)</label>
                                     <select value={factNbEcheances} onChange={e => setFactNbEcheances(e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
                                         <option value="1">Paiement unique</option>
                                         <option value="2">2 versements</option>
@@ -671,35 +868,46 @@ function FraisScolaritePage() {
                                         <option value="10">10 versements</option>
                                     </select>
                                 </div>
-                            {factEcheances.length > 0 && (
-                                <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    <label style={{ fontSize: '13px', color: '#475569', fontWeight: '600' }}>Configuration des échéances</label>
-                                    {factEcheances.map((ech, i) => (
-                                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', alignItems: 'center' }}>
-                                            <input type="text" value={ech.libelle} onChange={e => {
-                                                const newEch = [...factEcheances];
-                                                newEch[i].libelle = e.target.value;
-                                                setFactEcheances(newEch);
-                                            }} style={{ padding: '8px', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', width: '100%', boxSizing: 'border-box' }} placeholder="Libellé (ex: Tranche 1)" required />
-                                            <input type="number" value={ech.montant_attendu} onChange={e => {
-                                                const newEch = [...factEcheances];
-                                                newEch[i].montant_attendu = e.target.value ? parseFloat(e.target.value) : '';
-                                                setFactEcheances(newEch);
-                                            }} style={{ padding: '8px', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', width: '100%', boxSizing: 'border-box' }} placeholder="Montant" required />
-                                            <input type="date" value={ech.date_limite} onChange={e => {
-                                                const newEch = [...factEcheances];
-                                                newEch[i].date_limite = e.target.value;
-                                                setFactEcheances(newEch);
-                                            }} style={{ padding: '8px', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', width: '100%', boxSizing: 'border-box' }} required />
-                                        </div>
-                                    ))}
-                                    <div style={{ textAlign: 'right', fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
-                                        Total configuré : <strong style={{ color: Math.abs(factEcheances.reduce((a, b) => a + (parseFloat(b.montant_attendu) || 0), 0) - (parseFloat(factMontant) || 0)) > 1 ? '#ef4444' : '#10b981' }}>
-                                            {factEcheances.reduce((a, b) => a + (parseFloat(b.montant_attendu) || 0), 0).toLocaleString()} GNF
-                                        </strong>
+                            </div>
+                            <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: 6 }}>
+                                    <label style={{ fontSize: '13px', color: '#475569', fontWeight: '500' }}>Classes concernées et montant *</label>
+                                    <div style={{ display: 'flex', gap: 10 }}>
+                                        <button type="button" onClick={appliquerMontantATous}
+                                            style={{ background: 'none', border: 'none', color: '#3b82f6', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                                            Appliquer le montant par défaut à toutes les cochées
+                                        </button>
+                                        <button type="button" onClick={() => {
+                                            if (Object.keys(factClasseMontants).length === classes.length) { setFactClasseMontants({}); return; }
+                                            const next: Record<string, string> = {};
+                                            classes.forEach((c: any) => { next[String(c.classe_id)] = factClasseMontants[String(c.classe_id)] ?? factMontant ?? ''; });
+                                            setFactClasseMontants(next);
+                                        }}
+                                            style={{ background: 'none', border: 'none', color: '#10b981', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                                            {classes.length > 0 && Object.keys(factClasseMontants).length === classes.length ? 'Tout désélectionner' : 'Tout sélectionner'}
+                                        </button>
                                     </div>
                                 </div>
-                            )}
+                                <p style={{ margin: '0 0 8px', fontSize: '12px', color: '#94a3b8' }}>Cochez chaque classe concernée et ajustez son montant si sa scolarité diffère (maternelle, primaire, secondaire...).</p>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '220px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px' }}>
+                                    {classes.map((c: any) => {
+                                        const id = String(c.classe_id);
+                                        const checked = id in factClasseMontants;
+                                        return (
+                                            <div key={id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', cursor: 'pointer', flex: '1 1 auto' }}>
+                                                    <input type="checkbox" checked={checked} onChange={e => toggleFactClasse(id, e.target.checked)} />
+                                                    {c.libelle}
+                                                </label>
+                                                {checked && (
+                                                    <input type="number" min="1" required value={factClasseMontants[id]}
+                                                        onChange={e => setFactClasseMontants(prev => ({ ...prev, [id]: e.target.value }))}
+                                                        placeholder="Montant" style={{ width: '140px', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
                             </div>
                             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '8px' }}>
                                 <button type="button" onClick={() => setShowFactureModal(false)} style={{ padding: '10px 20px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>Annuler</button>
@@ -708,6 +916,38 @@ function FraisScolaritePage() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* =========== MODAL: TARIFS PAR CLASSE =========== */}
+            {showTarifsModal && tarifsTypeFrais && (
+                <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div style={{ backgroundColor: 'white', borderRadius: '16px', padding: '28px', width: '480px', maxWidth: '95vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <h3 style={{ margin: 0, fontSize: '18px', color: '#0f172a' }}>Tarifs par classe — {tarifsTypeFrais.libelle}</h3>
+                            <button onClick={() => setShowTarifsModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><X size={20} /></button>
+                        </div>
+                        <p style={{ margin: '0 0 16px', fontSize: '13px', color: '#64748b' }}>
+                            Laissez à 0 les classes non concernées par ce type de frais. Ces montants sont aussi
+                            visibles/modifiables depuis la fiche de configuration de chaque classe.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', flex: 1 }}>
+                            {classes.map((c: any) => (
+                                <div key={c.classe_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                                    <span style={{ fontSize: '13px', color: '#334155' }}>{c.libelle}</span>
+                                    <input type="number" min="0" value={tarifsMontants[String(c.classe_id)] || ''}
+                                        onChange={e => setTarifsMontants(prev => ({ ...prev, [String(c.classe_id)]: e.target.value }))}
+                                        placeholder="0" style={{ width: '140px', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box' }} />
+                                </div>
+                            ))}
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '16px', marginTop: '8px', borderTop: '1px solid #f1f5f9' }}>
+                            <button type="button" onClick={() => setShowTarifsModal(false)} style={{ padding: '10px 20px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>Annuler</button>
+                            <button onClick={saveTarifs} disabled={tarifsSaving} style={{ padding: '10px 20px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600', opacity: tarifsSaving ? 0.6 : 1 }}>
+                                {tarifsSaving ? 'Enregistrement...' : 'Enregistrer'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -759,15 +999,28 @@ function FraisScolaritePage() {
                                 </div>
                             )}
 
-                            <div>
-                                <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Montant encaissé (GNF) *</label>
-                                <input type="number" value={payMontant} onChange={e => setPayMontant(e.target.value)} required min="1" max={selectedFacture.montant_restant} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', fontWeight: '700', boxSizing: 'border-box' }} />
-                            </div>
+                            {(() => {
+                                const echeanceSelectionnee = payEcheanceId
+                                    ? selectedFacture.echeances.find(ec => ec.echeance_id === parseInt(payEcheanceId))
+                                    : null;
+                                const maxMontant = echeanceSelectionnee
+                                    ? echeanceSelectionnee.montant_attendu - echeanceSelectionnee.montant_paye
+                                    : selectedFacture.montant_restant;
+                                return (
+                                    <div>
+                                        <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Montant encaissé (GNF) *</label>
+                                        <input type="number" value={payMontant} onChange={e => setPayMontant(e.target.value)} required min="1" max={maxMontant} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '16px', fontWeight: '700', boxSizing: 'border-box' }} />
+                                        {echeanceSelectionnee && (
+                                            <p style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Plafonné au reste dû sur l'échéance : {fmtMoney(maxMontant)}</p>
+                                        )}
+                                    </div>
+                                );
+                            })()}
 
                             <div>
                                 <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '8px', fontWeight: '500' }}>Mode de paiement *</label>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                                    {MODES_PAIEMENT.map(m => (
+                                    {modesAffichables.map(m => (
                                         <button key={m.value} type="button" onClick={() => setPayMode(m.value)} style={{
                                             padding: '10px', border: `2px solid ${payMode === m.value ? '#10b981' : '#e2e8f0'}`,
                                             borderRadius: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: '600',

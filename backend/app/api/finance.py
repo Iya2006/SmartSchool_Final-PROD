@@ -1,25 +1,74 @@
 """
 SMARTSCHOOL API — Routes Finance (TypesFrais, Factures, Échéanciers, Paiements, Dépenses)
 """
-from fastapi import APIRouter, Depends, HTTPException
+import os
+import uuid
+import shutil
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Optional
+from typing import Dict, List, Optional
 from datetime import date as date_type
 from app.core.database import get_db
 from app.models.academique import (
-    TypeFrais, Facture, EcheanceFacture, Paiement, Depense,
-    Inscription, Classe, Eleve, AnneeScolaire, Enseignant, Utilisateur
+    TypeFrais, TarifClasse, Facture, EcheanceFacture, Paiement, Depense,
+    Inscription, Classe, Eleve, AnneeScolaire, Enseignant, Utilisateur,
+    Employe, Avance, Prime, AbsencePersonnel, BulletinPaie, PresenceAgent,
+    Message, ParametreComptabilite,
 )
+import calendar
 from app.schemas.schemas import (
-    TypeFraisCreate, TypeFraisOut,
+    TypeFraisCreate, TypeFraisOut, TarifClasseEntry,
     FactureCreate, FactureOut,
     EcheanceFactureOut,
     PaiementCreate, PaiementOut,
     DepenseCreate, DepenseOut
 )
+# Pont automatique vers la Comptabilité Générale (SYSCOHADA) : chaque
+# facture/paiement/dépense/salaire réel génère une écriture équilibrée,
+# dans la même transaction, pour que Balance/Grand Livre/Auxiliaire soient
+# toujours synchronisés avec les opérations financières réelles.
+from app.api.comptabilite import (
+    generer_ecriture_auto, compte_tresorerie_pour_mode, compte_charge_pour_categorie,
+    COMPTE_ELEVES, COMPTE_PRODUITS_SCOLARITE, COMPTE_BANQUE,
+)
 
 router = APIRouter(prefix="/api/finance", tags=["Finance"])
+
+
+def _invalidate_dashboard_cache(etablissement_id: int = 1, annee_id: int = 1) -> None:
+    """
+    Invalide le cache Redis du tableau de bord financier (TTL 60s) après
+    toute mutation (encaissement, décaissement, salaire...), pour que le
+    dashboard reflète immédiatement l'opération au lieu de servir des
+    chiffres périmés jusqu'à expiration du TTL.
+    """
+    from app.core.cache import cache_del
+    cache_del(f"dashboard:{etablissement_id}:{annee_id}")
+
+
+# Relocalisé dans app/core/annee_lock.py (Phase 3) — le garde n'est plus
+# spécifique à la finance, il est désormais importé transversalement par
+# evaluations.py/portail_enseignant.py/vie_scolaire.py/emploi_du_temps.py
+# pour verrouiller aussi les mutations pédagogiques d'une année archivée.
+# Alias conservé pour que tous les appels internes existants de ce fichier
+# continuent de fonctionner sans modification.
+from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
+
+
+UPLOAD_DIR_DEPENSES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "depenses")
+os.makedirs(UPLOAD_DIR_DEPENSES, exist_ok=True)
+
+
+@router.post("/upload-justificatif")
+def upload_justificatif(file: UploadFile = File(...)):
+    """Upload d'un justificatif (facture/reçu) attaché à une dépense, retourne son URL publique."""
+    ext = os.path.splitext(file.filename or "")[1]
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    save_path = os.path.join(UPLOAD_DIR_DEPENSES, unique_name)
+    with open(save_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return {"facture_url": f"/uploads/depenses/{unique_name}"}
 
 
 # ============================================================================
@@ -39,6 +88,8 @@ FINANCE_DEFAULTS = {
     "penalite_delai_jours": 0,
     "reduction_active": False,
     "reductions": [],  # ex: [{"rang": 2, "pourcentage": 10}, {"rang": 3, "pourcentage": 15}]
+    "salaires_mois_debut": "",  # YYYY-MM — début de la période sur laquelle les salaires sont dus
+    "salaires_mois_fin": "",    # YYYY-MM — vide = période toujours en cours
 }
 
 
@@ -194,11 +245,224 @@ def delete_type_frais(type_frais_id: int, db: Session = Depends(get_db)):
 
 
 # ============================================================================
+# TARIFS PAR CLASSE — un montant différent par classe pour un même type de frais.
+# Éditable depuis la page Comptabilité (par type de frais, ?type_frais_id=) ou
+# depuis la fiche de configuration d'une classe (par classe, ?classe_id=) : les
+# deux écrans lisent/écrivent la même table ss_tarifs_classe, donc restent
+# automatiquement synchronisés sans logique de synchro dédiée.
+# ============================================================================
+
+@router.get("/tarifs-classe")
+def get_tarifs_classe(
+    type_frais_id: Optional[int] = None,
+    classe_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    if not type_frais_id and not classe_id:
+        raise HTTPException(status_code=400, detail="type_frais_id ou classe_id requis")
+
+    query = db.query(TarifClasse, Classe, TypeFrais).join(
+        Classe, TarifClasse.classe_id == Classe.classe_id
+    ).join(
+        TypeFrais, TarifClasse.type_frais_id == TypeFrais.type_frais_id
+    )
+    if type_frais_id:
+        query = query.filter(TarifClasse.type_frais_id == type_frais_id)
+    if classe_id:
+        query = query.filter(TarifClasse.classe_id == classe_id)
+
+    return [
+        {
+            "tarif_id": t.tarif_id,
+            "type_frais_id": t.type_frais_id,
+            "type_frais_libelle": tf.libelle,
+            "type_frais_categorie": tf.categorie,
+            "classe_id": c.classe_id,
+            "classe_libelle": c.libelle,
+            "montant": float(t.montant),
+        }
+        for t, c, tf in query.all()
+    ]
+
+
+def _repercuter_tarif_sur_factures(db: Session, type_frais_id: int, classe_id: int, nouveau_montant: float) -> int:
+    """
+    Répercute un nouveau tarif de classe sur les factures déjà générées mais
+    pas encore intégralement payées, pour les élèves actuellement inscrits
+    dans cette classe. Sans ça, changer un tarif de classe n'avait aucun
+    effet sur ce qui restait dû aux familles n'ayant pas encore payé (bug
+    signalé) : le montant d'une facture est un instantané figé à la
+    génération, jamais resynchronisé depuis SS_TARIFS_CLASSE.
+
+    Le montant de remise (fratrie) déjà appliqué est conservé tel quel en
+    valeur absolue ; seul le montant de base change. Les échéances non
+    encore intégralement soldées absorbent la différence au prorata de leur
+    poids actuel (une échéance déjà payée n'est jamais modifiée), chacune
+    plafonnée à ne jamais descendre sous ce qui a déjà été réglé dessus.
+    """
+    factures = (
+        db.query(Facture)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .filter(
+            Facture.type_frais_id == type_frais_id,
+            Inscription.classe_id == classe_id,
+            Inscription.statut == "ACTIVE",
+            Facture.statut != "PAYEE",
+        )
+        .all()
+    )
+
+    for facture in factures:
+        montant_paye_facture = float(facture.montant_paye or 0)
+        nouveau_montant_net = max(nouveau_montant - float(facture.montant_remise or 0), montant_paye_facture)
+
+        facture.montant_total = nouveau_montant
+        facture.montant_net = nouveau_montant_net
+        facture.montant_restant = max(0.0, nouveau_montant_net - montant_paye_facture)
+        if facture.montant_restant <= 0:
+            facture.statut = "PAYEE"
+        elif montant_paye_facture > 0:
+            facture.statut = "PARTIELLEMENT_PAYEE"
+        else:
+            facture.statut = "EN_ATTENTE"
+
+        echeances = db.query(EcheanceFacture).filter(EcheanceFacture.facture_id == facture.facture_id).all()
+        soldees = [e for e in echeances if e.statut == "PAYEE"]
+        non_soldees = [e for e in echeances if e.statut != "PAYEE"]
+        if not non_soldees:
+            continue
+
+        total_soldees = sum(float(e.montant_attendu or 0) for e in soldees)
+        cible_non_soldees = max(0.0, nouveau_montant_net - total_soldees)
+        ancien_total_non_soldees = sum(float(e.montant_attendu or 0) for e in non_soldees)
+
+        restant_a_repartir = cible_non_soldees
+        for i, echeance in enumerate(non_soldees):
+            montant_paye_ech = float(echeance.montant_paye or 0)
+            if i == len(non_soldees) - 1:
+                nouveau_attendu = restant_a_repartir
+            elif ancien_total_non_soldees > 0:
+                poids = float(echeance.montant_attendu or 0) / ancien_total_non_soldees
+                nouveau_attendu = round(cible_non_soldees * poids, 2)
+            else:
+                nouveau_attendu = round(cible_non_soldees / len(non_soldees), 2)
+            nouveau_attendu = max(nouveau_attendu, montant_paye_ech)
+            restant_a_repartir -= nouveau_attendu
+
+            echeance.montant_attendu = nouveau_attendu
+            if montant_paye_ech >= nouveau_attendu and nouveau_attendu > 0:
+                echeance.statut = "PAYEE"
+            elif montant_paye_ech > 0:
+                echeance.statut = "PARTIELLEMENT_PAYEE"
+            else:
+                echeance.statut = "EN_ATTENTE"
+
+    return len(factures)
+
+
+@router.put("/tarifs-classe")
+def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get_db)):
+    """Upsert en masse. Un montant <= 0 supprime le tarif existant pour ce
+    couple (type_frais_id, classe_id) — permet de "décocher" une classe."""
+    upserted, deleted, factures_maj = 0, 0, 0
+    for entry in entries:
+        existing = db.query(TarifClasse).filter(
+            TarifClasse.type_frais_id == entry.type_frais_id,
+            TarifClasse.classe_id == entry.classe_id,
+        ).first()
+        if entry.montant <= 0:
+            if existing:
+                db.delete(existing)
+                deleted += 1
+            continue
+        if existing:
+            existing.montant = entry.montant
+        else:
+            db.add(TarifClasse(type_frais_id=entry.type_frais_id, classe_id=entry.classe_id, montant=entry.montant))
+        upserted += 1
+        factures_maj += _repercuter_tarif_sur_factures(db, entry.type_frais_id, entry.classe_id, float(entry.montant))
+
+    db.commit()
+    _invalidate_dashboard_cache()
+    return {"message": f"{upserted} tarif(s) enregistré(s), {deleted} supprimé(s), {factures_maj} facture(s) impayée(s) mise(s) à jour"}
+
+
+@router.post("/tarifs/copier")
+def copier_tarifs(data: dict, db: Session = Depends(get_db)):
+    """
+    Copie les tarifs (TarifClasse) d'une année vers une autre, classe par
+    classe appariée sur le même niveau_id (même logique d'appariement que la
+    préparation des classes en promotion — une classe n'a pas le même
+    classe_id d'une année à l'autre, seul le niveau se retrouve). Idempotent :
+    un tarif déjà présent pour la classe cible n'est jamais écrasé.
+    Corps attendu : {annee_source_id, annee_cible_id, mode}.
+    mode="vide" ne fait rien (l'admin construira la grille à la main) ;
+    mode="copier"/"copier_editer" copient — la distinction entre les deux
+    n'a de sens que côté frontend (ouvrir ou non l'écran tarifs après coup).
+    """
+    annee_source_id = data.get("annee_source_id")
+    annee_cible_id = data.get("annee_cible_id")
+    mode = data.get("mode", "copier")
+
+    if mode == "vide":
+        return {"message": "Grille tarifaire laissée vide pour la nouvelle année.", "copies": 0}
+
+    if not annee_source_id or not annee_cible_id:
+        raise HTTPException(status_code=400, detail="annee_source_id et annee_cible_id sont obligatoires")
+    if annee_source_id == annee_cible_id:
+        raise HTTPException(status_code=400, detail="L'année source et l'année cible doivent être différentes")
+
+    for aid in (annee_source_id, annee_cible_id):
+        if not db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == aid).first():
+            raise HTTPException(status_code=404, detail=f"Année scolaire {aid} non trouvée")
+
+    classes_source = db.query(Classe).filter(Classe.annee_id == annee_source_id).all()
+    classes_cible = db.query(Classe).filter(Classe.annee_id == annee_cible_id).all()
+    cible_par_niveau = {}
+    for c in classes_cible:
+        cible_par_niveau.setdefault(c.niveau_id, []).append(c)
+
+    tarifs_existants_cible = {
+        (t.type_frais_id, t.classe_id)
+        for t in db.query(TarifClasse).filter(TarifClasse.classe_id.in_([c.classe_id for c in classes_cible])).all()
+    } if classes_cible else set()
+
+    copies, ignores_deja_present, classes_sans_correspondance = 0, 0, set()
+    for classe_src in classes_source:
+        classes_dst = cible_par_niveau.get(classe_src.niveau_id)
+        if not classes_dst:
+            classes_sans_correspondance.add(classe_src.libelle)
+            continue
+        tarifs_src = db.query(TarifClasse).filter(TarifClasse.classe_id == classe_src.classe_id).all()
+        for tarif in tarifs_src:
+            for classe_dst in classes_dst:
+                if (tarif.type_frais_id, classe_dst.classe_id) in tarifs_existants_cible:
+                    ignores_deja_present += 1
+                    continue
+                db.add(TarifClasse(
+                    type_frais_id=tarif.type_frais_id,
+                    classe_id=classe_dst.classe_id,
+                    montant=tarif.montant,
+                ))
+                tarifs_existants_cible.add((tarif.type_frais_id, classe_dst.classe_id))
+                copies += 1
+
+    db.commit()
+    return {
+        "message": f"{copies} tarif(s) copié(s) vers la nouvelle année.",
+        "copies": copies,
+        "ignores_deja_present": ignores_deja_present,
+        "classes_sans_correspondance": sorted(classes_sans_correspondance),
+    }
+
+
+# ============================================================================
 # FACTURES — avec info élève
 # ============================================================================
 
 @router.get("/factures")
 def list_factures(
+    response: Response,
     etablissement_id: int = 1,
     annee_id: int = 1,
     statut: Optional[str] = None,
@@ -224,6 +488,9 @@ def list_factures(
     if classe_id:
         query = query.filter(Classe.classe_id == classe_id)
 
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+
     results = query.order_by(Facture.date_facture.desc()).offset(skip).limit(limit).all()
 
     factures = []
@@ -240,6 +507,7 @@ def list_factures(
             "inscription_id": facture.inscription_id,
             "type_frais_id": facture.type_frais_id,
             "type_frais_libelle": type_frais.libelle if type_frais else "N/A",
+            "eleve_id": eleve.eleve_id,
             "eleve_nom": eleve.nom,
             "eleve_prenom": eleve.prenom,
             "classe_nom": classe.libelle,
@@ -259,13 +527,26 @@ def list_factures(
 
 
 @router.get("/factures/stats")
-def stats_factures(etablissement_id: int = 1, annee_id: int = 1, db: Session = Depends(get_db)):
+def stats_factures(
+    etablissement_id: int = 1,
+    annee_id: int = 1,
+    classe_id: Optional[int] = None,
+    statut: Optional[str] = None,
+    type_frais_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
     query_base = (
         db.query(Facture)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
         .filter(Classe.etablissement_id == etablissement_id, Inscription.annee_id == annee_id)
     )
+    if classe_id:
+        query_base = query_base.filter(Classe.classe_id == classe_id)
+    if type_frais_id:
+        query_base = query_base.filter(Facture.type_frais_id == type_frais_id)
+    if statut:
+        query_base = query_base.filter(Facture.statut == statut)
 
     total_facture = query_base.with_entities(func.coalesce(func.sum(Facture.montant_net), 0)).scalar()
     total_paye = query_base.with_entities(func.coalesce(func.sum(Facture.montant_paye), 0)).scalar()
@@ -275,6 +556,10 @@ def stats_factures(etablissement_id: int = 1, annee_id: int = 1, db: Session = D
     nb_en_retard = query_base.filter(Facture.statut == "EN_RETARD").count()
     nb_en_attente = query_base.filter(Facture.statut == "EN_ATTENTE").count()
     nb_partielles = query_base.filter(Facture.statut == "PARTIELLEMENT_PAYEE").count()
+    nb_eleves_impayes = (
+        query_base.filter(Facture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE", "EN_RETARD"]))
+        .with_entities(Inscription.eleve_id).distinct().count()
+    )
 
     return {
         "total_facture": float(total_facture),
@@ -285,6 +570,7 @@ def stats_factures(etablissement_id: int = 1, annee_id: int = 1, db: Session = D
         "nb_en_retard": nb_en_retard,
         "nb_en_attente": nb_en_attente,
         "nb_partielles": nb_partielles,
+        "nb_eleves_impayes": nb_eleves_impayes,
         "total_factures": nb_payees + nb_en_retard + nb_en_attente + nb_partielles
     }
 
@@ -296,6 +582,7 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db)):
     inscription = db.query(Inscription).filter(Inscription.inscription_id == data.inscription_id).first()
     if not inscription:
         raise HTTPException(status_code=404, detail="Inscription non trouvée")
+    _verifier_annee_modifiable(db, inscription.annee_id)
 
     # Vérifier le type de frais
     type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == data.type_frais_id).first()
@@ -324,6 +611,7 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db)):
 
     facture = Facture(
         inscription_id=data.inscription_id,
+        annee_id=inscription.annee_id,
         type_frais_id=data.type_frais_id,
         numero_facture=numero_facture,
         montant_total=data.montant_total,
@@ -348,8 +636,22 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db)):
         )
         db.add(echeance)
 
+    # Comptabilité générale : constate la créance (Debit 4111 Élèves / Credit 7061 Produits)
+    generer_ecriture_auto(
+        db, date_ecriture=date_type.today(), journal_code="VE",
+        libelle=f"Facturation {type_frais.libelle} — {numero_facture}",
+        reference=numero_facture,
+        lignes=[
+            {"compte": COMPTE_ELEVES, "debit": float(facture.montant_net), "credit": 0,
+             "eleve_id": inscription.eleve_id, "classe_id": inscription.classe_id, "description": numero_facture},
+            {"compte": COMPTE_PRODUITS_SCOLARITE, "debit": 0, "credit": float(facture.montant_net),
+             "classe_id": inscription.classe_id, "description": numero_facture},
+        ],
+    )
+
     db.commit()
     db.refresh(facture)
+    _invalidate_dashboard_cache()
 
     return {
         "facture_id": facture.facture_id,
@@ -368,6 +670,8 @@ def generer_factures_classe(
     db: Session = Depends(get_db)
 ):
     """Génère les factures pour tous les élèves d'une classe en un clic."""
+    _verifier_annee_modifiable(db, data.annee_id)
+
     # Récupérer toutes les inscriptions de la classe
     inscriptions = db.query(Inscription).filter(
         Inscription.classe_id == data.classe_id,
@@ -381,6 +685,43 @@ def generer_factures_classe(
     type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == data.type_frais_id).first()
     if not type_frais:
         raise HTTPException(status_code=404, detail="Type de frais non trouvé")
+
+    # Le montant vient jusqu'ici uniquement du corps de la requête, sans jamais
+    # être confronté au tarif réellement configuré (TarifClasse) — un montant
+    # incohérent envoyé par erreur (ou un client tiers) pouvait être facturé
+    # silencieusement à toute une classe. Si un tarif existe pour cette
+    # (classe, type de frais), c'est LUI la source de vérité.
+    tarif = db.query(TarifClasse).filter(
+        TarifClasse.classe_id == data.classe_id, TarifClasse.type_frais_id == data.type_frais_id
+    ).first()
+    if tarif is not None and abs(float(tarif.montant) - float(data.montant)) > 0.01:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Le montant envoyé ({data.montant:,.0f} GNF) ne correspond pas au tarif configuré "
+                f"pour cette classe ({float(tarif.montant):,.0f} GNF) — mettez à jour le tarif "
+                "(Paramètres > Finance ou fiche de classe) plutôt que de forcer un montant différent."
+            ),
+        )
+
+    # Un frais FACULTATIF (ex: cantine) n'a pas vocation à être facturé
+    # automatiquement à TOUTE la classe : seules les familles qui y adhèrent
+    # doivent être facturées (via l'inscription, où l'adhésion est cochée par
+    # frais, ou individuellement ensuite). Sans ce garde-fou, générer les
+    # factures "pour la classe" facturait la cantine à des familles qui n'y
+    # avaient jamais adhéré (bug signalé). `forcer_optionnel` permet quand
+    # même de facturer toute la classe si le comptable le confirme sciemment
+    # (ex: un service qui devient collectif pour l'année).
+    if type_frais.est_obligatoire != "O" and not data.forcer_optionnel:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{type_frais.libelle}' est un frais facultatif : le facturer à toute la classe "
+                "l'imposerait aussi aux familles qui n'y ont pas adhéré. Facturez-le individuellement "
+                "par élève (fiche de compte élève), ou confirmez explicitement vouloir l'appliquer à "
+                "toute la classe."
+            ),
+        )
 
     created_count = 0
     skipped_count = 0
@@ -420,6 +761,7 @@ def generer_factures_classe(
 
         facture = Facture(
             inscription_id=inscription.inscription_id,
+            annee_id=inscription.annee_id,
             type_frais_id=data.type_frais_id,
             numero_facture=numero_facture,
             montant_total=data.montant,
@@ -457,6 +799,24 @@ def generer_factures_classe(
             )
             db.add(echeance)
 
+        # Comptabilité générale : constate la créance, exactement comme
+        # create_facture (facture unitaire) — jusqu'ici cette génération en
+        # masse ne créait AUCUNE écriture, donc les factures produites via
+        # "Facturer une classe" restaient invisibles du Grand Livre et de la
+        # Comptabilité Auxiliaire (compte élève toujours à 0, quel que soit le
+        # tarif réellement facturé).
+        generer_ecriture_auto(
+            db, date_ecriture=date_type.today(), journal_code="VE",
+            libelle=f"Facturation {type_frais.libelle} — {numero_facture}",
+            reference=numero_facture,
+            lignes=[
+                {"compte": COMPTE_ELEVES, "debit": float(montant_net), "credit": 0,
+                 "eleve_id": inscription.eleve_id, "classe_id": inscription.classe_id, "description": numero_facture},
+                {"compte": COMPTE_PRODUITS_SCOLARITE, "debit": 0, "credit": float(montant_net),
+                 "classe_id": inscription.classe_id, "description": numero_facture},
+            ],
+        )
+
         created_count += 1
 
     db.commit()
@@ -473,18 +833,29 @@ def generer_factures_classe(
 
 @router.get("/paiements")
 def list_paiements(
+    response: Response,
     etablissement_id: int = 1,
+    annee_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    results = (
+    query = (
         db.query(Paiement, Facture, Eleve)
         .join(Facture, Paiement.facture_id == Facture.facture_id)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
         .filter(Classe.etablissement_id == etablissement_id)
+    )
+    if annee_id is not None:
+        query = query.filter(Inscription.annee_id == annee_id)
+
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+
+    results = (
+        query
         .order_by(Paiement.date_paiement.desc())
         .offset(skip).limit(limit).all()
     )
@@ -515,6 +886,8 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
+    _verifier_annee_modifiable(db, facture.annee_id)
+
     if float(facture.montant_restant or 0) <= 0:
         raise HTTPException(status_code=400, detail="Cette facture est déjà entièrement payée")
 
@@ -536,6 +909,13 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
         if not echeance:
             raise HTTPException(status_code=404, detail="Échéance non trouvée pour cette facture")
 
+        restant_echeance = float(echeance.montant_attendu or 0) - float(echeance.montant_paye or 0)
+        if data.montant > restant_echeance:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Le montant ({data.montant:,.0f}) dépasse le reste dû sur cette échéance ({restant_echeance:,.0f})"
+            )
+
         echeance.montant_paye = float(echeance.montant_paye or 0) + data.montant
         if echeance.montant_paye >= float(echeance.montant_attendu or 0):
             echeance.statut = "PAYEE"
@@ -550,6 +930,7 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
 
     paiement = Paiement(
         facture_id=data.facture_id,
+        annee_id=facture.annee_id,
         echeance_id=data.echeance_id,
         numero_recu=numero_recu,
         montant=data.montant,
@@ -569,8 +950,36 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
     else:
         facture.statut = "PARTIELLEMENT_PAYEE"
 
+    # Comptabilité générale : encaissement réel (Debit trésorerie / Credit 4111 Élèves)
+    insc = db.query(Inscription).filter(Inscription.inscription_id == facture.inscription_id).first()
+    compte_tresorerie, journal_tresorerie = compte_tresorerie_pour_mode(data.mode_paiement)
+    # `eleve_id` n'est posé QUE sur la ligne 4111 (compte élève) — c'est elle
+    # qui identifie le compte auxiliaire de l'élève. La poser aussi sur la
+    # ligne de trésorerie (comme c'était le cas avant ce correctif) fausse le
+    # solde auxiliaire de l'élève : les requêtes "compte individuel" (voir
+    # comptabilite.py) somment débit/crédit par eleve_id sans filtrer par
+    # compte, donc la ligne trésorerie (qui n'appartient pas à l'élève, elle
+    # appartient à la caisse/banque de l'école) venait gonfler artificiellement
+    # le total débit de l'élève d'exactement le montant payé — masquant tout
+    # solde réellement dû (symptôme observé : "Facturé"/"Réglé" identiques,
+    # toujours "Soldé", quel que soit le montant réellement facturé).
+    generer_ecriture_auto(
+        db, date_ecriture=date_type.today(), journal_code=journal_tresorerie,
+        libelle=f"Encaissement scolarité — {numero_recu}",
+        reference=numero_recu,
+        lignes=[
+            {"compte": compte_tresorerie, "debit": float(data.montant), "credit": 0,
+             "classe_id": insc.classe_id if insc else None,
+             "description": numero_recu},
+            {"compte": COMPTE_ELEVES, "debit": 0, "credit": float(data.montant),
+             "eleve_id": insc.eleve_id if insc else None, "classe_id": insc.classe_id if insc else None,
+             "description": numero_recu},
+        ],
+    )
+
     db.commit()
     db.refresh(paiement)
+    _invalidate_dashboard_cache()
 
     return {
         "paiement_id": paiement.paiement_id,
@@ -589,9 +998,13 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
 
 @router.get("/depenses", response_model=List[DepenseOut])
 def list_depenses(
+    response: Response,
     etablissement_id: int = 1,
     annee_id: int = 1,
     categorie: Optional[str] = None,
+    classe_id: Optional[int] = None,
+    statut: Optional[str] = None,
+    search: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db)
@@ -602,15 +1015,32 @@ def list_depenses(
     )
     if categorie:
         query = query.filter(Depense.categorie == categorie)
-    return query.order_by(Depense.date_depense.desc()).offset(skip).limit(limit).all()
+    if classe_id:
+        query = query.filter(Depense.classe_id == classe_id)
+    if statut:
+        query = query.filter(Depense.statut == statut)
+    if search:
+        like = f"%{search.strip()}%"
+        query = query.filter(
+            (Depense.libelle.ilike(like)) | (Depense.fournisseur.ilike(like)) | (Depense.categorie.ilike(like))
+        )
+
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+
+    return query.order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).offset(skip).limit(limit).all()
 
 
 @router.post("/depenses", response_model=DepenseOut, status_code=201)
 def create_depense(data: DepenseCreate, db: Session = Depends(get_db)):
+    _verifier_annee_modifiable(db, data.annee_id)
+    if data.montant <= 0:
+        raise HTTPException(status_code=400, detail="Le montant doit être supérieur à 0")
     dep = Depense(**data.model_dump())
     db.add(dep)
     db.commit()
     db.refresh(dep)
+    _invalidate_dashboard_cache()
     return dep
 
 
@@ -619,28 +1049,58 @@ def approuver_depense(depense_id: int, db: Session = Depends(get_db)):
     dep = db.query(Depense).filter(Depense.depense_id == depense_id).first()
     if not dep:
         raise HTTPException(status_code=404, detail="Dépense non trouvée")
+    _verifier_annee_modifiable(db, dep.annee_id)
     if dep.statut != "EN_ATTENTE":
         raise HTTPException(status_code=400, detail="Cette dépense ne peut pas être approuvée")
     dep.statut = "APPROUVEE"
     db.commit()
     return {"message": "Dépense approuvée"}
 
+@router.put("/depenses/{depense_id}/statut")
+def changer_statut_depense(depense_id: int, statut: str, db: Session = Depends(get_db)):
+    dep = db.query(Depense).filter(Depense.depense_id == depense_id).first()
+    if not dep:
+        raise HTTPException(status_code=404, detail="Dépense non trouvée")
+    _verifier_annee_modifiable(db, dep.annee_id)
+    if dep.statut == "VALIDE":
+        raise HTTPException(
+            status_code=400,
+            detail="Cette dépense est déjà validée et postée en comptabilité générale : son statut ne peut plus être changé depuis cet écran."
+        )
+    if statut not in ("EN_ATTENTE", "APPROUVEE", "REJETEE"):
+        raise HTTPException(status_code=400, detail="Statut invalide")
+    dep.statut = statut
+    db.commit()
+    _invalidate_dashboard_cache()
+    return {"message": f"Statut mis à jour en {statut}"}
+
 
 @router.get("/depenses/stats")
 def stats_depenses(etablissement_id: int = 1, annee_id: int = 1, db: Session = Depends(get_db)):
     query_base = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
-        Depense.annee_id == annee_id
+        Depense.annee_id == annee_id,
+        Depense.statut != "REJETEE"
     )
     total = query_base.with_entities(func.coalesce(func.sum(Depense.montant), 0)).scalar()
     par_categorie = query_base.with_entities(
         Depense.categorie,
-        func.sum(Depense.montant).label("total")
+        func.sum(Depense.montant).label("total"),
+        func.count(Depense.depense_id).label("nb"),
     ).group_by(Depense.categorie).order_by(func.sum(Depense.montant).desc()).all()
+
+    total_valide = query_base.filter(Depense.statut == "VALIDE").with_entities(
+        func.coalesce(func.sum(Depense.montant), 0)
+    ).scalar()
+    total_en_attente = query_base.filter(Depense.statut.in_(["EN_ATTENTE", "APPROUVEE"])).with_entities(
+        func.coalesce(func.sum(Depense.montant), 0)
+    ).scalar()
 
     return {
         "total_depenses": float(total),
-        "par_categorie": [{"categorie": r.categorie, "total": float(r.total)} for r in par_categorie]
+        "total_valide": float(total_valide),
+        "total_en_attente": float(total_en_attente),
+        "par_categorie": [{"categorie": r.categorie, "total": float(r.total), "nb": r.nb} for r in par_categorie]
     }
 
 
@@ -650,11 +1110,13 @@ def stats_depenses(etablissement_id: int = 1, annee_id: int = 1, db: Session = D
 
 @router.get("/impayes")
 def list_impayes(
+    response: Response,
     etablissement_id: int = 1,
     annee_id: int = 1,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
     type_frais_id: Optional[int] = None,
+    search: Optional[str] = None,
     skip: int = 0,
     limit: int = 200,
     db: Session = Depends(get_db)
@@ -688,8 +1150,16 @@ def list_impayes(
         query = query.filter(Facture.statut == statut)
     if type_frais_id:
         query = query.filter(Facture.type_frais_id == type_frais_id)
+    if search:
+        like = f"%{search.strip()}%"
+        query = query.filter(
+            (Eleve.nom.ilike(like)) | (Eleve.prenom.ilike(like)) | (Eleve.matricule.ilike(like))
+        )
 
-    results = query.order_by(Facture.montant_restant.desc()).offset(skip).limit(limit).all()
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+
+    results = query.order_by(Facture.montant_restant.desc(), Facture.facture_id).offset(skip).limit(limit).all()
 
     impayes = []
     for facture, eleve, classe, inscription, type_frais in results:
@@ -707,13 +1177,19 @@ def list_impayes(
             EcheanceFacture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"])
         ).order_by(EcheanceFacture.date_limite).all()
 
-        # Calculer les jours de retard depuis l'échéance la plus ancienne
+        # Calculer les jours de retard depuis l'échéance la plus ancienne ;
+        # à défaut d'échéancier (facture à paiement unique, sans EcheanceFacture),
+        # on retombe sur l'ancienneté depuis la date de facturation elle-même,
+        # seule référence temporelle disponible sur ce type de facture.
         jours_retard = 0
         date_limite_proche = None
         if echeances:
             date_limite_proche = echeances[0].date_limite
             if date_limite_proche and date_limite_proche < today:
                 jours_retard = (today - date_limite_proche).days
+        elif facture.date_facture and facture.date_facture < today:
+            date_limite_proche = facture.date_facture
+            jours_retard = (today - facture.date_facture).days
 
         parent_nom = ""
         parent_tel = ""
@@ -853,11 +1329,21 @@ def tableau_solvabilite(
 
     results = query.order_by(Eleve.nom, Eleve.prenom).all()
 
+    # Précharge TOUTES les factures des inscriptions concernées en une seule
+    # requête plutôt qu'une par élève dans la boucle ci-dessous — à l'échelle
+    # réelle (5000 élèves), la version précédente prenait ~20s (mesuré),
+    # dépassant le seuil de patience de l'utilisateur et parfois le timeout
+    # axios (30s) selon la charge — voir la règle N+1 déjà établie sur ce
+    # projet (mémoire : "ne jamais faire de requête DB dans une boucle").
+    inscription_ids = [insc.inscription_id for _, insc, _ in results]
+    factures_par_inscription: Dict[int, List[Facture]] = {}
+    if inscription_ids:
+        for f in db.query(Facture).filter(Facture.inscription_id.in_(inscription_ids)).all():
+            factures_par_inscription.setdefault(f.inscription_id, []).append(f)
+
     solvabilite = []
     for eleve, inscription, classe in results:
-        factures = db.query(Facture).filter(
-            Facture.inscription_id == inscription.inscription_id
-        ).all()
+        factures = factures_par_inscription.get(inscription.inscription_id, [])
 
         total_facture = sum(float(f.montant_net or 0) for f in factures)
         total_paye = sum(float(f.montant_paye or 0) for f in factures)
@@ -929,7 +1415,8 @@ def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db))
             libelle_frais = type_frais.libelle if type_frais else "Frais Scolaires (Standard)"
 
             paiements = db.query(Paiement).filter(
-                Paiement.facture_id == facture.facture_id
+                Paiement.facture_id == facture.facture_id,
+                Paiement.statut == "VALIDE"
             ).order_by(Paiement.date_paiement.desc()).all()
 
             echeances = db.query(EcheanceFacture).filter(
@@ -939,7 +1426,7 @@ def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db))
             factures_detail.append({
                 "facture_id": facture.facture_id,
                 "numero_facture": facture.numero_facture,
-                "libelle_frais": libelle_frais,
+                "type_frais_libelle": libelle_frais,
                 "montant_total": float(facture.montant_net or 0),
                 "montant_paye": float(facture.montant_paye or 0),
                 "montant_restant": float(facture.montant_restant or 0),
@@ -987,9 +1474,18 @@ def dashboard_financier(
 ):
     """
     Tableau de bord financier complet avec KPIs, évolution mensuelle et répartition.
+
+    Mis en cache dans Redis (TTL 60s) pour limiter la charge sur la base de
+    données et rester réactif même en cas de connexion instable.
     """
     from datetime import date as today_type, timedelta
     from sqlalchemy import extract
+    from app.core.cache import cache_get, cache_set
+
+    cache_key = f"dashboard:{etablissement_id}:{annee_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return cached
 
     today = today_type.today()
 
@@ -1052,6 +1548,22 @@ def dashboard_financier(
     revenus_mois = sum_paiements_periode(debut_mois)
     revenus_annee = sum_paiements_periode(debut_annee)
 
+    def sum_depenses_periode(date_debut: today_type):
+        result = (
+            db.query(func.coalesce(func.sum(Depense.montant), 0))
+            .filter(
+                Depense.etablissement_id == etablissement_id,
+                Depense.date_depense >= date_debut,
+                Depense.statut == "VALIDE"
+            ).scalar()
+        )
+        return float(result)
+
+    debut_trimestre = today.replace(month=((today.month - 1) // 3) * 3 + 1, day=1)
+    depenses_mois = sum_depenses_periode(debut_mois)
+    revenus_trimestre = sum_paiements_periode(debut_trimestre)
+    depenses_trimestre = sum_depenses_periode(debut_trimestre)
+
     # === Évolution mensuelle (12 derniers mois) ===
     evolution = []
     MOIS_LABELS = ["Jan", "Fév", "Mar", "Avr", "Mai", "Jun", "Jul", "Aoû", "Sep", "Oct", "Nov", "Déc"]
@@ -1067,6 +1579,7 @@ def dashboard_financier(
             .join(Classe, Inscription.classe_id == Classe.classe_id)
             .filter(
                 Classe.etablissement_id == etablissement_id,
+                Inscription.annee_id == annee_id,
                 extract("month", Paiement.date_paiement) == mois_num,
                 extract("year", Paiement.date_paiement) == annee_num,
                 Paiement.statut == "VALIDE"
@@ -1085,10 +1598,22 @@ def dashboard_financier(
             ).scalar()
         )
 
+        depense_mois_evo = float(
+            db.query(func.coalesce(func.sum(Depense.montant), 0))
+            .filter(
+                Depense.etablissement_id == etablissement_id,
+                Depense.annee_id == annee_id,
+                Depense.statut == "VALIDE",
+                extract("month", Depense.date_depense) == mois_num,
+                extract("year", Depense.date_depense) == annee_num,
+            ).scalar()
+        )
+
         evolution.append({
             "mois": MOIS_LABELS[mois_num - 1],
             "encaisse": montant_mois,
             "facture": facture_mois,
+            "depense": depense_mois_evo,
         })
 
     # === Répartition par classe ===
@@ -1117,12 +1642,17 @@ def dashboard_financier(
         .join(Facture, Paiement.facture_id == Facture.facture_id)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
-        .filter(Classe.etablissement_id == etablissement_id)
+        .filter(Classe.etablissement_id == etablissement_id, Inscription.annee_id == annee_id, Paiement.statut == "VALIDE")
         .group_by(Paiement.mode_paiement)
         .all()
     )
 
-    return {
+    nb_eleves_impayes = (
+        query_base.filter(Facture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE", "EN_RETARD"]))
+        .with_entities(Inscription.eleve_id).distinct().count()
+    )
+
+    resultat = {
         "kpis": {
             "total_facture": total_facture,
             "total_paye": total_paye,
@@ -1135,8 +1665,12 @@ def dashboard_financier(
             "revenus_semaine": revenus_semaine,
             "revenus_mois": revenus_mois,
             "revenus_annee": revenus_annee,
+            "revenus_trimestre": revenus_trimestre,
             "total_depenses": total_depenses,
+            "depenses_mois": depenses_mois,
+            "depenses_trimestre": depenses_trimestre,
             "solde_caisse": solde_caisse,
+            "nb_eleves_impayes": nb_eleves_impayes,
         },
         "evolution_mensuelle": evolution,
         "repartition_classes": [
@@ -1148,6 +1682,9 @@ def dashboard_financier(
             for r in repartition_modes
         ],
     }
+
+    cache_set(cache_key, resultat, ttl_seconds=60)
+    return resultat
 
 
 @router.get("/rapports/journalier")
@@ -1251,6 +1788,17 @@ def rapport_mensuel(
     )
     total_impayes = float(query_impayes.scalar())
 
+    total_depenses = float((
+        db.query(func.coalesce(func.sum(Depense.montant), 0))
+        .filter(
+            Depense.etablissement_id == etablissement_id,
+            extract("month", Depense.date_depense) == mois_cible,
+            extract("year", Depense.date_depense) == annee_cible,
+            Depense.statut == "VALIDE"
+        )
+        .scalar() or 0
+    ))
+
     MOIS_LABELS = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
                    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
 
@@ -1259,6 +1807,8 @@ def rapport_mensuel(
         "annee": annee_cible,
         "total_encaisse": total_encaisse,
         "total_impayes": total_impayes,
+        "total_depenses": total_depenses,
+        "solde_final": total_encaisse - total_depenses,
         "nb_paiements": len(paiements),
         "par_classe": list(par_classe.values()),
         "paiements": [
@@ -1272,6 +1822,55 @@ def rapport_mensuel(
             }
             for p, f, e, c in paiements
         ]
+    }
+
+
+@router.get("/rapports/annuel")
+def rapport_annuel(
+    etablissement_id: int = 1,
+    annee_id: int = 1,
+    annee: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Rapport financier annuel : recettes, dépenses, masse salariale et résultat net."""
+    from datetime import date as today_type
+    from sqlalchemy import extract
+
+    today = today_type.today()
+    annee_cible = annee or today.year
+
+    total_encaisse = float((
+        db.query(func.coalesce(func.sum(Paiement.montant), 0))
+        .join(Facture, Paiement.facture_id == Facture.facture_id)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            extract("year", Paiement.date_paiement) == annee_cible,
+            Paiement.statut == "VALIDE"
+        )
+        .scalar() or 0
+    ))
+
+    query_dep = db.query(Depense).filter(
+        Depense.etablissement_id == etablissement_id,
+        extract("year", Depense.date_depense) == annee_cible,
+        Depense.statut == "VALIDE"
+    )
+    total_depenses = float(
+        query_dep.with_entities(func.coalesce(func.sum(Depense.montant), 0)).scalar() or 0
+    )
+    masse_salariale = float(
+        query_dep.filter(Depense.categorie == "SALAIRES")
+        .with_entities(func.coalesce(func.sum(Depense.montant), 0)).scalar() or 0
+    )
+
+    return {
+        "annee": annee_cible,
+        "total_encaisse": total_encaisse,
+        "total_depenses": total_depenses,
+        "masse_salariale": masse_salariale,
+        "solde_final": total_encaisse - total_depenses,
     }
 
 
@@ -1419,7 +2018,16 @@ def notifier_impayes(
     from app.models.academique import Parent, EleveParent, Message
     from datetime import date as today_type
 
+    if not _rappels_config.get("actif", True):
+        raise HTTPException(
+            status_code=400,
+            detail="Les rappels automatiques sont désactivés dans la configuration. Activez-les avant d'envoyer."
+        )
+
     today = today_type.today()
+    template = _rappels_config.get("message_template") or (
+        "Cher(e) {parent_nom}, le paiement de {montant} GNF pour {eleve_nom} est attendu le {date_limite}. Merci de régulariser."
+    )
 
     # Récupérer tous les impayés actifs
     impayes = (
@@ -1445,14 +2053,29 @@ def notifier_impayes(
         )
         if lien:
             _, parent = lien
-            # Créer un message de notification dans le système
+            echeance = (
+                db.query(EcheanceFacture)
+                .filter(EcheanceFacture.facture_id == facture.facture_id, EcheanceFacture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"]))
+                .order_by(EcheanceFacture.date_limite)
+                .first()
+            )
+            date_limite = str(echeance.date_limite) if echeance and echeance.date_limite else str(today)
+            contenu = template.format(
+                parent_nom=f"{parent.prenom} {parent.nom}",
+                montant=f"{float(facture.montant_restant or 0):,.0f}",
+                eleve_nom=f"{eleve.prenom} {eleve.nom}",
+                date_limite=date_limite,
+            )
+            # Créer un message de notification dans le système (seul canal réellement
+            # implémenté pour l'instant ; SMS/Email nécessiteraient une intégration
+            # opérateur dédiée, hors périmètre de cette correction)
             message = Message(
                 expediteur_type="ADMIN",
                 destinataire_type="PARENT",
                 destinataire_id=parent.parent_id,
                 objet_type="PAIEMENT",
                 sujet=f"Rappel de paiement — {eleve.prenom} {eleve.nom}",
-                contenu=f"Bonjour {parent.prenom} {parent.nom},\n\nNous vous rappelons que le solde restant dû pour votre enfant {eleve.prenom} {eleve.nom} ({classe.libelle}) est de {float(facture.montant_restant or 0):,.0f} GNF.\n\nMerci de régulariser votre situation au secrétariat.\n\nCordialement,\nLa Direction",
+                contenu=contenu,
                 statut="ENVOYE",
             )
             db.add(message)
@@ -1463,6 +2086,98 @@ def notifier_impayes(
         "message": f"{notifies} notification(s) envoyée(s) aux parents",
         "nb_notifies": notifies,
         "nb_impayes": len(impayes)
+    }
+
+
+# ============================================================================
+# REÇU — Détail JSON pour affichage/impression à l'écran (voir aussi
+# /paiements/{id}/recu-pdf ci-dessous pour le téléchargement PDF)
+# ============================================================================
+
+@router.get("/recu/{paiement_id}")
+def get_recu(paiement_id: int, db: Session = Depends(get_db)):
+    """Détail complet d'un reçu de paiement pour affichage/impression écran."""
+    from app.models.academique import Etablissement, Parent, EleveParent
+
+    result = (
+        db.query(Paiement, Facture, Inscription, Eleve, Classe)
+        .join(Facture, Paiement.facture_id == Facture.facture_id)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(Paiement.paiement_id == paiement_id)
+        .first()
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Paiement non trouvé")
+
+    paiement, facture, inscription, eleve, classe = result
+
+    type_frais = None
+    if facture.type_frais_id:
+        type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == facture.type_frais_id).first()
+
+    etablissement = db.query(Etablissement).filter(Etablissement.etablissement_id == classe.etablissement_id).first()
+
+    lien_parent = (
+        db.query(Parent)
+        .join(EleveParent, EleveParent.parent_id == Parent.parent_id)
+        .filter(EleveParent.eleve_id == eleve.eleve_id)
+        .first()
+    )
+
+    historique = (
+        db.query(Paiement)
+        .filter(Paiement.facture_id == facture.facture_id, Paiement.statut == "VALIDE")
+        .order_by(Paiement.date_paiement.desc())
+        .all()
+    )
+
+    return {
+        "recu": {
+            "numero_recu": paiement.numero_recu,
+            "date_paiement": str(paiement.date_paiement) if paiement.date_paiement else None,
+            "montant": float(paiement.montant),
+            "mode_paiement": paiement.mode_paiement,
+            "reference_externe": paiement.reference_externe,
+            "devise": paiement.devise or "GNF",
+        },
+        "facture": {
+            "facture_id": facture.facture_id,
+            "numero_facture": facture.numero_facture,
+            "montant_total": float(facture.montant_net or 0),
+            "montant_paye": float(facture.montant_paye or 0),
+            "montant_restant": float(facture.montant_restant or 0),
+            "statut": facture.statut,
+            "type_frais": type_frais.libelle if type_frais else "Frais Scolaires (Standard)",
+        },
+        "eleve": {
+            "eleve_id": eleve.eleve_id,
+            "nom": eleve.nom,
+            "prenom": eleve.prenom,
+            "matricule": eleve.matricule,
+            "classe": classe.libelle,
+        },
+        "etablissement": {
+            "nom": etablissement.nom if etablissement else "SmartSchool",
+            "adresse": (etablissement.adresse if etablissement else "") or "",
+            "telephone": (etablissement.telephone if etablissement else "") or "",
+            "email": (etablissement.email if etablissement else "") or "",
+            "directeur": (etablissement.directeur if etablissement else "") or "",
+        },
+        "parent": {
+            "nom": f"{lien_parent.prenom} {lien_parent.nom}" if lien_parent else None,
+            "telephone": lien_parent.telephone_1 if lien_parent else None,
+        },
+        "historique_paiements": [
+            {
+                "numero_recu": p.numero_recu,
+                "date_paiement": str(p.date_paiement) if p.date_paiement else None,
+                "montant": float(p.montant),
+                "mode_paiement": p.mode_paiement,
+            }
+            for p in historique
+        ],
     }
 
 
@@ -1507,6 +2222,44 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
     tel_ecole = getattr(etablissement, "telephone", "") or ""
     email_ecole = getattr(etablissement, "email", "") or ""
 
+    # Type de frais concerné par ce paiement — sans ça, le reçu affiche un
+    # montant sans jamais préciser à quoi il correspond (scolarité, cantine...).
+    type_frais_recu = None
+    if facture.type_frais_id:
+        type_frais_recu = db.query(TypeFrais).filter(TypeFrais.type_frais_id == facture.type_frais_id).first()
+    libelle_type_frais = type_frais_recu.libelle if type_frais_recu else "Frais Scolaires (Standard)"
+
+    # Numéro de tranche : position de l'échéance réglée par CE paiement parmi
+    # toutes les échéances de la facture (permet d'indiquer "Tranche 2 sur 3",
+    # utile pour les parents qui paient en plusieurs fois).
+    tranche_info = None
+    if paiement.echeance_id:
+        echeances_facture = (
+            db.query(EcheanceFacture)
+            .filter(EcheanceFacture.facture_id == facture.facture_id)
+            .order_by(EcheanceFacture.date_limite.asc(), EcheanceFacture.echeance_id.asc())
+            .all()
+        )
+        for idx, ech in enumerate(echeances_facture, start=1):
+            if ech.echeance_id == paiement.echeance_id:
+                tranche_info = (idx, len(echeances_facture), ech.libelle)
+                break
+
+    # Historique des règlements déjà effectués sur cette facture AVANT ce
+    # paiement-ci — affiché en récapitulatif quand ce n'est pas le tout premier
+    # versement, pour que le reçu de la dernière tranche retrace bien toutes
+    # les tranches précédentes (dates + montants), pas seulement la dernière.
+    historique_anterieur = (
+        db.query(Paiement)
+        .filter(
+            Paiement.facture_id == facture.facture_id,
+            Paiement.statut == "VALIDE",
+            Paiement.paiement_id != paiement.paiement_id,
+        )
+        .order_by(Paiement.date_paiement.asc(), Paiement.paiement_id.asc())
+        .all()
+    )
+
     # Créer le buffer PDF
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
@@ -1515,11 +2268,30 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
     # === En-tête : informations de l'établissement ===
     y = hauteur - 2 * cm
 
-    # Zone logo (placeholder rectangle)
-    pdf.setStrokeColorRGB(0.7, 0.7, 0.7)
-    pdf.rect(2 * cm, y - 1.5 * cm, 2.5 * cm, 2 * cm)
-    pdf.setFont("Helvetica", 8)
-    pdf.drawCentredString(3.25 * cm, y - 0.7 * cm, "LOGO")
+    # Logo de l'école — lit le même réglage que les bulletins
+    # (documents.entete_logo) et le fichier réellement uploadé
+    # (Etablissement.logo_url), au lieu d'un rectangle "LOGO" statique.
+    from app.core.documents_settings import get_documents_settings, dessiner_filigrane, _bool
+    doc_settings = get_documents_settings(db, classe.etablissement_id)
+    logo_dessine = False
+    if _bool(doc_settings.get("documents.entete_logo", "true")) and etablissement and getattr(etablissement, "logo_url", None):
+        backend_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        logo_path = os.path.join(backend_root, etablissement.logo_url.lstrip("/").replace("/", os.sep))
+        if os.path.isfile(logo_path):
+            try:
+                from reportlab.lib.utils import ImageReader
+                pdf.drawImage(
+                    ImageReader(logo_path), 2 * cm, y - 1.7 * cm, width=2.5 * cm, height=2.2 * cm,
+                    preserveAspectRatio=True, mask='auto', anchor='c'
+                )
+                logo_dessine = True
+            except Exception:
+                logo_dessine = False
+    if not logo_dessine:
+        pdf.setStrokeColorRGB(0.7, 0.7, 0.7)
+        pdf.rect(2 * cm, y - 1.5 * cm, 2.5 * cm, 2 * cm)
+        pdf.setFont("Helvetica", 8)
+        pdf.drawCentredString(3.25 * cm, y - 0.7 * cm, "LOGO")
 
     # Nom de l'école
     pdf.setFont("Helvetica-Bold", 16)
@@ -1578,6 +2350,8 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
 
     y -= 0.6 * cm
     pdf.setFont("Helvetica", 10)
+    pdf.drawString(2.5 * cm, y, f"Motif :  {libelle_type_frais}")
+    y -= 0.5 * cm
     pdf.drawString(2.5 * cm, y, f"Montant payé :  {float(paiement.montant):,.0f} GNF")
     y -= 0.5 * cm
     pdf.drawString(2.5 * cm, y, f"Mode de paiement :  {paiement.mode_paiement or 'N/A'}")
@@ -1588,6 +2362,11 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
     pdf.drawString(2.5 * cm, y, f"Référence :  {paiement.reference_externe or 'N/A'}")
     y -= 0.5 * cm
     pdf.drawString(2.5 * cm, y, f"Devise :  {paiement.devise or 'GNF'}")
+    if tranche_info:
+        idx, total, libelle_echeance = tranche_info
+        y -= 0.5 * cm
+        suffixe = " — dernière tranche" if idx == total else ""
+        pdf.drawString(2.5 * cm, y, f"Tranche :  {idx} sur {total} ({libelle_echeance}){suffixe}")
 
     # === Informations de la facture ===
     y -= 1.2 * cm
@@ -1608,6 +2387,30 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
     y -= 0.5 * cm
     pdf.drawString(2.5 * cm, y, f"Statut facture :  {facture.statut}")
 
+    # === Historique des règlements antérieurs sur cette facture ===
+    # Affiché dès que ce n'est pas le tout premier versement — utile en
+    # particulier pour le reçu de la dernière tranche, qui doit retracer
+    # toutes les tranches déjà réglées (dates + montants), pas seulement
+    # celle-ci.
+    if historique_anterieur:
+        y -= 1.2 * cm
+        pdf.setFont("Helvetica-Bold", 11)
+        pdf.drawString(2 * cm, y, "RÈGLEMENTS ANTÉRIEURS SUR CETTE FACTURE")
+        y -= 0.2 * cm
+        pdf.line(2 * cm, y, largeur - 2 * cm, y)
+
+        y -= 0.55 * cm
+        pdf.setFont("Helvetica", 9)
+        # Limité aux 6 derniers pour rester sur une page (reçu simple, pas de pagination).
+        entries = historique_anterieur[-6:]
+        if len(historique_anterieur) > len(entries):
+            pdf.drawString(2.5 * cm, y, f"({len(historique_anterieur) - len(entries)} règlement(s) antérieur(s) supplémentaire(s) non affiché(s) ici)")
+            y -= 0.45 * cm
+        for h in entries:
+            h_date = str(h.date_paiement) if h.date_paiement else ""
+            pdf.drawString(2.5 * cm, y, f"{h_date}  —  {float(h.montant):,.0f} GNF  ({h.mode_paiement or 'N/A'}, reçu N° {h.numero_recu})")
+            y -= 0.45 * cm
+
     # === Pied de page : date et signature ===
     y -= 2 * cm
     pdf.setLineWidth(1)
@@ -1624,10 +2427,8 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
     pdf.drawCentredString(largeur / 2, y, "Ce reçu est généré automatiquement par SmartSchool. Conservez-le pour vos archives.")
 
     # === Filigrane ===
-    from app.core.documents_settings import get_documents_settings, dessiner_filigrane, _bool
-    settings = get_documents_settings(db, classe.etablissement_id)
-    if _bool(settings.get("documents.filigrane_recus", "false")):
-        dessiner_filigrane(pdf, largeur, hauteur, settings)
+    if _bool(doc_settings.get("documents.filigrane_recus", "false")):
+        dessiner_filigrane(pdf, largeur, hauteur, doc_settings)
 
     # Finaliser le PDF
     pdf.showPage()
@@ -1726,10 +2527,17 @@ def creer_reglement_fournisseur(
         fournisseur=fournisseur,
         reference=reference[:150] if reference else None,
         statut="EN_ATTENTE",
+        mode_paiement=data.get("mode_paiement") or None,
+        facture_url=data.get("facture_url") or None,
+        source_fonds=data.get("source_fonds") or None,
+        classe_id=data.get("classe_id") or None,
+        eleve_id=data.get("eleve_id") or None,
+        departement=data.get("departement") or None,
     )
     db.add(dep)
     db.commit()
     db.refresh(dep)
+    _invalidate_dashboard_cache()
 
     return {
         "depense_id": dep.depense_id,
@@ -1750,14 +2558,30 @@ def valider_depense(depense_id: int, db: Session = Depends(get_db)):
     dep = db.query(Depense).filter(Depense.depense_id == depense_id).first()
     if not dep:
         raise HTTPException(status_code=404, detail="Dépense non trouvée")
-    
+
+    _verifier_annee_modifiable(db, dep.annee_id)
+
     if dep.statut == "VALIDE":
         raise HTTPException(status_code=400, detail="Cette dépense est déjà validée")
-        
+
     dep.statut = "VALIDE"
+
+    # Comptabilité générale : sortie de fonds réelle (Debit charge / Credit Banque)
+    compte_charge = compte_charge_pour_categorie(dep.categorie)
+    generer_ecriture_auto(
+        db, date_ecriture=date_type.today(), journal_code="OD",
+        libelle=f"Dépense validée — {dep.libelle}",
+        reference=dep.reference or f"DEP-{dep.depense_id}",
+        lignes=[
+            {"compte": compte_charge, "debit": float(dep.montant), "credit": 0, "description": dep.libelle},
+            {"compte": COMPTE_BANQUE, "debit": 0, "credit": float(dep.montant), "description": dep.libelle},
+        ],
+    )
+
     db.commit()
     db.refresh(dep)
-    
+    _invalidate_dashboard_cache()
+
     return {"message": "Dépense validée avec succès", "depense_id": dep.depense_id, "statut": dep.statut}
 
 
@@ -1767,6 +2591,7 @@ def valider_depense(depense_id: int, db: Session = Depends(get_db)):
 
 @router.get("/decaissements")
 def list_decaissements(
+    response: Response,
     etablissement_id: int = 1,
     annee_id: int = 1,
     date_debut: Optional[str] = None,
@@ -1794,6 +2619,9 @@ def list_decaissements(
         query = query.filter(Depense.date_depense <= today_type.fromisoformat(date_fin))
     if categorie:
         query = query.filter(Depense.categorie == categorie)
+
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
 
     # Récupérer les transactions
     transactions = query.order_by(Depense.date_depense.desc()).offset(skip).limit(limit).all()
@@ -1867,6 +2695,8 @@ def annuler_paiement(
     if paiement.statut == "ANNULE":
         raise HTTPException(status_code=400, detail="Ce paiement est déjà annulé")
 
+    _verifier_annee_modifiable(db, paiement.annee_id)
+
     montant_paiement = float(paiement.montant or 0)
 
     # Mettre à jour le statut du paiement
@@ -1902,6 +2732,23 @@ def annuler_paiement(
             else:
                 echeance.statut = "PARTIELLEMENT_PAYEE"
 
+    # Comptabilité générale : contre-passation de l'écriture d'encaissement d'origine
+    insc = db.query(Inscription).filter(Inscription.inscription_id == facture.inscription_id).first() if facture else None
+    compte_tresorerie, journal_tresorerie = compte_tresorerie_pour_mode(paiement.mode_paiement)
+    generer_ecriture_auto(
+        db, date_ecriture=date_type.today(), journal_code=journal_tresorerie,
+        libelle=f"Annulation paiement {paiement.numero_recu} — {motif}",
+        reference=paiement.numero_recu,
+        lignes=[
+            # eleve_id uniquement sur la ligne 4111 (compte élève) — voir le
+            # même correctif dans create_paiement pour l'explication complète.
+            {"compte": COMPTE_ELEVES, "debit": montant_paiement, "credit": 0,
+             "eleve_id": insc.eleve_id if insc else None, "classe_id": insc.classe_id if insc else None},
+            {"compte": compte_tresorerie, "debit": 0, "credit": montant_paiement,
+             "classe_id": insc.classe_id if insc else None},
+        ],
+    )
+
     db.commit()
 
     return {
@@ -1920,6 +2767,7 @@ def annuler_paiement(
 
 @router.get("/acomptes")
 def list_acomptes(
+    response: Response,
     etablissement_id: int = 1,
     annee_id: int = 1,
     skip: int = 0,
@@ -1930,7 +2778,7 @@ def list_acomptes(
     Liste les paiements qui constituent des acomptes (avances).
     Un acompte est un paiement validé dont la facture associée a encore un montant restant > 0.
     """
-    results = (
+    query = (
         db.query(Paiement, Facture, Eleve, Classe)
         .join(Facture, Paiement.facture_id == Facture.facture_id)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
@@ -1942,6 +2790,13 @@ def list_acomptes(
             Paiement.statut == "VALIDE",
             Facture.montant_restant > 0
         )
+    )
+
+    total = query.count()
+    response.headers["X-Total-Count"] = str(total)
+
+    results = (
+        query
         .order_by(Paiement.date_paiement.desc())
         .offset(skip).limit(limit)
         .all()
@@ -2161,8 +3016,7 @@ def list_employes_salaires(
         db.query(Enseignant)
         .filter(
             Enseignant.etablissement_id == etablissement_id,
-            Enseignant.statut == "ACTIF",
-            Enseignant.salaire_base > 0
+            Enseignant.statut == "ACTIF"
         )
         .all()
     )
@@ -2171,8 +3025,7 @@ def list_employes_salaires(
         db.query(Utilisateur)
         .filter(
             Utilisateur.etablissement_id == etablissement_id,
-            Utilisateur.statut == "ACTIF",
-            Utilisateur.salaire_base > 0
+            Utilisateur.statut == "ACTIF"
         )
         .all()
     )
@@ -2180,7 +3033,7 @@ def list_employes_salaires(
     result = []
     # --- Traitement des Enseignants ---
     for ens in enseignants:
-        historique = (
+        depenses = (
             db.query(Depense)
             .filter(
                 Depense.etablissement_id == etablissement_id,
@@ -2193,14 +3046,33 @@ def list_employes_salaires(
             .all()
         )
 
-        paye_ce_mois = False
-        if mois:
-            paye_ce_mois = any(
-                dep.date_depense and dep.date_depense.strftime("%Y-%m") == mois
-                for dep in historique
-            )
+        historique = []
+        for dep in depenses:
+            bulletin = None
+            if dep.reference and dep.reference.isdigit():
+                bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == int(dep.reference)).first()
 
-        total_paye = sum(float(dep.montant) for dep in historique)
+            historique.append({
+                "depense_id": dep.depense_id,
+                "bulletin_id": bulletin.bulletin_id if bulletin else None,
+                "date": dep.date_depense.isoformat() if dep.date_depense else None,
+                "date_paiement": bulletin.date_paiement.isoformat() if bulletin and bulletin.date_paiement else (dep.date_depense.isoformat() if dep.date_depense else None),
+                "mois_concerne": bulletin.mois_concerne if bulletin else None,
+                "mode_paiement": bulletin.mode_paiement if bulletin else None,
+                "montant": float(dep.montant),
+                "libelle": dep.libelle,
+                "statut": dep.statut,
+                "salaire_base": float(bulletin.salaire_base) if bulletin else float(ens.salaire_base or 0),
+                "total_primes": float(bulletin.total_primes) if bulletin else float(ens.prime_mensuelle or 0),
+                "total_absences": float(bulletin.total_absences) if bulletin else 0,
+                "total_avances": float(bulletin.total_avances) if bulletin else 0,
+                "net_a_payer": float(bulletin.net_a_payer) if bulletin else float(dep.montant),
+                "details_absences": bulletin.details_absences if bulletin else None
+            })
+
+        paye_ce_mois = any(dep["mois_concerne"] == mois for dep in historique) if mois else False
+
+        total_paye = sum(float(dep["montant"]) for dep in historique)
 
         result.append({
             "id": f"ENS_{ens.enseignant_id}",
@@ -2214,21 +3086,12 @@ def list_employes_salaires(
             "paye_ce_mois": paye_ce_mois,
             "total_paye_annee": total_paye,
             "nb_paiements": len(historique),
-            "historique": [
-                {
-                    "depense_id": dep.depense_id,
-                    "date": dep.date_depense.isoformat() if dep.date_depense else None,
-                    "montant": float(dep.montant),
-                    "libelle": dep.libelle,
-                    "statut": dep.statut,
-                }
-                for dep in historique
-            ]
+            "historique": historique
         })
 
     # --- Traitement du Personnel ---
     for p in personnel:
-        historique = (
+        depenses = (
             db.query(Depense)
             .filter(
                 Depense.etablissement_id == etablissement_id,
@@ -2241,14 +3104,33 @@ def list_employes_salaires(
             .all()
         )
 
-        paye_ce_mois = False
-        if mois:
-            paye_ce_mois = any(
-                dep.date_depense and dep.date_depense.strftime("%Y-%m") == mois
-                for dep in historique
-            )
+        historique = []
+        for dep in depenses:
+            bulletin = None
+            if dep.reference and dep.reference.isdigit():
+                bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == int(dep.reference)).first()
 
-        total_paye = sum(float(dep.montant) for dep in historique)
+            historique.append({
+                "depense_id": dep.depense_id,
+                "bulletin_id": bulletin.bulletin_id if bulletin else None,
+                "date": dep.date_depense.isoformat() if dep.date_depense else None,
+                "date_paiement": bulletin.date_paiement.isoformat() if bulletin and bulletin.date_paiement else (dep.date_depense.isoformat() if dep.date_depense else None),
+                "mois_concerne": bulletin.mois_concerne if bulletin else None,
+                "mode_paiement": bulletin.mode_paiement if bulletin else None,
+                "montant": float(dep.montant),
+                "libelle": dep.libelle,
+                "statut": dep.statut,
+                "salaire_base": float(bulletin.salaire_base) if bulletin else float(p.salaire_base or 0),
+                "total_primes": float(bulletin.total_primes) if bulletin else float(p.prime_mensuelle or 0),
+                "total_absences": float(bulletin.total_absences) if bulletin else 0,
+                "total_avances": float(bulletin.total_avances) if bulletin else 0,
+                "net_a_payer": float(bulletin.net_a_payer) if bulletin else float(dep.montant),
+                "details_absences": bulletin.details_absences if bulletin else None
+            })
+
+        paye_ce_mois = any(dep["mois_concerne"] == mois for dep in historique) if mois else False
+
+        total_paye = sum(float(dep["montant"]) for dep in historique)
 
         result.append({
             "id": f"PERS_{p.utilisateur_id}",
@@ -2262,16 +3144,7 @@ def list_employes_salaires(
             "paye_ce_mois": paye_ce_mois,
             "total_paye_annee": total_paye,
             "nb_paiements": len(historique),
-            "historique": [
-                {
-                    "depense_id": dep.depense_id,
-                    "date": dep.date_depense.isoformat() if dep.date_depense else None,
-                    "montant": float(dep.montant),
-                    "libelle": dep.libelle,
-                    "statut": dep.statut,
-                }
-                for dep in historique
-            ]
+            "historique": historique
         })
 
     # Tri global par nom, prénom
@@ -2284,65 +3157,804 @@ def list_employes_salaires(
 def payer_salaire_employe(data: dict, db: Session = Depends(get_db)):
     """
     Enregistre le paiement de salaire d'un employé (Enseignant ou Personnel).
-    Champs: enseignant_id (ex: 'ENS_1' ou 'PERS_2'), montant, mois (ex: '2026-06'), description, etablissement_id, annee_id
     """
     employe_id_str = data.get("enseignant_id")
-    montant = data.get("montant")
     mois = data.get("mois", "")
-    description = data.get("description", "")
+    mode_paiement = data.get("mode_paiement", "Cash")
     etablissement_id = data.get("etablissement_id", 1)
     annee_id = data.get("annee_id", 1)
 
-    if not employe_id_str:
-        raise HTTPException(status_code=400, detail="Identifiant employé obligatoire")
-    if not montant or float(montant) <= 0:
-        raise HTTPException(status_code=400, detail="Montant invalide")
+    if not employe_id_str or not mois:
+        raise HTTPException(status_code=400, detail="Identifiant employé et mois obligatoires")
 
-    prefix, emp_id = employe_id_str.split("_", 1)
-    emp_id = int(emp_id)
+    try:
+        result = _executer_paiement_salaire(
+            db=db,
+            employe_id_str=employe_id_str,
+            mois_concerne=mois,
+            mode_paiement=mode_paiement,
+            etablissement_id=etablissement_id,
+            annee_id=annee_id
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+JOURS_OUVRABLES_MOIS = 26  # convention pour le taux journalier de retenue/absence
+
+
+def _bornes_mois(mois_concerne: str):
+    """Retourne (date_debut, date_fin) du mois au format YYYY-MM."""
+    annee, mois = (int(x) for x in mois_concerne.split("-"))
+    dernier_jour = calendar.monthrange(annee, mois)[1]
+    return date_type(annee, mois, 1), date_type(annee, mois, dernier_jour)
+
+
+def _identifier_employe(employe_id_str: str, db: Session) -> dict:
+    """Retrouve l'enseignant/personnel réel derrière une référence 'ENS_x'/'PERS_x'."""
+    if not employe_id_str or "_" not in employe_id_str:
+        raise HTTPException(status_code=400, detail="Identifiant employé invalide")
+    prefix, emp_id_raw = employe_id_str.split("_", 1)
+    try:
+        emp_id = int(emp_id_raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Identifiant employé invalide")
 
     if prefix == "ENS":
         ens = db.query(Enseignant).filter(Enseignant.enseignant_id == emp_id).first()
         if not ens:
             raise HTTPException(status_code=404, detail="Enseignant introuvable")
-        nom_complet = f"{ens.prenom} {ens.nom}"
+        return {
+            "nom": ens.nom, "prenom": ens.prenom, "poste": "Enseignant",
+            "salaire_base": float(ens.salaire_base or 0),
+            "prime_mensuelle": float(ens.prime_mensuelle or 0),
+            "type_contrat": ens.type_contrat or "PERMANENT", "mobile_money": None,
+            "type_agent": "ENSEIGNANT", "agent_id": emp_id,
+        }
     elif prefix == "PERS":
         pers = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == emp_id).first()
         if not pers:
             raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
-        nom_complet = f"{pers.prenom} {pers.nom}"
+        return {
+            "nom": pers.nom, "prenom": pers.prenom, "poste": pers.role,
+            "salaire_base": float(pers.salaire_base or 0),
+            "prime_mensuelle": float(pers.prime_mensuelle or 0),
+            "type_contrat": pers.type_contrat or "PERMANENT", "mobile_money": None,
+            "type_agent": "PERSONNEL", "agent_id": emp_id,
+        }
+    raise HTTPException(status_code=400, detail="Type d'employé inconnu")
+
+
+def _get_or_sync_employe_paie(db: Session, employe_id_str: str, infos: dict) -> Employe:
+    """
+    Retrouve (ou crée) la ligne SS_EMPLOYES miroir correspondant à un
+    enseignant/personnel réel, indispensable pour y rattacher primes/avances/
+    absences (clé étrangère SS_EMPLOYES obligatoire côté base). Les infos
+    (nom/prénom/poste/salaire) sont resynchronisées à chaque appel pour ne
+    jamais désynchroniser ce miroir de la vraie fiche RH (Enseignant/Utilisateur).
+    """
+    employe = db.query(Employe).filter(Employe.source_ref == employe_id_str).first()
+    if not employe:
+        employe = Employe(
+            etablissement_id=1,
+            nom=infos["nom"], prenom=infos["prenom"], poste=infos["poste"],
+            salaire_base=infos["salaire_base"], type_contrat=infos["type_contrat"],
+            mobile_money=infos["mobile_money"], statut="ACTIF",
+            source_ref=employe_id_str,
+        )
+        db.add(employe)
+        db.flush()
     else:
-        raise HTTPException(status_code=400, detail="Type d'employé inconnu")
+        employe.nom = infos["nom"]
+        employe.prenom = infos["prenom"]
+        employe.poste = infos["poste"]
+        employe.salaire_base = infos["salaire_base"]
+    return employe
 
-    libelle = description or f"Salaire {nom_complet} — {mois}"
 
-    dep = Depense(
-        etablissement_id=etablissement_id,
-        annee_id=annee_id,
-        categorie="SALAIRES",
-        libelle=libelle[:300],
-        montant=float(montant),
-        date_depense=date_type.today(),
-        fournisseur=employe_id_str,  # Garde la trace 'ENS_1' ou 'PERS_2'
-        statut="VALIDE",  # salaire directement validé
+def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str) -> dict:
+    """Calcule le net à payer réel d'un employé pour un mois donné, à partir
+    des vraies données (salaire de base, primes fixes + ponctuelles, absences
+    non justifiées pointées, avances en attente)."""
+    infos = _identifier_employe(employe_id_str, db)
+    employe = _get_or_sync_employe_paie(db, employe_id_str, infos)
+    debut_mois, fin_mois = _bornes_mois(mois_concerne)
+
+    bulletin_existant = (
+        db.query(BulletinPaie)
+        .filter(BulletinPaie.employe_id == employe.employe_id, BulletinPaie.mois_concerne == mois_concerne)
+        .order_by(BulletinPaie.bulletin_id.desc())
+        .first()
     )
-    db.add(dep)
-    db.commit()
-    db.refresh(dep)
+    if bulletin_existant and bulletin_existant.statut == "PAYE":
+        # Une fois payé, on fige les montants réellement versés (bulletin) au lieu de
+        # recalculer en direct : ajouter une prime/avance plus tard pour ce même mois
+        # ne doit jamais faire dériver ce qui est affiché comme "déjà payé" (c'était la
+        # cause d'un écart constaté entre le "net à payer" affiché et le montant réel
+        # de l'historique de paiement pour un même mois).
+        return {
+            "employe_id": employe_id_str,
+            "employe_pk": employe.employe_id,
+            "nom": infos["nom"], "prenom": infos["prenom"], "poste": infos["poste"],
+            "salaire_base": float(bulletin_existant.salaire_base),
+            "total_primes": float(bulletin_existant.total_primes),
+            "total_absences": float(bulletin_existant.total_absences),
+            "total_avances": float(bulletin_existant.total_avances),
+            "net_a_payer": float(bulletin_existant.net_a_payer),
+            "statut": "PAYE",
+            "bulletin_id": bulletin_existant.bulletin_id,
+            "nom_complet": f"{infos['prenom']} {infos['nom']}",
+            "details_absences": bulletin_existant.details_absences,
+        }
+
+    primes_ponctuelles = (
+        db.query(func.coalesce(func.sum(Prime.montant), 0))
+        .filter(Prime.employe_id == employe.employe_id, Prime.mois_concerne == mois_concerne)
+        .scalar()
+    )
+    total_primes = float(infos["prime_mensuelle"]) + float(primes_ponctuelles or 0)
+
+    nb_absences_pointage = db.query(func.count(PresenceAgent.presence_id)).filter(
+        PresenceAgent.type_agent == infos["type_agent"],
+        PresenceAgent.agent_id == infos["agent_id"],
+        PresenceAgent.statut == "ABSENT",
+        PresenceAgent.date_presence >= debut_mois,
+        PresenceAgent.date_presence <= fin_mois,
+    ).scalar() or 0
+    nb_absences_manuelles = db.query(func.count(AbsencePersonnel.absence_id)).filter(
+        AbsencePersonnel.employe_id == employe.employe_id,
+        AbsencePersonnel.est_justifie == "N",
+        AbsencePersonnel.date_absence >= debut_mois,
+        AbsencePersonnel.date_absence <= fin_mois,
+    ).scalar() or 0
+    taux_journalier = infos["salaire_base"] / JOURS_OUVRABLES_MOIS if infos["salaire_base"] else 0
+    total_absences = round((nb_absences_pointage + nb_absences_manuelles) * taux_journalier, 2)
+    
+    details_absences_parts = []
+    if nb_absences_pointage > 0:
+        details_absences_parts.append(f"{nb_absences_pointage} absence(s) pointage QR")
+    if nb_absences_manuelles > 0:
+        details_absences_parts.append(f"{nb_absences_manuelles} absence(s) saisie(s) manuellement (non justifiée)")
+    
+    details_absences_texte = None
+    if details_absences_parts:
+        details_absences_texte = " | ".join(details_absences_parts) + f" — Retenue totale: {total_absences} GNF"
+
+    avances_en_attente = db.query(func.coalesce(func.sum(Avance.montant), 0)).filter(
+        Avance.employe_id == employe.employe_id,
+        Avance.mois_concerne == mois_concerne,
+        Avance.statut == "EN_ATTENTE",
+    ).scalar()
+    total_avances = float(avances_en_attente or 0)
+
+    net_a_payer = round(infos["salaire_base"] + total_primes - total_absences - total_avances, 2)
 
     return {
-        "depense_id": dep.depense_id,
-        "enseignant": nom_complet,
-        "montant": float(dep.montant),
-        "mois": mois,
-        "statut": dep.statut,
-        "message": f"Salaire de {nom_complet} enregistré avec succès"
+        "employe_id": employe_id_str,
+        "employe_pk": employe.employe_id,
+        "nom": infos["nom"], "prenom": infos["prenom"], "poste": infos["poste"],
+        "salaire_base": infos["salaire_base"],
+        "total_primes": total_primes,
+        "total_absences": total_absences,
+        "total_avances": total_avances,
+        "net_a_payer": max(net_a_payer, 0),
+        "statut": "NON_PAYE",
+        "bulletin_id": None,
+        "nom_complet": f"{infos['prenom']} {infos['nom']}",
+        "details_absences": details_absences_texte,
     }
+
+
+def _lister_employes_actifs(db: Session, etablissement_id: int):
+    """Retourne la liste des références employés actifs ('ENS_x'/'PERS_x')."""
+    refs = []
+    for ens in db.query(Enseignant).filter(
+        Enseignant.etablissement_id == etablissement_id, Enseignant.statut == "ACTIF", Enseignant.salaire_base > 0
+    ).all():
+        refs.append(f"ENS_{ens.enseignant_id}")
+    for pers in db.query(Utilisateur).filter(
+        Utilisateur.etablissement_id == etablissement_id, Utilisateur.statut == "ACTIF", Utilisateur.salaire_base > 0
+    ).all():
+        refs.append(f"PERS_{pers.utilisateur_id}")
+    return refs
+
+
+def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: str, mode_paiement: str, etablissement_id: int = 1, annee_id: int = 1) -> dict:
+    """Exécute réellement le paiement calculé (Dépense + Bulletin + écriture comptable + avances soldées)."""
+    calc = _calculer_salaire(db, employe_id_str, mois_concerne)
+    if calc["statut"] == "PAYE":
+        raise HTTPException(status_code=400, detail=f"{calc['nom_complet']} est déjà payé(e) pour {mois_concerne}")
+    if calc["net_a_payer"] <= 0:
+        raise HTTPException(status_code=400, detail="Le net à payer calculé est nul ou négatif")
+
+    libelle = f"Salaire {calc['nom_complet']} — {mois_concerne}"
+    dep = Depense(
+        etablissement_id=etablissement_id, annee_id=annee_id, categorie="SALAIRES",
+        libelle=libelle[:300], montant=calc["net_a_payer"], date_depense=date_type.today(),
+        fournisseur=employe_id_str, statut="VALIDE",
+    )
+    db.add(dep)
+    db.flush()
+
+    compte_charge = compte_charge_pour_categorie("SALAIRES")
+    generer_ecriture_auto(
+        db, date_ecriture=dep.date_depense, journal_code="OD",
+        libelle=libelle, reference=f"SAL-{dep.depense_id}",
+        lignes=[
+            {"compte": compte_charge, "debit": float(dep.montant), "credit": 0, "description": libelle},
+            {"compte": COMPTE_BANQUE, "debit": 0, "credit": float(dep.montant), "description": libelle},
+        ],
+    )
+
+    bulletin = BulletinPaie(
+        employe_id=calc["employe_pk"], mois_concerne=mois_concerne,
+        salaire_base=calc["salaire_base"], total_primes=calc["total_primes"],
+        total_absences=calc["total_absences"], total_avances=calc["total_avances"],
+        net_a_payer=calc["net_a_payer"], date_paiement=date_type.today(),
+        mode_paiement=mode_paiement, statut="PAYE",
+        details_absences=calc.get("details_absences")
+    )
+    db.add(bulletin)
+    db.flush()
+    dep.reference = str(bulletin.bulletin_id)  # lien pour pouvoir annuler proprement plus tard
+
+    db.query(Avance).filter(
+        Avance.employe_id == calc["employe_pk"],
+        Avance.mois_concerne == mois_concerne,
+        Avance.statut == "EN_ATTENTE",
+    ).update({"statut": "DEDUITE"})
+
+    db.commit()
+    _invalidate_dashboard_cache(etablissement_id, annee_id)
+    return {"message": f"Salaire de {calc['nom_complet']} payé avec succès ({mois_concerne})", "net_a_payer": calc["net_a_payer"]}
+
+
+from datetime import date
+from app.models.academique import ParametreEtablissement
+
+@router.get("/salaires/calculer")
+def calculer_salaires_endpoint(
+    etablissement_id: int = 1,
+    mois_concerne: str = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Calcule les salaires pour le mois concerné.
+    """
+    if not mois_concerne:
+        mois_concerne = date_type.today().strftime("%Y-%m")
+        
+    refs = _lister_employes_actifs(db, etablissement_id)
+    result = []
+    
+    for ref in refs:
+        try:
+            calc = _calculer_salaire(db, ref, mois_concerne)
+            result.append({
+                "employe_id": ref,
+                "nom": calc["nom"],
+                "prenom": calc["prenom"],
+                "poste": calc["poste"],
+                "salaire_base": calc["salaire_base"],
+                "total_primes": calc["total_primes"],
+                "total_absences": calc["total_absences"],
+                "total_avances": calc["total_avances"],
+                "net_a_payer": calc["net_a_payer"],
+                "statut": calc["statut"],
+                "deja_paye": calc["statut"] == "PAYE"
+            })
+        except Exception as e:
+            # Skip invalid employees during bulk calculation
+            continue
+            
+    return result
+
+@router.get("/salaires/date-paie")
+def get_date_paie_endpoint(etablissement_id: int = 1, mois_concerne: str = None, db: Session = Depends(get_db)):
+    if not mois_concerne:
+        return {"date_paie": None, "mois": mois_concerne}
+    cle = f"finance.date_paie_{mois_concerne}"
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.categorie == 'FINANCE',
+        ParametreEtablissement.cle == cle
+    ).first()
+    if param:
+        return {"date_paie": param.valeur, "mois": mois_concerne}
+    return {"date_paie": f"{mois_concerne}-25", "mois": mois_concerne}
+
+@router.put("/salaires/date-paie")
+def put_date_paie_endpoint(data: dict, db: Session = Depends(get_db)):
+    etablissement_id = data.get("etablissement_id", 1)
+    mois = data.get("mois")
+    date_paie = data.get("date_paie")
+    if not mois or not date_paie:
+        raise HTTPException(status_code=400, detail="Mois et date_paie requis")
+        
+    cle = f"finance.date_paie_{mois}"
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.categorie == 'FINANCE',
+        ParametreEtablissement.cle == cle
+    ).first()
+    
+    if param:
+        param.valeur = date_paie
+    else:
+        param = ParametreEtablissement(
+            etablissement_id=etablissement_id,
+            categorie='FINANCE',
+            cle=cle,
+            valeur=date_paie
+        )
+        db.add(param)
+    db.commit()
+    return {"date_paie": date_paie, "mois": mois}
+
+@router.post("/salaires/payer-group")
+def payer_group_endpoint(
+    etablissement_id: int = 1,
+    mois_concerne: str = None,
+    mode_paiement: str = "Cash",
+    db: Session = Depends(get_db)
+):
+    if not mois_concerne:
+        mois_concerne = date_type.today().strftime("%Y-%m")
+        
+    refs = _lister_employes_actifs(db, etablissement_id)
+    count = 0
+    
+    for ref in refs:
+        try:
+            calc = _calculer_salaire(db, ref, mois_concerne)
+            if calc["statut"] != "PAYE" and calc["net_a_payer"] > 0:
+                _executer_paiement_salaire(
+                    db=db,
+                    employe_id_str=ref,
+                    mois_concerne=mois_concerne,
+                    mode_paiement=mode_paiement,
+                    etablissement_id=etablissement_id,
+                    annee_id=1
+                )
+                count += 1
+        except Exception:
+            pass
+            
+    return {"message": f"{count} salaires payés avec succès"}
+
+
+def _derniers_mois(n: int):
+    """Liste des n derniers mois (format YYYY-MM), du plus ancien au plus récent,
+    en remontant depuis le mois en cours (inclus)."""
+    today = date_type.today()
+    mois = []
+    annee, m = today.year, today.month
+    for _ in range(n):
+        mois.append(f"{annee:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            annee -= 1
+    return list(reversed(mois))
+
+
+def _mois_entre(debut: str, fin: str):
+    """Liste des mois (YYYY-MM) de `debut` à `fin` inclus, dans l'ordre chronologique."""
+    a1, m1 = (int(x) for x in debut.split("-"))
+    a2, m2 = (int(x) for x in fin.split("-"))
+    mois = []
+    a, m = a1, m1
+    while (a, m) <= (a2, m2):
+        mois.append(f"{a:04d}-{m:02d}")
+        m += 1
+        if m == 13:
+            m = 1
+            a += 1
+    return mois
+
+
+def _mois_periode_paie(db: Session, etablissement_id: int, nb_mois_fallback: int):
+    """
+    Période sur laquelle les salaires sont considérés dus, telle que configurée dans
+    Paramètres > Finance & Comptabilité > Salaires (ss_parametres, finance.salaires_mois_*).
+    Sans configuration, on retombe sur les `nb_mois_fallback` derniers mois glissants
+    (comportement précédent).
+    """
+    settings = get_finance_settings(db, etablissement_id)
+    mois_debut = (settings.get("salaires_mois_debut") or "").strip()
+    if not mois_debut:
+        return _derniers_mois(nb_mois_fallback)
+    mois_fin = (settings.get("salaires_mois_fin") or "").strip() or date_type.today().strftime("%Y-%m")
+    mois_courant = date_type.today().strftime("%Y-%m")
+    if mois_fin > mois_courant:
+        mois_fin = mois_courant  # jamais au-delà du mois en cours
+    if mois_debut > mois_fin:
+        return []
+    return _mois_entre(mois_debut, mois_fin)
+
+
+@router.get("/salaires/arrieres/{employe_id_str}")
+def arrieres_salaire_endpoint(
+    employe_id_str: str,
+    etablissement_id: int = 1,
+    nb_mois: int = 12,
+    db: Session = Depends(get_db)
+):
+    """
+    Liste, pour un employé, tous les mois de la période de paie configurée (Paramètres
+    > Finance > Salaires ; à défaut, les `nb_mois` derniers mois glissants) qui restent
+    NON payés avec un net à payer positif — permet au comptable de régler un ou
+    plusieurs mois de retard manuellement, ou la totalité en un clic, plutôt que d'être
+    limité au seul mois actuellement sélectionné dans le calendrier de paie.
+    """
+    mois_du = []
+    total_du = 0.0
+    for mois in _mois_periode_paie(db, etablissement_id, nb_mois):
+        try:
+            calc = _calculer_salaire(db, employe_id_str, mois)
+        except HTTPException:
+            continue
+        if calc["statut"] != "PAYE" and calc["net_a_payer"] > 0:
+            mois_du.append({
+                "mois_concerne": mois,
+                "salaire_base": calc["salaire_base"],
+                "total_primes": calc["total_primes"],
+                "total_absences": calc["total_absences"],
+                "total_avances": calc["total_avances"],
+                "net_a_payer": calc["net_a_payer"],
+            })
+            total_du += calc["net_a_payer"]
+    return {"mois_du": mois_du, "total_du": round(total_du, 2)}
+
+
+@router.post("/salaires/payer-plusieurs-mois")
+def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db)):
+    """
+    Règle en une seule action une sélection de mois en retard pour un même employé
+    (paiement manuel mois par mois, ou totalité des arriérés cochés en un clic) —
+    un BulletinPaie + une écriture comptable distincts sont générés par mois, comme
+    pour un paiement individuel classique.
+    """
+    employe_id_str = data.get("enseignant_id") or data.get("employe_id")
+    mois_list = data.get("mois_list") or []
+    mode_paiement = data.get("mode_paiement", "Cash")
+    etablissement_id = data.get("etablissement_id", 1)
+    annee_id = data.get("annee_id", 1)
+
+    if not employe_id_str or not mois_list:
+        raise HTTPException(status_code=400, detail="employe_id et mois_list requis")
+
+    payes, erreurs = [], []
+    total_paye = 0.0
+    for mois in mois_list:
+        try:
+            result = _executer_paiement_salaire(
+                db=db, employe_id_str=employe_id_str, mois_concerne=mois,
+                mode_paiement=mode_paiement, etablissement_id=etablissement_id, annee_id=annee_id
+            )
+            payes.append({"mois": mois, "net_a_payer": result.get("net_a_payer")})
+            total_paye += float(result.get("net_a_payer") or 0)
+        except HTTPException as e:
+            erreurs.append({"mois": mois, "detail": e.detail})
+        except Exception as e:
+            erreurs.append({"mois": mois, "detail": str(e)})
+
+    return {
+        "message": f"{len(payes)} mois payé(s), {len(erreurs)} erreur(s)",
+        "payes": payes, "erreurs": erreurs, "total_paye": round(total_paye, 2),
+    }
+
+
+@router.post("/primes")
+def primes_endpoint(data: dict, db: Session = Depends(get_db)):
+    employe_id_str = data.get("employe_id")
+    montant = data.get("montant")
+    motif = data.get("motif") or "Prime exceptionnelle"
+    mois = data.get("mois_concerne")
+    if not employe_id_str or not montant or not mois:
+        raise HTTPException(status_code=400, detail="Données incomplètes (employe_id, montant, mois_concerne)")
+        
+    infos = _identifier_employe(employe_id_str, db)
+    employe = _get_or_sync_employe_paie(db, employe_id_str, infos)
+    
+    prime = Prime(
+        employe_id=employe.employe_id,
+        montant=float(montant),
+        motif=motif,
+        mois_concerne=mois
+    )
+    db.add(prime)
+    
+    # Trace the prime directly as an expense for immediate accounting if needed, 
+    # but wait, a prime is paid WITH the salary, so it shouldn't be a separate expense today.
+    # It just increases the net salary on payday.
+    
+    db.commit()
+    return {"message": "Prime ajoutée avec succès"}
+@router.post("/avances")
+def avances_endpoint(data: dict, db: Session = Depends(get_db)):
+    employe_id_str = data.get("employe_id")
+    montant = data.get("montant")
+    motif = data.get("motif") or "Avance sur salaire"
+    mois = data.get("mois_concerne") or date_type.today().strftime("%Y-%m")
+    etablissement_id = data.get("etablissement_id", 1)
+    if not employe_id_str or not montant:
+        raise HTTPException(status_code=400, detail="Données incomplètes")
+        
+    infos = _identifier_employe(employe_id_str, db)
+    employe = _get_or_sync_employe_paie(db, employe_id_str, infos)
+    
+    avance = Avance(
+        employe_id=employe.employe_id,
+        montant=float(montant),
+        date_avance=date_type.today(),
+        mois_concerne=mois,
+        statut="EN_ATTENTE"
+    )
+    db.add(avance)
+    
+    # Avance is money leaving the school NOW, so we need a Depense
+    dep = Depense(
+        etablissement_id=etablissement_id,
+        annee_id=1,
+        categorie="AVANCE_SALAIRE",
+        libelle=f"{motif} {infos['nom']} {infos['prenom']} — {mois}",
+        montant=float(montant),
+        date_depense=date_type.today(),
+        fournisseur=employe_id_str,
+        statut="VALIDE",
+    )
+    db.add(dep)
+    
+    compte_charge = compte_charge_pour_categorie("AVANCE_SALAIRE")
+    generer_ecriture_auto(
+        db, date_ecriture=dep.date_depense, journal_code="OD",
+        libelle=dep.libelle, reference=f"ADV",
+        lignes=[
+            {"compte": compte_charge, "debit": float(dep.montant), "credit": 0, "description": dep.libelle},
+            {"compte": COMPTE_BANQUE, "debit": 0, "credit": float(dep.montant), "description": dep.libelle},
+        ],
+    )
+    
+    db.commit()
+    return {"message": "Avance enregistrée avec succès"}
+@router.post("/absences")
+def absences_endpoint(data: dict, db: Session = Depends(get_db)):
+    employe_id_str = data.get("employe_id")
+    date_absence = data.get("date_absence")
+    motif = data.get("motif")
+    est_justifie = "Y" if data.get("est_justifie") else "N"
+    
+    if not employe_id_str or not date_absence:
+        raise HTTPException(status_code=400, detail="Données incomplètes")
+        
+    infos = _identifier_employe(employe_id_str, db)
+    employe = _get_or_sync_employe_paie(db, employe_id_str, infos)
+    
+    absence = AbsencePersonnel(
+        employe_id=employe.employe_id,
+        date_absence=date_type.fromisoformat(date_absence),
+        motif=motif,
+        est_justifie=est_justifie
+    )
+    db.add(absence)
+    db.commit()
+    return {"message": "Absence enregistrée avec succès"}
+@router.get("/salaires/historique/{employe_id}")
+def historique_salaire_endpoint(employe_id: str, db: Session = Depends(get_db)):
+    historique = db.query(Depense).filter(
+        Depense.fournisseur == employe_id,
+        Depense.categorie == "SALAIRES",
+        Depense.statut == "VALIDE"
+    ).order_by(Depense.date_depense.desc()).all()
+    
+    return [
+        {
+            "depense_id": dep.depense_id,
+            "date_paiement": dep.date_depense.isoformat() if dep.date_depense else None,
+            "montant": float(dep.montant),
+            "libelle": dep.libelle,
+            "statut": dep.statut,
+        }
+        for dep in historique
+    ]
+
+@router.get("/salaires/bulletin-detail/{depense_id}")
+def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db)):
+    dep = db.query(Depense).filter(Depense.depense_id == depense_id).first()
+    if not dep:
+        raise HTTPException(status_code=404, detail="Paiement introuvable")
+        
+    bulletin = None
+    if dep.reference and dep.reference.isdigit():
+        bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == int(dep.reference)).first()
+        
+    infos = _identifier_employe(dep.fournisseur, db)
+    
+    if bulletin:
+        employe_id = bulletin.employe_id
+        primes = db.query(Prime).filter(Prime.employe_id == employe_id, Prime.mois_concerne == bulletin.mois_concerne).all()
+        absences = db.query(AbsencePersonnel).filter(AbsencePersonnel.employe_id == employe_id, func.to_char(AbsencePersonnel.date_absence, 'YYYY-MM') == bulletin.mois_concerne).all()
+        
+        return {
+            "bulletin": {
+                "bulletin_id": bulletin.bulletin_id,
+                "mois_concerne": bulletin.mois_concerne,
+                "net_a_payer": float(bulletin.net_a_payer),
+                "date_paiement": bulletin.date_paiement.isoformat() if bulletin.date_paiement else None,
+                "mode_paiement": bulletin.mode_paiement,
+                "salaire_base": float(bulletin.salaire_base),
+                "total_primes": float(bulletin.total_primes),
+                "total_absences": float(bulletin.total_absences),
+                "total_avances": float(bulletin.total_avances)
+            },
+            "employe": {
+                "nom": infos["nom"],
+                "prenom": infos["prenom"],
+                "poste": infos["poste"],
+                "type_contrat": infos["type_contrat"],
+                "mobile_money": infos["mobile_money"],
+            },
+            "details": {
+                "primes": [{"montant": float(p.montant), "motif": p.motif} for p in primes],
+                "absences": [{"date": a.date_absence.isoformat(), "motif": a.motif} for a in absences],
+                "details_absences_texte": bulletin.details_absences
+            }
+        }
+    
+    # Fallback for old payments without BulletinPaie
+    return {
+        "bulletin": {
+            "bulletin_id": dep.depense_id,
+            "mois_concerne": dep.date_depense.strftime("%Y-%m") if dep.date_depense else "",
+            "net_a_payer": float(dep.montant),
+            "date_paiement": dep.date_depense.isoformat() if dep.date_depense else None,
+            "mode_paiement": "VIREMENT",
+            "salaire_base": float(dep.montant),
+            "total_primes": 0,
+            "total_absences": 0,
+            "total_avances": 0
+        },
+        "employe": {
+            "nom": infos["nom"],
+            "prenom": infos["prenom"],
+            "poste": infos["poste"],
+        },
+        "details": {
+            "primes": [],
+            "absences": [],
+            "details_absences_texte": None
+        }
+    }
+
+@router.get("/salaires/absences-source")
+def absences_source_endpoint(
+    etablissement_id: int = 1,
+    mois_concerne: str = None,
+    employe_id: str = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Détaille, pour le mois donné, chaque absence retenue sur salaire (pointage
+    QR ABSENT + saisie manuelle non justifiée), avec la retenue estimée
+    correspondante — mêmes deux sources et même taux journalier que
+    `_calculer_salaire` (onglet "Calcul des salaires"), pour que ce tableau de
+    diagnostic reste cohérent avec le montant réellement déduit du net à payer.
+    """
+    if not mois_concerne:
+        mois_concerne = date_type.today().strftime("%Y-%m")
+    debut_mois, fin_mois = _bornes_mois(mois_concerne)
+
+    refs = [employe_id] if employe_id else _lister_employes_actifs(db, etablissement_id)
+
+    absences = []
+    total_retenue = 0.0
+    for ref in refs:
+        try:
+            infos = _identifier_employe(ref, db)
+        except HTTPException:
+            continue
+        employe = _get_or_sync_employe_paie(db, ref, infos)
+        taux_journalier = infos["salaire_base"] / JOURS_OUVRABLES_MOIS if infos["salaire_base"] else 0
+
+        pointages = db.query(PresenceAgent).filter(
+            PresenceAgent.type_agent == infos["type_agent"],
+            PresenceAgent.agent_id == infos["agent_id"],
+            PresenceAgent.statut == "ABSENT",
+            PresenceAgent.date_presence >= debut_mois,
+            PresenceAgent.date_presence <= fin_mois,
+        ).order_by(PresenceAgent.date_presence).all()
+        for p in pointages:
+            retenue = round(taux_journalier, 2)
+            absences.append({
+                "absence_id": f"presence-{p.presence_id}",
+                "nom": infos["nom"], "prenom": infos["prenom"], "poste": infos["poste"],
+                "date_absence": p.date_presence.isoformat() if p.date_presence else None,
+                "source": "Pointage QR", "motif": None, "est_justifie": "N",
+                "retenue_estimee": retenue,
+            })
+            total_retenue += retenue
+
+        manuelles = db.query(AbsencePersonnel).filter(
+            AbsencePersonnel.employe_id == employe.employe_id,
+            AbsencePersonnel.est_justifie == "N",
+            AbsencePersonnel.date_absence >= debut_mois,
+            AbsencePersonnel.date_absence <= fin_mois,
+        ).order_by(AbsencePersonnel.date_absence).all()
+        for a in manuelles:
+            retenue = round(taux_journalier, 2)
+            absences.append({
+                "absence_id": f"manuelle-{a.absence_id}",
+                "nom": infos["nom"], "prenom": infos["prenom"], "poste": infos["poste"],
+                "date_absence": a.date_absence.isoformat() if a.date_absence else None,
+                "source": "Saisie manuelle", "motif": a.motif, "est_justifie": "N",
+                "retenue_estimee": retenue,
+            })
+            total_retenue += retenue
+
+    absences.sort(key=lambda r: r["date_absence"] or "")
+    return {"absences": absences, "total_retenue_estimee": round(total_retenue, 2)}
+
+@router.get("/salaires/alertes/historique")
+def alertes_historique_endpoint(etablissement_id: int = 1, mois_concerne: str = None, db: Session = Depends(get_db)):
+    """Historique réel des envois d'alertes de paie (persistés via Message, même
+    mécanisme que les rappels d'impayés — voir notifier_impayes)."""
+    query = db.query(Message).filter(Message.objet_type == "PAIEMENT", Message.sujet.like("Alerte paie%"))
+    if mois_concerne:
+        query = query.filter(Message.sujet == f"Alerte paie {mois_concerne}")
+    rows = query.order_by(Message.date_envoi.desc()).limit(50).all()
+    return [
+        {
+            "message_id": m.message_id,
+            "date_envoi": m.date_envoi.isoformat() if m.date_envoi else None,
+            "destinataire_type": m.destinataire_type,
+            "sujet": m.sujet,
+            "statut": m.statut,
+            "contenu": m.contenu,
+        }
+        for m in rows
+    ]
+
+@router.post("/salaires/alertes")
+def alertes_endpoint(data: dict, db: Session = Depends(get_db)):
+    """Envoie une alerte de paie (rappel interne) et persiste la trace de l'envoi,
+    avec la liste des employés encore non payés pour le mois concerné."""
+    etablissement_id = data.get("etablissement_id", 1)
+    mois_concerne = data.get("mois_concerne")
+    type_alerte = data.get("type", "J7")
+    if not mois_concerne:
+        raise HTTPException(status_code=400, detail="mois_concerne requis")
+
+    refs = _lister_employes_actifs(db, etablissement_id)
+    non_payes = []
+    for ref in refs:
+        try:
+            calc = _calculer_salaire(db, ref, mois_concerne)
+        except HTTPException:
+            continue
+        if calc["statut"] != "PAYE":
+            non_payes.append(calc["nom_complet"])
+
+    message = Message(
+        expediteur_type="ADMIN",
+        destinataire_type="TOUS_ENSEIGNANTS",
+        objet_type="PAIEMENT",
+        sujet=f"Alerte paie {mois_concerne}",
+        contenu=f"Type {type_alerte} — {len(non_payes)} employé(s) non payé(s) pour {mois_concerne}"
+                + (f" : {', '.join(non_payes)}" if non_payes else ""),
+        statut="ENVOYE",
+    )
+    db.add(message)
+    db.commit()
+    return {"message": "Alerte envoyée avec succès", "type": type_alerte, "nb_non_payes": len(non_payes)}
 
 
 @router.delete("/salaires/{depense_id}")
 def annuler_salaire(depense_id: int, db: Session = Depends(get_db)):
-    """Annule un paiement de salaire."""
+    """Annule un paiement de salaire (et le bulletin de paie associé, pour permettre un nouveau paiement)."""
     dep = db.query(Depense).filter(
         Depense.depense_id == depense_id,
         Depense.categorie == "SALAIRES"
@@ -2350,6 +3962,13 @@ def annuler_salaire(depense_id: int, db: Session = Depends(get_db)):
     if not dep:
         raise HTTPException(status_code=404, detail="Paiement introuvable")
     dep.statut = "ANNULE"
+    if dep.reference:
+        try:
+            bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == int(dep.reference)).first()
+            if bulletin:
+                bulletin.statut = "ANNULE"
+        except ValueError:
+            pass
     db.commit()
     return {"message": "Paiement annulé"}
 

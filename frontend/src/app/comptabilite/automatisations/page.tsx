@@ -36,9 +36,15 @@ export default function AutomatisationsPage() {
     const [genData, setGenData] = useState({ classe_id: '', type_frais_id: '', montant: '', nb_echeances: '1' });
     const [generating, setGenerating] = useState(false);
 
-    const showMsg = (text: string, type: 'success' | 'error') => {
-        setMessage({ text, type });
-        setTimeout(() => setMessage(null), 4000);
+    const showMsg = (text: any, type: 'success' | 'error') => {
+        let messageText = typeof text === 'string' ? text : 'Erreur inattendue';
+        if (Array.isArray(text)) {
+            messageText = text.map((t: any) => t.msg || JSON.stringify(t)).join(', ');
+        } else if (typeof text === 'object' && text !== null) {
+            messageText = text.msg || text.message || JSON.stringify(text);
+        }
+        setMessage({ text: messageText, type });
+        setTimeout(() => setMessage(null), 5000);
     };
 
     const fetchData = useCallback(async () => {
@@ -46,13 +52,15 @@ export default function AutomatisationsPage() {
         try {
             const [confRes, impRes, clsRes] = await Promise.all([
                 api.get('/api/finance/rappels/config'),
+                // limit=1 : on ne veut que le total réel via l'en-tête X-Total-Count,
+                // pas la liste complète (qui serait de toute façon plafonnée à 200
+                // par le backend et sous-compterait au-delà).
                 api.get(`/api/finance/impayes?etablissement_id=${etablissementId}&annee_id=${anneeId}&limit=1`),
                 api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`)
             ]);
             setConfig(confRes.data);
-            // Count can be approximated by checking if there's any data, or we could fetch without limit to get length
-            const fullImpRes = await api.get(`/api/finance/impayes?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
-            setImpayesCount(fullImpRes.data.length);
+            const totalHeader = impRes.headers?.['x-total-count'];
+            setImpayesCount(totalHeader !== undefined ? Number(totalHeader) : impRes.data.length);
             setClasses(clsRes.data || []);
             
             // Try fetching types frais if endpoint exists

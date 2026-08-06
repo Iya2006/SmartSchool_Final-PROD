@@ -6,6 +6,9 @@ import html2canvas from 'html2canvas';
 import api from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
+import Pagination from '@/components/Pagination';
+import SyncStatusIndicator from '@/components/SyncStatusIndicator';
+import { startAutoSync } from '@/lib/syncEngine';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Phone, User, GraduationCap, BookOpen, Clock, Calendar, AlertCircle,
@@ -95,6 +98,15 @@ export default function PortailEnseignant() {
                 .catch(err => console.error(err));
         }
     }, [user]);
+
+    // Module offline-first (Phase 1) : rejoue la file locale (notes/présences
+    // saisies hors-ligne) dès le montage du portail, et à chaque retour de
+    // connexion/premier plan ensuite — voir lib/syncEngine.ts.
+    useEffect(() => {
+        const stopAutoSync = startAutoSync();
+        return stopAutoSync;
+    }, []);
+
     const [data, setData] = useState<DashData | null>(null);
     const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
@@ -102,6 +114,13 @@ export default function PortailEnseignant() {
     const [selectedClass, setSelectedClass] = useState<AffectationData|null>(null);
     const [classEleves, setClassEleves] = useState<EleveItem[]>([]);
     const [elevesLoading, setElevesLoading] = useState(false);
+    // Pagination des listes d'élèves (Mes Classes / Saisie des notes / Appel) —
+    // certaines classes réelles dépassent maintenant 150 élèves, un affichage
+    // non paginé ralentissait fortement ces 3 écrans. Un seul état partagé,
+    // remis à la page 1 à chaque changement de classe (voir loadClassForNotes/
+    // loadClassForAppel/loadClassEleves).
+    const [elevesPage, setElevesPage] = useState(1);
+    const ELEVES_PAGE_SIZE = 25;
 
     // ── Notes state ──
     const [notesData, setNotesData] = useState<Record<number, { valeur: string; absent: boolean }>>({});
@@ -120,7 +139,7 @@ export default function PortailEnseignant() {
     const [showEvalDetail, setShowEvalDetail] = useState(false);
     const [evalDetailData, setEvalDetailData] = useState<any>(null);
     const [evalDetailLoading, setEvalDetailLoading] = useState(false);
-    const [editingNotes, setEditingNotes] = useState<Record<number, { valeur: string; absent: boolean; observation: string }>>({});
+    const [editingNotes, setEditingNotes] = useState<Record<number, { valeur: string; absent: boolean; observation: string; updatedAt?: string | null }>>({});
     const [savingNotes, setSavingNotes] = useState(false);
     const [centralizingEval, setCentralizingEval] = useState(false);
     const [showConfirmCentralize, setShowConfirmCentralize] = useState(false);
@@ -212,6 +231,32 @@ export default function PortailEnseignant() {
     const [showSignalerEnfantModal, setShowSignalerEnfantModal] = useState(false);
     const [signalerForm, setSignalerForm] = useState({ nom_enfant: '', prenom_enfant: '', classe_detail: '', remarque: '' });
     const [signalerSending, setSignalerSending] = useState(false);
+
+    // ── Paiements state ──
+    const [paiementsData, setPaiementsData] = useState<any[]>([]);
+    const [paiementsLoading, setPaiementsLoading] = useState(false);
+    const [selectedBulletin, setSelectedBulletin] = useState<any>(null);
+    const [bulletinLoading, setBulletinLoading] = useState(false);
+
+    const loadPaiements = useCallback(async () => {
+        if (!data) return;
+        setPaiementsLoading(true);
+        try {
+            const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/paiements`);
+            setPaiementsData(res.data || []);
+        } catch { setPaiementsData([]); }
+        finally { setPaiementsLoading(false); }
+    }, [data]);
+
+    const loadBulletinDetail = async (bulletinId: number) => {
+        if (!data || !bulletinId) return;
+        setBulletinLoading(true);
+        try {
+            const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/paiements/${bulletinId}`);
+            setSelectedBulletin(res.data);
+        } catch { setSelectedBulletin(null); }
+        finally { setBulletinLoading(false); }
+    };
 
     const loadMesEnfants = useCallback(async () => {
         if (!data) return;
@@ -410,6 +455,9 @@ export default function PortailEnseignant() {
                 setTeacherActs((r.data || []).filter((a: any) => a.est_actif === 'O'));
             }).catch(() => {});
         }
+        if (activeTab === 'paiements' && data) {
+            loadPaiements();
+        }
     }, [activeTab, data]);
 
     // ═══ REFRESH AUTOMATIQUE du tableau de bord ═══
@@ -574,7 +622,7 @@ export default function PortailEnseignant() {
     /* ═══ FETCH CLASS STUDENTS ═══ */
     const loadClassEleves = useCallback(async (aff: AffectationData) => {
         if (!data) return;
-        setSelectedClass(aff); setElevesLoading(true);
+        setSelectedClass(aff); setElevesLoading(true); setElevesPage(1);
         try {
             const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/classe/${aff.classe_id}/eleves`);
             setClassEleves(res.data);
@@ -646,12 +694,16 @@ export default function PortailEnseignant() {
             const res = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations/${evalId}/notes`);
             setEvalDetailData(res.data);
             // Init editing state
-            const initEdit: Record<number, { valeur: string; absent: boolean; observation: string }> = {};
+            const initEdit: Record<number, { valeur: string; absent: boolean; observation: string; updatedAt?: string | null }> = {};
             (res.data.notes || []).forEach((n: any) => {
                 initEdit[n.note_id] = {
                     valeur: n.valeur !== null ? String(n.valeur) : '',
                     absent: n.est_absent,
                     observation: n.observation || '',
+                    // Horodatage connu au moment de cette lecture — renvoyé lors
+                    // de la sauvegarde (base_updated_at) pour que la synchro
+                    // hors-ligne détecte un éventuel conflit (voir sync.py).
+                    updatedAt: n.updated_at,
                 };
             });
             setEditingNotes(initEdit);
@@ -663,22 +715,33 @@ export default function PortailEnseignant() {
         if (!data || !evalDetailData) return;
         setSavingNotes(true);
         try {
-            const payload = Object.entries(editingNotes).map(([noteId, v]) => ({
+            const items = Object.entries(editingNotes).map(([noteId, v]) => ({
                 note_id: Number(noteId),
                 valeur: v.absent ? null : (v.valeur ? parseFloat(v.valeur) : null),
                 est_absent: v.absent,
                 observation: v.observation || null,
+                base_updated_at: v.updatedAt || null,
             }));
-            const res = await api.put(
-                `/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations/${evalDetailData.evaluation.evaluation_id}/notes`,
-                { notes: payload }
-            );
-            showToast('success', `${res.data.nb_modifiees} notes modifiées (Moy: ${res.data.moyenne || '—'})`);
-            // Reload detail
-            await openEvalDetail(evalDetailData.evaluation.evaluation_id);
-            // Reload history
-            const histRes = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations`);
-            setEvalHistory(histRes.data);
+            // Passe par /api/sync (plutôt que l'ancien PUT .../evaluations/{id}/notes) :
+            // même effet en ligne, mais cet appel est éligible à la file
+            // hors-ligne (voir lib/api.ts) — une coupure réseau pendant la
+            // saisie n'empêche plus l'enseignant de continuer.
+            const res = await api.post(`/api/sync/${data.enseignant.enseignant_id}/notes`, { items });
+
+            if (res.data.queued) {
+                showToast('success', res.data.message);
+            } else {
+                const nbConflits = res.data.conflicts?.length || 0;
+                showToast('success',
+                    `${res.data.nb_synchronises} note(s) enregistrée(s)` +
+                    (nbConflits > 0 ? ` — ${nbConflits} conflit(s) résolu(s) automatiquement` : ''));
+                // Reload detail + historique — seulement si la sauvegarde a
+                // réellement atteint le serveur (inutile, voire trompeur, de
+                // recharger juste après une mise en file hors-ligne).
+                await openEvalDetail(evalDetailData.evaluation.evaluation_id);
+                const histRes = await api.get(`/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations`);
+                setEvalHistory(histRes.data);
+            }
         } catch (e: any) { showToast('error', e.response?.data?.detail || 'Erreur de sauvegarde'); }
         finally { setSavingNotes(false); }
     }, [data, evalDetailData, editingNotes, openEvalDetail]);
@@ -708,14 +771,17 @@ export default function PortailEnseignant() {
         setAppelLoading(true);
         setAppelSaved('');
         try {
-            const presences = classEleves.map(e => ({
+            const items = classEleves.map(e => ({
                 inscription_id: e.inscription_id,
                 statut: appelData[e.inscription_id] || 'PRESENT',
             }));
-            const res = await api.post(`/api/portail-enseignant/${data.enseignant.enseignant_id}/presences`, {
+            // Passe par /api/sync (plutôt que POST .../presences directement) :
+            // même effet en ligne, mais éligible à la file hors-ligne (voir
+            // lib/api.ts) si le réseau manque au moment de l'appel.
+            const res = await api.post(`/api/sync/${data.enseignant.enseignant_id}/presences`, {
                 classe_id: selectedClass.classe_id,
                 demi_journee: appelDemiJournee,
-                presences,
+                items,
             });
             setAppelSaved(`${res.data.message}`);
         } catch (err: any) {
@@ -817,7 +883,8 @@ export default function PortailEnseignant() {
             {/* CONTENU PRINCIPAL */}
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
                 {/* ── HEADER ── */}
-                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 32px', flexShrink: 0, position: 'relative' }}>
+                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '16px', padding: '0 32px', flexShrink: 0, position: 'relative' }}>
+                    <SyncStatusIndicator />
                     <div ref={dropdownRef} style={{ position: 'relative' }}>
                         <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
                             <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#f59e0b', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>
@@ -1418,9 +1485,9 @@ export default function PortailEnseignant() {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        {classEleves.map((el, i) => (
+                                                        {classEleves.slice((elevesPage - 1) * ELEVES_PAGE_SIZE, elevesPage * ELEVES_PAGE_SIZE).map((el, i) => (
                                                             <tr key={el.eleve_id} style={{ borderBottom: '1px solid #f8fafc' }}>
-                                                                <td style={{ padding: '12px 16px', fontSize: '12px', color: '#94a3b8' }}>{i + 1}</td>
+                                                                <td style={{ padding: '12px 16px', fontSize: '12px', color: '#94a3b8' }}>{(elevesPage - 1) * ELEVES_PAGE_SIZE + i + 1}</td>
                                                                 <td style={{ padding: '12px 16px' }}>
                                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                                                         <div style={{ width: '32px', height: '32px', borderRadius: '10px', background: el.sexe === 'F' ? '#fce7f3' : '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: 700, color: el.sexe === 'F' ? '#ec4899' : '#3b82f6' }}>
@@ -1444,12 +1511,13 @@ export default function PortailEnseignant() {
                                                         ))}
                                                     </tbody>
                                                 </table>
-                                                {classEleves.length === 0 && (
+                                {classEleves.length === 0 && (
                                                     <div style={{ padding: '40px', textAlign: 'center', color: '#94a3b8' }}>
                                                         <GraduationCap size={36} style={{ marginBottom: '8px', opacity: 0.3 }} />
                                                         <p style={{ fontSize: '13px', fontWeight: 600 }}>Aucun élève inscrit dans cette classe</p>
                                                     </div>
                                                 )}
+                                                <Pagination page={elevesPage} pageSize={ELEVES_PAGE_SIZE} total={classEleves.length} onPageChange={setElevesPage} />
                                             </div>
                                         )}
                                     </div>
@@ -1518,6 +1586,18 @@ export default function PortailEnseignant() {
                                                             style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 700, outline: 'none', boxSizing: 'border-box', textAlign: 'center' }} />
                                                     </div>
                                                 </div>
+                                                {(() => {
+                                                    const typeActuel = typesEval.find(t => t.type_eval_id === selectedTypeEval);
+                                                    const estComposition = typeActuel?.code === 'COMPO';
+                                                    return (
+                                                        <p style={{ margin: 0, fontSize: '11.5px', color: estComposition ? '#b45309' : '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                            <ClipboardList size={13} />
+                                                            {estComposition
+                                                                ? `Composition : le coefficient de la matière (${selectedClass.coefficient}) s'applique automatiquement à cette note.`
+                                                                : "Écrite / orale / devoirs : comptent pour un poids de 1 (le coefficient ne s'applique qu'à la composition). Si vous saisissez plusieurs évaluations du même type, seule la meilleure note sera retenue dans la moyenne."}
+                                                        </p>
+                                                    );
+                                                })()}
                                             </div>
 
                                             {elevesLoading ? (
@@ -1535,11 +1615,11 @@ export default function PortailEnseignant() {
                                                             </tr>
                                                         </thead>
                                                         <tbody>
-                                                            {classEleves.map((e, i) => {
+                                                            {classEleves.slice((elevesPage - 1) * ELEVES_PAGE_SIZE, elevesPage * ELEVES_PAGE_SIZE).map((e, i) => {
                                                                 const nd = notesData[e.inscription_id] || { valeur: '', absent: false };
                                                                 return (
                                                                 <tr key={e.eleve_id} style={{ borderBottom: '1px solid #f1f5f9', background: nd.absent ? '#fef2f2' : 'transparent' }}>
-                                                                    <td style={{ padding: '10px 16px', color: '#94a3b8', fontWeight: 600 }}>{i + 1}</td>
+                                                                    <td style={{ padding: '10px 16px', color: '#94a3b8', fontWeight: 600 }}>{(elevesPage - 1) * ELEVES_PAGE_SIZE + i + 1}</td>
                                                                     <td style={{ padding: '10px 16px', fontWeight: 600, color: nd.absent ? '#94a3b8' : '#1e293b' }}>{e.prenom} {e.nom}</td>
                                                                     <td style={{ padding: '10px 16px' }}>
                                                                         <code style={{ background: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', fontSize: '12px' }}>{e.matricule}</code>
@@ -1564,6 +1644,7 @@ export default function PortailEnseignant() {
                                                             );})}
                                                         </tbody>
                                                     </table>
+                                                    <Pagination page={elevesPage} pageSize={ELEVES_PAGE_SIZE} total={classEleves.length} onPageChange={setElevesPage} />
                                                     {notesSaved && (
                                                         <div style={{ padding: '12px 16px', borderRadius: '12px', marginTop: '12px', fontSize: '13px', fontWeight: 600,
                                                             background: notesSaved.includes('succès') ? '#f0fdf4' : '#fef2f2',
@@ -1880,7 +1961,7 @@ export default function PortailEnseignant() {
                                                     </div>
 
                                                     <div style={{ overflowX: 'auto' }}>
-                                                        {classEleves.map((e, i) => {
+                                                        {classEleves.slice((elevesPage - 1) * ELEVES_PAGE_SIZE, elevesPage * ELEVES_PAGE_SIZE).map((e, i) => {
                                                             const currentStatus = appelData[e.inscription_id] || 'PRESENT';
                                                             return (
                                                             <div key={e.eleve_id} style={{
@@ -1889,7 +1970,7 @@ export default function PortailEnseignant() {
                                                                 borderRadius: '10px', transition: 'background 0.15s',
                                                                 background: currentStatus === 'ABSENT' ? '#fef2f208' : 'transparent',
                                                             }}>
-                                                                <span style={{ fontWeight: 600, color: '#94a3b8', fontSize: '12px', minWidth: '24px' }}>{i + 1}</span>
+                                                                <span style={{ fontWeight: 600, color: '#94a3b8', fontSize: '12px', minWidth: '24px' }}>{(elevesPage - 1) * ELEVES_PAGE_SIZE + i + 1}</span>
                                                                 <div style={{
                                                                     width: '36px', height: '36px', borderRadius: '50%',
                                                                     background: `${CLASS_COLORS[i % CLASS_COLORS.length]}15`,
@@ -1926,6 +2007,7 @@ export default function PortailEnseignant() {
                                                             </div>
                                                         );})}
                                                     </div>
+                                                    <Pagination page={elevesPage} pageSize={ELEVES_PAGE_SIZE} total={classEleves.length} onPageChange={setElevesPage} />
                                                     {appelSaved && (
                                                         <div style={{ padding: '12px 16px', borderRadius: '12px', marginTop: '12px', fontSize: '13px', fontWeight: 600,
                                                             background: appelSaved.includes('succès') ? '#f0fdf4' : '#fef2f2',
@@ -2790,6 +2872,165 @@ export default function PortailEnseignant() {
                             )}
                         </motion.div>
                     )}
+
+                    {activeTab === 'paiements' && (
+                        <motion.div key="paiements" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <div style={{ marginBottom: '24px' }}>
+                                <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#1e293b', margin: '0 0 8px 0' }}>Mes Paiements</h2>
+                                <p style={{ margin: 0, color: '#64748b', fontSize: '13px' }}>Historique de vos fiches de paie et bulletins de salaire.</p>
+                            </div>
+
+                            {paiementsLoading ? (
+                                <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+                                    <Loader2 size={32} style={{ animation: 'spin 1s linear infinite', color: primaryColor }} />
+                                    <p style={{ marginTop: '12px', color: '#64748b', fontSize: '14px' }}>Chargement des paiements...</p>
+                                </div>
+                            ) : paiementsData.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '60px 20px', background: 'white', borderRadius: '16px', border: '1px dashed #cbd5e1' }}>
+                                    <Wallet size={48} color="#94a3b8" style={{ marginBottom: '16px' }} />
+                                    <h3 style={{ margin: '0 0 8px', color: '#1e293b', fontSize: '16px', fontWeight: 600 }}>Aucun paiement enregistré</h3>
+                                    <p style={{ margin: 0, color: '#64748b', fontSize: '14px' }}>Vos fiches de paie apparaîtront ici après le premier versement.</p>
+                                </div>
+                            ) : (
+                                <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0' }}>
+                                    {/* Summary cards */}
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', padding: '20px', borderBottom: '1px solid #f1f5f9' }}>
+                                        <div style={{ padding: '16px', background: '#f0fdf4', borderRadius: '12px', textAlign: 'center' }}>
+                                            <p style={{ margin: 0, fontSize: '11px', fontWeight: 600, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Reçu</p>
+                                            <p style={{ margin: '4px 0 0', fontSize: '22px', fontWeight: 900, color: '#166534' }}>
+                                                {new Intl.NumberFormat('fr-GN').format(paiementsData.reduce((s: number, p: any) => s + (p.net_a_payer || p.montant || 0), 0))} GNF
+                                            </p>
+                                        </div>
+                                        <div style={{ padding: '16px', background: '#eff6ff', borderRadius: '12px', textAlign: 'center' }}>
+                                            <p style={{ margin: 0, fontSize: '11px', fontWeight: 600, color: '#1d4ed8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Nb Paiements</p>
+                                            <p style={{ margin: '4px 0 0', fontSize: '22px', fontWeight: 900, color: '#1e40af' }}>{paiementsData.length}</p>
+                                        </div>
+                                        <div style={{ padding: '16px', background: '#fefce8', borderRadius: '12px', textAlign: 'center' }}>
+                                            <p style={{ margin: 0, fontSize: '11px', fontWeight: 600, color: '#a16207', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Dernier Paiement</p>
+                                            <p style={{ margin: '4px 0 0', fontSize: '14px', fontWeight: 700, color: '#92400e' }}>
+                                                {paiementsData[0]?.date ? new Date(paiementsData[0].date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }) : '\u2014'}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Table */}
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                            <thead>
+                                                <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: '11px', textTransform: 'uppercase' }}>Date</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: '#475569', fontSize: '11px', textTransform: 'uppercase' }}>Base</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: '#475569', fontSize: '11px', textTransform: 'uppercase' }}>Primes</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: '#475569', fontSize: '11px', textTransform: 'uppercase' }}>Retenues</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, color: '#475569', fontSize: '11px', textTransform: 'uppercase' }}>Net Pay\u00e9</th>
+                                                    <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#475569', fontSize: '11px', textTransform: 'uppercase' }}>Fiche</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {paiementsData.map((p: any, i: number) => (
+                                                    <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                        <td style={{ padding: '14px 16px' }}>
+                                                            <div style={{ fontWeight: 700, color: '#1e293b' }}>
+                                                                {p.date ? new Date(p.date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' }) : '\u2014'}
+                                                            </div>
+                                                            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>{p.libelle}</div>
+                                                        </td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: 600, color: '#1e293b' }}>
+                                                            {new Intl.NumberFormat('fr-GN').format(p.salaire_base || 0)}
+                                                        </td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: 600, color: '#10b981' }}>
+                                                            +{new Intl.NumberFormat('fr-GN').format(p.total_primes || 0)}
+                                                        </td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                                                            <span style={{ fontWeight: 600, color: '#ef4444' }}>-{new Intl.NumberFormat('fr-GN').format((p.total_absences || 0) + (p.total_avances || 0))}</span>
+                                                            {p.details_absences && <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>{p.details_absences}</div>}
+                                                        </td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'right', fontWeight: 800, fontSize: '14px', color: '#059669' }}>
+                                                            {new Intl.NumberFormat('fr-GN').format(p.net_a_payer || p.montant || 0)} GNF
+                                                        </td>
+                                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                            {p.bulletin_id ? (
+                                                                <button onClick={() => loadBulletinDetail(p.bulletin_id)}
+                                                                    style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#475569', fontSize: '12px', fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                                    <Eye size={12} /> Voir
+                                                                </button>
+                                                            ) : <span style={{ color: '#cbd5e1' }}>\u2014</span>}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Bulletin Detail Modal */}
+                            {selectedBulletin && (
+                                <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(6px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+                                    onClick={() => setSelectedBulletin(null)}>
+                                    <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '20px', maxWidth: '550px', width: '100%', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px rgba(0,0,0,0.2)' }}>
+                                        {bulletinLoading ? (
+                                            <div style={{ padding: '60px', textAlign: 'center' }}><Loader2 size={32} style={{ animation: 'spin 1s linear infinite', color: primaryColor }} /></div>
+                                        ) : (
+                                            <div style={{ padding: '28px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+                                                    <div>
+                                                        <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#1e293b', margin: 0 }}>Bulletin de Paie</h3>
+                                                        <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>{selectedBulletin.bulletin?.mois_concerne}</p>
+                                                    </div>
+                                                    <button onClick={() => setSelectedBulletin(null)} style={{ width: '32px', height: '32px', borderRadius: '50%', border: 'none', background: '#f1f5f9', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={16} /></button>
+                                                </div>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '16px', background: '#f8fafc', borderRadius: '12px', marginBottom: '20px' }}>
+                                                    <div>
+                                                        <p style={{ margin: 0, fontWeight: 800, fontSize: '15px', color: '#1e293b' }}>{selectedBulletin.employe?.prenom} {selectedBulletin.employe?.nom}</p>
+                                                        <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>Poste : {selectedBulletin.employe?.poste}</p>
+                                                    </div>
+                                                    <div style={{ textAlign: 'right' }}>
+                                                        <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>Pay\u00e9 le : {selectedBulletin.bulletin?.date_paiement || '\u2014'}</p>
+                                                        <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>Mode : {selectedBulletin.bulletin?.mode_paiement || 'VIREMENT'}</p>
+                                                    </div>
+                                                </div>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                                    <tbody>
+                                                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                            <td style={{ padding: '12px 0', color: '#475569' }}>Salaire de Base</td>
+                                                            <td style={{ padding: '12px 0', textAlign: 'right', fontWeight: 700 }}>{new Intl.NumberFormat('fr-GN').format(selectedBulletin.bulletin?.salaire_base || 0)} GNF</td>
+                                                        </tr>
+                                                        {selectedBulletin.details?.primes?.map((p: any, i: number) => (
+                                                            <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                <td style={{ padding: '10px 0 10px 16px', color: '#10b981' }}>+ Prime : {p.motif}</td>
+                                                                <td style={{ padding: '10px 0', textAlign: 'right', fontWeight: 600, color: '#10b981' }}>+{new Intl.NumberFormat('fr-GN').format(p.montant)} GNF</td>
+                                                            </tr>
+                                                        ))}
+                                                        {(selectedBulletin.bulletin?.total_absences || 0) > 0 && (
+                                                            <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                <td style={{ padding: '12px 0', color: '#ef4444' }}>
+                                                                    - Retenues Absences
+                                                                    {selectedBulletin.details?.details_absences_texte && <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px' }}>{selectedBulletin.details.details_absences_texte}</div>}
+                                                                </td>
+                                                                <td style={{ padding: '12px 0', textAlign: 'right', fontWeight: 600, color: '#ef4444' }}>-{new Intl.NumberFormat('fr-GN').format(selectedBulletin.bulletin.total_absences)} GNF</td>
+                                                            </tr>
+                                                        )}
+                                                        {(selectedBulletin.bulletin?.total_avances || 0) > 0 && (
+                                                            <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                <td style={{ padding: '12px 0', color: '#f59e0b' }}>- Avances D\u00e9duites</td>
+                                                                <td style={{ padding: '12px 0', textAlign: 'right', fontWeight: 600, color: '#f59e0b' }}>-{new Intl.NumberFormat('fr-GN').format(selectedBulletin.bulletin.total_avances)} GNF</td>
+                                                            </tr>
+                                                        )}
+                                                    </tbody>
+                                                </table>
+                                                <div style={{ marginTop: '20px', padding: '20px', background: 'linear-gradient(135deg, #f0fdf4, #ecfdf5)', borderRadius: '12px', textAlign: 'center' }}>
+                                                    <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: '#15803d', textTransform: 'uppercase', letterSpacing: '1px' }}>Net \u00e0 Payer</p>
+                                                    <p style={{ margin: '4px 0 0', fontSize: '28px', fontWeight: 900, color: '#059669' }}>{new Intl.NumberFormat('fr-GN').format(selectedBulletin.bulletin?.net_a_payer || 0)} GNF</p>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </motion.div>
+                    )}
+
                 </AnimatePresence>
             </div>
 

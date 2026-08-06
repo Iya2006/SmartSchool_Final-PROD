@@ -28,6 +28,7 @@ from app.api.communication import router as comm_router
 from app.api.examens import router as examens_router
 from app.api.portail_parent import router as parent_portal_router
 from app.api.portail_enseignant import router as teacher_portal_router
+from app.api.sync import router as sync_router
 from app.api.portail_eleve import router as eleve_portal_router
 from app.api.auth import router as auth_router
 from app.api.devoirs import router as devoirs_router
@@ -42,6 +43,9 @@ from app.api.activites import router as activites_router
 from app.api.bibliotheque import router as bibliotheque_router
 from app.api.informatique import router as informatique_router
 from app.api.pointage_eleves import router as pointage_eleves_router
+from app.api.promotion import router as promotion_router
+from app.api.annee_scolaire import router as annee_scolaire_router
+from app.api.reinscription import router as reinscription_router
 
 
 # Création des tables au démarrage
@@ -93,6 +97,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
+    expose_headers=["X-Total-Count", "X-Meilleure-Moyenne", "X-Plus-Faible-Moyenne", "X-Moyenne-Classe"],
 )
 
 
@@ -135,6 +140,9 @@ app.include_router(eleves_router, dependencies=[Depends(get_current_user)])
 app.include_router(enseignants_router, dependencies=[Depends(get_current_user)])
 app.include_router(classes_router, dependencies=[Depends(get_current_user)])
 app.include_router(inscriptions_router, dependencies=[Depends(get_current_user)])
+app.include_router(promotion_router, dependencies=[Depends(get_current_user)])
+app.include_router(annee_scolaire_router, dependencies=[Depends(get_current_user)])
+app.include_router(reinscription_router, dependencies=[Depends(get_current_user)])
 app.include_router(evaluations_router, dependencies=[Depends(get_current_user)])
 app.include_router(notes_router, dependencies=[Depends(get_current_user)])
 # ── Routes COMPTABILITÉ / FINANCE / RH / PRÉSENCES AGENTS (rôles restreints) ──
@@ -156,13 +164,16 @@ app.include_router(evenements_router, dependencies=[Depends(get_current_user)])
 app.include_router(activites_router, dependencies=[Depends(get_current_user)])
 app.include_router(bibliotheque_router)
 app.include_router(informatique_router)
+# Comptabilité générale (SYSCOHADA) : mêmes rôles que Finance, plus d'auth
+# maison séparée — l'accès passe uniquement par le JWT principal.
+app.include_router(comptabilite_router, dependencies=[Depends(require_roles(*FINANCE_ROLES))])
 
 # ── Routes PUBLIQUES (gèrent leur propre authentification) ──
 app.include_router(auth_router)           # Login admin → retourne le JWT
 app.include_router(parent_portal_router)  # Login parent → son propre JWT
 app.include_router(teacher_portal_router) # Login enseignant → son propre JWT
+app.include_router(sync_router)           # Sync offline-first — auth via _enseignant_auth par route (même pattern que teacher_portal_router)
 app.include_router(eleve_portal_router)   # Login élève → son propre JWT
-app.include_router(comptabilite_router)   # Login PIN comptable → son propre mécanisme
 app.include_router(parametrage_public_router) # GET établissement + settings (sans JWT)
 
 # Servir les fichiers uploadés avec support CORS pour permettre l'exportation PDF/canvas côté client

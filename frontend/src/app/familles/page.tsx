@@ -5,11 +5,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Search, Users, Phone, Mail, Briefcase, MapPin, ChevronRight, X, Edit3,
     Save, Loader2, Heart, GraduationCap, User2, Shield, Eye, CheckCircle,
-    AlertCircle, Calendar, Hash, UserCheck, Filter, ChevronLeft, UserPlus, Home, Lock, KeyRound, ArrowLeft, Camera, ClipboardList
+    AlertCircle, Calendar, Hash, UserCheck, Filter, UserPlus, Home, Lock, KeyRound, ArrowLeft, Camera, ClipboardList
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import Pagination from '@/components/Pagination';
 
 interface Enfant {
     eleve_id: number; nom: string; prenom: string; matricule: string;
@@ -42,35 +43,46 @@ export default function FamillesPage() {
     const [editForm, setEditForm] = useState<any>({});
     const [saving, setSaving] = useState(false);
     const [successMsg, setSuccessMsg] = useState('');
+    const [total, setTotal] = useState(0);
+    const [stats, setStats] = useState({ total_parents: 0, total_enfants: 0, avec_password: 0, avec_email: 0 });
     const [currentPage, setCurrentPage] = useState(1);
-    const pageSize = 10;
+    const pageSize = 20;
 
+    // Chargée en une requête paginée + agrégats globaux côté serveur — avant,
+    // les 2753 familles réelles de la base étaient TOUTES chargées d'un coup
+    // (jusqu'à 4 requêtes SQL par parent côté backend), ce qui faisait timeout
+    // la page ("0 enfant(s)" affiché car le fetch échouait silencieusement).
     const loadParents = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await api.get('/api/communication/parents/annuaire');
+            const skip = (currentPage - 1) * pageSize;
+            const res = await api.get(`/api/communication/parents/annuaire?skip=${skip}&limit=${pageSize}&search=${encodeURIComponent(search)}`);
             setParents(res.data.map((p: any) => ({
                 ...p,
                 date_creation: null,
             })));
-        } catch { setParents([]); }
+            const totalCount = res.headers?.['x-total-count'];
+            setTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
+        } catch { setParents([]); setTotal(0); }
         finally { setLoading(false); }
-    }, []);
+    }, [currentPage, search]);
 
     useEffect(() => { loadParents(); }, [loadParents]);
 
-    const filtered = parents.filter(p =>
-        `${p.prenom} ${p.nom} ${p.telephone_1} ${p.email || ''} ${p.profession || ''}`.toLowerCase().includes(search.toLowerCase())
-    );
+    // Recherche : revenir à la page 1 pour éviter une page vide après filtrage
+    useEffect(() => { setCurrentPage(1); }, [search]);
 
-    const totalPages = Math.ceil(filtered.length / pageSize);
-    const paginatedList = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+    useEffect(() => {
+        api.get('/api/communication/parents/stats').then(res => setStats(res.data)).catch(() => {});
+    }, []);
 
-    // KPI stats
-    const totalParents = parents.length;
-    const totalEnfants = parents.reduce((acc, p) => acc + p.nb_enfants, 0);
-    const avecMdp = parents.filter(p => p.has_password).length;
-    const avecEmail = parents.filter(p => p.email).length;
+    const paginatedList = parents;
+
+    // KPI stats — agrégats globaux (indépendants de la page/recherche courante)
+    const totalParents = stats.total_parents;
+    const totalEnfants = stats.total_enfants;
+    const avecMdp = stats.avec_password;
+    const avecEmail = stats.avec_email;
 
     const handleSave = async () => {
         if (!editParent) return;
@@ -223,7 +235,7 @@ export default function FamillesPage() {
                         <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
                             <Loader2 size={32} className="animate-spin" color="var(--brand-primary)" />
                         </div>
-                    ) : filtered.length === 0 ? (
+                    ) : parents.length === 0 ? (
                         <div style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
                             <Users size={40} style={{ marginBottom: '12px', opacity: 0.3 }} />
                             <p>Aucun parent trouvé</p>
@@ -305,20 +317,7 @@ export default function FamillesPage() {
                                 </tbody>
                             </table>
 
-                            {/* Pagination */}
-                            <div className="pagination">
-                                <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}>
-                                    <ChevronLeft size={16} />
-                                </button>
-                                {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map(page => (
-                                    <button key={page} className={currentPage === page ? 'active' : ''} onClick={() => setCurrentPage(page)}>
-                                        {page}
-                                    </button>
-                                ))}
-                                <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0}>
-                                    <ChevronRight size={16} />
-                                </button>
-                            </div>
+                            <Pagination page={currentPage} pageSize={pageSize} total={total} onPageChange={setCurrentPage} />
                         </>
                     )}
                 </div>

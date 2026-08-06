@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Wallet, Receipt, AlertTriangle, Users, Lock, Save, CheckCircle,
-    Loader2, Plus, Trash2, Pencil, Check, X, KeyRound, ShieldCheck
+    Loader2, Plus, Trash2, Pencil, Check, X, KeyRound, ShieldCheck, Calendar
 } from 'lucide-react';
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
@@ -32,6 +32,7 @@ const TABS = [
     { id: 'frais',       label: 'Types de frais',    Icon: Receipt },
     { id: 'penalites',   label: 'Pénalités',         Icon: AlertTriangle },
     { id: 'reductions',  label: 'Réductions',        Icon: Users },
+    { id: 'salaires',    label: 'Salaires',          Icon: Calendar },
     { id: 'securite',    label: 'Reçus & Sécurité',  Icon: Lock },
 ] as const;
 type TabId = typeof TABS[number]['id'];
@@ -59,6 +60,8 @@ interface FinanceSettings {
     penalite_delai_jours: number;
     reduction_active: boolean;
     reductions: ReductionRule[];
+    salaires_mois_debut: string; // YYYY-MM, période sur laquelle les salaires sont dus
+    salaires_mois_fin: string;   // YYYY-MM, optionnel — vide = pas de fin (en cours)
 }
 
 interface TypeFrais {
@@ -85,6 +88,8 @@ const DEFAULT_SETTINGS: FinanceSettings = {
     penalite_delai_jours: 0,
     reduction_active: false,
     reductions: [],
+    salaires_mois_debut: '',
+    salaires_mois_fin: '',
 };
 
 const EMPTY_TYPE = { code: '', libelle: '', categorie: 'Scolarité', montant_defaut: 0, frequence: 'ANNUEL', est_obligatoire: 'O' };
@@ -587,6 +592,43 @@ export default function FinancePage() {
                                     <Plus size={16} /> Ajouter une règle de réduction
                                 </button>
 </div>
+                        </section>
+                    </motion.div>
+                )}
+
+                {/* ══════════════════════════════════════
+                    TAB : SALAIRES — période de paie
+                ══════════════════════════════════════ */}
+                {activeTab === 'salaires' && (
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+                        <section className={styles.section}>
+                            <div className={styles.sectionHeader}>
+                                <Calendar size={20} className={styles.sectionIcon} />
+                                <h3>Période de Paie</h3>
+                                <span className={styles.sectionSubtitle}>
+                                    De quel mois à quel mois les salaires sont dus — pilote les "arriérés" affichés
+                                    dans Comptabilité &gt; Gestion des Paiements &gt; Salaires
+                                </span>
+                            </div>
+                            <div className={styles.fieldsGrid}>
+                                <div className={styles.fieldRow}>
+                                    <label>Mois de début</label>
+                                    <input type="month" className={styles.inputFancy} value={settings.salaires_mois_debut}
+                                        onChange={e => update('salaires_mois_debut', e.target.value)} />
+                                    <span className={styles.infoHint}>Premier mois à partir duquel un salaire est dû (ex: début de l'année scolaire).</span>
+                                </div>
+                                <div className={styles.fieldRow}>
+                                    <label>Mois de fin (optionnel)</label>
+                                    <input type="month" className={styles.inputFancy} value={settings.salaires_mois_fin}
+                                        onChange={e => update('salaires_mois_fin', e.target.value)} />
+                                    <span className={styles.infoHint}>Laissez vide si la période est toujours en cours (jusqu'au mois actuel).</span>
+                                </div>
+                            </div>
+                            <p className={styles.infoHint} style={{ marginTop: 8 }}>
+                                Le Calendrier de paie (dans Comptabilité &gt; Salaires) reste l'outil du comptable pour
+                                déclarer la date exacte de paiement de chaque mois — cette période-ci ne fait que
+                                borner la fenêtre des mois considérés comme dus par le système.
+                            </p>
                         </section>
                     </motion.div>
                 )}

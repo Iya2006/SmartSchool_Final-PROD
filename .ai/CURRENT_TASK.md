@@ -1,78 +1,1625 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active
-**Stabilisation urgente des portails enseignant / élève / parent / admin et parcours critiques (hors TODO.md)**
+## Tâche active — Remise à zéro des données, corrections post-reset, module Offline-First Phase 1 (05-06/08/2026)
+Suite directe de la Phase 5 (même session). Trois volets enchaînés dans
+l'ordre où l'utilisateur les a demandés : (1) remise à zéro complète de la
+base + reseed 5000 élèves (voir mémoire projet, entrée dédiée), (2) une série
+de retours de test après le reset ayant révélé des bugs réels (certains
+préexistants, révélés seulement à l'échelle réelle), (3) implémentation du
+module Offline-First Phase 1 à partir d'un guide d'architecture fourni par
+l'utilisateur, adapté à la stack réelle du projet (pas implémenté tel quel).
 
-### Objectif
-Corriger les dysfonctionnements signalés sur les portails déjà existants afin que le système soit prêt à l’usage : téléchargements de sujets/documents, ressources partagées enseignant→élève, messagerie, profils, paramètres, boutons de contact et parcours admin.
+### 1. Bugs trouvés et corrigés après le reset (avant le module offline)
+- **Page Classes vide** : `classes/page.tsx` avait un `useEffect(..., [])` —
+  dépendance manquante sur `anneeId`/`etablissementId`, donc chargeait
+  systématiquement `annee_id=1` (valeur par défaut du contexte au premier
+  rendu), une année qui n'existait plus après le reset. Corrigé (dépendances
+  ajoutées) — même classe de bug que plusieurs autres trouvés ce jour.
+- **Tarif créé ≠ facture générée** : comportement voulu, pas un bug — expliqué
+  à l'utilisateur (configurer un tarif alimente juste la grille de prix ;
+  générer les factures est une action séparée, onglet Factures > "Facturer
+  une classe"). Découverte annexe : cet onglet n'avait **aucun lien nulle
+  part dans l'UI** (le sous-menu "Frais Scolaires" n'avait pas de
+  `subItems`, contrairement à "Salaires et Personnel" qui a le même
+  pattern) — corrigé dans `comptabilite/layout.tsx`.
+- **KPI "Nouvelles Inscriptions" fantaisiste** : `Math.round(totalCount *
+  0.14)`, un placeholder codé en dur jamais remplacé (5000×0.14=700, exactement
+  ce que l'utilisateur voyait). Remplacé par un vrai calcul backend
+  (`GET /api/eleves/count`, nouveau champ `nouvelles_inscriptions` = compte
+  réel des inscriptions `type_inscription=NOUVELLE` de l'année).
+- **Factures : 200 affichées au lieu de 263 réelles** : `limit=200` codé en
+  dur sur le fetch de `comptabilite/frais` (même pour `/paiements`). Corrigé
+  en lisant `X-Total-Count` et en re-fetchant avec le vrai total si besoin —
+  jamais de troncature silencieuse, quelle que soit l'échelle.
+- **Fiche financière élève à 0/0/0** : `GET /api/finance/solde-eleve/{id}`
+  appelé sans `annee_id` depuis `comptabilite/paiements/page.tsx` →
+  retombait sur le défaut serveur `annee_id=1`, une année inexistante.
+  Corrigé (paramètre ajouté).
+- **Comptabilité Auxiliaire — soldes incohérents (le bug le plus sérieux)** :
+  deux causes cumulées dans le Grand Livre. (a) `generer_factures_classe`
+  (facturation en masse) n'écrivait **aucune écriture comptable**,
+  contrairement à `create_facture` (facture unitaire) — les factures issues
+  de "Facturer une classe" étaient invisibles du Grand Livre. (b)
+  `create_paiement`/`annuler_paiement` taguaient `eleve_id` sur la ligne de
+  **trésorerie** en plus de la ligne 4111 (compte élève) — un élève ayant payé
+  voyait son "total débité" artificiellement gonflé du montant payé,
+  masquant systématiquement toute dette réelle ("Soldé" affiché à tort quel
+  que soit le montant facturé). Corrigé dans le code (`finance.py`) **et**
+  réparé rétroactivement sur les données déjà générées (263 écritures de
+  facturation manquantes recréées, lignes de trésorerie mal taguées
+  corrigées, 10 écritures orphelines résiduelles du reset nettoyées).
+- **Recherche élève (Rapports Financiers)** : le message "Aucun élève trouvé"
+  s'affichait dès la première lettre tapée, **avant même l'envoi de la
+  requête** (condition basée sur `searchEleve` non-vide plutôt que sur une
+  vraie tentative de recherche). Corrigé avec recherche automatique
+  debouncée (300ms) + un flag `hasSearched` distinct.
+- **Crash React sur erreurs 422** ("Objects are not valid as a React
+  child") : FastAPI renvoie `detail` comme tableau d'objets pour les
+  erreurs de validation automatique (pas une string comme pour les
+  `HTTPException` levées à la main) — tout le code qui fait
+  `showMsg(e.response.data.detail)` plantait. Corrigé une seule fois dans
+  l'intercepteur axios partagé (`lib/api.ts`), normalise `detail` en
+  chaîne lisible avant que quoi que ce soit d'autre ne le lise.
+- **"Je dois recharger après chaque connexion, partout"** — cause racine
+  trouvée : `AppContext` (fournit `anneeId` à quasiment toute l'app) ne se
+  charge qu'une fois au tout premier montage. `login()` navigue en
+  client-side (`router.push`), donc si l'utilisateur arrive sur `/login`
+  sans token, l'année réelle n'est jamais chargée sans un vrai rechargement
+  navigateur. Corrigé en rendant l'effet de chargement réactif à
+  `isAuthenticated` (`useAuth()`) plutôt qu'à une simple lecture
+  `localStorage` unique au montage.
+- **Page Communication vide + Encaissement/Solvabilité qui "charge sans
+  fin"** : deux N+1 catastrophiques à l'échelle réelle (5000 élèves/5033
+  parents), invisibles à petite échelle. `GET /api/communication/parents-list`
+  : **69 secondes** (dépassait le timeout axios de 30s → la page entière
+  restait vide, `Promise.all` rejeté). `GET /api/finance/solvabilite` :
+  **20,6 secondes**. Réécrits en préchargement par lot (règle N+1 déjà
+  établie sur ce projet) → **1,4s et 0,96s** respectivement. `messages-parents`
+  corrigé pareil en passant. `communication/page.tsx` avait aussi le même
+  bug de dépendances manquantes que `classes/page.tsx`.
+- **Erreur d'hydratation React sur `/dashboard`** : bug que j'ai moi-même
+  introduit en convertissant la page à `useQuery` — la branche affichée
+  dépendait de `isLoading`, qui vaut `false` (pas `true`) tant qu'une query
+  est simplement `enabled: false`, donc le serveur (SSR) et le client
+  (premier rendu) affichaient deux arbres DOM différents. Corrigé en
+  basculant sur `isError` pour distinguer "pas encore de données" de
+  "échec confirmé" — les deux rendus convergent maintenant.
 
-### Décision de périmètre
-- Le chantier des rôles internes (`BIBLIOTHECAIRE`, `INFORMATICIEN`, `SURVEILLANT`, `OPERATEUR`) est mis en stand-by après les dernières refontes dynamiques.
-- Pour l’instant, les rôles système prioritaires restent : `FONDATEUR`, `DG`, `ADMIN` côté interface admin globale.
-- Les portails historiques à stabiliser sont prioritaires : enseignant, élève, parent et admin.
-- Ne pas travailler dans `.ai/TODO.md` pour cette tâche.
+### 2. Module Offline-First — Phase 1 (notes/présences enseignants)
+Guide d'architecture générique fourni par l'utilisateur (19 sections :
+Service Worker, IndexedDB, Sync Engine, conflits, RabbitMQ, Cloudflare R2,
+chiffrement, monitoring...), avec demande explicite de l'**adapter à la
+stack réelle** plutôt que de l'implémenter tel quel, et de **tout tester**.
+Passage en Plan Mode (audit de stack avant plan, 2 questions de cadrage —
+voir `docs/module-offlineFirst.md` pour le guide original et
+`docs/guides/guide_test_offline.html` pour le guide de test).
 
-### Problèmes à traiter
-1. **Portail enseignant — documents / partages**
-   - Le téléchargement dans l’historique des sujets/documents ne fonctionne pas.
-   - Il manque une action pour ajouter des liens externes aux élèves.
-   - Les liens externes ajoutés par l’enseignant doivent apparaître automatiquement côté élève dans les ressources.
-   - Les informations de paiements/salaire de l’enseignant ne sont pas visibles.
+**Décidé avec l'utilisateur** : pas de Cloudflare R2 cette phase (disque
+local conservé) ; la saisie hors-ligne démarre par les enseignants
+(notes/présences) — la comptabilité reste "connexion requise" (cohérent
+avec le §12 du guide et avec les bugs de Grand Livre du point 1 ci-dessus).
 
-2. **Portail élève**
-   - Les ressources doivent afficher les liens externes envoyés par l’enseignant.
-   - L’historique des messages envoyés par l’élève ne s’affiche pas correctement dans la messagerie.
-   - Un message envoyé ne doit jamais disparaître.
+**Livré** :
+- Migration `updated_at`/`updated_by` sur `Note`/`Presence` (prérequis
+  détection de conflit).
+- `backend/app/api/sync.py` (nouveau) : `POST /api/sync/{id}/notes` et
+  `/presences`, réutilisent la logique métier existante
+  (`update_notes_batch_enseignant`/`enregistrer_appel`) mais élément par
+  élément avec Last-Write-Wins + signalement de conflit.
+- `frontend/src/lib/offlineQueue.ts` (nouveau, `idb-keyval` — installé mais
+  jamais branché avant) : file locale persistante.
+- `frontend/src/lib/syncEngine.ts` (nouveau) : rejeu automatique au retour
+  réseau/premier plan, arrêt propre si le réseau retombe en cours de rejeu,
+  poursuite sur refus serveur (pas bloqué par un seul item en échec).
+- `lib/api.ts` : intercepteur détecte l'absence réseau sur les endpoints
+  `/api/sync/*` et met en file au lieu de rejeter — succès optimiste
+  invisible pour l'appelant.
+- `components/SyncStatusIndicator.tsx` (🟢🟡🔴) dans le portail enseignant.
+- Purge de la file + du cache React Query à la déconnexion
+  (`AuthContext.logout`).
+- Lecture mise en cache (React Query + persistance déjà montée mais
+  quasi-inutilisée, `QueryProvider.tsx`) étendue à Classes, Élèves,
+  Dashboard admin — même mécanisme que ce qui règle la fraîcheur des
+  données en plus de l'offline.
+- 16 tests Vitest (file + moteur de synchro) + 13 vérifications backend
+  end-to-end sur données isolées (conflit détecté/résolu, upsert présences,
+  refus propre) — tous passés, nettoyage vérifié.
 
-3. **Portail parent**
-   - La page profil ne se charge pas.
-   - La page paramètres/profil est mal affichée et doit être redesignée proprement.
+**Trouvé en testant, pas contourné** : `next-pwa` (générateur de Service
+Worker) est **incompatible avec Turbopack**, le bundler réellement utilisé
+par ce projet (`next build` tourne sous Turbopack par défaut — confirmé).
+Aucun `sw.js` n'était donc généré malgré une config `runtimeCaching`
+correcte. Le contournement `--webpack` fonctionne pour `next-pwa` mais butte
+sur un bug CSS préexistant et sans rapport (`:root` dans un CSS Module de
+`portail-eleve`, non corrigé — hors périmètre). **Conséquence** : la saisie
+hors-ligne fonctionne intégralement (ne dépend pas du Service Worker), mais
+le chargement de l'app avec zéro réseau au tout premier accès ne fonctionne
+pas encore. Remplacement prévu : `@serwist/next` (successeur maintenu de
+next-pwa, support Turbopack confirmé disponible sur le registre npm) —
+non fait, prochaine étape actée avec l'utilisateur.
 
-4. **Admin**
-   - Les sujets envoyés par les enseignants donnent une erreur 404 au téléchargement.
-   - La page profil admin manque / ne fonctionne pas et doit être créée/refondue de façon professionnelle.
-   - Le bouton paramètres dans le menu utilisateur du header ne fonctionne pas.
+### ⚠️ Reste à faire (phases restantes du guide offline-first, actées avec l'utilisateur)
+Phase 2 (prioritaire) : Service Worker réel via Serwist. Phase 3 : étendre
+la saisie hors-ligne aux autres rôles (secrétariat, direction ; comptable
+probablement lecture seule vu la sensibilité des montants). Phase 4 : cache
+étendu à toutes les données de référence + synchronisation delta (plutôt que
+tout retélécharger). Phase 5 : chiffrement IndexedDB (Web Crypto API),
+expiration de session hors-ligne, registre d'appareils + effacement à
+distance. Phase 6 : média vers Cloudflare R2 (attend les identifiants).
+Phase 7 : file d'attente serveur (Redis Streams, déjà présent) + workers
+email/SMS/PDF/exports (n'existe pas du tout aujourd'hui, même en
+synchrone) ; Redis élargi (sessions/OTP/rate limiting/verrous). Phase 8 :
+monitoring du moteur de synchronisation.
 
-5. **Dossiers élèves / enseignants côté admin**
-   - Dans le dossier élève, le bouton `Contacter` doit ouvrir la messagerie avec l’élève ou son destinataire préselectionné.
-   - Dans le dossier enseignant, supprimer le bouton `Email`.
-   - Dans le dossier enseignant, le bouton message doit ouvrir la messagerie avec l’enseignant préselectionné.
+## Historique (sous-session précédente) — Refonte clôture d'année / réinscription / tarifs, Phase 5 "Découplage promotion / choix de filière" (05/08/2026)
+Retour de test de l'utilisateur sur l'assistant (Phase 4), suivi d'une
+spécification détaillée et prescriptive : le choix de filière (SM/SS/SE) des
+10e année bloquait l'étape "Promotions" du wizard (`_valider_classe_core`
+refusait de valider une classe tant qu'un ADMIS/REDOUBLANT — ce qui incluait
+les 10e admis, la frontière Lycée n'étant qu'un flag `necessite_choix_serie`
+sur la décision `ADMIS`, pas une décision à part — n'avait pas de
+`classe_cible_id` résolue). L'utilisateur juge ce comportement incorrect :
+"le choix de la filière ne doit jamais empêcher la validation de la
+promotion". 4e passage en Plan Mode de cette session : investigation directe
+du code existant + une question de cadrage (AskUserQuestion — réponse "Garder
+2 clics séparés (recommandé)", confirmant que "Calculer les résultats" et
+"Valider" restent deux actions manuelles distinctes, conforme au principe
+"aucun transfert définitif avant validation" déjà acté en Phase 1).
 
-6. **Pointage tuteur / élèves**
-   - Le pointage personnel fonctionne, mais le pointage tuteur/élèves n’est pas encore géré. À auditer puis implémenter ou cadrer proprement selon l’existant.
+### 1. Nouvelle décision `EN_ATTENTE_FILIERE` — plus un flag, une vraie décision persistée
+Root cause : la frontière Collège→Lycée ne produisait qu'un `ADMIS` +
+`necessite_choix_serie` (flag recalculé à la volée), jamais un état
+persistant indépendamment requêtable. Corrigé (`promotion.py`) : nouvelle
+valeur de décision `EN_ATTENTE_FILIERE` (réservée aux 10e admis), calculée
+directement à la frontière dans `_calculer_resultats_classe_core` et
+`apercu_cloture_classe`. **Deux constantes distinctes remplacent l'ancienne
+`DECISIONS_AVEC_SUITE`** (qui mélangeait deux concepts différents) :
+`DECISIONS_AVEC_SUITE = (ADMIS, REDOUBLANT, EN_ATTENTE_FILIERE)` (qui entre en
+campagne de réinscription à la validation) et
+`DECISIONS_NECESSITANT_CLASSE_CIBLE = (ADMIS, REDOUBLANT)` (qui DOIT avoir une
+classe cible résolue pour que `valider` accepte la classe —
+`EN_ATTENTE_FILIERE` en est explicitement exclu, ne pas avoir de classe cible
+étant son état normal à ce stade). C'est ce changement de constante dans
+`_valider_classe_core` qui corrige le bug rapporté : un élève 10e admis ne
+bloque plus jamais la validation de sa classe.
 
-7. **Scalabilité / pagination**
-   - Vérifier que les pages concernées respectent la pagination et ne chargent pas inutilement des volumes énormes.
-   - Garder en tête le scénario multi-établissements avec millions de données.
+### 2. Choix de filière déplacé à la réinscription (plus dans le wizard)
+`choisir_filiere` (`promotion.py`) : retiré le refus `statut_promotion ==
+"VALIDE"` — le choix de filière doit désormais fonctionner justement APRÈS
+validation (cas normal, à la réinscription), avec un nouveau refus si la
+décision n'est pas `EN_ATTENTE_FILIERE` ou si déjà `REINSCRIT`. Nouvel
+endpoint `GET /api/reinscription/en-attente-filiere/{annee_source_id}`
+(`reinscription.py`) — liste les 10e admis promus mais sans classe cible
+(invisibles de `GET /classe-cible/{id}`, filtré par `classe_cible_id`).
+`GET /annee/{id}/etat` (`promotion.py`) gagne un champ `en_attente_filiere`
+purement informatif (ne bloque jamais), et `sans_classe_cible` ne compte plus
+que les cas réellement bloquants (`DECISIONS_NECESSITANT_CLASSE_CIBLE`).
 
-### Fichiers potentiellement concernés
-- `frontend/src/app/portail-enseignant/**`
-- `frontend/src/app/portail-eleve/**`
-- `frontend/src/app/portail-parent/**`
-- `frontend/src/app/enseignants/**`
-- `frontend/src/app/eleves/**`
-- `frontend/src/app/messages/**` ou pages de communication existantes
-- `frontend/src/components/Topbar*`
-- `frontend/src/app/profil/**` ou nouvelle route profil admin
-- `backend/app/api/portail_enseignant.py`
-- `backend/app/api/portail_eleve.py`
-- `backend/app/api/portail_parent.py`
-- `backend/app/api/examens.py`
-- `backend/app/api/communication.py`
-- `backend/app/api/devoirs.py`
-- `backend/app/api/photos.py`
-- éventuels modèles/schémas nécessaires
-- `.ai/CURRENT_TASK.md`
-- `.ai/PROJECT_MEMORY.md`
+### 3. Frontend — retrait complet du choix de filière du wizard
+`classes/cloture-annee/page.tsx` : sélecteur `<select>` "Série" retiré de la
+modale de classe (colonne devenue un simple badge de statut), fonction
+`choisirFiliere`/état `niveauxLycee` supprimés (dead code — plus utilisés
+nulle part dans ce fichier), `bloqueSerieManquante` et sa simulation de
+blocage client sur le bouton "Valider" retirés (le backend ne bloque plus,
+pas de raison de le simuler côté client), étape 6 "Choix des filières"
+réécrite comme purement informative (compte `etatPromotion.en_attente_filiere`,
+lien vers l'étape 7, jamais présentée comme un blocage à résoudre ici).
 
-### Stratégie
-1. Auditer les endpoints et pages existants avant modification.
-2. Corriger d’abord les téléchargements 404, car ils impactent enseignant/admin.
-3. Brancher les liens externes enseignant → ressources élève.
-4. Corriger la messagerie élève pour conserver et afficher l’historique.
-5. Corriger/redesigner profils et paramètres parent/admin.
-6. Corriger les boutons de contact admin.
-7. Vérifier pagination et validation TypeScript/backend.
+### 4. Frontend — nouvel onglet "Choix de filière" sur la page réinscription
+`comptabilite/reinscription/page.tsx` : nouvel onglet (à côté de "Par
+classe"), sélecteur d'année source dédié (`filiereSourceId`, distinct de
+`filterAnnee` qui reste l'année cible), liste à plat via le nouvel endpoint
+avec un `<select>` SM/SS/SE par ligne appelant `choisir-filiere` — une fois
+résolu, l'élève sort de la liste et devient normalement confirmable depuis
+l'onglet "Par classe" habituel.
+
+### 5. Vérification effectuée
+Sweep annotations différées (415 fonctions, 0 erreur), `npx tsc --noEmit` (0
+erreur) sur les deux pages modifiées, test end-to-end sur données 100%
+synthétiques (codes `TSTP5-*`, 1 classe 10e/1 élève/1 classe 11e SM cible) —
+19 vérifications, toutes passées : `valider` réussit IMMÉDIATEMENT sans choix
+de filière préalable (c'était le bug), `decision_fin_annee ==
+EN_ATTENTE_FILIERE` et `statut_reinscription == A_REINSCRIRE` après
+validation, élève visible dans `/en-attente-filiere` et PAS dans
+`/classe-cible` tant que filière non choisie, `choisir-filiere` accepté après
+validation (contrairement à avant), classe cible résolue et confirmation de
+réinscription fonctionnant normalement une fois la filière choisie (nouvelle
+Inscription créée, élève réactivé, effectif incrémenté). Nettoyage complet
+vérifié (0 résidu `TSTP5-*`), production confirmée intacte (2801 élèves).
+**Limite assumée, comme en Phase 4** : pas d'outil d'automatisation de
+navigateur disponible cette session — vérifié uniquement au niveau
+backend (appels directs des fonctions endpoint) + `tsc`, pas de clic réel
+dans un navigateur sur les deux pages modifiées.
+
+### ⚠️ Reste à faire
+Aucune Phase 6 identifiée à ce stade. Reste à confirmer par l'utilisateur :
+test interactif réel en navigateur du nouvel onglet "Choix de filière" et du
+wizard modifié (étape 6 reformulée, colonne Série retirée).
+
+## Historique (sous-session précédente) — Refonte clôture d'année / réinscription / tarifs, Phase 4 "Assistant de clôture (wizard 10 étapes)" (05/08/2026)
+Suite directe de la Phase 3 (même session, "on continue phase 4"). 4e passage
+en Plan Mode de cette session : un agent Explore (navigation/patterns UI
+existants) + investigation directe (schémas des endpoints déjà construits en
+Phases 1-3, connus de première main). Livré : le chrome guidé qui manquait —
+toute la mécanique existait déjà, seule l'orchestration visuelle restait à
+faire.
+
+### 1. Décision d'architecture : pas de nouvelle page, la page existante DEVIENT l'assistant
+Investigation : `classes/cloture-annee/page.tsx` (Phase 2, 459 lignes) avait
+déjà une UI riche et testée pour "Calcul des résultats"/"Promotions"/"Choix
+des filières" ; `comptabilite/reinscription/page.tsx` (Phase 2) couvrait déjà
+"Ouverture de la campagne"/"Génération des frais". **Dupliquer cette UI dans
+un nouveau composant aurait créé deux implémentations à maintenir en
+parallèle** — risque de désynchronisation supérieur au bénéfice. Décision :
+`classes/cloture-annee` **devient** l'assistant complet (même route, contenu
+restructuré en 10 étapes avec un nouveau composant `Stepper`) ; la grille de
+classes + modale existantes de Phase 2 sont réutilisées TELLES QUELLES comme
+"vue détaillée" sous les étapes 4-6. `comptabilite/reinscription` reste une
+page dédiée séparée (rôle comptable, usage répété sur plusieurs jours — pas
+adapté à un wizard linéaire), reliée par un lien + un statut agrégé.
+
+### 2. Réordonnancement assumé par rapport au cahier des charges littéral
+L'étape 6 du cahier des charges ("Création de la nouvelle année") est placée
+APRÈS "Calcul des résultats"/"Promotions"/"Choix des filières" (étapes 3-5) —
+mais `calculer-resultats` (Phase 2) a besoin de `annee_cible_id` pour résoudre
+`classe_cible_id`, donc l'année cible doit déjà exister AVANT le calcul.
+**Décision assumée et documentée** : l'assistant réordonne "Création de la
+nouvelle année" en position 3 (juste après la clôture comptable), tout en
+gardant les 10 libellés d'étapes du cahier des charges intacts.
+
+### 3. Deux nouveaux endpoints d'agrégation (lecture seule)
+`GET /api/promotion/annee/{id}/etat` (`promotion.py`) et
+`GET /api/reinscription/etat/{annee_cible_id}` (`reinscription.py`) — évitent
+que le frontend interroge classe par classe (règle N+1 déjà établie sur ce
+projet) pour savoir combien de classes ont leurs résultats calculés/validés,
+combien d'élèves sans classe cible (filière non choisie OU classe cible
+manquante — même remédiation dans les deux cas), combien de réinscriptions
+par statut.
+
+### 4. Nouveau composant `frontend/src/components/Stepper.tsx`
+Liste verticale réutilisable, navigation libre (pas de verrouillage
+séquentiel côté client — les vraies contraintes restent imposées par le
+backend). Statuts dérivés de l'état RÉEL des données (pas d'un état wizard
+séparé à synchroniser) : `a_faire`/`en_cours`/`fait`/`attention`, avec une
+auto-navigation vers la première étape non terminée au premier chargement
+(une seule fois, pour ne jamais faire sauter l'utilisateur pendant sa
+navigation manuelle ensuite).
+
+### 5. Limite de vérification assumée et signalée
+Contrairement à la routine habituelle de ce projet pour les changements
+frontend (test réel au clic dans un navigateur), **je n'ai pas d'outil
+d'automatisation de navigateur disponible dans cette session** (pas de
+Playwright/capture d'écran) — seulement `WebFetch`, qui ne exécute pas le
+JavaScript React côté client. Vérifié à la place : `tsc --noEmit` propre,
+sweep backend propre, les 2 nouveaux endpoints testés sur données
+synthétiques, et la page chargée via `curl` (200, présence du bundle JS,
+aucun marqueur d'erreur Next.js) — ce dernier point ne prouve PAS que
+l'interactivité (clics, appels API déclenchés, changement d'étape) fonctionne
+réellement. Les deux serveurs de dev (backend :8300, frontend :3300) ont été
+laissés démarrés pour que l'utilisateur puisse tester lui-même le parcours
+complet dans son navigateur.
+
+### ⚠️ Reste à faire
+Aucune Phase 5 identifiée à ce stade — les 11 points du cahier des charges
+original sont couverts (Phases 1-4) à l'exception du test interactif réel en
+navigateur (point 5 ci-dessus), à faire confirmer par l'utilisateur.
+
+## Historique (sous-session précédente) — Refonte clôture d'année / réinscription / tarifs, Phase 3 "Verrou étendu + centre d'historique réel" (05/08/2026)
+Suite directe de la Phase 2 (même session, "on continue phase 3"). Re-passage
+en Plan Mode (3e fois cette session) vu l'ampleur restante : 3 agents Explore
+en parallèle (un complété normalement, deux read directs faits en complément
+manuel pour préciser les schémas exacts), une question de cadrage
+(AskUserQuestion, réponse : "Données réelles + verrou d'abord") pour séparer
+ce chantier du wizard visuel. Livré cette session : verrouillage étendu à
+TOUTES les mutations pédagogiques (pas seulement la comptabilité), transition
+réelle vers le statut `ARCHIVEE`, et un vrai centre d'historique remplaçant
+les données simulées. **Le wizard visuel guidé 10 étapes reste différé** à une
+Phase 4 future — en attendant, l'admin enchaîne manuellement les pages déjà
+construites (Phases 1-3, dans l'ordre logique).
+
+### 1. Verrou étendu — relocalisation + généralisation
+Root cause trouvée par investigation : `_verifier_annee_modifiable` (Phase 1)
+ne gardait QUE `Facture`/`Paiement`/`Depense` — **~15 endpoints dans 4
+fichiers** (`evaluations.py`, `portail_enseignant.py`, `vie_scolaire.py`,
+`emploi_du_temps.py`) pouvaient créer/modifier `Note`/`Bulletin`/`Presence`/
+`CreneauEmploi` sans jamais consulter le statut de l'année — le statut
+`ARCHIVEE` (créé en Phase 1) n'était d'ailleurs **jamais atteint par aucun
+code**. Corrigé : le garde est relocalisé dans `app/core/annee_lock.py`
+(`verifier_annee_modifiable(db, annee_id)`, générique, plus de nom
+"finance"-spécifique trompeur) et câblé dans les ~15 endpoints, chacun
+résolvant `annee_id` via le chemin le plus direct disponible
+(`Classe.annee_id` directement, `Inscription.annee_id`, ou
+`CreneauEmploi.annee_id` qui a la colonne en direct). `Incident`
+(sanctions disciplinaires) reste **délibérément non verrouillé** — aucune
+FK vers une année scolaire précise (juste `eleve_id` + `date_incident`),
+pas d'ancrage fiable sans modification de schéma non prévue au cadrage.
+
+### 2. Bugs préexistants trouvés et corrigés en cours de route
+- **`GET /api/evaluations/classe/{id}/bulletins`** référençait
+  `classe.etablissement_id` (pour les réglages d'affichage bulletin) sans
+  **jamais avoir fetché `classe`** — un vrai `NameError` latent, invisible à
+  `py_compile`/au sweep d'annotations (qui ne force que l'évaluation des
+  annotations, pas l'exécution du corps de fonction), qui n'aurait explosé
+  qu'au premier appel réel. Trouvé en branchant la nouvelle page
+  `archive/classe/[id]` sur cet endpoint — jamais exercé par du code
+  applicatif jusqu'ici (l'ancien onglet Bulletins de cette page était un
+  simple lien statique, jamais un vrai appel). Corrigé (fetch + 404 ajoutés).
+- `emploi_du_temps.py:create_creneau` avait `annee_id=data.get("annee_id", 1)`
+  — même classe de bug que les `annee_id=1` codés en dur corrigés en Phases
+  1-2 (source de vérité cliente plutôt que serveur) ; corrigé en dérivant
+  `annee_id` de la `Classe` réellement résolue.
+
+### 3. Nouvel endpoint d'archivage
+`POST /api/annee-scolaire/{id}/archiver` (`annee_scolaire.py`) — transition
+`CLOTURE_COMPTABLE → ARCHIVEE` uniquement. Comme le verrou traite déjà les
+deux statuts de façon identique, cette transition est sémantique ("année
+définitivement classée") plutôt qu'un niveau de verrouillage technique
+supplémentaire.
+
+### 4. Centre d'historique réel
+Deux nouveaux endpoints (`eleves.py`) : `GET /{eleve_id}/inscriptions`
+(historique complet multi-années, remplace le tableau `inscriptions` **codé
+en dur** trouvé dans `archive/eleve/[id]/page.tsx` — commentaire explicite
+"For demonstration, we simulate...") et `GET /{eleve_id}/dossier/{inscription_id}`
+(bulletins + résumé présence + incidents pour UNE année, alimente les onglets
+Bulletins/Discipline précédemment 100% statiques). Frontend : les deux pages
+`/archive/eleve/[id]` et `/archive/classe/[id]` branchées sur des données
+réelles (bulletins via l'endpoint existant `GET /classe/{id}/bulletins` avec
+sélecteur de trimestre, présences résumées côté client depuis l'endpoint
+existant). **Téléchargement PDF corrigé au passage** : un lien `<a href>` brut
+vers l'endpoint PDF (protégé par JWT) aurait échoué en 401 au clic — remplacé
+par le pattern établi ailleurs dans le projet (`api.get(url, {responseType:
+'blob'})` + lien objet créé côté client, cohérent avec
+`centre-evaluation/page.tsx`).
+
+### 5. Vérification effectuée
+Sweep annotations différées (412 fonctions, 0 erreur — mais rappel : ce sweep
+n'aurait PAS trouvé le bug `classe` non défini du point 2, seul un test réel
+l'a révélé), `npx tsc --noEmit` (0 erreur), test end-to-end sur données
+synthétiques (2 années, 1 élève avec 2 inscriptions, trimestre/bulletin/
+présences/incident) couvrant : clôture comptable → refus d'archiver une année
+non clôturée → archivage réussi → 403 sur un échantillon représentatif des 4
+patterns de verrouillage (Classe.annee_id direct, Inscription.annee_id via
+data, Inscription.annee_id via 1er élément de lot, CreneauEmploi.annee_id
+direct) → confirmation qu'aucune donnée n'est committée lors d'un rejet →
+confirmation qu'une année EN_COURS reste normalement modifiable → historique
+multi-années et dossier annuel corrects. Nettoyage complet réussi, production
+confirmée intacte (2801 élèves, année 1 `EN_COURS`, 0 facture/paiement).
+
+### ⚠️ Reste à faire — Phase 4 (session future, PAS commencée)
+Wizard visuel guidé en 10 étapes (chrome UI qui enchaîne dans l'ordre les
+endpoints déjà construits en Phases 1-3). Nécessitera un nouveau composant
+Stepper/wizard côté frontend — aucun composant de ce type n'existe
+actuellement dans `frontend/src/components/` (vérifié Phase 3).
+
+## Historique (sous-session précédente) — Refonte clôture d'année / réinscription / tarifs, Phase 2 "Résultats, Promotion V2, Réinscription V2" (05/08/2026)
+Suite directe de la Phase 1 (même session utilisateur, "ok go on" puis "go on").
+Vu l'ampleur du reste du cahier des charges (résultats/promotion/réinscription/
+frais/archivage/historique/wizard), re-passage en Plan Mode : investigation
+directe du code (un agent Explore lancé en parallèle a été interrompu par une
+limite de session API — complété manuellement via Read/Grep), une question de
+cadrage (AskUserQuestion, réponse : "Fondations d'abord") pour sous-découper
+encore la Phase 2, plan écrit et approuvé. Livré cette session : moteur de
+résultats, promotion V2 (proposition/validation séparée), réinscription V2 (5
+statuts, indépendante). **Différé à une Phase 3 future** (non commencée) : le
+wizard visuel 10 étapes et l'archivage réel/historique (pages `/archive`
+toujours simulées).
+
+### 1. Modèle de données — 5 nouvelles colonnes sur `Inscription`
+`total_points`, `niveau_cible_id`, `classe_cible_id`, `statut_promotion`
+(`PROPOSE`|`VALIDE`), `statut_reinscription` (`A_REINSCRIRE`|`REINSCRIT`|
+`NON_REINSCRIT`|`TRANSFERE`|`ABANDON`) — toutes nullable, vivent sur
+l'inscription de l'année QUI SE TERMINE (portent "la proposition pour l'an
+prochain" jusqu'à ce que la réinscription la matérialise). **Piège rencontré
+et corrigé immédiatement** : `classe_cible_id` étant une 2e FK `Inscription →
+Classe`, la relation existante `Classe.inscriptions`/`Inscription.classe`
+(sans `foreign_keys` explicite) est devenue ambiguë
+(`AmbiguousForeignKeysError` au premier `db.query()`, détecté dès le premier
+test) — corrigé en ajoutant `foreign_keys=` explicite des deux côtés de la
+relation. **Leçon générale pour ce projet** : ajouter une 2e FK entre deux
+tables déjà reliées par un `relationship()` SQLAlchemy casse silencieusement
+ce relationship tant qu'on ne teste pas une vraie requête ORM — `py_compile`/
+`import main` ne le détectent pas, seul un `db.query()` réel le révèle.
+
+### 2. Moteur de résultats (extension de `promotion.py`)
+`_resultats_annuels_bulk()` remplace `_moyenne_annuelle()` (V1, une simple
+moyenne des `Bulletin.moyenne_generale` par trimestre, sans total de points) :
+agrège les `BulletinLigne` (déjà produites par `calculer_moyennes`,
+`evaluations.py`) par matière sur tous les trimestres, pondère par
+coefficient → `total_points = Σ(moyenne matière annuelle × coefficient)`,
+`moyenne = total_points / Σcoefficients` — plus rigoureux que l'ancienne
+moyenne simple. Rang annuel enfin écrit dans `Inscription.rang_final`
+(colonne présente depuis toujours, jamais utilisée avant cette session,
+confirmé par grep exhaustif lors de l'investigation). Décision `PROMU`→
+`ADMIS` (aligné sur le vocabulaire exact du cahier des charges : Admis/
+Redouble/Exclu/Diplômé) + nouvelle valeur `EXCLU`, **toujours un override
+manuel** (`PUT /api/promotion/eleve/{id}/decision`), jamais calculée
+automatiquement — décision actée dès la Phase 1.
+
+### 3. Promotion V2 — proposition puis validation explicite
+Root cause de l'ancien système (`promotion.py` V1, session précédente) :
+`POST /classe/{id}/executer` créait IMMÉDIATEMENT et DÉFINITIVEMENT la
+nouvelle `Inscription` + désactivait les élèves, sans étape de validation
+séparée, et la frontière Collège→Lycée (10e année) n'avait qu'un flag calculé
+à la volée (`necessite_choix_serie`), jamais un statut persistant "en attente
+de filière" consultable indépendamment. Nouveau flux :
+`POST /classe/{id}/calculer-resultats` (+ `/annee/{id}/calculer-resultats-tout`
+bulk, leçon retenue du bug "0 élève migré" de la session précédente : le bulk
+existe dès le départ cette fois) calcule et PERSISTE la proposition
+(`statut_promotion=PROPOSE`) sans jamais créer d'Inscription ; ajustements
+manuels via `PUT /eleve/{id}/decision` (override, notamment EXCLU) et
+`PUT /eleve/{id}/choisir-filiere` (résout automatiquement la classe cible une
+fois la série choisie) ; `POST /classe/{id}/valider` (+ `/annee/{id}/valider-tout`)
+verrouille définitivement (`statut_promotion=VALIDE`, refuse si un
+ADMIS/REDOUBLANT n'a toujours pas de classe cible), désactive les comptes
+élèves (comportement déjà existant, juste déplacé ici) et ouvre la campagne
+de réinscription (`statut_reinscription=A_REINSCRIRE` pour ADMIS/REDOUBLANT
+seulement). Les anciens `executer`/`executer-tout` sont retirés.
+
+### 4. Réinscription V2 — nouveau routeur indépendant `app/api/reinscription.py`
+L'ancien système (`GET /api/eleves/reinscription/classe/{id}` +
+`PUT /{id}/reactiver`) dépendait ENTIÈREMENT du fait que la promotion ait
+DÉJÀ créé la nouvelle Inscription à la clôture — pas indépendant comme
+demandé, et la génération des frais de réinscription était un geste
+totalement manuel et déconnecté (le comptable devait aller sur Frais
+Scolaires générer lui-même la facture). Nouveau système : pilote uniquement
+`Inscription.statut_reinscription` sur les inscriptions déjà
+`statut_promotion=VALIDE`. `POST /{id}/confirmer` est le SEUL endroit qui
+matérialise l'année suivante — crée la nouvelle `Inscription`, réactive
+l'élève, ET génère automatiquement les frais obligatoires (lecture
+`TarifClasse` de la classe cible, jamais un montant client, cohérent avec la
+correction Phase 1 de `generer_factures_classe`) dans la même transaction.
+**Décision assumée, différente de l'ancien système** : le paiement n'est plus
+une précondition à la confirmation (l'ancien système bloquait la réactivation
+tant que la facture n'était pas soldée) — confirmer facture immédiatement,
+le paiement suit ensuite le circuit normal (Encaissement). `PUT /{id}/statut`
+gère les 3 statuts terminaux (NON_REINSCRIT/TRANSFERE/ABANDON), aucun effet
+de bord.
+
+### 5. Bug préexistant corrigé au passage (retrofit, dans le même helper)
+`POST /api/eleves/inscription-complete` (inscription d'un nouvel élève,
+`eleves.py`) avait `annee_id=1` codé en dur, ne peuplait jamais
+`Facture.annee_id` (ajouté en Phase 1), et ne validait pas le montant envoyé
+contre `TarifClasse` — les 3 mêmes classes de bugs déjà corrigées en Phase 1
+pour `generer_factures_classe`, mais ce site d'appel avait été manqué.
+**Écart assumé par rapport au plan approuvé** : le plan prévoyait de réutiliser
+`_generer_frais_reinscription` "tel quel" ici, mais implémenter cela aurait
+supprimé la capacité existante (et voulue) du formulaire `/eleves/nouveau` de
+laisser l'admin sélectionner librement les frais facultatifs (cantine, etc.)
+à l'inscription — une régression réelle sur une fonctionnalité déjà
+documentée comme délibérée (voir entrée mémoire "reset scolarité" du
+03/08/2026 : "le formulaire d'inscription élève gère DÉJÀ correctement
+l'adhésion par frais"). Corrigé différemment : gardé la boucle de sélection
+client existante, mais validé chaque montant contre `TarifClasse` (400 si
+incohérent, comme `generer_factures_classe`) plutôt que de faire confiance
+au client, plus `annee_id`/`Facture.annee_id` corrigés et garde
+`_verifier_annee_modifiable` ajoutée. Frontend (`eleves/nouveau/page.tsx`)
+mis à jour pour envoyer le vrai `anneeId` du contexte au lieu de rien
+(retombait sur le défaut serveur `1`).
+
+### 6. Frontend (intégration minimale, pas le wizard — Phase 3)
+`classes/cloture-annee/page.tsx` reconstruite : "Calculer les résultats"
+(par classe + bulk) → tableau de revue (moyenne/points/rang/décision, action
+"Exclure" par ligne, sélection de filière avec résolution immédiate) →
+"Valider" (par classe + bulk), badge "Classe déjà validée" une fois fait.
+`comptabilite/reinscription/page.tsx` reconstruite contre `/api/reinscription/
+*` : 5 statuts avec badges dédiés, bouton "Confirmer" + "Transféré"/"Abandon"/
+"Non réinscrit", affichage informatif du statut de paiement une fois réinscrit
+(non bloquant, cohérent avec la décision du point 4).
+
+### 7. Vérification effectuée
+**Piège de relation SQLAlchemy trouvé et corrigé en cours de route** (voir
+point 1) — trouvé au premier test réel, pas par le sweep d'annotations
+(qui ne teste jamais de vraie requête ORM). Sweep annotations différées
+Python 3.14 (410 fonctions, 0 erreur), `npx tsc --noEmit` (0 erreur), test
+end-to-end complet sur données 100% synthétiques (3 élèves : promotion
+linéaire normale, override EXCLU, frontière filière avec blocage de
+validation puis déblocage après choix de série) couvrant tout le cycle
+calculer→ajuster→valider→confirmer réinscription→génération de frais, plus
+les cas négatifs (EXCLU ne peut jamais être confirmé, ABANDON ne crée aucune
+Inscription). Nettoyage complet vérifié après coup (réussi du premier coup
+cette fois, contrairement à Phase 1) ; vraie base (2801 élèves, année 1
+`EN_COURS`, 0 facture/paiement) confirmée intacte après coup.
+
+### ⚠️ Reste à faire — Phase 3 (session future, PAS commencée)
+Wizard visuel guidé en 10 étapes (chrome UI liant les étapes déjà construites
+en Phase 1 et Phase 2) et archivage automatique réel + centre d'historique
+(remplacement des pages `/archive/*` — `archive/eleve/[id]/page.tsx` a
+toujours des données d'inscription **codées en dur**, confirmé par relecture
+directe cette session).
+
+## Historique (sous-session précédente) — Refonte clôture d'année / réinscription / tarifs, Phase 1 "Fondations" (04/08/2026)
+Demande explicite et prescriptive de l'utilisateur : repartir sur une architecture
+propre pour la clôture d'année scolaire / réinscription / ouverture de nouvelle année
+(spécification en 11 points + wizard guidé 10 étapes). Vu l'ampleur (suppression de
+toute la logique existante + refonte complète demandée), passage en Plan Mode : 3
+agents Explore en parallèle, 3 questions de cadrage (AskUserQuestion), plan écrit et
+approuvé (`C:\Users\hp\.claude\plans\mighty-wiggling-moth.md`). **Décision de
+phasage actée avec l'utilisateur** : cette session livre uniquement le socle (Phase
+1 — "Fondations"), PAS le wizard complet ni la V2 de promotion/réinscription (Phase
+2, session future). `promotion.py`, `classes/cloture-annee`, `comptabilite/
+reinscription` (construits lors de sessions précédentes) sont donc restés
+**intacts et pleinement fonctionnels** — pas de trou dans les capacités existantes
+en attendant leurs remplaçants Phase 2.
+
+### 1. Modèle de données unifié — `AnneeScolaire` remplace `ExerciceComptable`
+Root cause identifiée par investigation (Explore) : deux notions d'« année »
+totalement déconnectées — `AnneeScolaire` (pédagogique) et `ExerciceComptable`
+(juste un champ statut OUVERT/CLOTURE, jamais relié à `Facture`/`Paiement`). Décision
+utilisateur (AskUserQuestion) : fusionner sous `AnneeScolaire`, qui devient l'unique
+entité "année" avec un cycle de statuts étendu : `PLANIFIEE` → `EN_COURS` →
+`CLOTURE_COMPTABLE` (nouveau) → `ARCHIVEE` (réservé Phase 2). Ajouté
+`AnneeScolaire.date_cloture_comptable` (Date, nullable). `ExerciceComptable` reste
+en base (table NON droppée, prudence sur données réelles) mais son seul rôle actif
+restant est l'ancrage fiscal du grand livre général (`EcritureComptable.exercice_id`,
+`_get_exercice()` dans `comptabilite.py`) — **investigation en cours de route a
+révélé que c'est un système bien plus profond que prévu au moment du plan** (utilisé
+par TOUS les rapports comptables SYSCOHADA : bilan, balance, grand livre, journaux)
+donc **NON retiré des imports** contrairement à ce que le plan initial prévoyait —
+seul l'ancien endpoint de clôture `POST /exercices/{id}/cloturer` (trivial, statut
+flip sans aucun verrouillage réel) a été supprimé, car remplacé par le nouveau
+mécanisme réel ci-dessous. `GET/POST /exercices` restent car nécessaires au cycle de
+vie du grand livre (orthogonal à cette refonte).
+- `Facture`/`Paiement` : ajout d'un `annee_id` dénormalisé direct (avant, seulement
+  atteignable via `Facture.inscription_id → Inscription.annee_id`) — nécessaire pour
+  un verrouillage fiable/performant. Backfillé par migration SQL directe (0 lignes
+  affectées : la base a actuellement 0 Facture/Paiement, cohérent avec le reset
+  scolarité d'une session précédente). Peuplé pour toute nouvelle facture/paiement
+  dans `create_facture`, `generer_factures_classe`, `create_paiement`.
+
+### 2. Vérification pré-clôture + clôture comptable réellement verrouillante
+Nouveau routeur `backend/app/api/annee_scolaire.py` :
+- `GET /api/annee-scolaire/{id}/verification-cloture` — contrôles BLOQUANT (tous
+  les trimestres CLOTURE ; un bulletin PUBLIE par élève actif × trimestre) et
+  AVERTISSEMENT (impayés en attente, salaires du mois courant non finalisés) ;
+  `peut_cloturer = tous les BLOQUANT passent`.
+- `POST /api/annee-scolaire/{id}/cloturer-comptabilite` — ré-exécute la
+  vérification (refuse 400 si un BLOQUANT échoue), sinon `statut =
+  CLOTURE_COMPTABLE` + `date_cloture_comptable = aujourd'hui`.
+- **Verrouillage réel** (nouveau, contrairement à l'ancien système qui ne faisait
+  QUE changer un statut sans rien empêcher) : `_verifier_annee_modifiable(db,
+  annee_id)` dans `finance.py`, appelé en garde par TOUTE mutation financière —
+  `create_facture`, `generer_factures_classe`, `create_paiement`,
+  `create_depense`, `approuver_depense`, `changer_statut_depense`,
+  `valider_depense`, `annuler_paiement`. Lève 403 si l'année est
+  `CLOTURE_COMPTABLE`/`ARCHIVEE`. Toute lecture (GET) reste libre.
+
+### 3. Copie des tarifs entre années + faille de validation corrigée
+- `POST /api/finance/tarifs/copier` (`finance.py`) — copie les `TarifClasse` d'une
+  année source vers une année cible, classe par classe appariée par `niveau_id`
+  (même logique que `preparer_classes_annee` en promotion). Idempotent (un tarif
+  déjà présent côté cible n'est jamais écrasé/dupliqué), modes `copier`/
+  `copier_editer`/`vide`.
+- **Faille corrigée en cours de route** (trouvée par l'investigation initiale, pas
+  explicitement demandée mais dans le périmètre "corriger `generer_factures_classe`
+  côté serveur") : cette fonction faisait confiance au montant envoyé par le
+  frontend SANS jamais le confronter au `TarifClasse` réellement configuré — un
+  montant incohérent (erreur ou client tiers) pouvait facturer silencieusement
+  toute une classe. Ajouté une validation stricte (400 si le montant envoyé diffère
+  du tarif configuré de plus de 0.01).
+
+### 4. Frontend — intégration minimale Phase 1 (pas le wizard complet)
+- `comptabilite/rapports/page.tsx` : ancien onglet "Clôture Annuelle" (piloté par
+  `ExerciceComptable`, un simple flip de statut sans rapport avec les vraies
+  données) entièrement remplacé — affiche maintenant les contrôles BLOQUANT/
+  AVERTISSEMENT de la vraie vérification, bouton de clôture actif seulement si
+  `peut_cloturer`.
+- `parametres/calendrier/page.tsx` : nouveau modal proposant les 3 options de
+  reprise des tarifs (reprendre / reprendre-et-modifier / vide), déclenché
+  automatiquement juste après la création d'une nouvelle année scolaire.
+
+### 5. Vérification effectuée
+Sweep annotations différées Python 3.14 (405 fonctions `app/api/*`, 0 erreur),
+`npx tsc --noEmit` frontend (0 erreur), et surtout un test end-to-end complet sur
+données 100% synthétiques (année/classe/élève/trimestre/bulletin/tarif/facture/
+paiement dédiés, codes `TST-PHASE1*`) couvrant les 2 scénarios clés : (1) blocage
+de la clôture tant que trimestre/bulletins incomplets → déblocage une fois
+complétés → clôture réussie → 403 sur toute nouvelle facture/paiement après coup ;
+(2) copie de tarifs entre deux années de test, idempotence vérifiée (2e appel : 0
+copie). **Nettoyage complet vérifié après coup** (script de nettoyage dédié
+exécuté deux fois — la 1ère tentative avait échoué sur l'ordre des FK
+`EcheanceFacture`→`Facture`, corrigé puis reconfirmé propre) ; la vraie base
+(2801 élèves, année 1 `EN_COURS`, 0 facture/paiement — état inchangé) n'a jamais
+été touchée.
+
+### ⚠️ Reste à faire — Phase 2 (session future, PAS commencée)
+Explicitement différé lors du cadrage avec l'utilisateur : calcul automatique des
+résultats scolaires (moyenne/rang/décision), promotions (7e→8e→9e→10e→attente
+filière, 11e→12e→Diplômé), cas spécial 10e année (choix SM/SS/SE), nouvelle V2 de
+réinscription (statuts À réinscrire/Réinscrit/Non réinscrit/Transféré/Abandon,
+indépendante de la promotion), génération des frais à la réinscription effective
+(pas à l'ouverture d'année), archivage automatique réel, centre d'historique
+consultation lecture seule, et le wizard guidé complet en 10 étapes. Le système
+existant (`promotion.py` + pages `classes/cloture-annee`/`comptabilite/
+reinscription`) reste la seule voie de clôture/réinscription jusqu'à ce que Phase 2
+livre leurs remplaçants — ne pas les supprimer avant.
+
+## Historique (sous-session précédente) — Clôture d'année (migration bulk), sync réglages bulletin, page Réinscription (04/08/2026, suite directe)
+Retour de test détaillé après un essai réel de clôture d'année par l'utilisateur (année
+cible "test") : activation nécessitant un reload, migration à 0 élève malgré la
+clôture, réglages Notation>Affichage sans effet sur le bulletin, et demande d'une
+page Réinscription dédiée côté comptabilité.
+
+### 1. Activation d'année nécessitait un reload manuel
+`AppContext.anneeId` n'était chargé qu'UNE FOIS au montage de l'app — `activateAnnee`
+(Paramètres > Calendrier) rafraîchissait bien SA PROPRE liste locale mais jamais le
+contexte global, donc le header/les filtres comptabilité/la page Classes restaient
+bloqués sur l'ancienne année jusqu'à un F5. Ajouté `refreshAnnee()` au contexte
+(`AppContext.tsx`), appelé après `activateAnnee`.
+
+### 2. Migration "0 élève" — la vraie cause : pas de clôture en masse
+Investigation sur la vraie base : l'année test (annee_id=9) avait bien ses 19 classes
+clonées (`préparer-classes` fonctionnait) mais **0 inscription** — la clôture n'avait
+jamais été exécutée. Cause : l'UI n'offrait qu'un bouton "Exécuter" PAR CLASSE (19
+clics requis, page `classes/cloture-annee`), aucun moyen de clôturer toute l'année en
+une fois. Ajouté `POST /api/promotion/annee/{source}/executer-tout` (bulk, factorise
+la logique via `_executer_cloture_classe_core` partagée avec l'endpoint par classe) +
+bouton "Clôturer TOUTES les classes" côté frontend. Testé avec des données isolées
+(promotion 7A→8A réussie, ancienne inscription ANNULEE/PROMU, nouvelle ACTIVE,
+élève INACTIF, effectif_actuel à jour) — nettoyé après coup, la vraie base (2801
+élèves, année 1) n'a PAS été touchée : c'est à l'utilisateur de relancer sa propre
+clôture test maintenant que le bouton bulk existe. L'année "test" (annee_id=9,
+actuellement active) a été laissée telle quelle — à l'utilisateur de décider quoi
+en faire.
+
+### 3. Badge redoublant
+`GET /api/classes/{id}/profil` renvoie maintenant `nb_redoublements` par élève
+(compte groupé sur `Inscription.decision_fin_annee == 'REDOUBLANT'`, une seule
+requête pour toute la classe) — affiché en badge orange "×N" sur la fiche classe.
+
+### 4. Réglages bulletin non synchronisés — cause root trouvée
+**Deux pages Paramètres écrivaient dans deux espaces de clés totalement disjoints :**
+Notation > Affichage Bulletins écrit `notation.display.*` (categorie NOTATION) ;
+Documents > Champs bulletin écrit `documents.champ_*` (categorie DOCUMENTS). Le PDF
+ne lisait QUE `documents.champ_*` — aucun des deux ne voyait les réglages de l'autre.
+Nouvelle fonction partagée `get_bulletin_display_flags()` (`evaluations.py`) qui
+fusionne les deux (`notation.display.*` prioritaire quand présent), appliquée
+PARTOUT où un bulletin est rendu : PDF, portail élève (`portail_eleve.py`), portail
+parent (`portail_parent.py`), ET la modale HTML de la page admin `/bulletins`
+(qui avait exactement le même bug, indépendamment du PDF). Ajouté des toggles
+RÉELS pour mention/appréciation/effectif (avant : rendus inconditionnellement dès
+que la valeur existait, sans lien avec aucun réglage). Vérifié par génération PDF
+réelle avec réglages désactivés puis réactivés + extraction de texte.
+
+### 5. Messages explicatifs du calcul
+Ajoutés sur `/notes` (Centralisation) et `/bulletins` (admin) — bannière violette
+avec la formule ET les vraies valeurs de pondération actuellement configurées
+(fetch `notation.poids_ecrit/oral/composition`), pas un texte figé.
+
+### 6. Pagination — nouveaux points corrigés cette session
+- `comptabilite/encaissement` : `searchResults.slice(0, 50)` codé en dur (les
+  résultats au-delà de 50 étaient invisibles, pas de moyen d'y accéder) → vraie
+  pagination.
+- `comptabilite/frais` (onglet Factures), `comptabilite/scolaire` (tableau
+  solvabilité, jusqu'à 2800 lignes sans AUCUNE limite) → paginés.
+- `comptabilite/rapports` : bug plus grave qu'un défaut de pagination — la
+  recherche d'élève téléchargeait les 50 premiers élèves (limite par défaut du
+  backend, jamais passée) et filtrait côté client, donc un élève au-delà des 50
+  premiers n'était **jamais trouvable**. Corrigé en déléguant la recherche au
+  paramètre `search` du backend (déjà supporté, jamais utilisé ici).
+- Portail enseignant (Mes Classes / Saisie des notes / Appel) et page Bulletins
+  admin (déjà en session précédente) — état partagé par écran, jamais par les
+  données SOUMISES (notes/présences restent construites sur la liste complète).
+
+### 7. Nouvelle page : Réinscription (`comptabilite/reinscription`)
+Feature demandée en détail par l'utilisateur : après une clôture d'année, les
+élèves promus/redoublants ont leur nouvelle inscription créée mais restent
+`Eleve.statut='INACTIF'` jusqu'à réinscription physique du parent. Nouveaux
+endpoints (`app/api/eleves.py`) :
+- `GET /api/eleves/reinscription/classe/{classe_id}` — liste les INACTIF ayant
+  une inscription ACTIVE dans cette classe, avec statut de paiement des frais de
+  réinscription (`TypeFrais.categorie == "Réinscription"`, code "REIN" — existe
+  déjà en base, catégorie confirmée).
+  - `PUT /api/eleves/{id}/reactiver` — **modifié** : bloque désormais (400) tant
+  que la facture de réinscription n'est pas soldée, sauf `force=true` explicite
+  (aucun appelant existant avant cette session, donc aucune régression). Testé
+  avec facture impayée (bloqué) puis payée (accepté) sur données isolées.
+  Page frontend avec sélecteur de classe, statut Réglé/Non réglé par élève,
+  bouton Activer désactivé si non réglé, pagination, lien vers Frais/Encaissement.
+
+### ⚠️ Point non résolu (signalé, pas trouvé)
+Coefficients de matière "différents" entre Notation et la page Matières — vérifié
+que les deux lisent/écrivent exactement la même colonne (`Matiere.coefficient_defaut`)
+via deux endpoints distincts mais équivalents ; aucune désynchronisation trouvée
+côté données. Reste possible : cache navigateur, ou l'assistant de déploiement de
+matières (`/matieres`, table `PROGRAMME_GUINEEN_UI` codée en dur) qui écraserait
+des coefficients personnalisés s'il est ré-exécuté après coup.
+
+## Historique (sous-session précédente) — Bug 422 (annotations différées Python 3.14) + pagination portails enseignant/bulletins (04/08/2026, suite directe)
+Retour de test immédiat après la session précédente : la page Centralisation
+avait toujours une erreur (plus un timeout cette fois — un 422), plus une
+demande de pagination étendue à d'autres écrans à fort volume.
+
+### Bug critique trouvé et corrigé : 422 sur `/api/evaluations/centralisees`
+Root cause = piège Python 3.14 documenté en tout début de ce fichier mémoire
+(voir section dédiée dans `PROJECT_MEMORY.md`) : `response: Response` utilisé
+sans `from fastapi import Response` dans `evaluations.py` — invisible à
+`py_compile`/`import main` à cause des annotations différées (PEP 649), n'a
+explosé qu'au premier vrai appel. Corrigé (import ajouté) + sweep complet des
+395 fonctions de `app/api/*` confirmant qu'aucune autre route n'a ce défaut.
+
+### Deuxième N+1 trouvé en creusant la demande de pagination : `get_bulletins_classe`
+Même classe de bug que la session précédente (Centralisation/Familles), pas
+encore corrigé jusqu'ici : `GET /api/evaluations/classe/{id}/bulletins`
+faisait 1 requête Bulletin + 1 Eleve + 1 BulletinLigne (+1 Matiere PAR ligne)
+PAR INSCRIPTION — ~2000+ requêtes pour une classe de 160 élèves. Réécrit en
+préchargement par lot, paginé (`skip`/`limit`, `X-Total-Count`), avec 3
+nouveaux headers (`X-Moyenne-Classe`, `X-Meilleure-Moyenne`,
+`X-Plus-Faible-Moyenne`, ajoutés à `expose_headers` dans `main.py`) pour que
+les KPIs de la page restent exacts sur l'ENSEMBLE de la classe même une fois
+la liste elle-même paginée. **0,48s pour 162 bulletins (était potentiellement
+plusieurs dizaines de secondes, jamais mesuré avant faute de le voir planter).**
+
+### Pagination ajoutée (élèves > 100/classe rendent ceci obligatoire partout)
+- Portail enseignant (`portail-enseignant/page.tsx`) : UN SEUL état de
+  pagination partagé (`elevesPage`, remis à 1 dans `loadClassEleves`, le point
+  d'entrée commun) appliqué aux 3 écrans qui affichent `classEleves` — Mes
+  Classes, Saisie des Notes, Appel. Important : les données SOUMISES
+  (`notesPayload`, `presences`) restent construites depuis `classEleves`
+  ENTIER (pas la page visible) — seul le RENDU est tronqué par page, jamais la
+  sauvegarde.
+- Page Bulletins (`bulletins/page.tsx`) : pagination serveur + KPIs classe
+  entière (voir ci-dessus).
+- Recherche texte sur les 3 pages listées ci-dessus (Centralisation, Bulletins)
+  : reste côté client, donc limitée à la page actuellement chargée — pas de
+  recherche serveur ajoutée cette fois (accepté comme compromis pragmatique,
+  le sélecteur de classe reste le filtre principal).
+
+### Investigué, non trouvé — à clarifier avec l'utilisateur
+- **Portail parent** : demande de paginer "la liste des élèves pour voir une
+  classe" — aucune fonctionnalité de ce type trouvée dans
+  `portail-parent/page.tsx` ni côté backend (`portail_parent.py`) ; le portail
+  parent ne montre que les enfants du parent connecté (1-3, jamais un effectif
+  de classe entière). Peut-être une confusion avec le portail enseignant (déjà
+  corrigé) ou une fonctionnalité qui n'existe pas encore — à préciser.
+- **Page Bibliothèque** : les listes d'élèves trouvées dans le portail
+  personnel par rôle (`personnel/portail/[role]/page.tsx`) sont déjà bornées
+  (`limit=120`, avec recherche) pour TOUS les rôles concernés (bibliothécaire,
+  vie scolaire, orientation) — aucune liste non bornée trouvée. Si le
+  ralentissement persiste, demander l'écran exact (URL/rôle connecté).
+
+## Historique (sous-session précédente) — Perf N+1 (Centralisation/Familles), formule Écrit/Oral/Composition configurable, bulletin PDF enrichi (04/08/2026, suite directe)
+Réponse directe au premier retour de test après le seed massif de 2801 élèves : deux
+pages complètement cassées par la nouvelle échelle (timeouts), plus une redéfinition
+précise de la formule de calcul fournie par l'utilisateur (remplace ma première
+implémentation de la session précédente) et un cahier des charges détaillé pour le
+bulletin PDF.
+
+### 1. Pages cassées par l'échelle (timeout 30s) — root cause : N+1 systématique
+Deux endpoints faisaient littéralement des milliers de requêtes SQL séparées (une
+par ligne à afficher) — fonctionnait avec les 21 notes/quelques dizaines de parents
+de test d'avant, s'effondre avec les vraies données (998 évaluations, 2753 parents) :
+- `GET /api/evaluations/centralisees` (page Centralisation des notes) : 6 requêtes
+  PAR évaluation (matière/classe/trimestre/enseignant/nb_notes/moyenne) → ~6000
+  requêtes. Réécrit en préchargement par lot (`IN (...)`) + agrégat SQL groupé,
+  paginé (`X-Total-Count` + `skip`/`limit`). **0,4s pour 998 évaluations.**
+- `GET /api/evaluations/classe/{id}/notes-centralisees` (vue détail classe) ET
+  `POST .../calculer-moyennes` : requêtes Evaluation+Note refaites PAR (élève ×
+  matière) → jusqu'à 9000 requêtes pour une classe de 160 élèves. Réécrit avec
+  préchargement en lot AVANT les boucles (`_precharger_notes()`, une requête pour
+  toutes les notes de la classe) — **la fonction `moyenne_matiere_eleve()` ne fait
+  plus AUCUNE requête DB**, elle prend un dict déjà chargé. Recalcul complet des
+  19 classes × 2 trimestres : **73s (était >15 min)**.
+- `GET /api/communication/parents/annuaire` (page Familles, "0 enfants" symptôme) :
+  jusqu'à 4 requêtes PAR parent → ~11000 requêtes pour 2753 parents, timeout →
+  `catch { setParents([]) }` côté frontend → page vide perçue comme "0 enfants".
+  Même traitement (préchargement en lot + pagination) + nouvel endpoint
+  `/parents/stats` (agrégats KPI globaux indépendants de la pagination).
+- **Leçon pour toute nouvelle vue "liste" future** : ne JAMAIS faire de requête DB
+  à l'intérieur d'une boucle sur des lignes à afficher — précharger par lot
+  (`.filter(X.in_(ids))`) puis indexer en dict Python. Cette classe de bug est
+  invisible avec des données de test (10-50 lignes) et invisible aux tests
+  manuels rapides — seulement révélée à l'échelle réelle.
+- Bug connexe corrigé au passage : `EleveParent.lien_parente` semé comme
+  "Père"/"Mère" (accentué, casse mixte) alors que toute la codebase (formulaire
+  `eleves/nouveau`, `LIEN_COLORS`) utilise la convention "PERE"/"MERE" (majuscule
+  sans accent) — normalisé en base (2747 lignes corrigées).
+
+### 2. Formule de calcul corrigée — remplace la V1 de la session précédente
+L'utilisateur a fourni une spécification précise, différente de ce qui avait été
+implémenté : le coefficient de la composition n'est PAS le coefficient de la
+matière (ex: Maths=4) — c'est une pondération FIXE et configurable séparément
+(défaut 2), strictement indépendante du coefficient matière. Formule officielle :
+- Moyenne de matière = (Écrit×W_e + Oral×W_o + Composition×W_c) ÷ (W_e + W_o + W_c),
+  défauts W_e=1, W_o=1, W_c=2 — le coefficient de la matière n'intervient PAS ici.
+- Moyenne générale = Σ(moyenne matière × coefficient matière) ÷ Σ(coefficients) —
+  c'est SEULEMENT à ce niveau que le coefficient de la matière (Maths=4, etc.) agit.
+- Si une catégorie n'a aucune note (pas d'oral dans cet établissement), elle est
+  exclue et le dénominateur se recalcule sur les catégories restantes — déjà le
+  comportement de `moyenne_matiere_eleve()`, inchangé.
+- **Configurable** : `get_poids_evaluations()` (`evaluations.py`) lit
+  `ss_parametres` catégorie NOTATION, clés `notation.poids_ecrit/poids_oral/
+  poids_composition` — nouvelle section dans Paramètres > Notation > Évaluations
+  & Poids, avec formule affichée en direct et bouton reset "standard guinéen (1/1/2)".
+  L'ANCIEN système "poids_pourcentage doit sommer à 100%" (par type Devoir/Interro/
+  etc.) existe toujours pour la gestion des libellés de types mais est maintenant
+  clairement étiqueté informatif — **il n'a jamais été branché au calcul réel**,
+  ce qui explique la confusion signalée ("135% au lieu de 100%, ne sauvegarde
+  jamais correctement") : ce n'était pas un bug de sauvegarde, juste une UI qui
+  laissait croire à tort que ce nombre avait un effet sur les moyennes.
+- Les 5586 bulletins ont été recalculés et republiés avec la formule corrigée.
+- Coefficients de matière : vérifié qu'il n'y a qu'UNE seule source de vérité
+  (`Matiere.coefficient_defaut`, lue et écrite identiquement par `/api/matieres`
+  et `/api/parametrage/matieres`) — aucune désynchronisation trouvée côté données ;
+  si l'utilisateur voit encore une différence, probablement le cache navigateur ou
+  l'assistant de déploiement de matières (`/matieres`, table `PROGRAMME_GUINEEN_UI`
+  codée en dur) qui réinitialiserait les coefficients personnalisés s'il est
+  ré-exécuté — à surveiller si le signalement persiste.
+
+### 3. Bulletin PDF enrichi selon le cahier des charges fourni
+`generer_bulletin_pdf()` (`evaluations.py`) — ajouté (le reste du bulletin existant
+jugé conforme par l'utilisateur, non retouché) :
+- Vrai logo établissement (`Etablissement.logo_url`, remplace le rectangle "LOGO"
+  placeholder qui traînait depuis toujours) + vrai cachet (`cachet_url`, tamponné
+  en rotation sous la signature du Directeur).
+- QR code de vérification (reportlab natif, `reportlab.graphics.barcode.qr` —
+  **aucune dépendance pip ajoutée**, l'environnement n'a pas d'accès réseau vers
+  PyPI). Encode bulletin_id + matricule + trimestre pour recoupement manuel.
+- Photo élève si `Eleve.photo_url` existe (aucun de mes 2801 élèves semés n'en a,
+  géré proprement — pas de placeholder cassé).
+- Tableau enrichi : colonnes ÉCR/ORAL/COMP (détail des 3 notes, pas seulement la
+  moyenne finale — `detail_categories_matiere()`, nouvelle fonction), PTS
+  (moyenne×coefficient), ligne TOTAUX (total coefficients / total points).
+- Meilleure et plus faible moyenne de la classe (agrégat sur tous les bulletins
+  de la classe/trimestre).
+- Taux de présence — affiché SEULEMENT si des `Presence` réelles existent pour
+  cet élève sur la période (32 lignes dans toute la base actuellement, aucune
+  pour mes élèves semés — jamais de taux fabriqué à partir de rien).
+- Graphique simple (barres horizontales) des performances par matière, élève vs
+  moyenne de classe.
+- Formule de calcul affichée dynamiquement (reflète les poids réellement
+  configurés, plus un texte figé).
+- Nouveau champ `Bulletin.appreciation_generale` (migration SQL appliquée) —
+  appréciation du Professeur Principal, retombe sur un texte auto-généré
+  (mention) si non saisie manuellement ; pas encore d'écran dédié pour la saisie
+  manuelle côté enseignant (à ajouter si l'utilisateur le demande).
+- Vérifié par génération réelle + relecture visuelle du PDF (pas seulement
+  extraction de texte).
+
+### 4. Pagination — pages à listes longues corrigées
+Conformément à la règle explicite ("toutes les pages où il y a une liste, une
+longue liste, doivent être paginées") :
+- `/familles` : pagination serveur réelle (était déjà paginée mais sur une liste
+  entièrement chargée côté client avant troncature).
+- `/notes` (Centralisation) : liste des évaluations paginée serveur ; vue détail
+  classe (tableau élèves × matières, jusqu'à 162 lignes) paginée côté client.
+- `/classes/{id}` (profil classe, onglet Élèves) : paginée côté client.
+- `/eleves` : déjà correctement paginée côté serveur (hook `useEleves` existant,
+  rien à faire).
+- Composant réutilisable `frontend/src/components/Pagination.tsx` (déjà créé la
+  session précédente pour la comptabilité) — c'est la référence à réutiliser pour
+  toute future liste longue dans l'app.
+
+## Historique (sous-session précédente) — Système de notation guinéen à 3 notes, filtre année comptabilité, seed massif réel (04/08/2026)
+Réponse directe à la clarification demandée en fin de session précédente (statut
+PUBLIEE/CENTRALISEE) + nouvelle vague de retours de test + demande explicite de
+peupler la vraie base avec des données réelles à grande échelle pour stress-tester
+le système ("je veux vraiment alourdir mon système pour voir si ça peut résister").
+
+### 1. Bug corrigé : Encaissement bloqué "déjà payé" même après nouvelle facture
+Root cause réelle (pas une régression du fix précédent `estReellementSolde`) :
+`frais/page.tsx` → `submitFacture()` (génération de factures) n'invalidait que la
+clé React Query `['frais-all']`, jamais `['encaissement-solvabilite']` (staleTime
+5 min) ni `['impayes']`/`['finance-dashboard']`. Un comptable qui génère une facture
+via Frais puis va sur Encaissement voyait donc des données PRÉ-facture pendant
+jusqu'à 5 min, déclenchant à tort le message "élève déjà réglé". Corrigé :
+`submitFacture` invalide désormais les 3 mêmes clés que `submitPaiement` le fait déjà.
+
+### 2. Bug corrigé : pages comptabilité non filtrées par année scolaire
+Root cause : quasiment tous les appels API des pages comptabilité (`encaissement`,
+`frais`, `paiements`, `salaires`) avaient `annee_id=1` codé EN DUR dans l'URL, au
+lieu de lire l'année courante depuis `AppContext` (`anneeId`, déjà alimenté par
+`GET /api/parametrage/annees`). Résultat : après clôture d'une année et activation
+d'une nouvelle, ces pages continuaient d'afficher indéfiniment les données de
+`annee_id=1`, quelle que soit l'année réellement active — d'où le signalement
+"les totaux ne se remettent pas à zéro après clôture".
+- Créé `frontend/src/components/AnneeFilter.tsx` (dropdown réutilisable, alimenté
+  par `AppContext.annees`, par défaut sur l'année courante).
+- Câblé sur **Encaissement, Frais, Impayés, Gestion des Paiements** : filtre
+  visible + bannière "année archivée" quand différent de l'année courante ; les
+  autres pages (`salaires`) corrigées pour au moins lire `anneeId` du contexte
+  au lieu de `1` en dur (déjà correctement dynamique pour `impayes`/`dashboard`).
+- Backend : `GET /api/finance/paiements` n'avait AUCUN filtre `annee_id` du tout
+  (mélangeait les paiements de toutes les années) → paramètre optionnel ajouté
+  (filtre via `Inscription.annee_id`, `None` = comportement inchangé si non fourni).
+- Vérifié directement (bypass HTTP, appel de fonction) : `annee_id=1` → 2801
+  élèves ; `annee_id=999` (inexistante) → 0 élève. Le filtre est réel, pas cosmétique.
+
+### 3. Système de notation guinéen à 3 notes (écrite/orale/composition) — clarifié
+et implémenté selon la description exacte de l'utilisateur
+Contexte : signalé précédemment un flou PUBLIEE/CENTRALISEE ; l'utilisateur a
+répondu en décrivant le VRAI fonctionnement attendu plutôt que de trancher entre
+les deux options proposées — la conception du moteur de calcul devait changer, pas
+juste un statut.
+- **Règle confirmée par l'utilisateur** : chaque matière/trimestre = exactement 3
+  notes officielles (écrite, orale, composition) envoyées à la centralisation.
+  L'enseignant peut saisir PLUSIEURS notes brutes dans une catégorie (ex: plusieurs
+  devoirs) ; seule la MEILLEURE de chaque catégorie compte (pas leur moyenne).
+- **Coefficient uniquement sur la composition** — `coefficient_pour_evaluation()`
+  (dupliqué intentionnellement dans `evaluations.py` et `portail_enseignant.py`,
+  modules indépendants) : si `TypeEvaluation.code == 'COMPO'`, coefficient =
+  celui configuré pour la matière (`ClasseMatiere.coefficient` ou
+  `Matiere.coefficient_defaut`) ; sinon coefficient = 1, **quoi que l'enseignant
+  saisisse** — appliqué côté serveur dans `create_evaluation` ET `saisir_notes`,
+  jamais un choix laissé au frontend.
+- **Moteur de calcul réécrit** : `moyenne_matiere_eleve()` (nouvelle fonction
+  partagée, `evaluations.py`) regroupe les évaluations centralisées d'un élève par
+  catégorie (composition / orale / écrite — cette dernière = tout sauf COMPO/ORAL),
+  retient la note la PLUS HAUTE par catégorie, puis moyenne pondérée des 3
+  catégories présentes (composition pondérée par le coefficient matière, écrite et
+  orale à poids 1 chacune). Remplace la logique dupliquée dans `calculer_moyennes`
+  ET `get_notes_centralisees_classe` (les deux utilisaient avant une simple
+  moyenne pondérée PAR ÉVALUATION individuelle, sans regroupement par catégorie).
+- Vérifié par recalcul manuel indépendant sur un échantillon réel (élève avec
+  1 note écrite, 1 absence à l'oral, 1 composition coef 3.0) : moteur et calcul
+  manuel donnent 10.94 — MATCH.
+- Note explicative du calcul mise à jour (PDF bulletin ReportLab + vue HTML
+  portail élève) pour refléter la vraie formule.
+- Portail enseignant (`portail-enseignant/page.tsx`, onglet Notes) : bannière
+  contextuelle sous le sélecteur de type d'évaluation — explique que le
+  coefficient s'applique automatiquement quand le type "Composition" est
+  sélectionné, et que la meilleure note est retenue en cas de saisies multiples
+  du même type. Pas de nouvelle case à cocher séparée — le sélecteur de type
+  existant (qui inclut déjà "Composition") EST le mécanisme demandé.
+
+### 4. Seed massif de données RÉELLES (pas des données de test jetables)
+Demande explicite et répétée : "Ce n'est pas un truc de test... tu dois rentrer
+dans notre base de données actuelle." Exécuté en 4 scripts séquentiels (supprimés
+après exécution, le RÉSULTAT en base est permanent) :
+- **Couverture enseignants 100%** : chaque (classe, matière) réellement programmée
+  (`ss_classe_matieres`) a désormais un enseignant affecté, plafond 3 matières
+  distinctes par enseignant par défaut, réutilisation prioritaire des enseignants
+  existants (5 sans affectation + capacité restante des autres) avant création —
+  seulement 1 nouvel enseignant créé (11 au total), 158 nouvelles affectations.
+- **2801 élèves actifs** (2747 nouveaux + 46 préexistants) répartis sur les 19
+  vraies classes (les 4 Collège qui avaient 10-13 élèves ET les 6 Primaire + 9
+  Lycée qui en avaient 0), chacune entre 132 et 162 élèves (cible "au moins 100"
+  largement dépassée, total ~2800 dans la fourchette 2000-3000 demandée). Chaque
+  élève a un parent réel (nom/téléphone/profession, lien père/mère) avec accès
+  portail immédiat (mot de passe par défaut du système = "smartschool", même
+  mécanisme que pour les élèves — aucun mot de passe à définir manuellement).
+- **146 544 notes** créées (996 évaluations : Devoir/Interrogation Orale/
+  Composition × chaque matière × chaque classe × T1 et T2), statut CENTRALISEE
+  directement (exploitables sans étape de centralisation manuelle), valeurs
+  générées avec une "capacité" par élève + bruit réaliste (pas des notes
+  uniformes ou aléatoires sans structure).
+- **5586 bulletins** calculés (`calculer_moyennes`, la vraie fonction de
+  production, pas une réimplémentation) puis **publiés** (`statut='PUBLIE'`,
+  requis pour être visibles côté portails élève/parent — sans quoi
+  `GET /portail-eleve/{id}/bulletin` renvoie `null` malgré des bulletins bien
+  calculés en base).
+- **Vérifié en conditions réelles** (serveur backend démarré temporairement,
+  arrêté après) : connexion élève (matricule + "smartschool") ✅, connexion
+  parent (téléphone + "smartschool") ✅, bulletin visible côté élève avec
+  moyennes/rang/mention ✅, génération PDF du bulletin avec la nouvelle formule
+  affichée ✅.
+
+### ⚠️ Reste à faire / non traité cette session
+- Lier les données d'années clôturées à la page `/archive` existante (explicitement
+  différé par l'utilisateur : "qu'on va retravailler plus tard").
+- Les 15 classes ARCHIVEE de test/scories restantes en base (`classe_id` 23-32,
+  39-42) n'ont pas été touchées (hors périmètre des "19 vraies classes") —
+  à nettoyer un jour si l'utilisateur le souhaite, mais actuellement inertes
+  (`statut='ARCHIVEE'`, jamais retournées par les listes actives).
+
+## Historique (sous-session précédente) — Module Promotion & Clôture d'année (03/08/2026, suite)
+**Démarré à la demande explicite de l'utilisateur** ("tu commences par ça") après
+une troisième vague de retours de test le même jour, couvrant plusieurs petits bugs
+concrets ET le lancement du plus gros chantier : clôture d'année scolaire + promotion
+des élèves (admis/redoublant/transfert/désactivation/réinscription), qui n'existait
+pas du tout avant cette session.
+
+### Bugs concrets corrigés
+1. **Carte enseignant affichant "ÉLÈVE"** — `BadgeCarte` se base sur `agent.role`
+   (absent → défaut "ÉLÈVE"). Le bouton "Voir la Carte" (fiche profil enseignant ET
+   listing) passait l'objet brut sans `role`. Corrigé aux deux endroits
+   (`enseignants/[id]/page.tsx`, `enseignants/page.tsx`) en injectant
+   `role: 'ENSEIGNANT'`, comme le fait déjà la vue grille qui fonctionnait.
+2. **Téléchargement de reçu portail parent en échec** — reproduit sans erreur avec
+   une facture réelle ; ajouté en prime un vrai bouton de téléchargement de REÇU
+   (pas seulement facture) sur chaque paiement de l'historique parent, endpoint déjà
+   existant mais jamais exposé côté UI parent.
+3. **En-tête "année scolaire" figée** — root cause réelle : DEUX lignes
+   `AnneeScolaire` marquées `est_courante='O'` simultanément (`create_annee` ne
+   désactivait jamais les autres si créée déjà "courante", contrairement à
+   `update_annee`/`activer_annee`). Corrigé côté backend + réactivé `annee_id=1` (qui
+   a toutes les vraies données : 19 classes, 2 trimestres, les seules notes
+   existantes) au lieu de `annee_id=2` (coquille vide) que j'avais activée par erreur
+   la fois précédente avant de comprendre où vivaient les vraies données.
+4. **Scan QR lent** — le scanner (`html5-qrcode`) n'était jamais restreint au format
+   QR (testait tous les formats de codes-barres à chaque frame) malgré l'import déjà
+   présent de `Html5QrcodeSupportedFormats` dans un des deux fichiers scanner ; ajouté
+   `formatsToSupport: [QR_CODE]` + contrainte de résolution caméra (720p) aux deux
+   scanners (élèves et personnel).
+5. **Message "destinataire incorrect"** depuis une fiche enseignant/élève —
+   `communication/page.tsx` acheminait TOUJOURS l'envoi via l'endpoint réservé aux
+   parents (`/messages-parents`, whitelist stricte), même pour `dest_type=ENSEIGNANT`
+   ou `ELEVE`. Corrigé : route vers l'endpoint générique `/messages` (déjà existant,
+   sans restriction) pour tout destinataire non-parent.
+6. **Élèves "déjà payés" sans aucune facture** (Encaissement) — `total_restant <= 0`
+   servait de proxy à "facture soldée", mais c'est aussi vrai pour "aucune facture
+   générée" (le cas de TOUS les élèves après le reset scolarité). Distingué via
+   `total_facture > 0 && total_restant <= 0`, avec message et affichage
+   ("Aucune facture") différents du cas réellement soldé.
+7. **Boucle infinie "Maximum update depth exceeded" (Encaissement)** — confirmée
+   persistante lors du re-signalement ; le fix précédent (mémoïser `allData`) tenait
+   bien, mais le VRAI second passage a permis de confirmer qu'aucune autre
+   instabilité ne subsistait dans ce fichier.
+8. **Erreur 500 à l'inscription d'un élève** — reproduction exacte du scénario
+   décrit (Terminale + scolarité + réinscription + uniforme + parent) directement en
+   base réelle : a réussi sans erreur. Cause racine non identifiée faute du texte
+   d'erreur exact — **en attente que l'utilisateur l'envoie**.
+
+### 🏗️ Nouveau module : Promotion & Clôture d'année (`backend/app/api/promotion.py`)
+Construit et testé de fond en comble (scénarios synthétiques isolés, jamais sur les
+vraies données, nettoyage complet vérifié après coup) :
+- **Séquence de promotion modélisée** : Primaire (1A→6A, linéaire) → Collège
+  (7A→10A, linéaire) → **branchement** vers le Lycée (choix de série SE/SM/SS à la
+  sortie de 10A) → linéaire au sein d'une série (11x→12x→Tx, écart d'ordre +3) →
+  Terminale = fin de cursus (DIPLOME, aucune classe suivante). `Niveau.ordre` est
+  scopé PAR CYCLE (pas global) — confirmé par lecture de la base réelle (19 classes,
+  pas 13 comme supposé par l'utilisateur ; le lycée a 3 séries parallèles).
+- **Décision admis/redoublant/diplômé** : lit enfin les réglages `notation.
+  redoublement_actif.{cycle}` / `notation.seuil_redoublement.{cycle}` (Paramètres >
+  Notation) — configurés depuis longtemps mais jusqu'ici jamais consultés par aucun
+  code. Moyenne annuelle = moyenne des `Bulletin.moyenne_generale` de tous les
+  trimestres de l'année pour l'inscription.
+- **`GET /api/promotion/classe/{id}/apercu`** — aperçu lecture seule (décision +
+  moyenne par élève, signale les cas nécessitant un choix de série) avant d'exécuter.
+- **`POST /api/promotion/classe/{id}/executer`** — transfert réel : nouvelle
+  inscription (classe suivante ou même classe si redoublant) sous l'année cible,
+  ancienne inscription clôturée avec `decision_fin_annee`/`moyenne_annuelle` renseignés
+  (colonnes qui existaient depuis toujours sans jamais être utilisées), désactivation
+  systématique de TOUS les élèves de la classe (promus compris) jusqu'à réinscription.
+  **Important, corrigé après un premier bug trouvé en testant** : si la classe cible
+  n'existe pas encore ou qu'une série Lycée n'a pas été choisie, l'élève concerné est
+  laissé INTACT (inscription toujours ACTIVE, pas désactivé) pour pouvoir relancer la
+  clôture plus tard sans élève "orphelin" (ancienne inscription annulée sans nouvelle
+  créée) — la première version faisait cette erreur, détectée et corrigée avant
+  validation finale.
+- **`POST /api/promotion/annee/{cible}/preparer-classes`** — clone la structure des
+  classes (niveau/code/libellé/capacité, PAS salle ni professeur principal — à
+  réassigner consciemment) d'une année source vers l'année cible ; nécessaire car
+  `Classe.annee_id` est propre à une année (pas d'entité "classe" persistante entre
+  années) — sans ça, aucun élève promu n'aurait de classe où atterrir l'année suivante.
+  Idempotent (vérifié par test double-appel).
+- **`PUT /api/eleves/{id}/reactiver`** — réactivation par le comptable à la
+  réinscription (le paiement des frais de réinscription utilise le mécanisme de
+  facturation individuelle déjà construit dans Auxiliaire).
+- **Auto-création des trimestres/semestres** (`create_annee`, lit
+  `calendrier.mode_decoupage`) et **clôture de trimestre** (`PUT /trimestres/{id}/
+  cloturer`, nouveau statut `CLOTURE`, avance automatiquement la période suivante en
+  `EN_COURS`, verrouille la création de nouvelles évaluations/notes pour la période
+  clôturée) — les deux fondations nécessaires avant même de pouvoir clôturer une année.
+- **Frontend** : bouton "Clôturer" par trimestre dans Paramètres > Calendrier ; nouvelle
+  page `/classes/cloture-annee` (choix année source/cible, préparation des classes,
+  aperçu par classe avec choix de série, exécution) reliée depuis `/classes`.
+- **Note explicative du calcul de moyenne** ajoutée sur le bulletin (PDF ReportLab +
+  vue HTML portail élève).
+
+### ⚠️ Trouvailles importantes NON corrigées — nécessitent une décision utilisateur
+1. **Statut PUBLIEE vs CENTRALISEE (`portail_enseignant.py`, `saisir_notes`)** — le
+   flux principal de saisie de notes ("Saisir des notes", `POST /{id}/notes`, appelé
+   activement par le frontend) crée les évaluations avec `statut="PUBLIEE"`, mais le
+   moteur de calcul des moyennes (`calculer_moyennes`, `evaluations.py`) ne compte QUE
+   les évaluations `statut="CENTRALISEE"`. Il existe un endpoint séparé
+   `.../centraliser` pour faire cette transition, mais rien n'indique clairement à
+   l'enseignant qu'il doit encore cliquer dessus après avoir "sauvegardé" ses notes —
+   risque réel que des notes saisies par les enseignants n'apparaissent jamais dans
+   les bulletins. **Décision à prendre** : centraliser automatiquement à la sauvegarde
+   (perd un éventuel contrôle de relecture), ou rendre le bouton "Centraliser" très
+   visible immédiatement après la saisie ?
+2. **Réglages Notation configurés mais jamais utilisés dans le calcul** :
+   `poids_pourcentage` par type d'évaluation (Devoir/Interro/Composition/Examen — le
+   calcul utilise en fait un coefficient libre par évaluation, sans rapport avec ces
+   pourcentages), `bareme` par cycle (toujours normalisé sur 20 en interne), `moyenne
+   de passage`, `mode de rang` (toujours par classe, jamais par niveau), `système de
+   lettres`. Seuls les seuils de mentions, les coefficients par matière, et
+   maintenant `redoublement_actif`/`seuil_redoublement` sont réellement branchés.
+3. **Couverture des données très faible** (confirmée par requêtes réelles) : 8
+   affectations enseignant↔matière↔classe sur 166 nécessaires (4,8%) ; 2 évaluations /
+   21 notes dans TOUTE la base (Chimie seulement, trimestre 1 seulement) ; les 9
+   classes de Lycée ont 0 élève inscrit (impossible d'y saisir des notes tant qu'aucun
+   élève n'y est inscrit) ; 17 des 33 matières n'ont AUCUN enseignant dont la
+   spécialité correspond (Anglais, Histoire, Géographie, Philosophie, Économie,
+   Biologie, Informatique...). **Semer des données de test réalistes reste à faire** —
+   rapport de l'écart exact déjà produit par l'investigation, prêt à être exécuté dès
+   que l'utilisateur confirme le périmètre souhaité (les 4 classes collège peuplées
+   seulement, ou aussi créer des enseignants fictifs + inscrire des élèves en Lycée ?).
+
+## Historique (sous-session précédente) — Deuxième vague de retours de test réels (03/08/2026, suite directe de la
+session précédente le même jour)
+
+L'utilisateur a continué ses tests après le reset scolarité et signalé plusieurs
+nouveaux problèmes concrets, plus des questions sur la clôture d'année/passage de
+classe (déjà cadrées comme feuille de route, pas encore commencées). Corrigé cette
+sous-session :
+1. **Boucle infinie "Maximum update depth exceeded" sur Encaissement (persistante)**
+   — `allData`/`classes` dans `encaissement/page.tsx` étaient dérivés par
+   `initialData?.allData || []` directement dans le corps du rendu : tant que la
+   requête React Query est en chargement (`initialData` undefined), cette expression
+   recrée un tableau vide à CHAQUE rendu, ce qui déstabilise les `useEffect` qui en
+   dépendent (`[searchQuery, filterClasse, allData]` et `[urlEleveId, allData]`) et
+   les fait boucler indéfiniment. Corrigé avec `useMemo(() => ..., [initialData])`.
+2. **Cantine/frais facultatifs facturés à toute une classe** — déjà traité la
+   sous-session précédente (garde-fou `forcer_optionnel` + facturation individuelle
+   par élève depuis Auxiliaire).
+3. **Élèves "déjà payés" alors qu'aucune facture n'a encore été générée** — même
+   fichier `encaissement/page.tsx` : `total_restant <= 0` était utilisé comme proxy
+   de "facture intégralement soldée", mais c'est AUSSI vrai quand `total_facture = 0`
+   (aucune facture générée). Résultat : après le reset scolarité (tous les élèves à
+   0 facture), l'écran affichait "100% payé" et bloquait l'encaissement pour tout le
+   monde avec le message trompeur "a déjà réglé l'intégralité de sa scolarité".
+   Corrigé : nouvelle condition `estReellementSolde = total_facture > 0 &&
+   total_restant <= 0`, message et affichage ("Aucune facture") distincts pour le cas
+   "pas encore facturé" vs "réellement soldé". `comptabilite/scolaire/page.tsx` avait
+   déjà le bon traitement (badge `AUCUNE_FACTURE` dédié) — seul `encaissement`
+   avait le bug.
+4. **Message "destinataire incorrect" depuis la fiche enseignant/élève** — les
+   boutons "Message" des fiches enseignant (`enseignants/[id]/page.tsx`) et élève
+   (`eleves/[id]/page.tsx`) redirigent vers `/communication?dest_type=ENSEIGNANT|
+   ELEVE&dest_id=...`, mais `communication/page.tsx` acheminait TOUJOURS l'envoi via
+   `POST /api/communication/messages-parents`, qui rejette tout `destinataire_type`
+   hors `PARENT/TOUS_PARENTS/CLASSE_PARENTS` (400 "destinataire_type invalide"). Le
+   bouton "Message" de la fiche PARENT (`familles/[id]/page.tsx`) fonctionnait
+   normalement (envoie bien `dest_type=PARENT`, dans la liste acceptée). Corrigé :
+   `handleSendParentMsg` route maintenant vers l'endpoint générique
+   `POST /api/communication/messages` (déjà existant, sans restriction de type) pour
+   tout destinataire non-parent.
+5. **Erreur 500 sur l'inscription complète d'un élève** — reproduction exacte du
+   scénario décrit (Terminale, scolarité + frais de réinscription + uniforme,
+   parent) tentée directement contre la base réelle : a réussi sans erreur. Cause
+   racine non identifiée faute du message d'erreur exact (l'utilisateur a dit
+   vouloir l'envoyer séparément) — **à reprendre dès réception du texte d'erreur
+   réel**, ne pas deviner davantage sans lui.
+6. **Emploi du temps absent pour Joseph Bangourah (Terminale, principal)** —
+   vérifié en base : 0 `CreneauEmploi` pour LUI sur SES 3 classes (pas seulement
+   Terminale), donc pas lié au nombre d'élèves comme il le supposait.
+   `Affectation` (assignation enseignant+matière+classe) et `CreneauEmploi`
+   (placement dans une plage horaire réelle) sont deux étapes séparées dans ce
+   système — seule la première a été faite pour cet enseignant. Pas un bug : il
+   faut compléter son emploi du temps via l'écran dédié.
+7. **Portail enseignant "Mes Paiements"** — vérifié : la fonctionnalité existe déjà
+   intégralement (backend `GET /{id}/paiements` + `GET /{id}/paiements/{bulletin_id}`
+   dans `portail_enseignant.py`, onglet "Mes Paiements" complet dans
+   `portail-enseignant/page.tsx` avec état vide explicite). L'impression de
+   l'utilisateur que "ça n'a pas été configuré" vient très probablement du fait que
+   TOUT l'historique de paie a été supprimé lors du reset payroll d'une session
+   antérieure (02/08) — l'onglet affiche donc normalement son état vide
+   ("Aucun paiement enregistré... apparaîtront ici après le premier versement").
+   Rien à corriger ici.
+8. **Clôture d'année scolaire / passage de classe — clarification demandée par
+   l'utilisateur, pas d'implémentation** : confirmé que (a) le bouton "Clôturer
+   l'exercice" (Comptabilité > Rapports) ne concerne QUE l'exercice comptable
+   (écritures, journaux), (b) l'année scolaire/trimestres sont configurables
+   (Paramètres > Calendrier, Section 2 terminée le 27/07/2026), MAIS (c) aucune
+   logique de promotion (admis/redoublant), transfert de classe, désactivation en
+   masse ou réinscription/réactivation n'existe — confirmé par grep exhaustif
+   (`decision_fin_annee`/`rang_final` sur `Inscription` sont des colonnes JAMAIS
+   lues ni écrites nulle part, de simples emplacements prévus mais jamais câblés).
+   Correspond exactement à la feuille de route déjà actée, pas encore commencée.
+
+### Anomalie corrigée en cours de route
+Une tentative de reproduction directe de l'erreur d'inscription (point 5) a créé un
+élève de test bien réel en base (`inscription_complete` commit en interne) ; sa
+suppression complète a elle-même révélé un bug latent distinct : `DELETE
+/api/eleves/{id}` ne supprime que la ligne `Eleve` sans gérer ses dépendances
+(`Inscription`, `Facture`, `EcheanceFacture`, `EleveParent`) — échoue avec une
+violation de contrainte FK dès qu'un élève a la moindre facture liée. Nettoyage
+manuel effectué en plusieurs étapes (échéances/factures d'abord, commit séparé,
+puis inscription/élève/lien parent). **Non corrigé** (hors périmètre de cette
+session, mais à garder en tête pour la feuille de route "suppression définitive
+après non-réinscription" — cet endpoint devra être revu à ce moment-là).
+
+## Historique (sous-session précédente) — Retours de test réels post-analyse + reset scolarité + feuille de route
+(03/08/2026, suite directe de l'analyse complète du 01/08/2026)
+
+Après l'analyse complète ci-dessous, l'utilisateur a testé en conditions réelles et
+signalé 6 problèmes concrets, plus une longue liste de fonctionnalités à traiter
+**après** la comptabilité (explicitement mise en pause par l'utilisateur : "pour
+l'instant on s'occupe de la page comptabilité").
+
+### Corrigé cette session
+1. **Tarif de classe modifié → aucun effet sur les factures déjà générées mais
+   impayées** — `PUT /api/finance/tarifs-classe` ne touchait que `ss_tarifs_classe`,
+   jamais les `Facture` déjà émises. Ajout de `_repercuter_tarif_sur_factures()`
+   (`backend/app/api/finance.py`) : pour les élèves actuellement inscrits dans la
+   classe, avec une facture non soldée (`statut != PAYEE`) du type de frais modifié,
+   `montant_total/montant_net/montant_restant` sont recalculés (la remise fratrie
+   déjà appliquée est conservée en valeur absolue), et les échéances NON encore
+   soldées absorbent la différence au prorata de leur poids actuel (une échéance déjà
+   payée n'est jamais retouchée). Testé réellement avec une facture partiellement
+   payée à 2 tranches : la tranche payée reste intacte, la tranche restante absorbe
+   tout l'écart.
+2. **Avance/prime ajoutée non visible dans "Calcul des salaires" / "Salaire à
+   payer"** — root cause confirmée en base réelle : `selectedMonth` dans
+   `salaires/page.tsx` était codé en dur à la chaîne littérale `'2026-06'` (au lieu de
+   calculer le mois réel courant, comme le fait déjà `salairesMois` dans
+   `paiements/page.tsx`). Toutes les primes/avances test de l'utilisateur (3 primes,
+   5 avances, retrouvées en base) étaient bien enregistrées sous `mois_concerne =
+   '2026-06'`, jamais sous le mois réel affiché ailleurs. Corrigé (calcul dynamique du
+   mois courant) ; les primes/avances déjà saisies par l'utilisateur ont été migrées
+   de '2026-06' vers le mois réel courant pour qu'il les retrouve immédiatement sans
+   avoir à ressaisir son test.
+3. **Modes de paiement ajoutés dans Paramètres invisibles dans les formulaires
+   d'encaissement/décaissement** — confirmé : `parametres/finance/page.tsx` persiste
+   bien `finance.modes_paiement` (vérifié en base : l'utilisateur y avait déjà ajouté
+   "PAYPAL" et "TEST"), mais `paiements/page.tsx`, `encaissement/page.tsx`,
+   `frais/page.tsx` et `dashboard/page.tsx` avaient chacun leur PROPRE liste codée en
+   dur (4 copies mutuellement incohérentes). Créé `frontend/src/lib/modesPaiement.ts`
+   (fetch + labels partagés) et branché les 4 pages dessus — un mode ajouté dans
+   Paramètres apparaît désormais partout.
+4. **Reçu incomplet** (constat détaillé de l'utilisateur : pas de logo, pas
+   d'indication du type de frais, pas de suivi de tranche) — le PDF
+   (`generer_recu_pdf`, `backend/app/api/finance.py`) dessinait un rectangle
+   "LOGO" statique au lieu de lire `Etablissement.logo_url` + le réglage
+   `documents.entete_logo` (déjà utilisé pour les bulletins) ; n'affichait jamais le
+   libellé du type de frais ; n'indiquait jamais quelle tranche était réglée ni un
+   récapitulatif des tranches antérieures. Les 4 corrigés et testés réellement (PDF
+   généré + texte extrait avec `pypdf`, y compris le cas "dernière tranche sur 2" avec
+   récapitulatif de la tranche précédente). Le même récapitulatif des règlements
+   antérieurs a aussi été ajouté à la prévisualisation écran (`encaissement/page.tsx`,
+   qui recevait déjà `historique_paiements` du backend mais ne l'affichait jamais).
+5. **Frais facultatifs (cantine) facturés à des familles n'ayant pas adhéré** — root
+   cause : le formulaire d'inscription élève (`frontend/src/app/eleves/nouveau/
+   page.tsx`) gère DÉJÀ correctement l'adhésion par frais (case à cocher par type de
+   frais, facultatifs décochés par défaut, seuls les frais cochés génèrent une
+   facture) — ce mécanisme n'était pas cassé. Le vrai bug : la génération groupée
+   "pour toute la classe" (`POST /factures/generer-classe`) facturait TOUJOURS tous
+   les élèves de la classe, y compris pour un type de frais FACULTATIF (confirmé avec
+   "cantine", réellement marquée facultative en base) — imposant la cantine à des
+   familles n'y ayant jamais adhéré. Corrigé : `generer_factures_classe` refuse
+   désormais par défaut de générer en masse un frais facultatif (message clair
+   expliquant pourquoi), sauf confirmation explicite (`forcer_optionnel`, avec
+   confirm() côté frontend). Ajouté en complément un moyen de facturer un frais
+   individuellement à UN élève précis (bouton "+ Ajouter un frais" dans la fiche de
+   compte élève, Auxiliaire) pour couvrir le cas d'une adhésion tardive à un service
+   facultatif, sans devoir l'imposer à toute la classe.
+6. **Synchronisation portails parent/élève** — vérifiée saine : les deux portails
+   (`backend/app/api/portail_eleve.py`, `backend/app/api/portail_parent.py`)
+   interrogent directement les tables `Facture`/`Paiement` de l'inscription active,
+   sans couche de cache ni logique dupliquée/divergente — donc une fois le bug du
+   point 5 corrigé, les portails cesseront naturellement d'afficher les frais
+   facultatifs non adhérés (même source de vérité que l'admin).
+
+### Reset supplémentaire effectué sur demande explicite
+Toutes les données de paiement de scolarité (élèves) supprimées pour repartir de
+zéro pendant que l'utilisateur teste lui-même la configuration des tarifs par
+classe : sauvegarde JSON complète prise avant suppression
+(`<scratchpad session>/scolarite_backup_before_reset.json` — 102 factures, 92
+échéances, 47 paiements, 14 écritures comptables liées avec leurs lignes). Supprimé
+ensuite : toutes les `Facture`, `EcheanceFacture`, `Paiement`, et les
+`EcritureComptable`/`LigneEcriture` associées (identifiées via les lignes taguées
+`eleve_id`, aucune ligne mixte trouvée). **Non touché** : `TarifClasse`/`TypeFrais`
+(config que l'utilisateur va tester), toutes les données de paie (`BulletinPaie`,
+`Depense` catégorie SALAIRES — déjà remises à zéro lors d'un reset précédent, non
+redemandé cette fois). Cache Redis du tableau de bord vidé manuellement après coup
+(le reset a été fait par script direct sur la base, pas via l'API, donc
+l'invalidation automatique par mutation ne s'était pas déclenchée).
+
+### Anomalie détectée et corrigée en cours de route (process, pas produit)
+Un test de fumée effectué plus tôt dans cette session (`create_facture` appelé
+directement pour vérifier la facturation individuelle par élève) avait committé
+réellement en base malgré un `db.rollback()` explicite après coup — la fonction
+appelle `db.commit()` en interne, donc le rollback ultérieur ne pouvait plus rien
+annuler. Repéré en auditant les données avant le reset scolarité (une écriture
+"mixte" inattendue), nettoyé explicitement (facture, échéance, écriture, lignes)
+avant de procéder au reset. Retenu pour la suite : ne jamais compter sur
+`db.rollback()` après l'appel d'une fonction qui commit en interne — nettoyer
+explicitement par suppression + commit à la place.
+
+## 📋 FEUILLE DE ROUTE — Prochaine grande phase (après validation comptabilité)
+Décrite explicitement par l'utilisateur comme la suite, PAS à traiter maintenant :
+
+1. **Module Évaluations** — les enseignants saisissent les évaluations/notes
+   ("tatouilles" mentionné, à clarifier avec l'utilisateur — probablement un terme
+   local ou une transcription approximative pour un type d'évaluation).
+2. **Clôture d'année scolaire** — pour chaque classe : un bouton/section pour voir
+   les admis vs les redoublants. Un bouton "Transfert" fait passer tous les admis
+   d'une classe à la classe suivante du même cycle (ex: 9e → 10e). Les redoublants
+   restent dans la classe actuelle.
+3. **Désactivation en masse à la clôture** — au moment de la clôture/transfert, TOUS
+   les élèves (admis transférés et redoublants) sont désactivés. Un élève désactivé
+   reste visible dans sa classe (supérieure ou actuelle) mais aucune action ne lui est
+   autorisée tant qu'il n'est pas réactivé.
+4. **Réinscription / réactivation** — quand un parent vient réinscrire son enfant
+   pour la nouvelle année : le comptable encaisse les frais de réinscription (et/ou
+   une tranche de scolarité) puis réactive l'élève. Un élève réactivé redevient
+   pleinement utilisable dans le système.
+5. **Suppression définitive après non-réinscription prolongée** — après plusieurs
+   mois sans réinscription, l'admin doit pouvoir supprimer définitivement un élève de
+   la base (parti dans une autre école).
+
+Aucun de ces points n'a été commencé — à cadrer avec l'utilisateur (notamment le
+sens exact de "tatouilles" en point 1, et si le cycle de classes/succession de
+niveaux est déjà modélisé quelque part) avant de commencer l'implémentation.
+
+## Historique (sous-session précédente) — Analyse complète finale du module
+Comptabilité, demandée explicitement par l'utilisateur avant ses propres tests
+(01/08/2026, suite directe de la session précédente)
+
+L'utilisateur a demandé, après avoir validé les fonctionnalités de la sous-session
+précédente (arriérés multi-mois, prix par classe, reset des données), une **analyse
+complète** du module pour détecter toute erreur d'API, de communication front/back ou
+TypeScript avant de tester lui-même et de donner la tâche suivante. Exécuté via un
+Workflow de revue adversariale (8 zones, find→verify) qui a remonté 22 findings
+confirmés, puis corrigés un par un avec tests réels contre la base Postgres de dev à
+chaque étape (pas de simple relecture de code).
+
+### Corrections appliquées cette session (par sévérité)
+**CRITIQUE**
+- Bouton rapide « Payer ce mois » sur chaque ligne de la liste Salaires payait avec
+  `moisSelectionnes` (état partagé du panneau détaillé), donc pouvait régler les mois
+  cochés pour un AUTRE employé dont le panneau était resté ouvert. Isolé dans un
+  helper `payerMoisPourEmploye(ens, moisList)` commun, avec deux appelants distincts :
+  le bouton rapide passe désormais `[salairesMois]` (mois affiché uniquement), le
+  panneau détaillé passe `moisSelectionnes`.
+- `POST/PUT /api/finance/employes` et `PUT /api/finance/employes/{id}/statut`
+  n'existaient pas côté backend alors que `salaires/page.tsx` les appelait — mais
+  investigation a montré que ce code (`handleCreateOrUpdateEmp`/`handleToggleStatut`)
+  n'était en réalité JAMAIS déclenchable depuis l'UI (aucun élément ne mettait
+  `showEmpForm`/`editingEmp` à une valeur non-null). Code mort supprimé plutôt que
+  d'inventer des routes pour une fonctionnalité volontairement lecture-seule côté
+  comptable (la gestion réelle du personnel vit dans `/personnel`).
+
+**ÉLEVÉ**
+- `GET /api/comptabilite/pin/status` et `PUT /api/comptabilite/pin` appelés par
+  `profil/page.tsx` mais totalement absents du backend → implémentés (comparaison
+  PIN actuel, validation longueur minimale).
+- `profil/page.tsx` : widget de changement de PIN doublement cassé — ancien PIN
+  deviné en dur (`'123123'`) sans champ de saisie réel, et un `.catch(() => {})`
+  interne masquait tout échec au `try/catch` englobant → toast de succès affiché même
+  en cas d'échec réel. Refait avec un vrai champ de saisie et une gestion d'erreur
+  honnête.
+- `DepenseOut` (schéma Pydantic) n'exposait ni `reference` ni `description`
+  (`description` alias sur la colonne réelle `libelle`) → ces champs n'apparaissaient
+  jamais dans la liste des décaissements malgré leur présence en base.
+- Fiche Élève (`rapports/page.tsx`) et Auxiliaire (`auxiliaire/page.tsx`) : en cas
+  d'échec de recherche/sélection, les données de la fiche PRÉCÉDENTE restaient
+  affichées sous le nouvel élément sélectionné/surligné (aucune remise à `null` avant
+  le fetch). Corrigé dans les deux pages ; Auxiliaire reçoit en plus un message
+  d'erreur visible (avant : `console.error` silencieux).
+- `GET /api/comptabilite/auxiliaire/fournisseurs` et `.../parents-eleves` n'avaient
+  aucun paramètre `search` — le frontend filtrait côté client sur les 25 lignes de la
+  page chargée seulement, donc une correspondance au-delà de la première page était
+  invisible. Paramètre `search` ajouté aux deux endpoints (filtre nom/code pour
+  fournisseurs ; nom/prénom/matricule/classe pour parents-élèves, cette dernière sur
+  la liste assemblée après jointure car la classe n'est connue qu'à ce stade) ; le
+  filtrage client redondant a été retiré du frontend. Pastilles d'onglet corrigées
+  pour utiliser les vrais totaux (`X-Total-Count`) au lieu de la taille de page
+  chargée. Changement d'onglet corrigé pour réinitialiser la sélection des DEUX
+  onglets (pas seulement celui qu'on quitte).
+- Panneau d'arriérés (`paiements/page.tsx`) : un échec réseau du fetch des arriérés
+  était rendu de façon identique à « aucun arriéré » (message vert « à jour »).
+  État d'erreur distinct ajouté (message rouge explicite).
+- Statut « Non payé » resté affiché dans Salaires après un paiement effectué depuis
+  la redirection vers le Centre de Décaissement : `paiements/page.tsx` n'utilise pas
+  React Query pour ses propres données et n'invalidait donc jamais les clés
+  `['salaires-employes']`/`['salaires-calculer']` que `salaires/page.tsx` lit. Ajout
+  de `useQueryClient()` + `invalidateQueries` sur ces deux clés après un paiement de
+  salaire réussi (le `QueryClient` est un singleton partagé par toute l'app via
+  `QueryProvider.tsx`, donc l'invalidation traverse bien les deux pages).
+
+**MOYEN**
+- `mode_paiement` envoyé par le formulaire Fournisseur du Centre de Décaissement
+  vers `/reglements-fournisseurs` mais silencieusement jeté (colonne absente sur
+  `Depense`) → colonne ajoutée (migration
+  `database/migrations/2026_08_03_depenses_mode_paiement.sql`, appliquée sur la base
+  de dev réelle et vérifiée), modèle/schéma/endpoint mis à jour, testé de bout en
+  bout (création réelle + relecture + suppression du test).
+- Le clic sur une carte élève dans l'onglet « Reçus & Soldes » appelait directement
+  `api.get(...)` en inline au lieu du helper `fetchSoldeEleve` (qui gère
+  `soldeLoading`) — aucun retour visuel pendant le chargement, risque de double-clic.
+  Remplacé par un appel au helper existant.
+- Le tableau de bord financier (cache Redis, TTL 60s) n'était jamais invalidé après
+  une mutation (encaissement, décaissement, salaire...) — un paiement pouvait ne pas
+  apparaître sur le dashboard pendant jusqu'à 60s. Ajout de `cache_del()` dans
+  `backend/app/core/cache.py` + appel `_invalidate_dashboard_cache()` après chaque
+  mutation financière (`create_paiement`, `create_facture`, `create_depense`,
+  `changer_statut_depense`, `valider_depense`, `creer_reglement_fournisseur`,
+  `_executer_paiement_salaire`). Testé réellement : cache chaud → mutation → cache
+  vide confirmé.
+- Encaissement et Frais (deux écrans différents pouvant tous deux enregistrer un
+  paiement de scolarité) n'invalidaient pas la clé React Query de l'AUTRE écran — un
+  paiement fait sur l'un ne rafraîchissait pas la liste solvabilité/frais de l'autre
+  au retour. Invalidation croisée ajoutée dans les deux sens.
+- Bulletin de salaire imprimé : `type_contrat` était codé en dur à `"CDI"` dans
+  `_identifier_employe()` au lieu de lire le vrai champ (existant) sur
+  `Enseignant`/`Utilisateur` ; `bulletin_detail_endpoint` ne renvoyait même pas ces
+  champs au frontend alors que celui-ci les affiche déjà (`bulletinDetails.employe.
+  type_contrat`/`mobile_money`). Corrigé des deux côtés (`mobile_money` reste `None` :
+  aucune colonne dédiée n'existe pour ce numéro, pas de donnée à en tirer).
+
+### Corrigé en amont dans cette même session, avant la revue finale
+(Voir aussi l'historique plus bas pour le détail complet des sous-sessions
+précédentes du même jour : prix de scolarité par classe, arriérés multi-mois, reset
+des données de paie, module Paramètres salaires, etc.)
+
+### Anomalie corrigée en cours de route (hors périmètre de la demande)
+`docs/comptabilite/module-comptabilite.md` (cahier des charges aspirationnel, que
+l'utilisateur avait dit d'ignorer comme périmètre de travail — pas de le supprimer)
+s'est retrouvé supprimé du disque à un moment de la sous-session précédente
+(disparu entre le début et la fin de cette conversation, sans trace d'une suppression
+volontaire documentée). Restauré depuis `HEAD` par précaution ; à confirmer avec
+l'utilisateur si une suppression était réellement voulue.
+
+### Tests exécutés
+- `py_compile` sur l'ensemble de `backend/app/` (44 fichiers) + import complet de
+  `main.py` (342 routes, 0 erreur) après chaque lot de modifications.
+- Chaque endpoint touché testé en exécution directe contre la vraie base Postgres de
+  dev (pas de mock) : recherche auxiliaire (fournisseurs/parents-élèves, y compris un
+  cas confirmant qu'un second « DIALLO » invisible sur la page 1 est bien trouvé),
+  `creer_reglement_fournisseur` avec `mode_paiement` (persistance vérifiée), cache
+  dashboard (chaud → invalidé après mutation, vérifié), `bulletin_detail_endpoint`
+  avec `type_contrat` réel — tous les artefacts de test nettoyés après coup pour
+  laisser la base dans l'état pristine attendu par l'utilisateur.
+- `npx tsc --noEmit` sur tout le projet frontend : 0 erreur (plusieurs passages,
+  après chaque lot de fichiers modifiés).
+- `npm run lint` sur tout le projet : 0 erreur, 1030 warnings préexistants (bruit
+  `any`/imports inutilisés déjà présent partout, aucun nouveau).
+
+## Historique (sous-session précédente, même jour)
+**Fonctionnalités salaires/frais avancées + reset des données de paie (02/08/2026, suite)**
+
+### Ajouts de cette sous-session
+1. **Prix de scolarité différents par classe** (`frais/page.tsx`) — la génération de
+   factures permet désormais de cocher plusieurs classes avec un **montant propre à
+   chaque classe** (au lieu d'un seul montant partagé pour toutes les classes cochées).
+   Bouton "Appliquer le montant par défaut à toutes les cochées" pour aller vite quand
+   les montants sont identiques. Le tableau d'échéances manuel a été retiré (n'avait
+   plus de sens avec des montants variables) — les échéances sont maintenant générées
+   automatiquement par classe à partir du fractionnement choisi.
+2. **Reset complet des données de paie (base de dev)** — sur demande explicite, avec
+   sauvegarde JSON préalable
+   (`scratchpad/payroll_backup_before_reset.json`) : tous les `BulletinPaie` (5),
+   toutes les `Depense` catégorie SALAIRES (21) et leurs écritures comptables `SAL-*`
+   (5) supprimés ; avances `DEDUITE` repassées `EN_ATTENTE` (2) ; `salaire_base` mis à
+   2 500 000 GNF pour tous les enseignants (9) et tout le personnel (5) sans exception
+   de rôle/statut.
+3. **Arriérés multi-mois pour le paiement de salaire** — nouveaux endpoints
+   `GET /api/finance/salaires/arrieres/{employe_id}` (liste les mois impayés des 12
+   derniers mois avec net à payer chacun) et
+   `POST /api/finance/salaires/payer-plusieurs-mois` (règle une sélection de mois en
+   une seule action). Le formulaire Salaire du Centre de Décaissement affiche
+   désormais une liste à cocher de tous les mois en retard (tous cochés par défaut,
+   décochables individuellement) avec un total qui se met à jour, au lieu d'un seul
+   mois figé sur le calendrier sélectionné.
+4. **Garde-fou date de paie** — si le mois en cours fait partie de la sélection et que
+   la date de paie officielle (Calendrier de paie) n'est pas encore arrivée, une
+   confirmation est demandée avant de payer en avance (pas un blocage dur).
+5. **Section "Salaires" retirée du formulaire générique "Nouveau Décaissement"** — les
+   salaires ne se paient plus que via la carte dédiée "Salaires" (Centre de
+   Décaissement), plus du tout via le sélecteur de catégorie du formulaire générique à
+   montant libre (source de la confusion signalée précédemment).
+6. Re-vérifié : "Envoyer alerte forcée" persiste bien une trace visible immédiatement
+   dans le tableau de "Calendrier de paie" (test réel, artefacts de test nettoyés
+   ensuite).
+
+### Tests exécutés
+- `py_compile` + import complet (338 routes, 0 erreur).
+- `payer_plusieurs_mois_endpoint` testé réellement : paiement partiel de 2 mois sur 12
+  choisis manuellement, arriérés recalculés correctement après (10 mois restants) —
+  données de test nettoyées après coup pour laisser la base dans l'état pristine du
+  reset.
+- `alertes_endpoint`/`alertes_historique_endpoint` testés réellement (l'alerte envoyée
+  apparaît bien dans l'historique) — données de test nettoyées après coup.
+- `npx tsc --noEmit` : 0 erreur. `npm run lint` : 0 erreur (1021 warnings préexistants).
+
+## Historique (session précédente, même jour)
+**Restructuration du module Comptabilité suite aux retours d'usage réel (02/08/2026)**
+
+### Contexte
+Après la correction exhaustive de bugs du 01/08/2026 (voir `.ai/PROJECT_MEMORY.md`),
+l'utilisateur a testé le module en conditions réelles et est revenu avec une liste de
+retours concrets — pas des bugs supplémentaires cette fois, mais des demandes de
+réorganisation/nettoyage de flux qui se chevauchaient ou créaient de la confusion.
+
+## ✅ Réalisé cette session
+
+1. **Auto-refresh après encaissement** — `encaissement/page.tsx` et `frais/page.tsx`
+   n'invalidaient que leur propre cache React Query après un paiement. Un paiement fait
+   depuis Impayés → Encaisser → payer ne rafraîchissait jamais la liste Impayés ni le
+   Dashboard au retour. Les deux pages invalident désormais aussi `['impayes']` et
+   `['finance-dashboard']`.
+
+2. **Types de frais — génération multi-classes + fractionnement automatique**
+   (`frais/page.tsx`) — le champ « obligatoire » existait déjà (rien à faire). Ajouté :
+   sélection de plusieurs classes par cases à cocher (au lieu d'une classe à la fois,
+   un appel à `POST /factures/generer-classe` par classe cochée, endpoint déjà
+   idempotent) + auto-remplissage du montant et du nombre d'échéances à partir de la
+   fréquence du type de frais choisi (mensuel→10, trimestriel→3, unique/annuel→1),
+   modifiable manuellement ensuite comme avant.
+
+3. **Écart net à payer vs historique corrigé** — `_calculer_salaire()`
+   (`backend/app/api/finance.py`) recalculait TOUJOURS en direct depuis les tables
+   primes/absences/avances, même pour un mois déjà payé : ajouter une prime après coup
+   pour ce même mois faisait dériver le montant affiché loin de ce qui avait réellement
+   été versé (bulletin figé). Corrige : si un `BulletinPaie` existe et est `PAYE`, ses
+   valeurs figées sont retournées telles quelles, plus de recalcul.
+
+4. **Calendrier de paie — historique des alertes** — `GET/POST /salaires/alertes*`
+   étaient des stubs (toujours vides / faux succès). Implémentés réellement : l'envoi
+   calcule la vraie liste des employés non payés du mois et persiste la trace (via le
+   modèle `Message`, même mécanisme que les rappels d'impayés) ; l'historique lit
+   désormais ces vraies traces au lieu de renvoyer `[]`.
+
+5. **Page Dépenses supprimée** (`comptabilite/depenses/page.tsx`, 827 lignes) —
+   faisait doublon avec Paiements > Centre de Décaissement (deux façons de payer un
+   salaire, confusion). Justificatif de facture (upload réel via
+   `POST /upload-justificatif`) et suivi analytique (classe + département) + source des
+   fonds (caisse/banque/mobile money) déplacés dans le formulaire Fournisseur du Centre
+   de Décaissement (`paiements/page.tsx`), visibles uniquement pour la catégorie
+   FOURNISSEUR. Lien de menu retiré (`comptabilite/layout.tsx`).
+   - **Perte de capacité identifiée et partiellement compensée** : l'ancienne page
+     permettait de rejeter une dépense (repasser à `REJETEE`) et filtrait par
+     statut/classe avec export CSV. Le bouton **Rejeter** a été rajouté à côté de
+     Valider dans le Centre de Décaissement (utilise l'endpoint déjà existant
+     `PUT /depenses/{id}/statut`). Les filtres statut/classe et l'export CSV n'ont
+     PAS été rajoutés (jugé superflu vu la demande explicite de simplifier cet écran) —
+     à reconsidérer si le besoin réapparaît.
+
+6. **Paiement de salaire centralisé** — le bouton « Payer » de Salaires > Calcul des
+   salaires ne paie plus sur place : il redirige vers
+   `/comptabilite/paiements?tab=fournisseurs&payerSalaire=<id>&mois=<mois>`, qui ouvre
+   automatiquement le formulaire Salaire du Centre de Décaissement pré-rempli sur cet
+   employé (seul point d'entrée désormais pour tout paiement de salaire individuel).
+   `showPayModal`/`handlePayIndividual`/`payMode` (l'ancien flux de paiement sur place)
+   supprimés de `salaires/page.tsx`. Le paiement groupé (`handlePayGroup`, paie tout le
+   personnel en un clic) n'a pas été touché — il reste un flux à part, volontairement
+   direct. `paiements/page.tsx` a dû être enveloppé dans un `<Suspense>` (requis par
+   Next.js App Router pour `useSearchParams()`).
+   - **Primes/avances** : déjà répercutées automatiquement sur le calcul du salaire
+     (vérifié, aucune correction nécessaire — la couche de cache avait déjà été
+     corrigée le 01/08).
+   - **Bulletins de paie / historique** : confirmés corrects par l'utilisateur, non
+     retouchés.
+
+## 🔍 Revue adversariale de cette session (Workflow, 5 zones)
+Exécutée après les corrections ci-dessus pour vérifier l'absence de régression sur les
+changements de CETTE session précisément (pas un audit général — celui du 01/08 a déjà
+eu lieu). Flux salaire→redirection et invalidation de cache : aucun bug trouvé. 4 bugs
+trouvés et corrigés dans la foulée :
+- Fichier justificatif et champs analytiques (`fournisseurForm`) jamais réinitialisés
+  en changeant de catégorie dans le formulaire encore ouvert, ni en annulant/fermant —
+  risque réel de rattacher un justificatif/une classe d'un décaissement précédent à un
+  nouveau. Corrigé (`resetFournisseurForm()` appelé à chaque ouverture/fermeture/
+  changement de catégorie).
+- Perte de la fonction « Rejeter » suite à la suppression de la page Dépenses (voir
+  point 5 ci-dessus) — rajoutée.
+- Bouton « Tout sélectionner/désélectionner » (génération de factures multi-classes)
+  affichait « Tout désélectionner » alors que rien n'était sélectionné quand la liste
+  des classes était encore vide (comparaison `0 === 0`). Corrigé.
+
+## Tests exécutés
+- `py_compile` + import complet du backend (336 routes, 0 erreur) après chaque lot.
+- Plusieurs fonctions testées directement contre la vraie base Postgres de dev (pas de
+  mock) : `_calculer_salaire` sur un bulletin déjà payé (confirmé : renvoie exactement
+  le montant historique, plus d'écart), `creer_reglement_fournisseur` avec les nouveaux
+  champs (facture_url/source_fonds/departement bien persistés), `changer_statut_depense`
+  vers REJETEE (fonctionne, ligne de test nettoyée après coup).
+- `npx tsc --noEmit` : 0 erreur (le cache `.next` a dû être vidé une fois après
+  suppression de la page Dépenses — Next.js générait un type de route obsolète pointant
+  vers le fichier supprimé, pas une vraie erreur de code).
+- `npm run lint` : 0 erreur, 1019 warnings préexistants (inchangé/légèrement réduit par
+  la suppression de la page Dépenses).
+
+## Prochaine étape exacte (état au terme de l'analyse complète du 01/08/2026)
+1. **Rendu à l'utilisateur** : l'analyse complète demandée est terminée (22 findings
+   confirmés, tous corrigés et testés réellement — voir section du haut). L'étape
+   suivante est le test utilisateur en conditions réelles ; aucune action côté agent
+   n'est requise tant que ce retour n'est pas arrivé.
+2. Point à confirmer avec l'utilisateur : `docs/comptabilite/module-comptabilite.md`
+   a été retrouvé supprimé et restauré par précaution (voir section du haut) — vérifier
+   que la restauration est bien ce qu'il souhaite.
+3. Non traité, connu et documenté (pas oublié) : filtres statut/classe + export CSV sur
+   le Centre de Décaissement (endpoints backend déjà prêts) ; onglet « Types de frais »
+   de `parametres/finance/page.tsx` en doublon fonctionnel de `comptabilite/frais/
+   page.tsx` sans synchronisation de cache entre les deux (informationnel, pas un bug
+   bloquant).
+4. Après validation utilisateur de ce module, reprendre la tâche antérieure documentée
+   dans `.ai/PROJECT_MEMORY.md` (« Stabilisation portails et parcours critiques »),
+   toujours en pause depuis le 27/07/2026.
 
 ### Règle mémoire importante
-Mettre à jour `.ai/CURRENT_TASK.md` et `.ai/PROJECT_MEMORY.md` régulièrement, surtout avant une limite de contexte/tokens ou une interruption possible.
+Mettre à jour `.ai/CURRENT_TASK.md` et `.ai/PROJECT_MEMORY.md` régulièrement,
+surtout avant une limite de contexte/tokens ou une interruption possible.

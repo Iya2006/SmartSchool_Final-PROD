@@ -6,7 +6,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Settings, ChevronRight, Loader2, UserCheck, Users,
-    CheckCircle2, AlertCircle, ArrowLeft, BookOpen, Crown, Search, Star, AlertTriangle, School, GraduationCap
+    CheckCircle2, AlertCircle, ArrowLeft, BookOpen, Crown, Search, Star, AlertTriangle, School, GraduationCap, Coins
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -64,15 +64,28 @@ export default function ConfigurerClassePage() {
     const [showManualModal, setShowManualModal] = useState(false);
     const [matieresGroupes, setMatieresGroupes] = useState<any[]>([]);
 
+    // Frais de scolarité de cette classe — même table (ss_tarifs_classe) que celle
+    // gérée depuis la page Comptabilité > Frais, par type de frais cette fois-ci :
+    // les deux écrans restent automatiquement synchronisés.
+    const [typesFrais, setTypesFrais] = useState<{ type_frais_id: number; libelle: string; categorie: string }[]>([]);
+    const [tarifs, setTarifs] = useState<Record<number, string>>({});
+    const [savingTarifs, setSavingTarifs] = useState(false);
+
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [classeRes, ensRes] = await Promise.all([
+                const [classeRes, ensRes, tfRes, tarifsRes] = await Promise.all([
                     api.get(`/api/classes/${classeId}/profil`),
                     api.get(`/api/enseignants?etablissement_id=${etablissementId}&skip=0&limit=200`),
+                    api.get('/api/finance/types-frais').catch(() => ({ data: [] })),
+                    api.get(`/api/finance/tarifs-classe?classe_id=${classeId}`).catch(() => ({ data: [] })),
                 ]);
                 setClasse(classeRes.data);
                 setEnseignants(ensRes.data);
+                setTypesFrais(tfRes.data || []);
+                const tarifsMap: Record<number, string> = {};
+                (tarifsRes.data || []).forEach((t: any) => { tarifsMap[t.type_frais_id] = String(t.montant); });
+                setTarifs(tarifsMap);
                 if (classeRes.data.professeur_principal) {
                     setSelectedProfId(classeRes.data.professeur_principal.enseignant_id);
                 }
@@ -88,6 +101,25 @@ export default function ConfigurerClassePage() {
         };
         if (classeId) fetchData();
     }, [classeId]);
+
+    const handleSaveTarifs = async () => {
+        setSavingTarifs(true);
+        setErrorMsg(null);
+        try {
+            const entries = typesFrais.map(tf => ({
+                type_frais_id: tf.type_frais_id,
+                classe_id: parseInt(classeId),
+                montant: parseFloat(tarifs[tf.type_frais_id] || '0') || 0,
+            }));
+            await api.put('/api/finance/tarifs-classe', entries);
+            setSuccessMsg('Frais de scolarité de la classe enregistrés !');
+            setTimeout(() => setSuccessMsg(null), 3000);
+        } catch (err: any) {
+            setErrorMsg(err.response?.data?.detail || "Erreur lors de l'enregistrement des frais.");
+        } finally {
+            setSavingTarifs(false);
+        }
+    };
 
     const handleSave = async () => {
         // Validation chefs de classe
@@ -217,6 +249,45 @@ export default function ConfigurerClassePage() {
                         </p>
                     </div>
                 </div>
+            </motion.div>
+
+            {/* ═══════════════════════════════════════════ */}
+            {/* Section 0: Frais de Scolarité de la classe */}
+            {/* ═══════════════════════════════════════════ */}
+            <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
+                className="card" style={{ padding: '24px' }}>
+                <h3 style={{ fontSize: '17px', fontWeight: 700, margin: '0 0 6px', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)' }}>
+                    <div style={{ padding: '8px', borderRadius: '10px', background: '#d1fae5', color: '#059669' }}>
+                        <Coins size={18} />
+                    </div>
+                    Frais de Scolarité de cette classe
+                </h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: '0 0 20px' }}>
+                    Montant propre à cette classe pour chaque type de frais (une école n'a pas la même
+                    scolarité en maternelle qu'en terminale). Laissez à 0 pour ne rien facturer de ce type
+                    à cette classe. Modifiable également depuis Comptabilité &gt; Frais Scolaires.
+                </p>
+                {typesFrais.length === 0 ? (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Aucun type de frais configuré pour l'instant (Comptabilité &gt; Frais Scolaires).</p>
+                ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
+                        {typesFrais.map(tf => (
+                            <div key={tf.type_frais_id} style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '12px', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
+                                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>{tf.libelle} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({tf.categorie})</span></label>
+                                <input type="number" min="0" value={tarifs[tf.type_frais_id] || ''}
+                                    onChange={e => setTarifs(prev => ({ ...prev, [tf.type_frais_id]: e.target.value }))}
+                                    placeholder="0" style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '14px', fontWeight: 600 }} />
+                            </div>
+                        ))}
+                    </div>
+                )}
+                {typesFrais.length > 0 && (
+                    <button onClick={handleSaveTarifs} disabled={savingTarifs}
+                        style={{ marginTop: '18px', display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 20px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer', opacity: savingTarifs ? 0.6 : 1 }}>
+                        {savingTarifs ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
+                        {savingTarifs ? 'Enregistrement...' : 'Enregistrer les frais de cette classe'}
+                    </button>
+                )}
             </motion.div>
 
             {/* ═══════════════════════════════════════════ */}

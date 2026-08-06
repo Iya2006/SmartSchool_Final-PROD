@@ -10,10 +10,11 @@ import {
 import api from '@/lib/api';
 import Link from 'next/link';
 
-const fmt = (n: number) => n.toLocaleString('fr-GN');
+const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN');
 
 const MOIS = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
-const ANNEES = [2023, 2024, 2025, 2026]; // Idealement dynamique
+const CURRENT_YEAR = new Date().getFullYear();
+const ANNEES = Array.from({ length: 6 }, (_, i) => CURRENT_YEAR - 4 + i);
 
 export default function ExportsPage() {
     const { etablissementId, anneeId } = useApp();
@@ -52,12 +53,15 @@ export default function ExportsPage() {
         setLoading(true);
         try {
             if (tab === 'journalier') {
+                setDataJour(null);
                 const res = await api.get(`/api/finance/rapports/journalier?etablissement_id=${etablissementId}&annee_id=${anneeId}&date_rapport=${dateRapport}`);
                 setDataJour(res.data);
             } else if (tab === 'mensuel') {
+                setDataMois(null);
                 const res = await api.get(`/api/finance/rapports/mensuel?etablissement_id=${etablissementId}&annee_id=${anneeId}&mois=${moisCible}&annee=${anneeCible}`);
                 setDataMois(res.data);
             } else if (tab === 'classe' && classeCible) {
+                setDataClasse(null);
                 const res = await api.get(`/api/finance/factures?etablissement_id=${etablissementId}&annee_id=${anneeId}&classe_id=${classeCible}`);
                 setDataClasse(res.data);
             }

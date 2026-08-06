@@ -414,6 +414,10 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depen
     if not bulletin:
         return None
 
+    from app.api.evaluations import get_bulletin_display_flags
+    cl_for_flags = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    flags = get_bulletin_display_flags(db, cl_for_flags.etablissement_id if cl_for_flags else 1)
+
     lignes = db.query(BulletinLigne, Matiere)\
         .join(Matiere, BulletinLigne.matiere_id == Matiere.matiere_id)\
         .filter(BulletinLigne.bulletin_id == bulletin.bulletin_id).all()
@@ -423,13 +427,13 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depen
             "matiere": mat.libelle if mat else "?",
             "coefficient": float(ligne.coefficient) if ligne.coefficient else 1,
             "moyenne_eleve": float(ligne.moyenne_matiere) if ligne.moyenne_matiere is not None else None,
-            "moyenne_classe": float(ligne.moyenne_classe) if ligne.moyenne_classe is not None else None,
-            "note_min": float(ligne.note_min) if ligne.note_min is not None else None,
-            "note_max": float(ligne.note_max) if ligne.note_max is not None else None,
-            "appreciation": ligne.appreciation,
+            "moyenne_classe": float(ligne.moyenne_classe) if ligne.moyenne_classe is not None and flags["show_stats_matiere"] else None,
+            "note_min": float(ligne.note_min) if ligne.note_min is not None and flags["show_stats_matiere"] else None,
+            "note_max": float(ligne.note_max) if ligne.note_max is not None and flags["show_stats_matiere"] else None,
+            "appreciation": ligne.appreciation if flags["show_appreciation"] else None,
         })
 
-    cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    cl = cl_for_flags
     tri = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
 
     return {
@@ -438,9 +442,13 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depen
         "trimestre": tri.libelle if tri else f"Trimestre {trimestre_id}",
         "trimestre_id": trimestre_id,
         "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
-        "rang": bulletin.rang,
-        "effectif_classe": bulletin.effectif_classe,
-        "mention": bulletin.mention,
+        "rang": bulletin.rang if flags["show_rang"] else None,
+        # Le portail élève affiche rang+effectif dans une seule phrase
+        # ("Xe sur Y") — on ne peut pas montrer l'effectif seul sans le rang,
+        # donc son affichage suit celui du rang (show_effectif seul seul ne
+        # suffit pas à activer cette phrase composée).
+        "effectif_classe": bulletin.effectif_classe if flags["show_rang"] and flags["show_effectif"] else None,
+        "mention": bulletin.mention if flags["show_mention"] else None,
         "decision": bulletin.decision,
         "matieres": matieres,
     }

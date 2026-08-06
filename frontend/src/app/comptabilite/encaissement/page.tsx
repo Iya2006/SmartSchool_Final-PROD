@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -10,6 +11,10 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
+import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
+import { useApp } from '@/context/AppContext';
+import AnneeFilter from '@/components/AnneeFilter';
+import Pagination from '@/components/Pagination';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type EleveSearch = {
@@ -43,17 +48,18 @@ type RecuData = {
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const MODES_PAIEMENT = [
-    { value: 'ESPECES', label: 'Espèces', icon: Banknote },
-    { value: 'MOBILE_MONEY', label: 'Mobile Money', icon: Smartphone },
-    { value: 'VIREMENT', label: 'Virement', icon: CreditCard },
-    { value: 'CHEQUE', label: 'Chèque', icon: FileText },
-];
-
-const MODE_LABELS: Record<string, string> = {
-    'ESPECES': 'Espèces', 'MOBILE_MONEY': 'Mobile Money',
-    'VIREMENT': 'Virement', 'CHEQUE': 'Chèque',
+// Icônes pour les modes de paiement CONNUS — la liste réellement proposée
+// dans le formulaire de paiement vient de Paramètres > Finance & Comptabilité
+// (voir modesPaiementConfig state + fetchModesPaiement), pas d'ici.
+const MODE_ICONS: Record<string, typeof Banknote> = {
+    ESPECES: Banknote,
+    MOBILE_MONEY: Smartphone,
+    ORANGE_MONEY: Smartphone,
+    MTN_MONEY: Smartphone,
+    VIREMENT: CreditCard,
+    CHEQUE: FileText,
 };
+const MODE_ICON_DEFAUT = CreditCard;
 
 const STATUT_COLORS: Record<string, { bg: string; color: string; label: string }> = {
     'EN_ATTENTE': { bg: '#fef3c7', color: '#d97706', label: 'En attente' },
@@ -62,7 +68,7 @@ const STATUT_COLORS: Record<string, { bg: string; color: string; label: string }
     'EN_RETARD': { bg: '#fee2e2', color: '#dc2626', label: 'En retard' },
 };
 
-const fmt = (n: number) => n.toLocaleString('fr-GN');
+const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN');
 
 function Badge({ statut }: { statut: string }) {
     const s = STATUT_COLORS[statut] || { bg: '#f1f5f9', color: '#475569', label: statut };
@@ -70,26 +76,46 @@ function Badge({ statut }: { statut: string }) {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export default function EncaissementPage() {
+function EncaissementContent() {
     const searchParams = useSearchParams();
     const urlEleveId = searchParams.get('eleve_id');
+    const { anneeId: anneeCouranteId } = useApp();
 
     // Steps: 'search' | 'solde' | 'payer' | 'recu'
     const [step, setStep] = useState<'search' | 'solde' | 'payer' | 'recu'>('search');
+
+    // Année scolaire consultée — par défaut l'année en cours (celle active dans
+    // AppContext) ; le comptable peut basculer sur une année clôturée via le
+    // filtre pour consulter l'historique, sans que ça n'affecte l'année active.
+    const [filterAnnee, setFilterAnnee] = useState<number>(anneeCouranteId);
+    useEffect(() => { setFilterAnnee(anneeCouranteId); }, [anneeCouranteId]);
 
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<EleveSearch[]>([]);
     const [searchLoading, setSearchLoading] = useState(false);
-    const [allData, setAllData] = useState<EleveSearch[]>([]);
-    const [classes, setClasses] = useState<any[]>([]);
     const [filterClasse, setFilterClasse] = useState('');
-    const [initialLoading, setInitialLoading] = useState(true);
+    // Pagination des résultats de recherche — avant, un `.slice(0, 50)` codé en
+    // dur cachait silencieusement le reste des résultats (jusqu'à 2800+ élèves
+    // réels) sans aucun moyen d'y accéder autrement qu'en affinant la recherche.
+    const [resultsPage, setResultsPage] = useState(1);
+    const RESULTS_PAGE_SIZE = 50;
 
     // Solde state
     const [selectedEleve, setSelectedEleve] = useState<EleveSearch | null>(null);
     const [soldeData, setSoldeData] = useState<SoldeData | null>(null);
     const [soldeLoading, setSoldeLoading] = useState(false);
+
+    // Modes de paiement configurés (Paramètres > Finance & Comptabilité) — source
+    // unique de vérité pour ce sélecteur, avant quoi la liste était codée en dur
+    // ici et ne reflétait jamais les modes ajoutés/retirés dans Paramètres.
+    const [modesPaiementConfig, setModesPaiementConfig] = useState<string[]>(DEFAULT_MODES_PAIEMENT);
+    useEffect(() => { fetchModesPaiement().then(setModesPaiementConfig); }, []);
+    const modesAffichables = modesPaiementConfig.map(value => ({
+        value,
+        label: modePaiementLabel(value),
+        icon: MODE_ICONS[value] || MODE_ICON_DEFAUT,
+    }));
 
     // Payment state
     const [selectedFacture, setSelectedFacture] = useState<FactureDetail | null>(null);
@@ -104,36 +130,78 @@ export default function EncaissementPage() {
     const [recuData, setRecuData] = useState<RecuData | null>(null);
     const [recuLoading, setRecuLoading] = useState(false);
     const recuRef = useRef<HTMLDivElement>(null);
+    const queryClient = useQueryClient();
 
-    const showMsg = (text: string, type: 'success' | 'error') => {
-        setMessage({ text, type });
+    const showMsg = (text: any, type: 'success' | 'error') => {
+        let messageText = typeof text === 'string' ? text : 'Erreur inattendue';
+        if (Array.isArray(text)) {
+            messageText = text.map((t: any) => t.msg || JSON.stringify(t)).join(', ');
+        } else if (typeof text === 'object' && text !== null) {
+            messageText = text.msg || text.message || JSON.stringify(text);
+        }
+        setMessage({ text: messageText, type });
         setTimeout(() => setMessage(null), 5000);
     };
 
-    // ─── Load initial data ───
-    const loadSolvabilite = useCallback(async () => {
-        setInitialLoading(true);
-        try {
+    // ─── Load initial data (React Query — offline cache) ───
+    const { data: initialData, isLoading: initialLoading } = useQuery({
+        queryKey: ['encaissement-solvabilite', filterAnnee],
+        queryFn: async () => {
             const [solvRes, classRes] = await Promise.all([
-                api.get('/api/finance/solvabilite?etablissement_id=1&annee_id=1'),
-                api.get('/api/classes?etablissement_id=1&annee_id=1'),
+                api.get(`/api/finance/solvabilite?etablissement_id=1&annee_id=${filterAnnee}`),
+                api.get(`/api/classes?etablissement_id=1&annee_id=${filterAnnee}`),
             ]);
-            setAllData(solvRes.data || []);
-            setSearchResults(solvRes.data || []);
-            setClasses(classRes.data || []);
-        } catch { }
-        setInitialLoading(false);
-    }, []);
+            return {
+                allData: (solvRes.data || []) as EleveSearch[],
+                classes: (classRes.data || []) as any[]
+            };
+        },
+        staleTime: 1000 * 60 * 5,
+        enabled: !!filterAnnee,
+    });
+    // Mémoïsés : sans ça, `initialData?.allData || []` recrée un nouveau tableau
+    // (référence différente) à CHAQUE rendu tant que la requête est en cours de
+    // chargement, ce qui déstabilise les useEffect ci-dessous (dépendance qui
+    // "change" à chaque rendu) et provoque une boucle de rendu infinie
+    // ("Maximum update depth exceeded") le temps que la requête réponde.
+    const allData: EleveSearch[] = useMemo(() => initialData?.allData || [], [initialData]);
+    const classes: any[] = useMemo(() => initialData?.classes || [], [initialData]);
 
-    useEffect(() => { loadSolvabilite(); }, [loadSolvabilite]);
+    // `total_restant <= 0` est vrai aussi bien pour un élève réellement soldé QUE
+    // pour un élève sans AUCUNE facture générée (total_facture = 0) — ce sont deux
+    // situations très différentes, mais le code traitait les deux comme "déjà payé
+    // intégralement", bloquant l'encaissement et affichant une barre "100%" trompeuse
+    // pour un élève qui n'a en réalité jamais été facturé (bug signalé : après avoir
+    // configuré des tarifs de classe mais avant de générer les factures, tous les
+    // élèves apparaissaient comme "déjà payés").
+    const estReellementSolde = (d: { total_facture: number; total_restant: number }) =>
+        d.total_facture > 0 && d.total_restant <= 0;
+
+    // ─── Select student → load balance ───
+    const selectEleve = async (eleve: EleveSearch) => {
+        setSelectedEleve(eleve);
+        setStep('solde');
+        setSoldeLoading(true);
+        try {
+            const res = await api.get(`/api/finance/solde-eleve/${eleve.eleve_id}?annee_id=${filterAnnee}`);
+            setSoldeData(res.data);
+        } catch {
+            showMsg('Erreur lors du chargement du solde', 'error');
+        }
+        setSoldeLoading(false);
+    };
 
     // ─── Auto-select student from URL param ───
     useEffect(() => {
         if (urlEleveId && allData.length > 0 && step === 'search') {
             const eleve = allData.find(d => d.eleve_id === parseInt(urlEleveId));
             if (eleve) {
-                if (eleve.total_restant <= 0) {
+                if (estReellementSolde(eleve)) {
                     alert(`Non autorisé : L'élève ${eleve.eleve_prenom} ${eleve.eleve_nom} a déjà réglé l'intégralité de sa scolarité.`);
+                    return;
+                }
+                if (eleve.total_facture <= 0) {
+                    alert(`Aucune facture n'a encore été générée pour ${eleve.eleve_prenom} ${eleve.eleve_nom} — générez d'abord une facture (page Frais) avant d'encaisser.`);
                     return;
                 }
                 selectEleve(eleve);
@@ -156,21 +224,8 @@ export default function EncaissementPage() {
             );
         }
         setSearchResults(filtered);
+        setResultsPage(1);
     }, [searchQuery, filterClasse, allData]);
-
-    // ─── Select student → load balance ───
-    const selectEleve = async (eleve: EleveSearch) => {
-        setSelectedEleve(eleve);
-        setStep('solde');
-        setSoldeLoading(true);
-        try {
-            const res = await api.get(`/api/finance/solde-eleve/${eleve.eleve_id}?annee_id=1`);
-            setSoldeData(res.data);
-        } catch {
-            showMsg('Erreur lors du chargement du solde', 'error');
-        }
-        setSoldeLoading(false);
-    };
 
     // ─── Open payment form ───
     const openPayer = (facture: FactureDetail) => {
@@ -211,8 +266,16 @@ export default function EncaissementPage() {
                 setRecuLoading(false);
             }
 
-            // Refresh solvabilite data in background
-            loadSolvabilite();
+            // Rafraîchir toutes les vues qui dépendent de ce paiement (pas seulement
+            // cette page) : Impayés, Dashboard financier et Scolaire/solvabilité
+            // utilisent chacun leur propre clé de cache React Query, jamais
+            // invalidée auparavant depuis l'écran d'encaissement — d'où un statut
+            // visuellement "en retard" côté Impayés bien après un paiement réel.
+            queryClient.invalidateQueries({ queryKey: ['encaissement-solvabilite'] });
+            queryClient.invalidateQueries({ queryKey: ['impayes'] });
+            queryClient.invalidateQueries({ queryKey: ['finance-dashboard'] });
+            queryClient.invalidateQueries({ queryKey: ['frais-all'] });
+            queryClient.invalidateQueries({ queryKey: ['paiements-all'] });
         } catch (err: any) {
             showMsg(err.response?.data?.detail || 'Erreur lors du paiement', 'error');
         }
@@ -258,10 +321,18 @@ export default function EncaissementPage() {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             {/* Breadcrumb */}
-            <div className="no-print" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
-                <Link href="/comptabilite" style={{ color: '#10b981' }}>Comptabilité</Link><ChevronRight size={14} />
-                <span style={{ fontWeight: 600, color: '#1e293b' }}>Encaissement des Frais de Scolarité</span>
+            <div className="no-print" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#64748b' }}>
+                    <Link href="/comptabilite" style={{ color: '#10b981' }}>Comptabilité</Link><ChevronRight size={14} />
+                    <span style={{ fontWeight: 600, color: '#1e293b' }}>Encaissement des Frais de Scolarité</span>
+                </div>
+                <AnneeFilter value={filterAnnee} onChange={setFilterAnnee} />
             </div>
+            {filterAnnee !== anneeCouranteId && (
+                <div className="no-print" style={{ padding: '10px 16px', borderRadius: 10, background: '#fef3c7', color: '#92400e', fontSize: 13, fontWeight: 600 }}>
+                    Vous consultez une année scolaire archivée — l'encaissement n'est possible que sur l'année en cours.
+                </div>
+            )}
 
             {/* Message */}
             <AnimatePresence>
@@ -345,13 +416,17 @@ export default function EncaissementPage() {
                                         <Users size={40} style={{ margin: '0 auto 12px', display: 'block', opacity: 0.5 }} />
                                         Aucun élève trouvé
                                     </td></tr>
-                                ) : searchResults.slice(0, 50).map((d, idx) => (
+                                ) : searchResults.slice((resultsPage - 1) * RESULTS_PAGE_SIZE, resultsPage * RESULTS_PAGE_SIZE).map((d, idx) => (
                                     <motion.tr key={d.eleve_id}
                                         initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: idx * 0.02 }}
                                         style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', transition: 'background 0.15s' }}
                                         onClick={() => {
-                                            if (d.total_restant <= 0) {
+                                            if (estReellementSolde(d)) {
                                                 alert(`Non autorisé : L'élève ${d.eleve_prenom} ${d.eleve_nom} a déjà réglé l'intégralité de sa scolarité.`);
+                                                return;
+                                            }
+                                            if (d.total_facture <= 0) {
+                                                alert(`Aucune facture n'a encore été générée pour ${d.eleve_prenom} ${d.eleve_nom} — générez d'abord une facture (page Frais) avant d'encaisser.`);
                                                 return;
                                             }
                                             selectEleve(d);
@@ -365,18 +440,26 @@ export default function EncaissementPage() {
                                         <td style={{ padding: '12px 14px', color: '#10b981', fontWeight: 600 }}>{fmt(d.total_paye)} GNF</td>
                                         <td style={{ padding: '12px 14px', color: d.total_restant > 0 ? '#ef4444' : '#10b981', fontWeight: 700 }}>{fmt(d.total_restant)} GNF</td>
                                         <td style={{ padding: '12px 14px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                <div style={{ width: 50, height: 6, borderRadius: 3, background: '#e2e8f0', overflow: 'hidden' }}>
-                                                    <div style={{ width: `${Math.min(d.taux_paiement, 100)}%`, height: '100%', borderRadius: 3, background: d.taux_paiement >= 100 ? '#10b981' : d.taux_paiement >= 50 ? '#3b82f6' : '#f59e0b' }} />
+                                            {d.total_facture <= 0 ? (
+                                                <span style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8' }}>Aucune facture</span>
+                                            ) : (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                    <div style={{ width: 50, height: 6, borderRadius: 3, background: '#e2e8f0', overflow: 'hidden' }}>
+                                                        <div style={{ width: `${Math.min(d.taux_paiement, 100)}%`, height: '100%', borderRadius: 3, background: d.taux_paiement >= 100 ? '#10b981' : d.taux_paiement >= 50 ? '#3b82f6' : '#f59e0b' }} />
+                                                    </div>
+                                                    <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>{d.taux_paiement}%</span>
                                                 </div>
-                                                <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>{d.taux_paiement}%</span>
-                                            </div>
+                                            )}
                                         </td>
                                         <td style={{ padding: '12px 14px' }}>
                                             <button onClick={(e) => {
                                                 e.stopPropagation();
-                                                if (d.total_restant <= 0) {
+                                                if (estReellementSolde(d)) {
                                                     alert(`Non autorisé : L'élève ${d.eleve_prenom} ${d.eleve_nom} a déjà réglé l'intégralité de sa scolarité.`);
+                                                    return;
+                                                }
+                                                if (d.total_facture <= 0) {
+                                                    alert(`Aucune facture n'a encore été générée pour ${d.eleve_prenom} ${d.eleve_nom} — générez d'abord une facture (page Frais) avant d'encaisser.`);
                                                     return;
                                                 }
                                                 selectEleve(d);
@@ -389,10 +472,7 @@ export default function EncaissementPage() {
                                 ))}
                             </tbody>
                         </table>
-                        <div style={{ padding: '12px 20px', borderTop: '1px solid #e2e8f0', fontSize: 13, color: '#64748b', display: 'flex', justifyContent: 'space-between' }}>
-                            <span>{searchResults.length} élève(s) trouvé(s)</span>
-                            {searchResults.length > 50 && <span style={{ color: '#f59e0b' }}>Affichage limité à 50 — affinez votre recherche</span>}
-                        </div>
+                        <Pagination page={resultsPage} pageSize={RESULTS_PAGE_SIZE} total={searchResults.length} onPageChange={setResultsPage} />
                     </motion.div>
                 </>
             )}
@@ -496,7 +576,7 @@ export default function EncaissementPage() {
                                                         <Receipt size={12} color="#10b981" />
                                                         <strong>{p.numero_recu}</strong> — {p.date_paiement}
                                                     </span>
-                                                    <span style={{ fontWeight: 700, color: '#10b981' }}>{fmt(p.montant)} GNF <span style={{ fontWeight: 400, color: '#94a3b8' }}>({MODE_LABELS[p.mode_paiement] || p.mode_paiement})</span></span>
+                                                    <span style={{ fontWeight: 700, color: '#10b981' }}>{fmt(p.montant)} GNF <span style={{ fontWeight: 400, color: '#94a3b8' }}>({modePaiementLabel(p.mode_paiement)})</span></span>
                                                 </div>
                                             ))}
                                         </div>
@@ -571,23 +651,38 @@ export default function EncaissementPage() {
                                 )}
 
                                 {/* Montant */}
-                                <div>
-                                    <label style={{ display: 'block', fontSize: 13, color: '#475569', marginBottom: 6, fontWeight: 600 }}>Montant reçu (GNF) *</label>
-                                    <input type="number" value={payMontant} onChange={e => setPayMontant(e.target.value)}
-                                        required min="1" max={selectedFacture.montant_restant}
-                                        style={{ width: '100%', padding: '14px 16px', borderRadius: 10, border: '2px solid #10b981', fontSize: 20, fontWeight: 800, color: '#059669', boxSizing: 'border-box', textAlign: 'center', outline: 'none' }} />
-                                    {parseFloat(payMontant) < selectedFacture.montant_restant && parseFloat(payMontant) > 0 && (
-                                        <p style={{ fontSize: 12, color: '#f59e0b', marginTop: 6, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <AlertTriangle size={14} color="#f59e0b" /> Paiement partiel — Reliquat après paiement : {fmt(selectedFacture.montant_restant - parseFloat(payMontant))} GNF
-                                        </p>
-                                    )}
-                                </div>
+                                {(() => {
+                                    const echeanceSelectionnee = payEcheanceId
+                                        ? selectedFacture.echeances.find(ec => ec.echeance_id === parseInt(payEcheanceId))
+                                        : null;
+                                    const maxMontant = echeanceSelectionnee
+                                        ? echeanceSelectionnee.montant_attendu - echeanceSelectionnee.montant_paye
+                                        : selectedFacture.montant_restant;
+                                    return (
+                                        <div>
+                                            <label style={{ display: 'block', fontSize: 13, color: '#475569', marginBottom: 6, fontWeight: 600 }}>Montant reçu (GNF) *</label>
+                                            <input type="number" value={payMontant} onChange={e => setPayMontant(e.target.value)}
+                                                required min="1" max={maxMontant}
+                                                style={{ width: '100%', padding: '14px 16px', borderRadius: 10, border: '2px solid #10b981', fontSize: 20, fontWeight: 800, color: '#059669', boxSizing: 'border-box', textAlign: 'center', outline: 'none' }} />
+                                            {echeanceSelectionnee && (
+                                                <p style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
+                                                    Plafonné au reste dû sur l'échéance sélectionnée : {fmt(maxMontant)} GNF
+                                                </p>
+                                            )}
+                                            {parseFloat(payMontant) < maxMontant && parseFloat(payMontant) > 0 && (
+                                                <p style={{ fontSize: 12, color: '#f59e0b', marginTop: 6, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                    <AlertTriangle size={14} color="#f59e0b" /> Paiement partiel — Reliquat après paiement : {fmt(maxMontant - parseFloat(payMontant))} GNF
+                                                </p>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
 
                                 {/* Mode de paiement */}
                                 <div>
                                     <label style={{ display: 'block', fontSize: 13, color: '#475569', marginBottom: 8, fontWeight: 600 }}>Mode de paiement *</label>
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                                        {MODES_PAIEMENT.map(m => {
+                                        {modesAffichables.map(m => {
                                             const Icon = m.icon;
                                             return (
                                                 <button key={m.value} type="button" onClick={() => setPayMode(m.value)}
@@ -745,7 +840,7 @@ export default function EncaissementPage() {
                                         <div>
                                             <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textTransform: 'uppercase', fontWeight: 600 }}>Mode de paiement</p>
                                             <p style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', margin: '4px 0 0' }}>
-                                                {MODE_LABELS[recuData.recu.mode_paiement] || recuData.recu.mode_paiement}
+                                                {modePaiementLabel(recuData.recu.mode_paiement)}
                                             </p>
                                         </div>
                                         {recuData.recu.reference_externe && (
@@ -760,6 +855,23 @@ export default function EncaissementPage() {
                                         </div>
                                     </div>
                                 </div>
+
+                                {/* Règlements antérieurs sur cette même facture — sans ça, un reçu de
+                                    dernière tranche n'indiquait jamais que des tranches précédentes
+                                    avaient déjà été réglées. */}
+                                {recuData.historique_paiements.filter(h => h.numero_recu !== recuData.recu.numero_recu).length > 0 && (
+                                    <div style={{ padding: '16px 32px', borderBottom: '1px solid #e2e8f0' }}>
+                                        <p style={{ fontSize: 11, color: '#94a3b8', margin: '0 0 8px', textTransform: 'uppercase', fontWeight: 600 }}>Règlements antérieurs sur cette facture</p>
+                                        {recuData.historique_paiements
+                                            .filter(h => h.numero_recu !== recuData.recu.numero_recu)
+                                            .map(h => (
+                                                <div key={h.numero_recu} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#475569', padding: '4px 0' }}>
+                                                    <span>{h.date_paiement ? new Date(h.date_paiement).toLocaleDateString('fr-FR') : '-'} — {modePaiementLabel(h.mode_paiement)} (reçu {h.numero_recu})</span>
+                                                    <span style={{ fontWeight: 600 }}>{fmt(h.montant)} GNF</span>
+                                                </div>
+                                            ))}
+                                    </div>
+                                )}
 
                                 {/* Footer */}
                                 <div style={{ padding: '20px 32px', textAlign: 'center', background: '#f8fafc' }}>
@@ -806,5 +918,17 @@ export default function EncaissementPage() {
                 }
             `}</style>
         </div>
+    );
+}
+
+export default function EncaissementPage() {
+    return (
+        <Suspense fallback={
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
+                <Loader2 size={40} style={{ animation: 'spin 1s linear infinite' }} color="#10b981" />
+            </div>
+        }>
+            <EncaissementContent />
+        </Suspense>
     );
 }

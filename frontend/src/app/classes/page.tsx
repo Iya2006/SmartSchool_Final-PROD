@@ -2,6 +2,7 @@
 
 import { useApp } from '@/context/AppContext';
 import { useState, useEffect, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Users, X, Eye, Edit, ChevronRight, ChevronLeft, Loader2, BookOpen, UserCheck, Plus, Settings, Search, ArrowLeft } from 'lucide-react';
 import api from '@/lib/api';
@@ -38,9 +39,7 @@ const colorPalette = [
 ];
 
 export default function ClassesPage() {
-    const [classes, setClasses] = useState<Classe[]>([]);
     const { etablissementId, anneeId } = useApp();
-    const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const router = useRouter();
 
@@ -52,19 +51,20 @@ export default function ClassesPage() {
     // Carousel ref
     const carouselRef = useRef<HTMLDivElement>(null);
 
-    useEffect(() => {
-        const fetchClasses = async () => {
-            try {
-                const res = await api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
-                setClasses(res.data);
-            } catch (error) {
-                console.error("Erreur chargement des classes:", error);
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchClasses();
-    }, []);
+    // React Query (déjà monté à la racine, voir components/QueryProvider.tsx) :
+    // cache persisté + `networkMode: 'offlineFirst'` (lib/queryClient.ts) —
+    // affiche instantanément la dernière liste connue puis revalide en
+    // arrière-plan, au lieu d'un fetch unique à l'ancien useEffect qui ne se
+    // rejouait jamais tant que le composant restait monté (voir le correctif
+    // de dépendances manquantes fait plus tôt cette session).
+    const { data: classes = [], isLoading: loading } = useQuery({
+        queryKey: ['classes', etablissementId, anneeId],
+        queryFn: async () => {
+            const res = await api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
+            return res.data as Classe[];
+        },
+        enabled: !!etablissementId && !!anneeId,
+    });
 
     // Auto-scroll carousel
     useEffect(() => {
@@ -167,16 +167,27 @@ export default function ClassesPage() {
                         <span>Classes & Effectifs</span>
                     </div>
                 </div>
-                <Link href="/classes/nouveau" style={{
-                    display: 'flex', alignItems: 'center', gap: '8px',
-                    background: 'var(--brand-primary)', color: 'white',
-                    padding: '10px 20px', borderRadius: '12px', fontSize: '14px', fontWeight: 600,
-                    textDecoration: 'none', transition: 'all 0.2s ease',
-                    boxShadow: '0 4px 12px rgba(59, 130, 246, 0.25)'
-                }}>
-                    <Plus size={18} />
-                    <span>Nouvelle Classe</span>
-                </Link>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                    <Link href="/classes/cloture-annee" style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        background: 'white', color: '#b45309', border: '1px solid #fde68a',
+                        padding: '10px 20px', borderRadius: '12px', fontSize: '14px', fontWeight: 600,
+                        textDecoration: 'none', transition: 'all 0.2s ease',
+                    }}>
+                        <UserCheck size={18} />
+                        <span>Assistant de fin d&apos;année</span>
+                    </Link>
+                    <Link href="/classes/nouveau" style={{
+                        display: 'flex', alignItems: 'center', gap: '8px',
+                        background: 'var(--brand-primary)', color: 'white',
+                        padding: '10px 20px', borderRadius: '12px', fontSize: '14px', fontWeight: 600,
+                        textDecoration: 'none', transition: 'all 0.2s ease',
+                        boxShadow: '0 4px 12px rgba(59, 130, 246, 0.25)'
+                    }}>
+                        <Plus size={18} />
+                        <span>Nouvelle Classe</span>
+                    </Link>
+                </div>
             </div>
 
             {/* ═══ Statistics Row - Compact ═══ */}

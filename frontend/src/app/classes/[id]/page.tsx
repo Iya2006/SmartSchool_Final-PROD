@@ -5,10 +5,11 @@ import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
     Users, BookOpen, ChevronRight, Loader2, Eye, Settings, UserCheck,
-    Clock, Hash, ArrowLeft, Phone, Crown, Calendar, TrendingUp, Award, Star, AlertTriangle, Utensils, User
+    Clock, Hash, ArrowLeft, Phone, Crown, Calendar, TrendingUp, Award, Star, AlertTriangle, Utensils, User, RotateCcw
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
+import Pagination from '@/components/Pagination';
 
 interface ClasseProfil {
     classe_id: number;
@@ -32,6 +33,7 @@ interface ClasseProfil {
     eleves: {
         eleve_id: number; matricule: string; nom: string; prenom: string;
         sexe: string; date_naissance: string; statut_inscription: string; role_classe: string | null;
+        nb_redoublements: number;
     }[];
     matieres: {
         matiere_id: number; code: string; libelle: string; categorie: string | null;
@@ -86,6 +88,8 @@ export default function ClasseProfilPage() {
     const [creneaux, setCreneaux] = useState<RealCreneau[]>([]);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'eleves' | 'matieres' | 'emploi' | 'stats'>('eleves');
+    const [elevesPage, setElevesPage] = useState(1);
+    const ELEVES_PAGE_SIZE = 25;
 
     useEffect(() => {
         const fetchData = async () => {
@@ -364,7 +368,7 @@ export default function ClasseProfilPage() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {profil.eleves.map((e, i) => {
+                                {profil.eleves.slice((elevesPage - 1) * ELEVES_PAGE_SIZE, elevesPage * ELEVES_PAGE_SIZE).map((e, i) => {
                                     const sc = studentColors[i % studentColors.length];
                                     const isChef = e.role_classe && e.role_classe.startsWith('CHEF');
                                     return (
@@ -381,6 +385,16 @@ export default function ClasseProfilPage() {
                                                         {isChef && <Star size={9} fill="#f59e0b" color="#f59e0b" style={{ position: 'absolute', top: '-3px', right: '-3px' }} />}
                                                     </div>
                                                     <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '13px' }}>{e.prenom} {e.nom}</span>
+                                                    {e.nb_redoublements > 0 && (
+                                                        <span title={`A redoublé ${e.nb_redoublements} fois`}
+                                                            style={{
+                                                                display: 'inline-flex', alignItems: 'center', gap: '3px',
+                                                                padding: '2px 7px', borderRadius: '999px', fontSize: '10px', fontWeight: 800,
+                                                                background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a',
+                                                            }}>
+                                                            <RotateCcw size={10} /> ×{e.nb_redoublements}
+                                                        </span>
+                                                    )}
                                                 </div>
                                             </td>
                                             <td><code style={{ background: '#f1f5f9', padding: '2px 7px', borderRadius: '4px', fontSize: '11px' }}>{e.matricule}</code></td>
@@ -420,6 +434,7 @@ export default function ClasseProfilPage() {
                             </tbody>
                         </table>
                     )}
+                    <Pagination page={elevesPage} pageSize={ELEVES_PAGE_SIZE} total={profil.eleves.length} onPageChange={setElevesPage} />
                 </motion.div>
             )}
 

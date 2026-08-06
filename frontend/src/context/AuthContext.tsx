@@ -100,13 +100,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         router.push(getRedirectPath(newUser.role));
     };
 
-    const logout = () => {
+    const logout = async () => {
         setToken(null);
         setUser(null);
 
         if (typeof window !== 'undefined') {
             localStorage.removeItem('smartschool_token');
             localStorage.removeItem('smartschool_user');
+            // Purge des données locales du module offline-first (§13 du guide
+            // fourni : "suppression des données locales après déconnexion") —
+            // la file d'attente (idb-keyval) et le cache React Query persisté
+            // (voir components/QueryProvider.tsx) ne doivent pas survivre à
+            // une déconnexion, surtout sur un poste partagé.
+            localStorage.removeItem('smartschool-query-cache');
+            try {
+                const { clearAll } = await import('@/lib/offlineQueue');
+                await clearAll();
+            } catch {
+                // IndexedDB indisponible ou déjà vide — la déconnexion ne doit
+                // jamais rester bloquée pour autant.
+            }
             sessionStorage.clear();
             window.location.href = '/login';
         }

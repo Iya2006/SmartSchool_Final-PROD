@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import api from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 
 /* ─── TypeScript Interfaces ─── */
 interface AnneeScolaire {
@@ -66,6 +67,7 @@ interface AppContextType {
     annees: AnneeScolaire[];
     loading: boolean;
     refreshEtablissement: () => void;
+    refreshAnnee: () => Promise<void>;
     
     theme: ThemeConfig;
     setTheme: React.Dispatch<React.SetStateAction<ThemeConfig>>;
@@ -195,7 +197,8 @@ const AppContext = createContext<AppContextType>({
     annees: [],
     loading: true,
     refreshEtablissement: () => {},
-    
+    refreshAnnee: () => Promise.resolve(),
+
     theme: DEFAULT_THEME,
     setTheme: () => {},
     refreshTheme: () => {},
@@ -210,6 +213,7 @@ const AppContext = createContext<AppContextType>({
 });
 
 export function AppProvider({ children }: { children: ReactNode }) {
+    const { isAuthenticated } = useAuth();
     const [etablissementId, setEtablissementId] = useState<number>(1);
     const [etablissementNom, setEtablissementNom] = useState<string>('SmartSchool');
     const [etablissementLogo, setEtablissementLogo] = useState<string | null>(null);
@@ -351,29 +355,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             .catch(() => {});
     }, []);
 
-    useEffect(() => {
-        if (typeof window !== 'undefined') {
-            const cachedNom = localStorage.getItem('etablissement_nom');
-            const cachedLogo = localStorage.getItem('etablissement_logo');
-            if (cachedNom) setEtablissementNom(cachedNom);
-            if (cachedLogo) setEtablissementLogo(cachedLogo);
-        }
-
-        const token = typeof window !== 'undefined'
-            ? localStorage.getItem('smartschool_token')
-            : null;
-
-        // Toujours charger l'établissement et le thème (routes publiques)
-        fetchEtablissement();
-        fetchTheme();
-
-        if (!token) {
-            setLoading(false);
-            setAnneeLibelle('2024-2025');
-            return;
-        }
-
-        api.get('/api/parametrage/annees')
+    // Recharge la liste des années + l'année courante depuis le backend.
+    // Exposée via le contexte (`refreshAnnee`) pour que toute page qui active
+    // une année (Paramètres > Calendrier, clôture d'année) puisse propager
+    // immédiatement le changement à TOUTE l'app (en-tête, filtres comptabilité,
+    // page Classes...) sans that l'utilisateur ait à recharger la page —
+    // AppContext ne se chargeait auparavant qu'une seule fois au montage.
+    const fetchAnnee = useCallback(() => {
+        return api.get('/api/parametrage/annees')
             .then(res => {
                 const data = res.data;
                 if (Array.isArray(data) && data.length > 0) {
@@ -387,9 +376,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
             })
             .catch(() => {
                 setAnneeLibelle('2024-2025');
-            })
-            .finally(() => setLoading(false));
-    }, [fetchTheme]);
+            });
+    }, []);
+
+    // Dépend de `isAuthenticated` (état réactif d'AuthContext) plutôt que de lire
+    // `localStorage.getItem('smartschool_token')` une seule fois au montage.
+    // Avant ce correctif : AppProvider vit au niveau racine et ne démonte
+    // jamais entre les pages — `login()` navigue en client-side (`router.push`,
+    // pas de rechargement complet), donc si l'utilisateur arrivait sur /login
+    // sans token, cet effet s'exécutait une fois, voyait "pas de token", et
+    // abandonnait DÉFINITIVEMENT le chargement de l'année/établissement réels
+    // (`anneeId` restait bloqué sur sa valeur par défaut `1`). Comme `anneeId`
+    // alimente quasiment toutes les pages (dashboard, comptabilité, classes...),
+    // un rechargement complet du navigateur était le SEUL moyen de forcer ce
+    // fetch — exactement le symptôme signalé ("obligé de recharger après
+    // connexion, sur toutes les pages"). Avec `isAuthenticated` en dépendance,
+    // le passage de false → true au moment du login relance cet effet et
+    // charge enfin les vraies données, sans aucun rechargement manuel.
+    useEffect(() => {
+        if (typeof window !== 'undefined') {
+            const cachedNom = localStorage.getItem('etablissement_nom');
+            const cachedLogo = localStorage.getItem('etablissement_logo');
+            if (cachedNom) setEtablissementNom(cachedNom);
+            if (cachedLogo) setEtablissementLogo(cachedLogo);
+        }
+
+        // Toujours charger l'établissement et le thème (routes publiques)
+        fetchEtablissement();
+        fetchTheme();
+
+        if (!isAuthenticated) {
+            setLoading(false);
+            setAnneeLibelle('2024-2025');
+            return;
+        }
+
+        fetchAnnee().finally(() => setLoading(false));
+    }, [fetchTheme, fetchAnnee, isAuthenticated]);
 
     // Mettre à jour le titre et le favicon
     useEffect(() => {
@@ -421,7 +444,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setEtablissementId, setAnneeId,
             annees, loading,
             refreshEtablissement: fetchEtablissement,
-            
+            refreshAnnee: fetchAnnee,
+
             theme,
             setTheme,
             refreshTheme: fetchTheme,

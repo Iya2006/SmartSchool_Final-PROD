@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApp } from '@/context/AppContext';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -13,37 +14,28 @@ import {
 import api from '@/lib/api';
 import Link from 'next/link';
 
-const fmt = (n: number) => n.toLocaleString('fr-GN') + ' GNF';
+const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN') + ' GNF';
 
 function SalairesContent() {
-    const { etablissementId } = useApp();
+    const { etablissementId, anneeId } = useApp();
     const searchParams = useSearchParams();
     const router = useRouter();
     
     const activeTab = searchParams.get('tab') || 'personnel';
-    const [employes, setEmployes] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
     const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+    const queryClient = useQueryClient();
 
-    // Global selected month
-    const [selectedMonth, setSelectedMonth] = useState('2026-06');
+    // Global selected month — doit correspondre au mois réel courant par défaut
+    // (même calcul que salairesMois dans paiements/page.tsx), sinon une prime/avance
+    // ajoutée ici est enregistrée sous un mois différent de celui que "Salaire à
+    // payer" (Gestion des paiements) et les arriérés calculent pour le mois réel.
+    const [selectedMonth, setSelectedMonth] = useState(() => {
+        const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    });
     const [paydayDate, setPaydayDate] = useState('');
     const [savingPayday, setSavingPayday] = useState(false);
 
-    // Tab 1: Personnel forms & modals
-    const [showEmpForm, setShowEmpForm] = useState(false);
-    const [editingEmp, setEditingEmp] = useState<any>(null);
-    const [empNom, setEmpNom] = useState('');
-    const [empPrenom, setEmpPrenom] = useState('');
-    const [empPoste, setEmpPoste] = useState('Enseignant');
-    const [empSalaire, setEmpSalaire] = useState('');
-    const [empContrat, setEmpContrat] = useState('CDI');
-    const [empMobile, setEmpMobile] = useState('');
-
-    // Tab 2: Calcul des salaires
-    const [salairesCalculated, setSalairesCalculated] = useState<any[]>([]);
-    const [showPayModal, setShowPayModal] = useState<any>(null);
-    const [payMode, setPayMode] = useState('Cash');
+    // Tab 2: Calcul des salaires — géré par React Query (voir fetchCalculatedSalaires)
 
     // Tab 3: Avances, absences, primes forms
     const [showAvanceForm, setShowAvanceForm] = useState(false);
@@ -106,7 +98,7 @@ function SalairesContent() {
                     e.nom.toUpperCase() === emp.nom.toUpperCase() && e.prenom.toUpperCase() === emp.prenom.toUpperCase()
                 );
                 if (match) {
-                    const affRes = await api.get(`/api/enseignants/${match.enseignant_id}/affectations?annee_id=1`);
+                    const affRes = await api.get(`/api/enseignants/${match.enseignant_id}/affectations?annee_id=${anneeId}`);
                     setTeacherAffectations(affRes.data || []);
                 }
             } catch { }
@@ -114,100 +106,159 @@ function SalairesContent() {
         }
     };
 
-    const showMsg = (text: string, type: 'success' | 'error') => {
-        setMessage({ text, type });
+    const showMsg = (text: any, type: 'success' | 'error') => {
+        let messageText = typeof text === 'string' ? text : 'Erreur inattendue';
+        if (Array.isArray(text)) {
+            messageText = text.map((t: any) => t.msg || JSON.stringify(t)).join(', ');
+        } else if (typeof text === 'object' && text !== null) {
+            messageText = text.msg || text.message || JSON.stringify(text);
+        }
+        setMessage({ text: messageText, type });
         setTimeout(() => setMessage(null), 4000);
     };
 
-    const fetchEmployes = useCallback(async () => {
-        setLoading(true);
-        try {
-            const res = await api.get(`/api/finance/employes?etablissement_id=${etablissementId}`);
-            setEmployes(res.data);
-            if (res.data.length > 0) {
-                const firstId = res.data[0].employe_id.toString();
-                setTargetEmpId(prev => prev || firstId);
-                setHistoryEmpId(prev => prev || firstId);
-                setSourceEmpId(prev => prev || firstId);
-            }
-        } catch {
-            showMsg('Erreur de chargement du personnel', 'error');
+    // ─── React Query: liste des employés (avec cache offline) ───
+    const { data: employesRaw, isLoading: empLoading, refetch: refetchEmployes } = useQuery({
+        queryKey: ['salaires-employes', etablissementId],
+        queryFn: async () => {
+            const res = await api.get(`/api/finance/salaires/employes?etablissement_id=${etablissementId}`);
+            return (res.data || []).map((emp: any) => ({
+                ...emp,
+                employe_id: emp.id,
+                poste: emp.role_label,
+                statut: 'ACTIF'
+            }));
+        },
+        staleTime: 1000 * 60 * 5, // 5 min
+    });
+    const employes: any[] = employesRaw || [];
+    const loading = empLoading;
+
+    // Auto-set default IDs once employes are loaded
+    useEffect(() => {
+        if (employes.length > 0) {
+            const firstId = employes[0].employe_id.toString();
+            setTargetEmpId(prev => prev || firstId);
+            setHistoryEmpId(prev => prev || firstId);
+            setSourceEmpId(prev => prev || firstId);
         }
-        setLoading(false);
-    }, [etablissementId]);
+    }, [employes]);
+
+    // Helper to invalidate employes cache after mutations
+    const fetchEmployes = useCallback(async () => {
+        await queryClient.invalidateQueries({ queryKey: ['salaires-employes', etablissementId] });
+    }, [etablissementId, queryClient]);
+
+    // ─── React Query: calcul des salaires du mois ───
+    const { data: salairesCalculatedData, isLoading: salLoading, refetch: refetchSalaires } = useQuery({
+        queryKey: ['salaires-calculer', etablissementId, selectedMonth],
+        queryFn: async () => {
+            const res = await api.get(`/api/finance/salaires/calculer?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}`);
+            return res.data || [];
+        },
+        enabled: activeTab === 'paie',
+        staleTime: 1000 * 60 * 3, // 3 min
+        placeholderData: employes.map(emp => ({
+            employe_id: emp.employe_id,
+            nom: emp.nom,
+            prenom: emp.prenom,
+            poste: emp.poste,
+            salaire_base: emp.salaire_base,
+            total_primes: emp.prime_mensuelle || 0,
+            total_absences: 0,
+            total_avances: 0,
+            net_a_payer: (emp.salaire_base || 0) + (emp.prime_mensuelle || 0),
+            statut: emp.paye_ce_mois ? 'PAYE' : 'NON_PAYE',
+            deja_paye: !!emp.paye_ce_mois
+        })),
+    });
+    const salairesCalculated: any[] = salairesCalculatedData || [];
+    const setSalairesCalculated = (_: any[]) => {}; // no-op: managed by React Query
 
     const fetchCalculatedSalaires = useCallback(async () => {
-        setLoading(true);
-        try {
-            const res = await api.get(`/api/finance/salaires/calculer?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}`);
-            setSalairesCalculated(res.data);
-        } catch {
-            showMsg('Erreur de calcul des salaires', 'error');
-        }
-        setLoading(false);
-    }, [etablissementId, selectedMonth]);
+        await queryClient.invalidateQueries({ queryKey: ['salaires-calculer', etablissementId, selectedMonth] });
+    }, [etablissementId, selectedMonth, queryClient]);
 
     const fetchBulletins = useCallback(async () => {
-        setLoading(true);
+        setBulletinLoading(true);
         try {
-            // Generate list of all paid bulletins for the establishment
+            const res = await api.get(`/api/finance/salaires/employes?etablissement_id=${etablissementId}`);
             const allBulletins: any[] = [];
-            const empRes = await api.get(`/api/finance/employes?etablissement_id=${etablissementId}`);
-            await Promise.all(empRes.data.map(async (emp: any) => {
-                const res = await api.get(`/api/finance/salaires/historique/${emp.employe_id}`);
-                res.data.forEach((b: any) => {
-                    allBulletins.push({
-                        ...b,
-                        employe_id: emp.employe_id,
-                        nom: emp.nom,
-                        prenom: emp.prenom,
-                        poste: emp.poste
+            res.data.forEach((emp: any) => {
+                if (emp.historique && Array.isArray(emp.historique)) {
+                    emp.historique.forEach((b: any) => {
+                        allBulletins.push({
+                            ...b,
+                            // b.bulletin_id / b.date_paiement / b.mode_paiement / b.mois_concerne
+                            // viennent désormais directement du backend (GET /salaires/employes) ;
+                            // on ne les écrase plus avec des valeurs devinées/fausses ici.
+                            mois_concerne: b.mois_concerne || selectedMonth,
+                            employe_id: emp.id,
+                            nom: emp.nom,
+                            prenom: emp.prenom,
+                            poste: emp.role_label,
+                            net_paye: b.net_a_payer !== undefined ? b.net_a_payer : b.montant,
+                            salaire_base: b.salaire_base !== undefined ? b.salaire_base : emp.salaire_base,
+                            net_a_payer: b.net_a_payer !== undefined ? b.net_a_payer : b.montant,
+                            total_primes: b.total_primes !== undefined ? b.total_primes : (emp.prime_mensuelle || 0),
+                            total_absences: b.total_absences || 0,
+                            total_avances: b.total_avances || 0
+                        });
                     });
-                });
-            }));
+                }
+            });
             setBulletins(allBulletins);
         } catch {
             showMsg('Erreur de chargement des bulletins', 'error');
         }
-        setLoading(false);
-    }, [etablissementId]);
+        setBulletinLoading(false);
+    }, [etablissementId, selectedMonth]);
 
     const fetchHistory = useCallback(async () => {
         if (!historyEmpId) return;
-        setLoading(true);
         try {
-            const res = await api.get(`/api/finance/salaires/historique/${historyEmpId}`);
-            setHistoryList(res.data);
+            const emp = employes.find((e: any) => e.employe_id === historyEmpId);
+            if (emp && emp.historique) {
+                setHistoryList(emp.historique.map((b: any) => ({
+                    ...b,
+                    // b.mode_paiement / b.date_paiement / b.bulletin_id / b.mois_concerne
+                    // viennent désormais directement du backend — plus de mode
+                    // "VIREMENT" codé en dur ni de bulletin_id fantôme (depense_id).
+                    mois_concerne: b.mois_concerne || selectedMonth,
+                    net_paye: b.net_a_payer !== undefined ? b.net_a_payer : b.montant,
+                    salaire_base: b.salaire_base !== undefined ? b.salaire_base : emp.salaire_base,
+                    total_primes: b.total_primes !== undefined ? b.total_primes : (emp.prime_mensuelle || 0),
+                    total_absences: b.total_absences || 0,
+                    total_avances: b.total_avances || 0
+                })));
+            } else {
+                setHistoryList([]);
+            }
         } catch {
             showMsg('Erreur de chargement de l\'historique', 'error');
         }
-        setLoading(false);
-    }, [historyEmpId]);
+    }, [historyEmpId, employes, selectedMonth]);
 
     const fetchAbsenceSources = useCallback(async () => {
-        setLoading(true);
         try {
-            const url = sourceEmpId
-                ? `/api/finance/salaires/absences-source?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}&employe_id=${sourceEmpId}`
-                : `/api/finance/salaires/absences-source?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}`;
-            const res = await api.get(url);
+            const params = new URLSearchParams({ etablissement_id: String(etablissementId), mois_concerne: selectedMonth });
+            if (sourceEmpId) params.set('employe_id', sourceEmpId);
+            const res = await api.get(`/api/finance/salaires/absences-source?${params.toString()}`);
             setAbsenceSourceRows(res.data?.absences || []);
             setAbsenceSourceTotal(res.data?.total_retenue_estimee || 0);
         } catch {
-            showMsg('Erreur de chargement des sources d\'absences', 'error');
+            setAbsenceSourceRows([]);
+            setAbsenceSourceTotal(0);
         }
-        setLoading(false);
     }, [etablissementId, selectedMonth, sourceEmpId]);
 
     const fetchAlertHistory = useCallback(async () => {
-        setLoading(true);
         try {
-            const res = await api.get(`/api/finance/salaires/alertes/historique?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}`);
+            const res = await api.get(`/api/finance/salaires/alertes/historique?mois_concerne=${selectedMonth}`);
             setAlertHistory(res.data || []);
         } catch {
-            showMsg('Erreur de chargement de l\'historique des alertes', 'error');
+            setAlertHistory([]);
         }
-        setLoading(false);
     }, [etablissementId, selectedMonth]);
 
     useEffect(() => {
@@ -228,77 +279,26 @@ function SalairesContent() {
         }
     }, [activeTab, fetchEmployes, fetchCalculatedSalaires, fetchBulletins, fetchHistory, fetchAbsenceSources, fetchAlertHistory, selectedMonth]);
 
-    const handleCreateOrUpdateEmp = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!empNom || !empPrenom || !empSalaire) {
-            showMsg('Veuillez remplir les champs obligatoires', 'error');
-            return;
-        }
-
-        try {
-            const payload = {
-                etablissement_id: etablissementId,
-                nom: empNom,
-                prenom: empPrenom,
-                poste: empPoste,
-                salaire_base: parseFloat(empSalaire),
-                type_contrat: empContrat,
-                mobile_money: empMobile || null
-            };
-
-            if (editingEmp) {
-                await api.put(`/api/finance/employes/${editingEmp.employe_id}`, payload);
-                showMsg('Employé modifié avec succès', 'success');
-            } else {
-                await api.post('/api/finance/employes', payload);
-                showMsg('Employé ajouté avec succès', 'success');
-            }
-
-            // Reset
-            setEmpNom(''); setEmpPrenom(''); setEmpPoste('Enseignant');
-            setEmpSalaire(''); setEmpContrat('CDI'); setEmpMobile('');
-            setEditingEmp(null); setShowEmpForm(false);
-            fetchEmployes();
-        } catch {
-            showMsg('Erreur lors de l\'enregistrement', 'error');
-        }
-    };
-
-    const handleToggleStatut = async (id: number, currentStatut: string) => {
-        const next = currentStatut === 'ACTIF' ? 'INACTIF' : 'ACTIF';
-        if (!confirm(`Confirmer la désactivation/activation de cet employé ?`)) return;
-        try {
-            await api.put(`/api/finance/employes/${id}/statut?statut=${next}`);
-            showMsg('Statut employé mis à jour', 'success');
-            fetchEmployes();
-        } catch {
-            showMsg('Erreur de changement de statut', 'error');
-        }
-    };
+    // NOTE : la création/modification d'employé et l'activation/désactivation de
+    // statut ont été retirées d'ici — ce panneau est en lecture seule côté comptable
+    // ("Personnel enregistré par la direction", voir le texte affiché sous l'onglet
+    // Personnel) et ces actions appelaient de toute façon des routes backend
+    // (/api/finance/employes) qui n'ont jamais existé : code mort, jamais atteignable
+    // depuis l'UI (aucun bouton ne les déclenchait), supprimé plutôt que "réparé" en
+    // pointant vers une fonctionnalité qui n'est pas censée être ici. La gestion
+    // réelle du personnel se fait via /personnel (API /api/personnel).
 
     // Tab 2 actions
-    const handlePayIndividual = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!showPayModal) return;
-
-        try {
-            const res = await api.post(`/api/finance/salaires/payer?employe_id=${showPayModal.employe_id}&mois_concerne=${selectedMonth}&mode_paiement=${payMode}&total_primes=${showPayModal.total_primes}&total_absences=${showPayModal.total_absences}&total_avances=${showPayModal.total_avances}&net_a_payer=${showPayModal.net_a_payer}`);
-            showMsg(res.data.message, 'success');
-            setShowPayModal(null);
-            fetchCalculatedSalaires();
-        } catch {
-            showMsg('Erreur lors du paiement', 'error');
-        }
-    };
-
     const handlePayGroup = async () => {
         if (!confirm(`Confirmer le paiement de tout le personnel actif en 1 clic pour le mois de ${selectedMonth} ?`)) return;
         try {
             const res = await api.post(`/api/finance/salaires/payer-group?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}&mode_paiement=Cash`);
-            showMsg(res.data.message, 'success');
+            showMsg(res.data?.message || 'Paiements multiples effectués', 'success');
             fetchCalculatedSalaires();
-        } catch {
-            showMsg('Erreur lors du paiement groupé', 'error');
+            fetchEmployes();
+            queryClient.invalidateQueries({ queryKey: ['depenses'] });
+        } catch (err: any) {
+            showMsg(err.response?.data?.detail || 'Erreur lors du paiement groupé', 'error');
         }
     };
 
@@ -307,15 +307,21 @@ function SalairesContent() {
         e.preventDefault();
         try {
             await api.post('/api/finance/primes', {
-                employe_id: parseInt(targetEmpId),
+                employe_id: targetEmpId,
                 montant: parseFloat(formMontant),
                 motif: formMotif,
                 mois_concerne: selectedMonth
             });
             showMsg('Prime ajoutée avec succès !', 'success');
             setFormMontant(''); setFormMotif(''); setShowPrimeForm(false);
-        } catch {
-            showMsg('Erreur lors de l\'ajout', 'error');
+            // Invalidation inconditionnelle : ce formulaire ne s'affiche que dans
+            // l'onglet "avances", donc `activeTab === 'paie'` n'est jamais vrai ici
+            // — le cache du calcul des salaires ne se rafraîchissait donc jamais.
+            fetchCalculatedSalaires();
+            fetchEmployes();
+            queryClient.invalidateQueries({ queryKey: ['depenses'] });
+        } catch (err: any) {
+            showMsg(err.response?.data?.detail || 'Erreur lors de l\'ajout', 'error');
         }
     };
 
@@ -323,14 +329,17 @@ function SalairesContent() {
         e.preventDefault();
         try {
             await api.post('/api/finance/avances', {
-                employe_id: parseInt(targetEmpId),
+                employe_id: targetEmpId,
                 montant: parseFloat(formMontant),
                 mois_concerne: selectedMonth
             });
             showMsg('Avance sur salaire enregistrée !', 'success');
             setFormMontant(''); setShowAvanceForm(false);
-        } catch {
-            showMsg('Erreur lors de l\'enregistrement', 'error');
+            fetchCalculatedSalaires();
+            fetchEmployes();
+            queryClient.invalidateQueries({ queryKey: ['depenses'] });
+        } catch (err: any) {
+            showMsg(err.response?.data?.detail || 'Erreur lors de l\'enregistrement', 'error');
         }
     };
 
@@ -338,15 +347,16 @@ function SalairesContent() {
         e.preventDefault();
         try {
             await api.post('/api/absences', {
-                employe_id: parseInt(targetEmpId),
+                employe_id: targetEmpId,
                 date_absence: formDate,
                 motif: formMotif || null,
                 est_justifie: formJustifie
             });
             showMsg('Absence ou retard enregistré !', 'success');
             setFormMotif(''); setShowAbsenceForm(false);
-        } catch {
-            showMsg('Erreur lors de l\'enregistrement', 'error');
+            fetchCalculatedSalaires();
+        } catch (err: any) {
+            showMsg(err.response?.data?.detail || 'Erreur lors de l\'enregistrement', 'error');
         }
     };
 
@@ -371,7 +381,11 @@ function SalairesContent() {
         }
         try {
             setSavingPayday(true);
-            await api.put(`/api/finance/salaires/date-paie?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}&date_paie=${paydayDate}`);
+            await api.put('/api/finance/salaires/date-paie', {
+                etablissement_id: etablissementId,
+                mois: selectedMonth,
+                date_paie: paydayDate
+            });
             showMsg('Date de paie enregistrée', 'success');
         } catch {
             showMsg('Erreur lors de l\'enregistrement de la date de paie', 'error');
@@ -381,8 +395,13 @@ function SalairesContent() {
 
     const handleSendPayAlerts = async (force: boolean = false) => {
         try {
-            await api.post(`/api/finance/salaires/alertes?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}&force=${force}`);
-            showMsg('Alertes de paie envoyées', 'success');
+            await api.post('/api/finance/salaires/alertes', {
+                etablissement_id: etablissementId,
+                mois_concerne: selectedMonth,
+                force: force,
+                type: force ? 'FORCE' : 'J7'
+            });
+            showMsg('Alertes envoyées avec succès', 'success');
             fetchAlertHistory();
         } catch {
             showMsg('Erreur lors de l\'envoi des alertes', 'error');
@@ -676,9 +695,9 @@ function SalairesContent() {
                                             <td style={{ padding: '14px 16px', fontWeight: 600 }}>{sal.prenom} {sal.nom}</td>
                                             <td style={{ padding: '14px 16px', color: '#64748b' }}>{sal.poste}</td>
                                             <td style={{ padding: '14px 16px' }}>{fmt(sal.salaire_base)}</td>
-                                            <td style={{ padding: '14px 16px', color: '#10b981', fontWeight: 600 }}>+{sal.total_primes.toLocaleString()}</td>
-                                            <td style={{ padding: '14px 16px', color: '#ef4444', fontWeight: 600 }}>-{sal.total_absences.toLocaleString()}</td>
-                                            <td style={{ padding: '14px 16px', color: '#e59e0b', fontWeight: 600 }}>-{sal.total_avances.toLocaleString()}</td>
+                                            <td style={{ padding: '14px 16px', color: '#10b981', fontWeight: 600 }}>+{fmt(sal.total_primes)}</td>
+                                            <td style={{ padding: '14px 16px', color: '#ef4444', fontWeight: 600 }}>-{fmt(sal.total_absences)}</td>
+                                            <td style={{ padding: '14px 16px', color: '#e59e0b', fontWeight: 600 }}>-{fmt(sal.total_avances)}</td>
                                             <td style={{ padding: '14px 16px', fontWeight: 800, color: '#10b981', fontSize: 14 }}>{fmt(sal.net_a_payer)}</td>
                                             <td style={{ padding: '14px 16px' }}>
                                                 <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, backgroundColor: sal.statut === 'PAYE' ? '#d1fae5' : '#fee2e2', color: sal.statut === 'PAYE' ? '#03543f' : '#9b1c1c' }}>
@@ -701,7 +720,7 @@ function SalairesContent() {
                                                             <Check size={14} /> Réglé
                                                         </span>
                                                     ) : (
-                                                        <button onClick={() => setShowPayModal(sal)}
+                                                        <button onClick={() => router.push(`/comptabilite/paiements?tab=fournisseurs&payerSalaire=${sal.employe_id}&mois=${selectedMonth}`)}
                                                             style={{ padding: '6px 12px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
                                                             Payer
                                                         </button>
@@ -1008,9 +1027,9 @@ function SalairesContent() {
                                         <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
                                             <td style={{ padding: '14px 16px', fontWeight: 700, color: '#3b82f6' }}>{b.mois_concerne}</td>
                                             <td style={{ padding: '14px 16px' }}>{fmt(b.salaire_base)}</td>
-                                            <td style={{ padding: '14px 16px', color: '#10b981' }}>+{b.total_primes.toLocaleString()}</td>
-                                            <td style={{ padding: '14px 16px', color: '#ef4444' }}>-{b.total_absences.toLocaleString()}</td>
-                                            <td style={{ padding: '14px 16px', color: '#e59e0b' }}>-{b.total_avances.toLocaleString()}</td>
+                                            <td style={{ padding: '14px 16px', color: '#10b981' }}>+{fmt(b.total_primes)}</td>
+                                            <td style={{ padding: '14px 16px', color: '#ef4444' }}>-{fmt(b.total_absences)}</td>
+                                            <td style={{ padding: '14px 16px', color: '#e59e0b' }}>-{fmt(b.total_avances)}</td>
                                             <td style={{ padding: '14px 16px', fontWeight: 800, color: '#10b981' }}>{fmt(b.net_a_payer)}</td>
                                             <td style={{ padding: '14px 16px' }}>{b.date_paiement || '—'}</td>
                                             <td style={{ padding: '14px 16px' }}>{b.mode_paiement || '—'}</td>
@@ -1031,66 +1050,10 @@ function SalairesContent() {
             </div>
 
             {/* MODAL: Employee Form — masqué pour le comptable (géré par la direction) */}
-
-            {/* MODAL: Pay Individual Employee */}
-            <AnimatePresence>
-                {showPayModal && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-                        <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-                            style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 450, padding: 24, boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e293b' }}>Confirmer le paiement du salaire</h3>
-                                <button onClick={() => setShowPayModal(null)} style={{ border: 'none', background: '#f1f5f9', width: 28, height: 28, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                                    <X size={16} />
-                                </button>
-                            </div>
-
-                            <form onSubmit={handlePayIndividual} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                                <div style={{ background: '#f8fafc', padding: 14, borderRadius: 8, fontSize: 13 }}>
-                                    <p style={{ fontWeight: 700, marginBottom: 8 }}>{showPayModal.prenom} {showPayModal.nom} ({showPayModal.poste})</p>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                                        <span>Salaire de Base :</span>
-                                        <span style={{ fontWeight: 600 }}>{fmt(showPayModal.salaire_base)}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, color: '#10b981' }}>
-                                        <span>Primes (+) :</span>
-                                        <span>+{showPayModal.total_primes.toLocaleString()} GNF</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, color: '#ef4444' }}>
-                                        <span>Absences (-) :</span>
-                                        <span>-{showPayModal.total_absences.toLocaleString()} GNF</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#e59e0b' }}>
-                                        <span>Avances (-) :</span>
-                                        <span>-{showPayModal.total_avances.toLocaleString()} GNF</span>
-                                    </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 800, borderTop: '1px solid #e2e8f0', paddingTop: 8, color: '#10b981' }}>
-                                        <span>Net à Payer :</span>
-                                        <span>{fmt(showPayModal.net_a_payer)}</span>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}>Mode de Règlement *</label>
-                                    <select value={payMode} onChange={e => setPayMode(e.target.value)}
-                                        style={{ width: '100%', padding: '10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, background: '#fff' }}>
-                                        <option value="Cash">Cash / Espèces</option>
-                                        <option value="Mobile Money">Mobile Money (Orange/MTN)</option>
-                                        <option value="Virement">Virement bancaire</option>
-                                        <option value="Cheque">Chèque</option>
-                                    </select>
-                                </div>
-
-                                <button type="submit"
-                                    style={{ width: '100%', padding: '12px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', marginTop: 8 }}>
-                                    Confirmer le règlement
-                                </button>
-                            </form>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
+            {/* Le paiement individuel ne se fait plus ici : le bouton "Payer" redirige
+                désormais vers Paiements > Centre de Décaissement > Salaire, seul
+                point d'entrée pour tout paiement de salaire (voir bouton "Payer"
+                ci-dessus, tab "paie"). */}
 
             {/* MODAL: Printable Bulletin / Pay Slip */}
             <AnimatePresence>
@@ -1159,7 +1122,7 @@ function SalairesContent() {
                                             <tbody>
                                                 <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                                                     <td style={{ padding: '12px' }}>Salaire de Base Contractuel</td>
-                                                    <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>{bulletinDetails.bulletin.salaire_base.toLocaleString()} GNF</td>
+                                                    <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>{fmt(bulletinDetails.bulletin.salaire_base)}</td>
                                                     <td style={{ padding: '12px', textAlign: 'right', color: '#94a3b8' }}>—</td>
                                                 </tr>
                                                 
@@ -1167,7 +1130,7 @@ function SalairesContent() {
                                                 {bulletinDetails.details.primes.map((p: any, i: number) => (
                                                     <tr key={i} style={{ borderBottom: '1px solid #f1f5f9', color: '#03543f' }}>
                                                         <td style={{ padding: '12px' }}>+ Prime : {p.motif}</td>
-                                                        <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>+{p.montant.toLocaleString()} GNF</td>
+                                                        <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>+{fmt(p.montant)}</td>
                                                         <td style={{ padding: '12px', textAlign: 'right', color: '#94a3b8' }}>—</td>
                                                     </tr>
                                                 ))}
@@ -1175,9 +1138,16 @@ function SalairesContent() {
                                                 {/* Absences deduction */}
                                                 {bulletinDetails.bulletin.total_absences > 0 && (
                                                     <tr style={{ borderBottom: '1px solid #f1f5f9', color: '#9b1c1c' }}>
-                                                        <td style={{ padding: '12px' }}>- Retenu Absences non justifiées ({bulletinDetails.details.absences.length} jour(s))</td>
+                                                        <td style={{ padding: '12px' }}>
+                                                            - Retenu Absences
+                                                            {bulletinDetails.details?.details_absences_texte && 
+                                                                <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>
+                                                                    {bulletinDetails.details.details_absences_texte}
+                                                                </div>
+                                                            }
+                                                        </td>
                                                         <td style={{ padding: '12px', textAlign: 'right', color: '#94a3b8' }}>—</td>
-                                                        <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>-{bulletinDetails.bulletin.total_absences.toLocaleString()} GNF</td>
+                                                        <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>-{fmt(bulletinDetails.bulletin.total_absences)}</td>
                                                     </tr>
                                                 )}
 
@@ -1186,7 +1156,7 @@ function SalairesContent() {
                                                     <tr style={{ borderBottom: '1px solid #f1f5f9', color: '#b25e02' }}>
                                                         <td style={{ padding: '12px' }}>- Déduction Avance sur salaire perçue</td>
                                                         <td style={{ padding: '12px', textAlign: 'right', color: '#94a3b8' }}>—</td>
-                                                        <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>-{bulletinDetails.bulletin.total_avances.toLocaleString()} GNF</td>
+                                                        <td style={{ padding: '12px', textAlign: 'right', fontWeight: 600 }}>-{fmt(bulletinDetails.bulletin.total_avances)}</td>
                                                     </tr>
                                                 )}
                                             </tbody>

@@ -13,8 +13,9 @@ from app.core.auth import get_current_user
 from app.models.academique import (
     Enseignant, Affectation, CreneauEmploi, Classe, Matiere, Niveau,
     Note, Evaluation, Inscription, Eleve, Presence, Trimestre, TypeEvaluation,
-    AnneeScolaire, RessourcePedagogique
+    AnneeScolaire, RessourcePedagogique, ClasseMatiere, ParametreEtablissement
 )
+from app.core.annee_lock import verifier_annee_modifiable
 
 router = APIRouter(prefix="/api/portail-enseignant", tags=["Portail Enseignant"])
 
@@ -131,6 +132,85 @@ def get_evaluations(enseignant_id: int, _auth: dict = Depends(_enseignant_auth),
         })
     return result
 
+
+# ================================================================
+# PAIEMENTS (SALAIRES)
+# ================================================================
+@router.get("/{enseignant_id}/paiements")
+def get_historique_paiements(enseignant_id: int, _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db)):
+    from app.models.academique import Depense, BulletinPaie, Enseignant
+    
+    # Historique depuis Depense + BulletinPaie
+    depenses = db.query(Depense).filter(
+        Depense.fournisseur == f"ENS_{enseignant_id}",
+        Depense.categorie == "SALAIRES",
+        Depense.statut == "VALIDE"
+    ).order_by(Depense.date_depense.desc()).all()
+    
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    
+    historique = []
+    for dep in depenses:
+        bulletin = None
+        if dep.reference and dep.reference.isdigit():
+            bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == int(dep.reference)).first()
+        
+        historique.append({
+            "depense_id": dep.depense_id,
+            "bulletin_id": bulletin.bulletin_id if bulletin else None,
+            "date": dep.date_depense.isoformat() if dep.date_depense else None,
+            "montant": float(dep.montant),
+            "libelle": dep.libelle,
+            "statut": dep.statut,
+            "salaire_base": float(bulletin.salaire_base) if bulletin else float(ens.salaire_base or 0),
+            "total_primes": float(bulletin.total_primes) if bulletin else float(ens.prime_mensuelle or 0),
+            "total_absences": float(bulletin.total_absences) if bulletin else 0,
+            "total_avances": float(bulletin.total_avances) if bulletin else 0,
+            "net_a_payer": float(bulletin.net_a_payer) if bulletin else float(dep.montant),
+            "details_absences": bulletin.details_absences if bulletin else None
+        })
+    return historique
+
+@router.get("/{enseignant_id}/paiements/{bulletin_id}")
+def get_bulletin_detail(enseignant_id: int, bulletin_id: int, _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db)):
+    from app.models.academique import BulletinPaie, Prime, AbsencePersonnel, Enseignant, Employe
+    from fastapi import HTTPException
+    
+    bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == bulletin_id).first()
+    if not bulletin:
+        raise HTTPException(status_code=404, detail="Bulletin introuvable")
+        
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    emp_mirror = db.query(Employe).filter(Employe.source_ref == f"ENS_{enseignant_id}").first()
+    
+    if bulletin.employe_id != emp_mirror.employe_id:
+        raise HTTPException(status_code=403, detail="Accès refusé à ce bulletin")
+        
+    primes = db.query(Prime).filter(Prime.employe_id == bulletin.employe_id, Prime.mois_concerne == bulletin.mois_concerne).all()
+    
+    return {
+        "bulletin": {
+            "bulletin_id": bulletin.bulletin_id,
+            "mois_concerne": bulletin.mois_concerne,
+            "net_a_payer": float(bulletin.net_a_payer),
+            "date_paiement": bulletin.date_paiement.isoformat() if bulletin.date_paiement else None,
+            "mode_paiement": bulletin.mode_paiement,
+            "salaire_base": float(bulletin.salaire_base),
+            "total_primes": float(bulletin.total_primes),
+            "total_absences": float(bulletin.total_absences),
+            "total_avances": float(bulletin.total_avances)
+        },
+        "employe": {
+            "nom": ens.nom,
+            "prenom": ens.prenom,
+            "poste": "Enseignant",
+            "type_contrat": ens.type_contrat or "Prestataire"
+        },
+        "details": {
+            "primes": [{"montant": float(p.montant), "motif": p.motif} for p in primes],
+            "details_absences_texte": bulletin.details_absences
+        }
+    }
 
 # ================================================================
 # HISTORIQUE DES APPELS
@@ -432,6 +512,8 @@ def enregistrer_appel(enseignant_id: int, data: AppelRequest, _auth: dict = Depe
     ).first()
     if not aff:
         raise HTTPException(403, "Vous n'êtes pas affecté à cette classe")
+    classe = db.query(Classe).filter(Classe.classe_id == data.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
     from datetime import date
     today = date.today()
@@ -471,6 +553,46 @@ def enregistrer_appel(enseignant_id: int, data: AppelRequest, _auth: dict = Depe
 # ================================================================
 # SAISIE DES NOTES (créer évaluation + sauvegarder notes)
 # ================================================================
+
+_POIDS_EVAL_DEFAUT = {"ecrite": 1.0, "orale": 1.0, "composition": 2.0}
+
+
+def _categorie_evaluation(type_eval_code):
+    if type_eval_code == "COMPO":
+        return "composition"
+    if type_eval_code == "ORAL":
+        return "orale"
+    return "ecrite"
+
+
+def _coefficient_pour_evaluation(db: Session, type_eval_id: int, matiere_id: int, classe_id: int, etablissement_id: int = 1) -> float:
+    """Système guinéen à 3 notes, pondérations Écrit/Oral/Composition
+    configurables par l'administrateur (Paramètres > Notation, défaut 1/1/2 —
+    la composition compte double). Le coefficient de la matière n'intervient
+    jamais ici (il ne pondère que la moyenne de matière dans la moyenne
+    générale, un niveau au-dessus) — jamais un choix manuel de l'enseignant.
+    """
+    type_eval = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == type_eval_id).first()
+    cat = _categorie_evaluation(type_eval.code if type_eval else None)
+    poids = dict(_POIDS_EVAL_DEFAUT)
+    try:
+        params = db.query(ParametreEtablissement).filter(
+            ParametreEtablissement.etablissement_id == etablissement_id,
+            ParametreEtablissement.categorie == 'NOTATION',
+            ParametreEtablissement.cle.in_([
+                'notation.poids_ecrit', 'notation.poids_oral', 'notation.poids_composition'
+            ]),
+        ).all()
+        mapping = {'notation.poids_ecrit': 'ecrite', 'notation.poids_oral': 'orale', 'notation.poids_composition': 'composition'}
+        for p in params:
+            key = mapping.get(p.cle)
+            if key:
+                poids[key] = float(p.valeur)
+    except Exception:
+        pass
+    return poids[cat]
+
+
 class NoteItem(BaseModel):
     inscription_id: int
     valeur: Optional[float] = None
@@ -499,8 +621,18 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
     ).first()
     if not aff:
         raise HTTPException(403, "Vous n'êtes pas affecté à cette classe/matière")
+    classe = db.query(Classe).filter(Classe.classe_id == data.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+
+    if data.trimestre_id:
+        trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == data.trimestre_id).first()
+        if trimestre and trimestre.statut == "CLOTURE":
+            raise HTTPException(400, f"{trimestre.libelle} est clôturé — impossible de saisir de nouvelles notes pour cette période.")
 
     from datetime import date
+
+    type_eval_id = data.type_evaluation_id or 1
+    coefficient = _coefficient_pour_evaluation(db, type_eval_id, data.matiere_id, data.classe_id)
 
     # 1. Créer l'évaluation
     evaluation = Evaluation(
@@ -508,11 +640,11 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
         matiere_id=data.matiere_id,
         enseignant_id=enseignant_id,
         trimestre_id=data.trimestre_id or 1,
-        type_eval_id=data.type_evaluation_id or 1,
+        type_eval_id=type_eval_id,
         libelle=data.libelle,
         date_evaluation=date.today(),
         note_sur=data.note_sur,
-        coefficient=data.coefficient,
+        coefficient=coefficient,
         statut="PUBLIEE",
     )
     db.add(evaluation)
@@ -563,6 +695,7 @@ def get_detail_evaluation(enseignant_id: int, evaluation_id: int, _auth: dict = 
         Note.valeur,
         Note.est_absent,
         Note.observation,
+        Note.updated_at,
         Eleve.eleve_id,
         Eleve.nom,
         Eleve.prenom,
@@ -599,6 +732,10 @@ def get_detail_evaluation(enseignant_id: int, evaluation_id: int, _auth: dict = 
             "valeur": val,
             "est_absent": is_absent,
             "observation": n.observation,
+            # Consommé par le module offline-first (base_updated_at, voir
+            # app/api/sync.py) pour détecter si la note a changé sur le
+            # serveur depuis la dernière lecture locale de cet enseignant.
+            "updated_at": n.updated_at.isoformat() if n.updated_at else None,
         })
 
     # Stats
@@ -663,6 +800,13 @@ def update_notes_batch_enseignant(
     if ev.statut == "CENTRALISEE":
         raise HTTPException(400, "Cette évaluation a déjà été centralisée. Contactez l'administrateur.")
 
+    classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — impossible de modifier des notes pour cette période.")
+
     updated = 0
     for item in data.notes:
         note = db.query(Note).filter(
@@ -708,6 +852,9 @@ def centraliser_evaluation(enseignant_id: int, evaluation_id: int, _auth: dict =
 
     if ev.statut == "CENTRALISEE":
         return {"message": "Cette évaluation est déjà centralisée", "statut": "CENTRALISEE"}
+
+    classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
     # Vérifier qu'il y a au moins 1 note saisie
     nb_notes = db.query(func.count(Note.note_id)).filter(

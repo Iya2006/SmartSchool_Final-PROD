@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guide de test — Module Offline-First (Phase 1)</title>
+<style>
+  :root {
+    --bg: #f8fafc; --card: #ffffff; --text: #0f172a; --muted: #64748b;
+    --border: #e2e8f0; --accent: #059669; --accent-light: #d1fae5;
+    --warn: #b45309; --warn-light: #fef3c7; --danger: #b91c1c; --danger-light: #fee2e2;
+  }
+  [data-theme="dark"] {
+    --bg: #0f172a; --card: #1e293b; --text: #f1f5f9; --muted: #94a3b8;
+    --border: #334155; --accent: #34d399; --accent-light: #064e3b;
+    --warn: #fbbf24; --warn-light: #451a03; --danger: #fca5a5; --danger-light: #450a0a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.6; transition: background .2s, color .2s; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 80px; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 24px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0; }
+  button.toggle { border: 1px solid var(--border); background: var(--card); color: var(--text); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; flex-shrink: 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 20px 24px; margin-bottom: 18px; }
+  .callout { border-radius: 12px; padding: 16px 18px; margin-bottom: 24px; font-size: 14px; }
+  .callout.info { background: var(--accent-light); border: 1px solid var(--accent); }
+  .callout.warn { background: var(--warn-light); border: 1px solid var(--warn); }
+  .step-num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: white; font-weight: 700; font-size: 13px; margin-right: 10px; flex-shrink: 0; }
+  .step-title { display: flex; align-items: center; font-size: 16px; font-weight: 700; margin: 0 0 10px; }
+  code, .mono { font-family: 'Cascadia Code', Consolas, monospace; background: rgba(128,128,128,0.12); padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  ul, ol { padding-left: 22px; margin: 8px 0; }
+  li { margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge.ok { background: var(--accent-light); color: var(--accent); }
+  .badge.gap { background: var(--danger-light); color: var(--danger); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>🧪 Guide de test — Module Offline-First (Phase 1)</h1>
+      <p class="sub">Portail enseignant : saisie de notes et présences sans connexion</p>
+    </div>
+    <button class="toggle" onclick="toggleTheme()">🌓 Thème</button>
+  </header>
+
+  <div class="callout info">
+    <strong>Ce qui est couvert par cette Phase 1 :</strong> les enseignants peuvent
+    corriger des notes déjà saisies et prendre l'appel même sans connexion —
+    tout est mis en attente localement puis synchronisé automatiquement au
+    retour du réseau. La comptabilité et les autres modules restent
+    "connexion requise" (décision actée avec l'utilisateur).
+  </div>
+
+  <div class="callout warn">
+    <strong>⚠️ Limite connue à ce stade :</strong> le chargement de
+    l'application elle-même (HTML/JS) sans AUCUNE connexion ("app shell"
+    hors-ligne, installation PWA complète) ne fonctionne pas encore — le
+    générateur de Service Worker utilisé (<code>next-pwa</code>) s'est révélé
+    incompatible avec Turbopack (le moteur de build de ce projet, confirmé
+    lors des tests de cette phase). La file de saisie hors-ligne décrite
+    ci-dessous n'en dépend PAS et fonctionne normalement — seul le
+    chargement initial de la page nécessite encore une connexion la première
+    fois. Une correction séparée (remplacer next-pwa par une génération de
+    Service Worker compatible Turbopack) sera nécessaire pour lever cette
+    limite.
+  </div>
+
+  <div class="card">
+    <p class="step-title"><span class="step-num">1</span> Se connecter normalement</p>
+    <p>Ouvre le portail enseignant (<code>/portail-enseignant</code>) avec une
+    vraie connexion internet et connecte-toi. En haut à droite de l'écran, à
+    côté de ton profil, une pastille indique l'état de synchronisation :</p>
+    <table>
+      <tr><th>Pastille</th><th>Signification</th></tr>
+      <tr><td>🟢 En ligne — à jour</td><td>Tout est synchronisé, aucune action en attente.</td></tr>
+      <tr><td>🟡 N en attente de synchronisation</td><td>Des saisies récentes n'ont pas encore atteint le serveur.</td></tr>
+      <tr><td>🔴 Hors ligne</td><td>Aucune connexion détectée — tes saisies sont enregistrées localement.</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <p class="step-title"><span class="step-num">2</span> Ouvrir une évaluation existante</p>
+    <p>Onglet <strong>Notes</strong> → ouvre le détail d'une évaluation déjà
+    créée (bouton "Voir" sur une évaluation de l'historique). Laisse cette
+    fiche ouverte, prêt à modifier des notes.</p>
+  </div>
+
+  <div class="card">
+    <p class="step-title"><span class="step-num">3</span> Couper le réseau</p>
+    <p>Dans les outils de développement du navigateur (F12) → onglet
+    <strong>Network/Réseau</strong> → sélectionner <strong>Offline</strong>
+    (Chrome/Edge) ou décocher "Activer le cache"/simuler hors-ligne selon le
+    navigateur.</p>
+  </div>
+
+  <div class="card">
+    <p class="step-title"><span class="step-num">4</span> Modifier des notes hors-ligne</p>
+    <ul>
+      <li>Change la valeur d'une ou plusieurs notes, clique <strong>Enregistrer</strong>.</li>
+      <li>Un message de succès apparaît quand même ("Enregistré localement — sera synchronisé...") —
+      c'est le comportement attendu, pas une erreur.</li>
+      <li>La pastille en haut à droite passe à 🔴 (ou 🟡 si une tentative
+      immédiate a eu lieu avant que tu coupes vraiment le réseau).</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <p class="step-title"><span class="step-num">5</span> Prendre l'appel hors-ligne</p>
+    <p>Onglet <strong>Appel</strong> → sélectionne une classe → marque
+    quelques élèves absents/en retard → <strong>Enregistrer l'appel</strong>.
+    Même comportement : succès optimiste local, rien envoyé au serveur pour
+    l'instant.</p>
+  </div>
+
+  <div class="card">
+    <p class="step-title"><span class="step-num">6</span> Rétablir le réseau</p>
+    <ul>
+      <li>Dans DevTools, repasser sur <strong>Online</strong>.</li>
+      <li>La synchronisation démarre automatiquement (pas besoin de recharger
+      la page) — la pastille passe brièvement à "Synchronisation en cours…"
+      puis à 🟢 une fois terminé.</li>
+      <li>Si une note avait été modifiée entre-temps par quelqu'un d'autre
+      (ou depuis un autre appareil), un message signale le nombre de
+      conflits résolus automatiquement (la saisie hors-ligne l'emporte —
+      Last-Write-Wins) — vérifiable en rouvrant l'évaluation.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <p class="step-title"><span class="step-num">7</span> Vérifier côté administration</p>
+    <p>Depuis un compte admin, ouvre la fiche de l'évaluation concernée
+    (Bulletins/Centralisation) et confirme que les notes modifiées
+    hors-ligne sont bien celles enregistrées côté serveur.</p>
+  </div>
+
+  <div class="card">
+    <p class="step-title">📋 Récapitulatif de ce qui a été vérifié automatiquement</p>
+    <table>
+      <tr><th>Élément</th><th>Statut</th></tr>
+      <tr><td>File locale (enregistrement, tri, statuts, purge) — 9 tests unitaires</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>Moteur de synchronisation (rejeu, conflits, arrêt propre hors-ligne, erreurs serveur) — 7 tests unitaires</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>Backend : détection de conflit (LWW), upsert présences, refus propre — 13 vérifications end-to-end</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>Lecture avec cache persisté (Classes, Élèves, Tableau de bord)</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>Purge de la file/cache à la déconnexion</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>Service Worker / app shell hors-ligne complet</td><td><span class="badge gap">À refaire (Turbopack)</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<script>
+function toggleTheme() {
+  const root = document.documentElement;
+  const current = root.getAttribute('data-theme') ||
+    (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  root.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
+}
+</script>
+</body>
+</html>

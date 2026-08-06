@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Guide de test — Clôture d'année, promotion, réinscription, archivage</title>
+<style>
+  :root {
+    --ink: #16241c;
+    --ink-soft: #55645c;
+    --paper: #f6f9f7;
+    --card: #ffffff;
+    --line: #dde5e0;
+    --accent: #0e8f63;
+    --accent-soft: #e3f5ec;
+    --accent-deep: #065f46;
+    --amber: #b45309;
+    --amber-soft: #fef3e2;
+    --ok: #059669;
+    --ok-bg: #d1fae5;
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --danger: #b91c1c;
+    --danger-bg: #fee2e2;
+    --info: #1d4ed8;
+    --info-bg: #dbeafe;
+    --shadow: 0 1px 2px rgba(22,36,28,.04), 0 6px 20px rgba(22,36,28,.06);
+  }
+  :root[data-theme="dark"] {
+    --ink: #eaf2ec;
+    --ink-soft: #a7b6ac;
+    --paper: #0f1712;
+    --card: #16211a;
+    --line: #263229;
+    --accent: #3ddc9a;
+    --accent-soft: #163827;
+    --accent-deep: #7ce8bb;
+    --amber: #f0a94e;
+    --amber-soft: #3a2712;
+    --ok: #34d399;
+    --ok-bg: #123726;
+    --warn: #f0a94e;
+    --warn-bg: #3a2712;
+    --danger: #f87171;
+    --danger-bg: #3a1414;
+    --info: #7aa2f7;
+    --info-bg: #16223c;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #eaf2ec;
+      --ink-soft: #a7b6ac;
+      --paper: #0f1712;
+      --card: #16211a;
+      --line: #263229;
+      --accent: #3ddc9a;
+      --accent-soft: #163827;
+      --accent-deep: #7ce8bb;
+      --amber: #f0a94e;
+      --amber-soft: #3a2712;
+      --ok: #34d399;
+      --ok-bg: #123726;
+      --warn: #f0a94e;
+      --warn-bg: #3a2712;
+      --danger: #f87171;
+      --danger-bg: #3a1414;
+      --info: #7aa2f7;
+      --info-bg: #16223c;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 40px 20px 100px;
+  }
+  h1, h2, h3 {
+    font-family: Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif;
+    font-weight: 600;
+    text-wrap: balance;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+  }
+  h1 { font-size: 30px; margin: 0 0 6px; line-height: 1.2; }
+  h2 { font-size: 20px; margin: 0; }
+  h3 { font-size: 15.5px; margin: 0 0 4px; font-family: inherit; font-weight: 700; }
+  .eyebrow {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .lede { color: var(--ink-soft); font-size: 15px; max-width: 62ch; }
+  code, .mono {
+    font-family: "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+    font-size: 0.88em;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  a { color: var(--accent-deep); }
+
+  header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 28px;
+  }
+  .theme-toggle {
+    position: fixed; top: 16px; right: 16px;
+    display: flex; gap: 4px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 999px; padding: 4px; box-shadow: var(--shadow); z-index: 40;
+  }
+  .theme-toggle button {
+    border: none; background: transparent; color: var(--ink-soft); cursor: pointer;
+    padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  }
+  .theme-toggle button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-deep); }
+
+  /* ---- FAQ callout ---- */
+  .faq {
+    display: grid;
+    gap: 14px;
+    margin: 28px 0 36px;
+  }
+  .faq-item {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    border-radius: 10px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .faq-item .q { font-weight: 700; font-size: 14.5px; margin-bottom: 6px; }
+  .faq-item .a { color: var(--ink-soft); font-size: 14px; }
+  .faq-item .a strong { color: var(--ink); }
+
+  /* ---- generic section card ---- */
+  section.block {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 22px 24px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+  }
+  section.block > h2 { margin-bottom: 10px; }
+  .warn-box {
+    background: var(--warn-bg); color: var(--warn);
+    border-radius: 8px; padding: 12px 14px; font-size: 13.5px; font-weight: 600;
+    display: flex; gap: 10px; align-items: flex-start; margin-top: 12px;
+  }
+  .warn-box .txt { color: var(--ink); font-weight: 400; }
+  .danger-box {
+    background: var(--danger-bg); color: var(--danger);
+    border-radius: 8px; padding: 12px 14px; font-size: 13.5px; font-weight: 700;
+    margin: 20px 0;
+  }
+
+  /* ---- numbered phases ---- */
+  .phase {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    gap: 16px;
+    padding: 22px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .phase:last-child { border-bottom: none; }
+  .phase-num {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent-deep);
+    display: flex; align-items: center; justify-content: center;
+    font-family: Georgia, serif; font-weight: 700; font-size: 17px;
+    flex-shrink: 0;
+  }
+  .phase-num.amber { background: var(--amber-soft); color: var(--amber); }
+  .phase-title-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .tag {
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    padding: 2px 8px; border-radius: 999px;
+  }
+  .tag.auto { background: var(--info-bg); color: var(--info); }
+  .tag.manuel { background: var(--ok-bg); color: var(--ok); }
+  .tag.definitif { background: var(--danger-bg); color: var(--danger); }
+  .phase p { margin: 0 0 8px; }
+  .phase ul { margin: 8px 0; padding-left: 20px; }
+  .phase li { margin-bottom: 5px; }
+  .checkline {
+    display: flex; gap: 10px; align-items: flex-start;
+    font-size: 14px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line);
+  }
+  .checkline input { margin-top: 3px; accent-color: var(--accent); width: 16px; height: 16px; flex-shrink: 0; }
+  .checkline .lbl strong { color: var(--ink); }
+  .checkline .lbl { color: var(--ink-soft); }
+
+  /* ---- recap table ---- */
+  table.recap {
+    width: 100%; border-collapse: collapse; font-size: 13.5px;
+  }
+  table.recap th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--ink-soft); padding: 8px 10px; border-bottom: 2px solid var(--line);
+  }
+  table.recap td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.recap tr:last-child td { border-bottom: none; }
+  .recap-wrap { overflow-x: auto; }
+
+  footer { margin-top: 40px; color: var(--ink-soft); font-size: 13px; text-align: center; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    section.block, .faq-item { transition: box-shadow .15s ease; }
+  }
+</style>
+</head>
+<body>
+
+<div class="theme-toggle" role="group" aria-label="Thème">
+  <button type="button" data-theme-btn="light" aria-pressed="false">Clair</button>
+  <button type="button" data-theme-btn="dark" aria-pressed="false">Sombre</button>
+</div>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">SmartSchool · Guide de test</span>
+    <h1>Clôture d'année, promotion, réinscription, archivage</h1>
+    <p class="lede">Ce document vous fait passer, étape par étape, du module Comptabilité jusqu'à l'archivage complet d'une année scolaire de test — dans l'ordre exact où l'assistant de clôture les présente.</p>
+  </header>
+
+  <div class="faq">
+    <div class="faq-item">
+      <div class="q">La page Archive reçoit-elle les données automatiquement ?</div>
+      <div class="a"><strong>Oui, toujours.</strong> Une année apparaît dans <code>/archive</code> dès qu'elle a des classes, sans aucune action de votre part — que l'année soit en cours, clôturée ou archivée. Le statut de l'année ne contrôle pas ce qui est <em>consultable</em>, seulement ce qui reste <em>modifiable</em>. Archiver une année ne « déplace » rien : ça verrouille définitivement les données là où elles sont déjà.</div>
+    </div>
+    <div class="faq-item">
+      <div class="q">Les 10 étapes de l'assistant sont-elles automatiques ?</div>
+      <div class="a"><strong>Non, sauf deux.</strong> Chaque étape a un bouton à cliquer par vous. Les deux seules choses automatiques : valider une classe (étape 5) ouvre aussitôt la campagne de réinscription pour ses élèves ; confirmer une réinscription génère aussitôt sa facture. C'est pour ça que les étapes 7 et 8 n'ont pas de bouton — elles ne font qu'afficher où vous en êtes.</div>
+    </div>
+  </div>
+
+  <div class="danger-box">⚠️ Ne travaillez que sur votre <strong>année de test</strong> la plus récente. Ne cliquez jamais sur « Clôturer », « Valider » ou « Archiver » pour l'année réelle en cours (2025-2026).</div>
+
+  <section class="block">
+    <h2>Avant de commencer</h2>
+    <p style="color:var(--ink-soft)">Pour que l'étape 1 de l'assistant passe au vert, votre année de test a besoin de deux choses déjà en place :</p>
+    <ul style="padding-left:20px; color:var(--ink-soft)">
+      <li>Chaque trimestre <strong>clôturé</strong> — Paramètres → Calendrier → icône cadenas sur chaque trimestre.</li>
+      <li>Un bulletin <strong>publié</strong> pour chaque élève actif, pour chaque trimestre — page Bulletins, ou Notes → Calculer les moyennes puis Publier.</li>
+    </ul>
+    <p style="color:var(--ink-soft); margin-bottom:0">« Les profs ont envoyé les notes » veut dire que les notes existent — pas forcément que les moyennes sont calculées ni les bulletins publiés. Si l'étape 1 bloque, c'est probablement ça : allez calculer les moyennes puis publier les bulletins de la classe concernée avant de continuer.</p>
+  </section>
+
+  <section class="block">
+    <h2 style="margin-bottom:16px">Le parcours, dans l'ordre</h2>
+
+    <div class="phase">
+      <div class="phase-num">1</div>
+      <div>
+        <div class="phase-title-row"><h3>Vérification</h3><span class="tag manuel">Lecture seule</span></div>
+        <p>Ouvrez <strong>Classes → Assistant de fin d'année</strong>, choisissez votre année de test comme « année source ». L'étape 1 s'affiche : chaque ligne doit être verte. Une ligne <span class="mono">BLOQUANT</span> rouge empêche la suite — corrigez-la (voir « Avant de commencer ») puis revenez sur cette page pour revérifier.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Tous les contrôles <strong>BLOQUANT</strong> sont verts</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num amber">2</div>
+      <div>
+        <div class="phase-title-row"><h3>Clôture comptable</h3><span class="tag manuel">Bouton à cliquer</span></div>
+        <p>Cliquez <strong>« Clôturer la comptabilité »</strong>. Vérifiez ensuite dans <strong>Comptabilité → Frais</strong> qu'une tentative de créer une facture pour cette année est refusée (message d'erreur, pas de facture créée) — c'est la preuve que le verrou fonctionne.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Comptabilité clôturée, et le verrou refuse bien une nouvelle facture</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">3</div>
+      <div>
+        <div class="phase-title-row"><h3>Nouvelle année scolaire</h3><span class="tag manuel">Formulaire</span></div>
+        <p>C'est l'année qui accueillera les élèves promus. Si elle n'existe pas encore, créez-la (code, libellé, dates), puis choisissez <strong>« Reprendre automatiquement »</strong> les tarifs dans la fenêtre qui s'ouvre — ça copie la grille de frais sans toucher à l'ancienne année.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Année cible créée ou sélectionnée, tarifs copiés</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">4</div>
+      <div>
+        <div class="phase-title-row"><h3>Calcul des résultats</h3><span class="tag manuel">Bouton à cliquer</span></div>
+        <p>Cliquez <strong>« Calculer les résultats (toutes) »</strong>. Ouvrez une classe pour voir, élève par élève : moyenne annuelle, total de points, rang, décision (Admis / Redoublant / Diplômé). Rejouable sans risque tant que rien n'est validé.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Résultats calculés pour toutes les classes, détail d'une classe vérifié</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num amber">5</div>
+      <div>
+        <div class="phase-title-row"><h3>Promotions</h3><span class="tag definitif">Définitif</span></div>
+        <p>Cliquez <strong>« Valider (toutes) »</strong>. Les classes avec un élève sans filière choisie sont ignorées et listées — traitez-les à l'étape 6 puis revenez valider. Une fois validé : les élèves concernés sont désactivés et entrent en campagne de réinscription.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Classes validées (ou classes bloquantes identifiées)</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">6</div>
+      <div>
+        <div class="phase-title-row"><h3>Choix des filières</h3><span class="tag manuel">Si 10<sup>e</sup> année</span></div>
+        <p>Ne concerne que les classes à la frontière Collège → Lycée. S'il y a des élèves « sans classe cible », ouvrez la vue détaillée (renvoyée depuis cette étape) et choisissez une série (SE/SM/SS) pour chacun.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Aucun élève en attente, ou tous résolus</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">7</div>
+      <div>
+        <div class="phase-title-row"><h3>Campagne de réinscription</h3><span class="tag auto">Automatique</span></div>
+        <p>Rien à cliquer ici — elle s'est ouverte toute seule à l'étape 5. Suivez le lien vers <strong>Comptabilité → Réinscriptions</strong>, choisissez la classe cible, et cliquez <strong>« Confirmer »</strong> pour au moins un élève de test.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Au moins un élève confirmé « Réinscrit »</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">8</div>
+      <div>
+        <div class="phase-title-row"><h3>Génération des frais</h3><span class="tag auto">Automatique</span></div>
+        <p>Rien à cliquer non plus — la confirmation de l'étape 7 a créé la facture toute seule. Allez vérifier dans <strong>Comptabilité → Frais</strong> (sur la nouvelle année) que la facture existe, montant à zéro payé.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Facture retrouvée pour l'élève réinscrit</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num amber">9</div>
+      <div>
+        <div class="phase-title-row"><h3>Archivage</h3><span class="tag definitif">Définitif</span></div>
+        <p>Cliquez <strong>« Archiver définitivement l'année »</strong>. À partir de là : plus aucune note, bulletin, présence, créneau ou facture ne peut être créé ou modifié pour cette année, nulle part dans l'application.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Année archivée</span></div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <div class="phase-num">10</div>
+      <div>
+        <div class="phase-title-row"><h3>Validation finale</h3><span class="tag manuel">Récapitulatif</span></div>
+        <p>Lisez les chiffres affichés (élèves traités, réinscrits). C'est un simple constat, rien à cliquer d'autre.</p>
+        <div class="checkline"><input type="checkbox" /><span class="lbl">Récapitulatif cohérent avec ce que vous avez fait</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Vérifier le résultat dans le Centre d'historique</h2>
+    <p style="color:var(--ink-soft)">Une fois l'année archivée, allez sur <strong>Archive</strong> (menu de gauche) :</p>
+    <ul style="padding-left:20px; color:var(--ink-soft)">
+      <li>Sélectionnez votre année de test dans les pastilles du haut.</li>
+      <li>Ouvrez une classe → onglet <strong>Élèves</strong> (liste réelle), <strong>Bulletins</strong> (choix du trimestre, téléchargement PDF), <strong>Présences</strong> (résumé par élève).</li>
+      <li>Depuis la fiche d'un élève, ouvrez son <strong>Dossier Archive</strong> → onglet <strong>Parcours Scolaire</strong> : vous devez voir la ligne de cette année ET celle de l'année précédente si l'élève y était déjà. Cliquez une ligne pour charger ses bulletins/présences/incidents de cette année-là.</li>
+    </ul>
+    <div class="checkline" style="border-top:none; padding-top:0; margin-top:14px"><input type="checkbox" /><span class="lbl">Classe et élève de test retrouvés dans l'Archive, avec de vraies données (pas de tirets partout)</span></div>
+  </section>
+
+  <section class="block">
+    <h2>Optionnel — vérifier le verrou directement</h2>
+    <p style="color:var(--ink-soft)">Pour les curieux : sur une année déjà archivée, essayez de saisir une note ou une présence pour un élève de cette année. Le système doit refuser (erreur explicite), pas planter silencieusement.</p>
+    <div class="checkline" style="border-top:none; padding-top:0"><input type="checkbox" /><span class="lbl">Tentative de modification refusée avec un message clair</span></div>
+  </section>
+
+  <div class="recap-wrap">
+    <table class="recap">
+      <thead><tr><th style="width:36px">#</th><th>Étape</th><th style="width:110px">Type</th><th>À vérifier</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Vérification</td><td>Lecture seule</td><td>Tous les contrôles bloquants au vert</td></tr>
+        <tr><td>2</td><td>Clôture comptable</td><td>Manuel</td><td>Facture refusée après clôture</td></tr>
+        <tr><td>3</td><td>Nouvelle année</td><td>Manuel</td><td>Année créée, tarifs copiés</td></tr>
+        <tr><td>4</td><td>Calcul des résultats</td><td>Manuel</td><td>Moyenne/rang/décision visibles par élève</td></tr>
+        <tr><td>5</td><td>Promotions</td><td>Manuel · définitif</td><td>Classes validées</td></tr>
+        <tr><td>6</td><td>Choix des filières</td><td>Manuel (10<sup>e</sup>)</td><td>Aucun élève en attente</td></tr>
+        <tr><td>7</td><td>Réinscription</td><td>Automatique</td><td>Au moins un élève confirmé</td></tr>
+        <tr><td>8</td><td>Génération des frais</td><td>Automatique</td><td>Facture retrouvée</td></tr>
+        <tr><td>9</td><td>Archivage</td><td>Manuel · définitif</td><td>Année archivée</td></tr>
+        <tr><td>10</td><td>Validation finale</td><td>Constat</td><td>Chiffres cohérents</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>Si une étape se comporte différemment de ce qui est décrit ici : notez le numéro de l'étape et le message exact affiché, et transmettez-le tel quel.</footer>
+</div>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var buttons = document.querySelectorAll('[data-theme-btn]');
+    function apply(theme) {
+      if (theme) root.setAttribute('data-theme', theme);
+      else root.removeAttribute('data-theme');
+      buttons.forEach(function (b) {
+        b.setAttribute('aria-pressed', String(b.getAttribute('data-theme-btn') === theme));
+      });
+    }
+    buttons.forEach(function (b) {
+      b.addEventListener('click', function () {
+        var current = root.getAttribute('data-theme');
+        var next = b.getAttribute('data-theme-btn');
+        apply(current === next ? null : next);
+      });
+    });
+  })();
+</script>
+</body>
+</html>

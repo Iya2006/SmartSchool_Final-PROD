@@ -18,6 +18,7 @@ interface Enseignant {
     type_contrat: string; statut: string; photo_url?: string | null;
     date_naissance?: string | null;
     adresse?: string | null;
+    role?: string;
 }
 
 const avatarColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#ec4899', '#14b8a6', '#f97316'];
@@ -334,7 +335,7 @@ export default function EnseignantsPage() {
                                             <td>
                                                 <div style={{ display: 'flex', gap: '6px' }}>
                                                     <Link href={`/enseignants/${ens.enseignant_id}`} className="btn btn-outline btn-sm" style={{ padding: '4px 8px' }} title="Voir"><Eye size={14} /></Link>
-                                                    <button onClick={() => setBadgeEns(ens)} className="btn btn-outline btn-sm" style={{ padding: '4px 8px', color: '#10b981', borderColor: '#10b981' }} title="Voir la Carte (Badge)"><UserCheck size={14} /></button>
+                                                    <button onClick={() => setBadgeEns({ ...ens, role: 'ENSEIGNANT' })} className="btn btn-outline btn-sm" style={{ padding: '4px 8px', color: '#10b981', borderColor: '#10b981' }} title="Voir la Carte (Badge)"><UserCheck size={14} /></button>
                                                     <Link href={`/enseignants/modifier/${ens.enseignant_id}`} className="btn btn-outline btn-sm" style={{ padding: '4px 8px' }} title="Modifier"><Edit size={14} /></Link>
                                                     <button onClick={() => handleDelete(ens.enseignant_id)} className="btn btn-outline btn-sm" style={{ padding: '4px 8px', color: 'var(--danger)' }} title="Supprimer"><Trash2 size={14} /></button>
                                                 </div>

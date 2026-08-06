@@ -3,6 +3,7 @@ SMARTSCHOOL API — Routes Paramétrage (Établissements, Années, Cycles, Nivea
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
 import os, shutil, uuid
+from datetime import timedelta
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel, Field
@@ -124,6 +125,59 @@ async def upload_etablissement_file(id: int, field: str, fichier: UploadFile = F
 # ============================================================================
 # ANNÉES SCOLAIRES
 # ============================================================================
+
+def _creer_trimestres_auto(db: Session, annee: AnneeScolaire) -> int:
+    """
+    Crée automatiquement les trimestres (3) ou semestres (2) d'une année
+    scolaire tout juste créée, selon le découpage configuré dans Paramètres >
+    Calendrier (ss_parametres, categorie='CALENDRIER', clé
+    'calendrier.mode_decoupage' = 'TRIMESTRE' ou 'SEMESTRE', défaut TRIMESTRE
+    si jamais configuré). Avant cette fonction, la création d'une année ne
+    créait aucune période — il fallait toujours les saisir une par une à la
+    main dans Paramètres > Calendrier.
+
+    Découpage simple en parts égales entre date_debut et date_fin de l'année
+    (les dates restent modifiables ensuite via PUT /trimestres/{id} si le
+    découpage réel doit tenir compte des vacances).
+    """
+    if db.query(Trimestre).filter(Trimestre.annee_id == annee.annee_id).count() > 0:
+        return 0  # des périodes existent déjà (ex: créées manuellement entre-temps)
+
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == annee.etablissement_id,
+        ParametreEtablissement.categorie == "CALENDRIER",
+        ParametreEtablissement.cle == "calendrier.mode_decoupage",
+    ).first()
+    mode = (param.valeur if param else "TRIMESTRE") or "TRIMESTRE"
+
+    nb_periodes = 2 if mode.upper() == "SEMESTRE" else 3
+    prefixe = "Semestre" if nb_periodes == 2 else "Trimestre"
+    code_prefixe = "S" if nb_periodes == 2 else "T"
+    ordinaux = ["1er", "2ème", "3ème"]
+
+    duree_totale = (annee.date_fin - annee.date_debut).days
+    if duree_totale <= 0:
+        return 0
+    duree_periode = duree_totale // nb_periodes
+
+    for i in range(nb_periodes):
+        debut = annee.date_debut + timedelta(days=i * duree_periode)
+        fin = (
+            annee.date_fin if i == nb_periodes - 1
+            else annee.date_debut + timedelta(days=(i + 1) * duree_periode - 1)
+        )
+        db.add(Trimestre(
+            annee_id=annee.annee_id,
+            code=f"{code_prefixe}{i + 1}",
+            libelle=f"{ordinaux[i]} {prefixe}",
+            numero=i + 1,
+            date_debut=debut,
+            date_fin=fin,
+            statut="EN_COURS" if i == 0 else "PLANIFIE",
+        ))
+    return nb_periodes
+
+
 @router.get("/annees", response_model=List[AnneeScolaireOut])
 def list_annees(etablissement_id: int = 1, db: Session = Depends(get_db)):
     return db.query(AnneeScolaire).filter(
@@ -134,6 +188,24 @@ def list_annees(etablissement_id: int = 1, db: Session = Depends(get_db)):
 def create_annee(data: AnneeScolaireCreate, db: Session = Depends(get_db)):
     a = AnneeScolaire(**data.model_dump())
     db.add(a)
+    db.flush()
+
+    # Si la nouvelle année est créée comme "courante", désactiver les autres —
+    # sans ça, deux années pouvaient rester marquées est_courante='O' en même
+    # temps, et l'en-tête de l'école continuait d'afficher l'ancienne année
+    # (celle trouvée en premier par l'ordre de tri côté frontend) au lieu de la
+    # nouvelle qu'on venait de créer.
+    if a.est_courante == "O":
+        db.query(AnneeScolaire).filter(
+            AnneeScolaire.etablissement_id == a.etablissement_id,
+            AnneeScolaire.annee_id != a.annee_id
+        ).update({"est_courante": "N"})
+
+    # Auto-création des trimestres/semestres selon le découpage configuré
+    # (Paramètres > Calendrier) — avant ça, il fallait toujours les saisir un
+    # par un à la main après chaque création d'année.
+    _creer_trimestres_auto(db, a)
+
     db.commit()
     db.refresh(a)
     return a
@@ -235,6 +307,39 @@ def delete_trimestre(id: int, db: Session = Depends(get_db)):
     db.delete(trimestre)
     db.commit()
     return {"message": "Période supprimée avec succès"}
+
+
+@router.put("/trimestres/{id}/cloturer")
+def cloturer_trimestre(id: int, db: Session = Depends(get_db)):
+    """
+    Clôture un trimestre/semestre : verrouille la saisie de nouvelles
+    évaluations/notes pour cette période (voir la garde dans
+    backend/app/api/evaluations.py et portail_enseignant.py) et fait
+    automatiquement passer la période suivante de PLANIFIE à EN_COURS.
+    Avant cet endpoint, il n'existait aucun mécanisme de clôture pour les
+    trimestres — seul l'exercice comptable pouvait être clôturé.
+    """
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == id).first()
+    if not trimestre:
+        raise HTTPException(404, "Période non trouvée")
+    if trimestre.statut == "CLOTURE":
+        raise HTTPException(400, "Cette période est déjà clôturée")
+
+    trimestre.statut = "CLOTURE"
+
+    suivant = (
+        db.query(Trimestre)
+        .filter(Trimestre.annee_id == trimestre.annee_id, Trimestre.numero == trimestre.numero + 1)
+        .first()
+    )
+    if suivant and suivant.statut == "PLANIFIE":
+        suivant.statut = "EN_COURS"
+
+    db.commit()
+    return {
+        "message": f"{trimestre.libelle} clôturé avec succès",
+        "periode_suivante": suivant.libelle if suivant else None,
+    }
 
 
 # ============================================================================

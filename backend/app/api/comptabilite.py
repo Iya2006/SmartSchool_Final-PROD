@@ -1,27 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import date
-from sqlalchemy import func, case, literal_column
+from sqlalchemy import func, case, literal_column, or_
 from decimal import Decimal
 
 from app.core.database import get_db
 from app.models.academique import (
     ParametreComptabilite, ExerciceComptable, JournalComptable, 
-    CompteComptable, EcritureComptable, LigneEcriture, Comptable, Etablissement,
-    Classe, Eleve
+    CompteComptable, EcritureComptable, LigneEcriture, Comptable,
+    Classe, Eleve, Fournisseur, Inscription
 )
-from app.core.security import verify_password, hash_password
-from app.core.auth import create_access_token
+from app.core.security import hash_password
 
 router = APIRouter(prefix="/api/comptabilite", tags=["Comptabilité"])
 
 # --- SCHEMAS ---
-
-class AuthRequest(BaseModel):
-    nom_utilisateur: str
-    mot_de_passe: str
 
 class ExerciceCreate(BaseModel):
     annee: str
@@ -144,49 +139,155 @@ def _get_exercice(db: Session, exercice_id: Optional[int] = None) -> ExerciceCom
         raise HTTPException(status_code=400, detail="Aucun exercice comptable ouvert")
     return exo
 
+
+# ============================================================================
+# PONT AUTOMATIQUE FINANCE -> COMPTABILITÉ GÉNÉRALE (SYSCOHADA)
+# ============================================================================
+# Objectif : chaque opération financière réelle (facture, paiement, dépense,
+# salaire) enregistrée depuis le module Finance (backend/app/api/finance.py)
+# génère automatiquement une écriture comptable équilibrée ici, pour que la
+# Balance, le Grand Livre, le Compte de Résultat et la Comptabilité Auxiliaire
+# reflètent toujours la réalité sans double saisie manuelle.
+
+# (numero_compte, libellé, type_compte)
+COMPTE_ELEVES = ("4111", "Parents et Élèves", "ACTIF")
+COMPTE_PRODUITS_SCOLARITE = ("7061", "Prestations de services (Scolarité)", "PRODUIT")
+COMPTE_BANQUE = ("5211", "Banque locale", "ACTIF")
+COMPTE_CAISSE = ("5711", "Caisse principale", "ACTIF")
+COMPTE_MOBILE_MONEY = ("5715", "Mobile Money", "ACTIF")
+
+COMPTES_CHARGE_PAR_CATEGORIE = {
+    "SALAIRES": ("6611", "Charges de personnel", "CHARGE"),
+    "FOURNITURES": ("6041", "Fournitures scolaires et administratives", "CHARGE"),
+    "LOYER": ("6221", "Locations immobilières", "CHARGE"),
+    "ENTRETIEN": ("6151", "Entretien et réparations", "CHARGE"),
+}
+COMPTE_CHARGE_DEFAUT = ("6288", "Autres charges diverses", "CHARGE")
+
+
+def _get_or_create_compte(db: Session, compte_tuple) -> CompteComptable:
+    numero_compte, libelle, type_compte = compte_tuple
+    compte = db.query(CompteComptable).filter(CompteComptable.numero_compte == numero_compte).first()
+    if not compte:
+        compte = CompteComptable(numero_compte=numero_compte, libelle=libelle, type_compte=type_compte)
+        db.add(compte)
+        db.flush()
+    return compte
+
+
+def compte_tresorerie_pour_mode(mode_paiement: Optional[str]):
+    """Retourne (compte_tuple, code_journal) selon le mode de paiement utilisé."""
+    mode = (mode_paiement or "").upper()
+    if mode in ("VIREMENT", "CHEQUE"):
+        return COMPTE_BANQUE, "BQ"
+    if mode in ("MOBILE_MONEY", "ORANGE_MONEY", "MTN_MONEY"):
+        return COMPTE_MOBILE_MONEY, "CA"
+    return COMPTE_CAISSE, "CA"
+
+
+def compte_charge_pour_categorie(categorie: Optional[str]):
+    cle = (categorie or "").strip().upper()
+    return COMPTES_CHARGE_PAR_CATEGORIE.get(cle, COMPTE_CHARGE_DEFAUT)
+
+
+def generer_ecriture_auto(
+    db: Session,
+    date_ecriture,
+    journal_code: str,
+    libelle: str,
+    reference: Optional[str],
+    lignes: list,
+) -> Optional[int]:
+    """
+    Crée une écriture comptable équilibrée dans LA MÊME transaction que
+    l'opération métier appelante (aucun commit ici : c'est l'appelant qui
+    commit le tout ensemble, pour garantir l'atomicité paiement <-> écriture).
+
+    `lignes` : liste de dicts avec les clés
+        compte (tuple numero/libelle/type), debit, credit,
+        description, classe_id, eleve_id, fournisseur_id (optionnels).
+
+    Retourne l'ecriture_id, ou None si rien n'a pu être généré (ex: aucun
+    exercice/journal disponible, ou lignes déséquilibrées) — dans ce cas
+    l'opération métier d'origine n'est PAS bloquée par cette fonction, mais
+    l'appelant doit alors décider quoi faire (voir usages dans finance.py).
+    """
+    init_comptabilite_defaults(db)
+
+    exo = db.query(ExerciceComptable).filter(ExerciceComptable.statut == "OUVERT").first()
+    journal = db.query(JournalComptable).filter(JournalComptable.code == journal_code).first()
+    if not exo or not journal:
+        return None
+
+    total_debit = round(sum(float(l.get("debit") or 0) for l in lignes), 2)
+    total_credit = round(sum(float(l.get("credit") or 0) for l in lignes), 2)
+    if total_debit != total_credit or total_debit == 0:
+        return None
+
+    ecriture = EcritureComptable(
+        date_ecriture=date_ecriture,
+        journal_id=journal.journal_id,
+        reference=reference,
+        libelle=libelle,
+        exercice_id=exo.exercice_id,
+    )
+    db.add(ecriture)
+    db.flush()
+
+    for l in lignes:
+        compte = _get_or_create_compte(db, l["compte"])
+        db.add(LigneEcriture(
+            ecriture_id=ecriture.ecriture_id,
+            compte_id=compte.compte_id,
+            debit=l.get("debit") or 0,
+            credit=l.get("credit") or 0,
+            description=l.get("description"),
+            classe_id=l.get("classe_id"),
+            eleve_id=l.get("eleve_id"),
+            fournisseur_id=l.get("fournisseur_id"),
+        ))
+    db.flush()
+    return ecriture.ecriture_id
+
+
 # --- ROUTES ---
 
-@router.post("/auth")
-def auth_comptabilite(req: AuthRequest, db: Session = Depends(get_db)):
-    init_comptabilite_defaults(db) # Initialize if first time
-    
-    comptable = db.query(Comptable).filter(
-        (Comptable.nom_utilisateur == req.nom_utilisateur) |
-        (Comptable.telephone == req.nom_utilisateur) |
-        (Comptable.email == req.nom_utilisateur)
-    ).first()
-    if not comptable:
-        raise HTTPException(status_code=401, detail="Nom d'utilisateur ou mot de passe incorrect")
-        
-    if comptable.statut != "ACTIF":
-        raise HTTPException(status_code=403, detail="Ce compte est inactif")
-        
-    if not verify_password(req.mot_de_passe, comptable.mot_de_passe):
-        raise HTTPException(status_code=401, detail="Nom d'utilisateur ou mot de passe incorrect")
-        
-    # Nom de l'établissement
-    etab = db.query(Etablissement).filter(Etablissement.etablissement_id == comptable.etablissement_id).first()
-    etablissement_nom = etab.nom if etab else "Établissement inconnu"
-    
-    # Générer le token JWT
-    token_data = {
-        "sub": str(comptable.comptable_id),
-        "nom": comptable.nom,
-        "prenom": comptable.prenom,
-        "role": "COMPTABLE",
-        "type": "comptable",
-    }
-    token = create_access_token(token_data)
-    
-    return {
-        "success": True,
-        "token": token,
-        "comptable_id": comptable.comptable_id,
-        "nom": comptable.nom,
-        "prenom": comptable.prenom,
-        "etablissement_id": comptable.etablissement_id,
-        "etablissement_nom": etablissement_nom
-    }
+# NOTE: L'ancienne authentification maison ("POST /auth" + modèle Comptable +
+# JWT type="comptable") a été retirée : elle créait une double session en
+# parallèle du JWT principal SmartSchool (localStorage smartschool_token +
+# sessionStorage comptabilite_auth), ce qui fragilisait la session globale
+# (un 401 sur ce module pouvait déconnecter tout l'admin). L'accès au module
+# Comptabilité passe désormais uniquement par le JWT principal + les rôles
+# FINANCE_ROLES (voir backend/main.py), exactement comme le module Finance.
+
+# ============================================================================
+# PIN D'ACCÈS COMPTABILITÉ — code additionnel demandé avant certaines actions
+# sensibles côté frontend (indépendant du JWT). Ces deux routes n'existaient
+# pas côté backend alors que le frontend (parametres/finance et profil) les
+# appelait déjà, causant des 404 systématiques.
+# ============================================================================
+
+class PinChangeRequest(BaseModel):
+    ancien_pin: str
+    nouveau_pin: str
+
+@router.get("/pin/status")
+def get_pin_status(db: Session = Depends(get_db)):
+    init_comptabilite_defaults(db)
+    param = db.query(ParametreComptabilite).filter(ParametreComptabilite.cle == "PIN_ACCESS").first()
+    return {"configured": bool(param and param.valeur)}
+
+@router.put("/pin")
+def changer_pin(data: PinChangeRequest, db: Session = Depends(get_db)):
+    init_comptabilite_defaults(db)
+    param = db.query(ParametreComptabilite).filter(ParametreComptabilite.cle == "PIN_ACCESS").first()
+    if not param or param.valeur != data.ancien_pin:
+        raise HTTPException(status_code=400, detail="PIN actuel incorrect")
+    if not data.nouveau_pin or len(data.nouveau_pin) < 4:
+        raise HTTPException(status_code=400, detail="Le nouveau PIN doit contenir au moins 4 caractères")
+    param.valeur = data.nouveau_pin
+    db.commit()
+    return {"message": "PIN mis à jour avec succès"}
 
 
 @router.get("/journaux", response_model=List[JournalOut])
@@ -222,16 +323,6 @@ def create_exercice(exo: ExerciceCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(nouveau)
     return nouveau
-
-@router.post("/exercices/{exercice_id}/cloturer")
-def cloturer_exercice(exercice_id: int, db: Session = Depends(get_db)):
-    exo = db.query(ExerciceComptable).filter(ExerciceComptable.exercice_id == exercice_id).first()
-    if not exo:
-        raise HTTPException(status_code=404, detail="Exercice introuvable")
-    
-    exo.statut = "CLOTURE"
-    db.commit()
-    return {"success": True, "message": "Exercice clôturé avec succès"}
 
 @router.get("/comptes", response_model=List[CompteOut])
 def get_comptes(db: Session = Depends(get_db)):
@@ -717,14 +808,22 @@ def get_mouvements_compte(
 
 @router.get("/auxiliaire/fournisseurs")
 def get_auxiliaire_fournisseurs(
+    response: Response,
     exercice_id: Optional[int] = Query(None),
+    search: Optional[str] = Query(None),
+    skip: int = 0,
+    limit: int = 50,
     db: Session = Depends(get_db)
 ):
     """Liste les fournisseurs avec leur cumul débit/crédit et leur solde."""
     exo = _get_exercice(db, exercice_id)
-    
+
     # Récupérer tous les fournisseurs
-    fournisseurs = db.query(Fournisseur).filter(Fournisseur.statut == "ACTIF").all()
+    fq = db.query(Fournisseur).filter(Fournisseur.statut == "ACTIF")
+    if search:
+        like = f"%{search}%"
+        fq = fq.filter(or_(Fournisseur.nom.ilike(like), Fournisseur.code.ilike(like)))
+    fournisseurs = fq.all()
     
     # Agrégation des mouvements
     mouvements = (
@@ -758,8 +857,10 @@ def get_auxiliaire_fournisseurs(
             "total_credit": tc,
             "solde": solde, # positif si l'école doit, négatif si trop-payé
         })
-        
-    return result
+
+    total = len(result)
+    response.headers["X-Total-Count"] = str(total)
+    return result[skip:skip + limit]
 
 @router.post("/auxiliaire/fournisseurs", response_model=FournisseurOut)
 def creer_fournisseur(fournisseur: FournisseurCreate, db: Session = Depends(get_db)):
@@ -856,7 +957,11 @@ def get_historique_fournisseur(
 
 @router.get("/auxiliaire/parents-eleves")
 def get_auxiliaire_parents_eleves(
+    response: Response,
     exercice_id: Optional[int] = Query(None),
+    search: Optional[str] = Query(None),
+    skip: int = 0,
+    limit: int = 50,
     db: Session = Depends(get_db)
 ):
     """Liste tous les parents/élèves ayant eu des mouvements comptables sur l'exercice."""
@@ -877,10 +982,11 @@ def get_auxiliaire_parents_eleves(
     )
     
     if not mouvements:
+        response.headers["X-Total-Count"] = "0"
         return []
         
     eleve_ids = [m.eleve_id for m in mouvements]
-    
+
     # Récupérer les infos des élèves concernés
     eleves = db.query(Eleve).filter(Eleve.eleve_id.in_(eleve_ids)).all()
     eleve_map = {e.eleve_id: e for e in eleves}
@@ -916,8 +1022,18 @@ def get_auxiliaire_parents_eleves(
             "total_credit": tc,
             "solde": solde, # positif = à payer par le parent, négatif = trop perçu
         })
-        
-    return result
+
+    if search:
+        q = search.lower()
+        result = [
+            r for r in result
+            if q in r["nom"].lower() or q in r["prenom"].lower()
+            or q in (r["matricule"] or "").lower() or q in (r["classe"] or "").lower()
+        ]
+
+    total = len(result)
+    response.headers["X-Total-Count"] = str(total)
+    return result[skip:skip + limit]
 
 @router.get("/auxiliaire/parents-eleves/{eleve_id}/compte")
 def get_historique_parent_eleve(
@@ -929,9 +1045,16 @@ def get_historique_parent_eleve(
     eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
     if not eleve:
         raise HTTPException(status_code=404, detail="Élève introuvable")
-        
+
     exo = _get_exercice(db, exercice_id)
-    
+
+    inscription_active = (
+        db.query(Inscription)
+        .filter(Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE")
+        .order_by(Inscription.inscription_id.desc())
+        .first()
+    )
+
     rows = (
         db.query(
             EcritureComptable.date_ecriture,
@@ -983,6 +1106,7 @@ def get_historique_parent_eleve(
             "matricule": eleve.matricule,
             "nom": eleve.nom,
             "prenom": eleve.prenom,
+            "inscription_id": inscription_active.inscription_id if inscription_active else None,
         },
         "mouvements": mouvements,
         "total_debit": total_debit,

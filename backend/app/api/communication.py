@@ -3,10 +3,10 @@ SMARTSCHOOL API — Communication & Demandes d'Emploi du Temps
 Système de messagerie Admin <-> Enseignants + Collecte de disponibilités
 + Génération automatique d'emplois du temps basée sur les disponibilités validées
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_
-from typing import Optional
+from sqlalchemy import desc, or_, func
+from typing import Dict, Optional
 from datetime import datetime
 import json
 
@@ -655,34 +655,61 @@ def get_objet_types():
 @router.get("/parents-list")
 def get_parents_list(db: Session = Depends(get_db)):
     """Liste tous les parents avec leurs enfants (pour l'admin).
-    Retourne parent_id, nom, prenom, telephone, enfants[{nom, prenom, classe}]."""
+    Retourne parent_id, nom, prenom, telephone, enfants[{nom, prenom, classe}].
+
+    Réécrit en préchargement par lot (4 requêtes fixes au lieu d'environ
+    4 par parent) — la version précédente faisait plusieurs requêtes DANS la
+    boucle sur les parents, soit ~20 000 requêtes séparées à l'échelle réelle
+    (5033 parents) : mesuré à 69s, largement au-delà du timeout axios (30s)
+    côté page Communication, qui affichait alors "aucune donnée" (la requête
+    entière échouait, aucune des listes de la page ne se remplissait). Voir la
+    règle N+1 déjà établie sur ce projet.
+    """
     from app.models.academique import Parent, EleveParent, Eleve, Inscription, Classe
+
     parents = db.query(Parent).filter(Parent.statut == "ACTIF").order_by(Parent.nom).all()
+    if not parents:
+        return []
+    parent_ids = [p.parent_id for p in parents]
+
+    liens = db.query(EleveParent).filter(EleveParent.parent_id.in_(parent_ids)).all()
+    liens_par_parent: Dict[int, list] = {}
+    for lien in liens:
+        liens_par_parent.setdefault(lien.parent_id, []).append(lien)
+
+    eleve_ids = list({lien.eleve_id for lien in liens})
+    eleves_par_id: Dict[int, Eleve] = {}
+    if eleve_ids:
+        eleves_par_id = {e.eleve_id: e for e in db.query(Eleve).filter(Eleve.eleve_id.in_(eleve_ids)).all()}
+
+    inscriptions_actives: Dict[int, Inscription] = {}
+    if eleve_ids:
+        for insc in db.query(Inscription).filter(
+            Inscription.eleve_id.in_(eleve_ids), Inscription.statut == "ACTIVE"
+        ).all():
+            inscriptions_actives[insc.eleve_id] = insc
+
+    classe_ids = list({insc.classe_id for insc in inscriptions_actives.values()})
+    classes_par_id: Dict[int, Classe] = {}
+    if classe_ids:
+        classes_par_id = {c.classe_id: c for c in db.query(Classe).filter(Classe.classe_id.in_(classe_ids)).all()}
+
     result = []
     for p in parents:
-        liens = db.query(EleveParent).filter(EleveParent.parent_id == p.parent_id).all()
         enfants = []
-        for lien in liens:
-            eleve = db.query(Eleve).filter(Eleve.eleve_id == lien.eleve_id).first()
+        for lien in liens_par_parent.get(p.parent_id, []):
+            eleve = eleves_par_id.get(lien.eleve_id)
             if not eleve:
                 continue
-            insc = db.query(Inscription).filter(
-                Inscription.eleve_id == eleve.eleve_id, Inscription.statut == "ACTIVE"
-            ).first()
-            classe_lib = "?"
-            classe_id = None
-            if insc:
-                cl = db.query(Classe).filter(Classe.classe_id == insc.classe_id).first()
-                if cl:
-                    classe_lib = cl.libelle
-                    classe_id = cl.classe_id
+            insc = inscriptions_actives.get(eleve.eleve_id)
+            classe = classes_par_id.get(insc.classe_id) if insc else None
             enfants.append({
                 "eleve_id": eleve.eleve_id,
                 "nom": eleve.nom,
                 "prenom": eleve.prenom,
                 "matricule": eleve.matricule,
-                "classe": classe_lib,
-                "classe_id": classe_id,
+                "classe": classe.libelle if classe else "?",
+                "classe_id": classe.classe_id if classe else None,
                 "lien_parente": lien.lien_parente,
             })
         result.append({
@@ -700,8 +727,13 @@ def get_parents_list(db: Session = Depends(get_db)):
 
 @router.get("/messages-parents")
 def list_messages_parents(db: Session = Depends(get_db)):
-    """Liste les messages échangés avec les parents (pour l'admin)."""
-    from app.models.academique import Parent
+    """Liste les messages échangés avec les parents (pour l'admin).
+
+    Préchargement par lot (parents + classes en 2 requêtes fixes) au lieu
+    d'une requête par message dans la boucle — même correctif que
+    get_parents_list, même règle N+1 déjà établie sur ce projet.
+    """
+    from app.models.academique import Parent, Classe
 
     msgs = db.query(Message).filter(
         or_(
@@ -710,11 +742,22 @@ def list_messages_parents(db: Session = Depends(get_db)):
         )
     ).order_by(desc(Message.date_envoi)).limit(200).all()
 
+    parent_ids = {m.expediteur_id for m in msgs if m.expediteur_type == "PARENT" and m.expediteur_id}
+    parent_ids |= {m.destinataire_id for m in msgs if m.destinataire_type == "PARENT" and m.destinataire_id}
+    parents_par_id: Dict[int, Parent] = {}
+    if parent_ids:
+        parents_par_id = {p.parent_id: p for p in db.query(Parent).filter(Parent.parent_id.in_(parent_ids)).all()}
+
+    classe_ids = {m.destinataire_id for m in msgs if m.destinataire_type == "CLASSE_PARENTS" and m.destinataire_id}
+    classes_par_id: Dict[int, Classe] = {}
+    if classe_ids:
+        classes_par_id = {c.classe_id: c for c in db.query(Classe).filter(Classe.classe_id.in_(classe_ids)).all()}
+
     result = []
     for m in msgs:
         exp_name = "Administration"
         if m.expediteur_type == "PARENT" and m.expediteur_id:
-            parent = db.query(Parent).filter(Parent.parent_id == m.expediteur_id).first()
+            parent = parents_par_id.get(m.expediteur_id)
             if parent:
                 exp_name = f"{parent.prenom} {parent.nom}"
 
@@ -722,11 +765,10 @@ def list_messages_parents(db: Session = Depends(get_db)):
         if m.destinataire_type == "TOUS_PARENTS":
             dest_name = "Tous les parents"
         elif m.destinataire_type == "CLASSE_PARENTS" and m.destinataire_id:
-            from app.models.academique import Classe
-            cl = db.query(Classe).filter(Classe.classe_id == m.destinataire_id).first()
+            cl = classes_par_id.get(m.destinataire_id)
             dest_name = f"Parents de {cl.libelle}" if cl else "Classe ?"
         elif m.destinataire_type == "PARENT" and m.destinataire_id:
-            parent = db.query(Parent).filter(Parent.parent_id == m.destinataire_id).first()
+            parent = parents_par_id.get(m.destinataire_id)
             dest_name = f"{parent.prenom} {parent.nom}" if parent else "Parent ?"
         elif m.destinataire_type == "ADMIN":
             dest_name = "Administration"
@@ -783,29 +825,81 @@ def send_message_to_parents(data: dict, db: Session = Depends(get_db)):
 # RÉPERTOIRE PARENTS (pour page Familles admin)
 # ============================================================================
 
+@router.get("/parents/stats")
+def get_parents_stats(db: Session = Depends(get_db)):
+    """KPIs globaux pour l'en-tête de la page Familles — indépendants de la
+    pagination/recherche de l'annuaire (agrégats SQL, aucune boucle Python)."""
+    total_parents = db.query(func.count(Parent.parent_id)).filter(Parent.statut == "ACTIF").scalar() or 0
+    total_enfants = db.query(func.count(EleveParent.eleve_parent_id)).join(
+        Parent, EleveParent.parent_id == Parent.parent_id
+    ).filter(Parent.statut == "ACTIF").scalar() or 0
+    avec_password = db.query(func.count(Parent.parent_id)).filter(
+        Parent.statut == "ACTIF", Parent.mot_de_passe.isnot(None)
+    ).scalar() or 0
+    avec_email = db.query(func.count(Parent.parent_id)).filter(
+        Parent.statut == "ACTIF", Parent.email.isnot(None), Parent.email != ""
+    ).scalar() or 0
+    return {
+        "total_parents": total_parents,
+        "total_enfants": total_enfants,
+        "avec_password": avec_password,
+        "avec_email": avec_email,
+    }
+
+
 @router.get("/parents/annuaire")
-def get_parents_annuaire(db: Session = Depends(get_db)):
-    """Retourne la liste de tous les parents avec infos de base + nombre d'enfants."""
-    parents = db.query(Parent).filter(Parent.statut == "ACTIF").order_by(Parent.prenom, Parent.nom).all()
+def get_parents_annuaire(
+    response: Response,
+    search: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """Retourne la liste des parents avec infos de base + nombre d'enfants, paginée.
+
+    Réécrit pour éviter le N+1 (jusqu'à 4 requêtes PAR PARENT — liens, élève,
+    inscription, classe) qui faisait timeout la page Familles dès que le nombre
+    de parents a dépassé quelques centaines (2753 parents réels dans cette base).
+    """
+    query = db.query(Parent).filter(Parent.statut == "ACTIF")
+    if search:
+        like = f"%{search.strip()}%"
+        query = query.filter(
+            (Parent.nom.ilike(like)) | (Parent.prenom.ilike(like)) |
+            (Parent.telephone_1.ilike(like)) | (Parent.email.ilike(like))
+        )
+
+    response.headers["X-Total-Count"] = str(query.count())
+    parents = query.order_by(Parent.prenom, Parent.nom).offset(skip).limit(limit).all()
+    if not parents:
+        return []
+
+    parent_ids = [p.parent_id for p in parents]
+    liens = db.query(EleveParent).filter(EleveParent.parent_id.in_(parent_ids)).all()
+    eleve_ids = {l.eleve_id for l in liens}
+
+    eleves = {e.eleve_id: e for e in db.query(Eleve).filter(Eleve.eleve_id.in_(eleve_ids)).all()}
+    inscriptions = {
+        i.eleve_id: i for i in db.query(Inscription).filter(
+            Inscription.eleve_id.in_(eleve_ids), Inscription.statut == "ACTIVE"
+        ).all()
+    }
+    classe_ids = {i.classe_id for i in inscriptions.values()}
+    classes = {c.classe_id: c for c in db.query(Classe).filter(Classe.classe_id.in_(classe_ids)).all()}
+
+    liens_by_parent = {}
+    for lien in liens:
+        liens_by_parent.setdefault(lien.parent_id, []).append(lien)
+
     result = []
     for p in parents:
-        # Compter les enfants via EleveParent
-        liens = db.query(EleveParent).filter(EleveParent.parent_id == p.parent_id).all()
         enfants_list = []
-        for lien in liens:
-            eleve = db.query(Eleve).filter(Eleve.eleve_id == lien.eleve_id).first()
+        for lien in liens_by_parent.get(p.parent_id, []):
+            eleve = eleves.get(lien.eleve_id)
             if not eleve:
                 continue
-            # Trouver la classe actuelle
-            insc = db.query(Inscription).filter(
-                Inscription.eleve_id == eleve.eleve_id,
-                Inscription.statut == "ACTIVE"
-            ).first()
-            classe_lib = "—"
-            if insc:
-                cl = db.query(Classe).filter(Classe.classe_id == insc.classe_id).first()
-                if cl:
-                    classe_lib = cl.libelle
+            insc = inscriptions.get(eleve.eleve_id)
+            classe_lib = classes[insc.classe_id].libelle if insc and insc.classe_id in classes else "—"
             enfants_list.append({
                 "eleve_id": eleve.eleve_id,
                 "nom": eleve.nom,

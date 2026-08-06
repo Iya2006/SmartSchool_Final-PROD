@@ -37,23 +37,97 @@ api.interceptors.request.use(
 );
 
 
+// Normalise error.response.data.detail en chaîne lisible avant que le reste
+// de l'app ne le lise. FastAPI renvoie `detail` comme une string pour les
+// HTTPException levées à la main ("400: message"), mais comme un TABLEAU
+// d'objets {type, loc, msg, input, ctx} pour les erreurs de validation
+// automatiques (422 — champ manquant/mal typé). Tout le code existant fait
+// `showMsg(e.response?.data?.detail, 'error')` puis rend ça tel quel dans du
+// JSX — un detail-tableau y provoque "Objects are not valid as a React
+// child" au lieu d'afficher un message utile. Corrigé une seule fois ici,
+// plutôt que dans chaque page qui lit `.detail`.
+function normaliserDetailErreur(error: unknown) {
+    const detail = (error as any)?.response?.data?.detail;
+    if (!Array.isArray(detail)) return;
+    const message = detail
+        .map((item: any) => {
+            if (typeof item === 'string') return item;
+            const champ = Array.isArray(item?.loc) ? item.loc.filter((p: any) => p !== 'body').join('.') : null;
+            const msg = item?.msg || 'Valeur invalide';
+            return champ ? `${champ} : ${msg}` : msg;
+        })
+        .join(' — ');
+    (error as any).response.data.detail = message || 'Requête invalide.';
+}
+
+// Endpoints éligibles à la mise en file hors-ligne — périmètre Phase 1
+// volontairement restreint aux notes/présences enseignants (voir
+// backend/app/api/sync.py ; le reste, notamment la comptabilité, reste
+// "connexion requise", cohérent avec le plan approuvé).
+const OFFLINE_QUEUEABLE = /^\/api\/sync\/(\d+)\/(notes|presences)$/;
+
+// Sur un POST vers un endpoint de sync qui échoue par ABSENCE RÉSEAU (pas un
+// vrai refus serveur), on met la requête en file locale au lieu de la
+// rejeter — l'appelant (portail enseignant) voit un succès optimiste et n'a
+// besoin d'aucune logique offline spécifique : il continue à faire un simple
+// `api.post('/api/sync/{id}/notes', payload)` comme s'il était en ligne.
+// `syncEngine.ts` (pas importé ici pour éviter un cycle api.ts <-> syncEngine.ts
+// qui importe déjà `api`) rejouera la file dès le retour de connexion.
+async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
+    const config = error?.config;
+    const isNetworkError = error?.code === 'ERR_NETWORK' && !error?.response;
+    const url: string = config?.url || '';
+    const method: string = (config?.method || '').toLowerCase();
+    const match = method === 'post' ? url.match(OFFLINE_QUEUEABLE) : null;
+
+    if (!isNetworkError || !match || typeof window === 'undefined') {
+        return null;
+    }
+
+    try {
+        const { enqueue } = await import('./offlineQueue');
+        let payload: unknown = config.data;
+        if (typeof payload === 'string') {
+            try { payload = JSON.parse(payload); } catch { /* corps non-JSON, on le garde tel quel */ }
+        }
+        await enqueue({
+            type: match[2] === 'notes' ? 'note' : 'presence',
+            endpoint: url,
+            payload,
+            utilisateur_id: match[1],
+            etablissement_id: 1,
+        });
+        return {
+            data: { queued: true, message: 'Enregistré localement — sera synchronisé dès le retour de connexion.' },
+            status: 202,
+            statusText: 'Accepted (offline queue)',
+            headers: {},
+            config,
+        };
+    } catch {
+        // La mise en file elle-même a échoué (IndexedDB indisponible...) —
+        // on retombe sur le rejet normal plutôt que de faire semblant.
+        return null;
+    }
+}
+
 // ── Intercepteur de réponse : gère les erreurs 401 (token expiré) et 403 (accès interdit) ──
 api.interceptors.response.use(
     (response) => response,
-    (error) => {
+    async (error) => {
+        normaliserDetailErreur(error);
+
+        const queued = await mettreEnFileSiHorsLigne(error);
+        if (queued) return queued;
+
         if (typeof window !== 'undefined' && error.response) {
             const status = error.response.status;
             const currentPath = window.location.pathname;
 
             if (status === 401) {
-                if (currentPath.startsWith('/comptabilite')) {
-                    sessionStorage.removeItem('comptabilite_auth');
-                    localStorage.removeItem('smartschool_token');
-                    localStorage.removeItem('smartschool_user');
-                    if (currentPath !== '/comptabilite/login') {
-                        window.location.href = '/comptabilite/login';
-                    }
-                } else if (currentPath !== '/login') {
+                // Le module Comptabilité n'a plus de session parallèle : un 401
+                // se traite exactement comme partout ailleurs dans l'admin.
+                if (currentPath !== '/login') {
                     localStorage.clear();
                     sessionStorage.clear();
                     window.location.href = '/login';
