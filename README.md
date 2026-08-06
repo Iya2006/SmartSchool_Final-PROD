@@ -52,17 +52,36 @@ SMART_SCHOOL_FINAL/
 
 ### 1. Cloner le projet
 ```bash
-git clone https://github.com/lya2006/SmartSchool_Final15J.git
-cd SmartSchool_Final15J
+git clone https://github.com/Iya2006/SmartSchool_Final-PROD.git
+cd SmartSchool_Final-PROD
 ```
 
 ### 2. Configurer le backend
 ```bash
 cd backend
 pip install -r requirements.txt
-# Créer un fichier .env avec vos identifiants PostgreSQL
-uvicorn main:app --reload --port 8000
+cp ../.env.example .env
+# Éditer .env : renseigner vos propres identifiants PostgreSQL et un JWT_SECRET_KEY
+# (créez d'abord une base Postgres vide, ex: createdb mydb)
+uvicorn main:app --reload --port 8500
 ```
+Le schéma de la base (toutes les tables) se crée **automatiquement** au
+premier démarrage (`Base.metadata.create_all` dans `main.py`) — aucun script
+SQL à lancer à la main. `database/install.sql` et les scripts numérotés sont
+des reliquats d'une ancienne version Oracle du projet, ils ne s'appliquent
+plus à ce backend (Postgres) : à ignorer.
+
+### 3. Peupler avec des données de démonstration (recommandé)
+```bash
+python seed_db.py
+```
+Une base fraîchement créée est vide (aucun élève, aucune classe) — ce script
+crée un établissement, des classes et des élèves de test pour pouvoir
+naviguer dans l'application (idempotent, sans risque à relancer). D'autres
+scripts de seed existent (`seed_referentiels.py`, `seed_classes_guinee.py`)
+pour enrichir davantage (trimestres, programme guinéen complet) — à exécuter
+après `seed_db.py`, en vérifiant leur contenu avant lancement (l'un d'eux
+contient un chemin codé en dur à adapter).
 
 ### 3. Configurer le frontend
 ```bash
