@@ -1,0 +1,59 @@
+# Render Blueprint — déploiement de l'API SmartSchool (backend + worker RQ)
+# et de son Redis. La base de données (PostgreSQL) est hébergée séparément
+# sur Supabase — voir GUIDE_DEPLOIEMENT.md, aucune base n'est déclarée ici.
+#
+# Utilisation : sur render.com → New → Blueprint → sélectionner ce dépôt.
+# Render détecte ce fichier automatiquement. Les variables marquées
+# `sync: false` doivent être saisies manuellement dans le dashboard Render
+# après création (jamais commitées ici — voir GUIDE_DEPLOIEMENT.md).
+
+services:
+  # API FastAPI + worker RQ, dans le MÊME service (voir backend/render_start.sh
+  # pour la raison : disque persistant Render non partageable entre services).
+  - type: web
+    name: smartschool-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile.prod
+    dockerContext: .
+    dockerCommand: sh render_start.sh
+    plan: starter
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    disk:
+      name: smartschool-uploads
+      mountPath: /app/uploads
+      sizeGB: 1
+    envVars:
+      # --- Base de données (Supabase — à saisir manuellement) ---
+      - key: DATABASE_URL
+        sync: false
+
+      # --- JWT (à saisir manuellement — voir GUIDE_DEPLOIEMENT.md pour le générer) ---
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "480"
+
+      # --- CORS (à saisir manuellement une fois l'URL Vercel connue) ---
+      - key: CORS_ORIGINS
+        sync: false
+
+      # --- Redis (rempli automatiquement depuis le service ci-dessous) ---
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: smartschool-redis
+          property: connectionString
+
+      - key: ENVIRONMENT
+        value: production
+      - key: RATELIMIT_ENABLED
+        value: "1"
+
+  - type: redis
+    name: smartschool-redis
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: volatile-lru
