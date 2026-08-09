@@ -1096,16 +1096,21 @@ def delete_type_evaluation(type_eval_id: int, db: Session = Depends(get_db)):
 # GÉNÉRATION PDF — Bulletin individuel
 # ════════════════════════════════════════════════════════════
 
-@router.get("/bulletins/{bulletin_id}/pdf")
-def generer_bulletin_pdf(bulletin_id: int, db: Session = Depends(get_db)):
-    """Génère le bulletin scolaire au format PDF."""
+def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
+    """Construit le PDF d'un bulletin — logique extraite telle quelle de
+    l'ancienne fonction monolithique `generer_bulletin_pdf` (Étape F).
+    Réutilisée à l'identique par la route GET synchrone ci-dessous ET par
+    la tâche worker asynchrone (app/tasks/bulletin_tasks.py) : aucune
+    dépendance à un contexte de requête HTTP, juste `bulletin_id` + une
+    session DB, renvoie (octets PDF, nom de fichier suggéré) au lieu d'une
+    StreamingResponse.
+    """
     import os
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
     from reportlab.lib.units import cm, mm
     from reportlab.lib.colors import HexColor
     from reportlab.lib.utils import ImageReader
-    from fastapi.responses import StreamingResponse
     from app.models.academique import Etablissement, Presence
     from app.core.documents_settings import (
         get_documents_settings, TEMPLATES_BULLETIN, dessiner_filigrane,
@@ -1625,8 +1630,83 @@ def generer_bulletin_pdf(bulletin_id: int, db: Session = Depends(get_db)):
     buffer.seek(0)
 
     nom_fichier = f"bulletin_{eleve.nom}_{eleve.prenom}_{titre_trimestre}.pdf".replace(" ", "_")
+    return buffer.getvalue(), nom_fichier
+
+
+@router.get("/bulletins/{bulletin_id}/pdf")
+def generer_bulletin_pdf(bulletin_id: int, db: Session = Depends(get_db)):
+    """Génère le bulletin scolaire au format PDF.
+
+    Comportement observable INCHANGÉ (Étape F : simple extraction
+    mécanique) — la logique réelle vit maintenant dans
+    _build_bulletin_pdf_bytes ci-dessus, réutilisée aussi par la
+    génération asynchrone (POST .../pdf-async, app/tasks/bulletin_tasks.py).
+    """
+    import io
+    from fastapi.responses import StreamingResponse
+
+    pdf_bytes, nom_fichier = _build_bulletin_pdf_bytes(bulletin_id, db)
     return StreamingResponse(
-        buffer,
+        io.BytesIO(pdf_bytes),
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={nom_fichier}"}
     )
+
+
+@router.post("/bulletins/{bulletin_id}/pdf-async")
+def generer_bulletin_pdf_async(bulletin_id: int, db: Session = Depends(get_db)):
+    """Version asynchrone (Étape F) — met la génération en file au lieu de
+    bloquer la requête HTTP. Ne remplace PAS l'endpoint synchrone
+    ci-dessus (toujours utile pour un seul bulletin ponctuel) ; utile
+    surtout en préparation d'une génération en masse future.
+
+    Validation minimale ici (le bulletin existe, appartient à l'école
+    demandée) — la génération réelle et sa propre re-vérification
+    d'établissement ont lieu dans le worker (jamais confiance aveugle au
+    payload de la tâche, voir app/tasks/bulletin_tasks.py).
+    """
+    from app.core.task_queue import get_queue
+    from app.tasks.bulletin_tasks import generate_bulletin_pdf_task
+    from rq.job import Retry
+
+    bulletin = db.query(Bulletin).filter(Bulletin.bulletin_id == bulletin_id).first()
+    if not bulletin:
+        raise HTTPException(404, "Bulletin non trouvé")
+    inscription = db.query(Inscription).filter(
+        Inscription.inscription_id == bulletin.inscription_id
+    ).first()
+    classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first() if inscription else None
+    if not classe:
+        raise HTTPException(404, "Classe introuvable pour ce bulletin")
+
+    try:
+        # Limite connue, trouvée en validant réellement F (pas avant) : ce
+        # Retry(max=3) s'applique à TOUTE exception, y compris le rejet
+        # PermissionError (isolation multi-école, bulletin_tasks.py) qui ne
+        # réussira jamais en retentant — la tâche mettra donc ~130s (10+30+90)
+        # à atteindre FAILED au lieu d'échouer immédiatement. Impact réel nul
+        # aujourd'hui : `classe.etablissement_id` ci-dessus est toujours la
+        # valeur réelle et fraîchement lue en base au moment de l'enqueue (ce
+        # seul appelant ne peut donc pas déclencher ce rejet en pratique — la
+        # vérification dans le worker est une défense en profondeur, pas un
+        # chemin normal). Non corrigé maintenant : nécessiterait un exception
+        # handler RQ dédié aux erreurs métier définitives, hors du périmètre
+        # minimal de cette validation — à construire si un futur appelant de
+        # generate_bulletin_pdf_task peut réellement déclencher ce cas.
+        job = get_queue().enqueue(
+            generate_bulletin_pdf_task,
+            bulletin_id,
+            classe.etablissement_id,
+            retry=Retry(max=3, interval=[10, 30, 90]),
+            job_timeout=120,
+            result_ttl=86400,
+            failure_ttl=86400,
+        )
+    except Exception as exc:
+        # Redis indisponible au moment de la mise en file : ne JAMAIS faire
+        # semblant que la tâche a été acceptée (contrairement au comportement
+        # volontairement permissif de app/core/cache.py, adapté à un cache
+        # mais pas à une file — voir le plan Étape F).
+        raise HTTPException(503, f"File de tâches indisponible : {exc}")
+
+    return {"task_id": job.id, "status": "PENDING"}

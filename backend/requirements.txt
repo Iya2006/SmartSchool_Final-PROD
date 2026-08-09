@@ -32,6 +32,9 @@ slowapi
 # Cache (Redis)
 redis
 
+# Queue de tâches asynchrones (Étape F — adossée au Redis déjà présent)
+rq
+
 # Tests
 pytest
 httpx

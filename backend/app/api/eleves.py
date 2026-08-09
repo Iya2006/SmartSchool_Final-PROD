@@ -7,10 +7,10 @@ from sqlalchemy import func
 from typing import List, Optional
 from app.core.database import get_db
 from app.core.security import hash_password
-from datetime import date as date_type
+from datetime import date as date_type, datetime
 from app.models.academique import (
     Eleve, Inscription, Classe, Niveau, Parent, EleveParent, Facture, EcheanceFacture, TypeFrais, TarifClasse,
-    AnneeScolaire, Bulletin, Trimestre, Presence, Incident,
+    AnneeScolaire, Bulletin, Trimestre, Presence, Incident, SyncTombstone,
 )
 from app.schemas.schemas import EleveCreate, EleveUpdate, EleveOut, EleveListOut
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
@@ -74,6 +74,85 @@ def list_eleves(
         statut=r.statut, classe_code=r.classe_code, niveau=r.niveau,
         photo_url=r.photo_url, adresse=r.adresse, groupe_sanguin=r.groupe_sanguin
     ) for r in results]
+
+
+class EleveDeltaOut(BaseModel):
+    items: List[EleveListOut]
+    deleted_ids: List[int]
+    sync_at: datetime
+
+
+@router.get("/delta", response_model=EleveDeltaOut)
+def delta_eleves(
+    since: Optional[datetime] = None,
+    etablissement_id: int = 1,
+    annee_id: int = 1,
+    db: Session = Depends(get_db),
+):
+    """Synchronisation delta (Étape C) — voir le plan approuvé.
+
+    Ne renvoie que les élèves créés/modifiés depuis `since` (absent =
+    première synchro, renvoie tout l'établissement), plus les ids supprimés
+    depuis `since` (SyncTombstone, alimenté par DELETE /{eleve_id}
+    ci-dessous). `sync_at` est l'horloge de la BASE (pas du serveur
+    applicatif ni du client — évite tout décalage d'horloge), capturée
+    AVANT les requêtes de lecture : une écriture concurrente entre ce
+    calcul et la fin de cette requête ne sera peut-être pas incluse cette
+    fois, mais elle a une garantie de l'être au prochain appel (son
+    modified_date sera nécessairement >= ce sync_at). Même principe que
+    `base_updated_at` déjà utilisé dans app/api/sync.py.
+
+    Limite assumée (voir le plan) : détecte les modifications du dossier
+    élève lui-même (Eleve.modified_date), PAS un changement de classe seul
+    — Inscription n'a pas encore de suivi de modification dans ce pilote.
+    """
+    sync_at = db.query(func.now()).scalar()
+
+    query = db.query(
+        Eleve.eleve_id,
+        Eleve.matricule,
+        Eleve.nom,
+        Eleve.prenom,
+        Eleve.sexe,
+        Eleve.date_naissance,
+        Eleve.statut,
+        Eleve.photo_url,
+        Eleve.adresse,
+        Eleve.groupe_sanguin,
+        Classe.code.label("classe_code"),
+        Niveau.libelle.label("niveau")
+    ).outerjoin(
+        Inscription, (Eleve.eleve_id == Inscription.eleve_id) &
+                      (Inscription.statut == "ACTIVE") &
+                      (Inscription.annee_id == annee_id)
+    ).outerjoin(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).outerjoin(
+        Niveau, Classe.niveau_id == Niveau.niveau_id
+    ).filter(
+        Eleve.etablissement_id == etablissement_id
+    )
+
+    if since is not None:
+        query = query.filter(Eleve.modified_date > since)
+
+    results = query.order_by(Eleve.nom, Eleve.prenom).all()
+    items = [EleveListOut(
+        eleve_id=r.eleve_id, matricule=r.matricule, nom=r.nom,
+        prenom=r.prenom, sexe=r.sexe, date_naissance=r.date_naissance,
+        statut=r.statut, classe_code=r.classe_code, niveau=r.niveau,
+        photo_url=r.photo_url, adresse=r.adresse, groupe_sanguin=r.groupe_sanguin
+    ) for r in results]
+
+    tombstones = db.query(SyncTombstone.entity_id).filter(
+        SyncTombstone.entity_type == "eleve",
+        SyncTombstone.etablissement_id == etablissement_id,
+    )
+    if since is not None:
+        tombstones = tombstones.filter(SyncTombstone.deleted_at > since)
+    deleted_ids = [row[0] for row in tombstones.all()]
+
+    return EleveDeltaOut(items=items, deleted_ids=deleted_ids, sync_at=sync_at)
 
 
 @router.get("/count")
@@ -418,6 +497,11 @@ def delete_eleve(eleve_id: int, db: Session = Depends(get_db)):
     eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
     if not eleve:
         raise HTTPException(status_code=404, detail="Élève non trouvé")
+    # Tombstone (Étape C, synchro delta) : la suppression est physique
+    # (db.delete), donc c'est le SEUL moyen pour un client ayant un delta
+    # obsolète de savoir que cet élève a disparu — voir GET /delta et
+    # SyncTombstone. Même transaction que le DELETE, avant le commit.
+    db.add(SyncTombstone(entity_type="eleve", entity_id=eleve_id, etablissement_id=eleve.etablissement_id))
     db.delete(eleve)
     db.commit()
     return {"message": "Élève supprimé"}

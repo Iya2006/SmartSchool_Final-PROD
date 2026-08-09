@@ -15,6 +15,7 @@ const FULLSCREEN_PATHS = [
     '/portail-eleve',
     '/comptabilite',
     '/personnel/portail',
+    '/hors-ligne',
 ];
 
 function AppShellInner({ children }: { children: React.ReactNode }) {

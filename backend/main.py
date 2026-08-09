@@ -5,6 +5,7 @@ Assemble tous les routers de chaque module.
 import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
@@ -46,6 +47,8 @@ from app.api.pointage_eleves import router as pointage_eleves_router
 from app.api.promotion import router as promotion_router
 from app.api.annee_scolaire import router as annee_scolaire_router
 from app.api.reinscription import router as reinscription_router
+from app.api.tasks import router as tasks_router
+from app.api.monitoring import router as monitoring_router
 
 
 # Création des tables au démarrage
@@ -99,6 +102,23 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept"],
     expose_headers=["X-Total-Count", "X-Meilleure-Moyenne", "X-Plus-Faible-Moyenne", "X-Moyenne-Classe"],
 )
+
+
+# ── Compression (Étape H) ──
+# Gzip uniquement : Brotli nécessiterait un reverse proxy/CDN devant l'app
+# (hors de ce dépôt — aucun nginx/Caddy/Traefik trouvé ici), pas une
+# dépendance Python supplémentaire pour un gain marginal en plus de gzip.
+# `minimum_size` = défaut Starlette (500 octets) : pas la peine de
+# compresser les réponses déjà minuscules (overhead CPU > gain réseau).
+# Compromis assumé : les endpoints PDF/photos (déjà compressés en interne —
+# `/eleves/{id}/certificat-scolarite/pdf`, `/photos/...`) passent aussi par
+# ce middleware, Starlette ne filtrant pas par Content-Type. Gzip ne les
+# réduira quasiment pas (coût CPU mineur, pas un problème de correction) ;
+# les exclure demanderait un middleware sur-mesure pour un gain marginal —
+# non fait, cohérent avec "solution la moins invasive". Le vrai bénéfice
+# visé est le JSON des listes (élèves, classes...), potentiellement gros à
+# l'échelle réelle (5000 élèves) sur une connexion instable.
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 # ── Rate Limiting ──
@@ -158,7 +178,14 @@ app.include_router(devoirs_router, dependencies=[Depends(get_current_user)])
 app.include_router(photos_router, dependencies=[Depends(get_current_user)])
 app.include_router(fournitures_router, dependencies=[Depends(get_current_user)])
 app.include_router(personnel_router, dependencies=[Depends(require_roles(*PERSONNEL_ROLES))])
-app.include_router(presence_agent_router, dependencies=[Depends(get_current_user)])
+# Présences agents : même sensibilité que le module Personnel (historique de
+# présence RH) — trouvé non restreint (get_current_user seul, comme
+# finance/comptabilité/personnel l'étaient avant leur propre correctif,
+# voir tests/test_rbac_modules_sensibles.py) en exécutant la suite complète
+# pour la validation préproduction. N'importe quel token valide, y compris
+# ENSEIGNANT/PARENT/ELEVE, pouvait consulter l'historique de présence du
+# personnel de tout l'établissement.
+app.include_router(presence_agent_router, dependencies=[Depends(require_roles(*PERSONNEL_ROLES))])
 app.include_router(pointage_eleves_router, dependencies=[Depends(get_current_user)])
 app.include_router(evenements_router, dependencies=[Depends(get_current_user)])
 app.include_router(activites_router, dependencies=[Depends(get_current_user)])
@@ -167,6 +194,15 @@ app.include_router(informatique_router)
 # Comptabilité générale (SYSCOHADA) : mêmes rôles que Finance, plus d'auth
 # maison séparée — l'accès passe uniquement par le JWT principal.
 app.include_router(comptabilite_router, dependencies=[Depends(require_roles(*FINANCE_ROLES))])
+# Suivi des tâches asynchrones (Étape F) — un id de tâche valide suffit à
+# consulter son statut, mais on exige quand même une session valide (pas
+# de fuite d'information à un client non authentifié).
+app.include_router(tasks_router, dependencies=[Depends(get_current_user)])
+# Monitoring infrastructure (Étape G) — détails d'infra (profondeur de
+# file, noms de workers) réservés aux rôles admin, jamais publics (à la
+# différence de /health, volontairement minimal et sans authentification
+# pour rester utilisable par le HEALTHCHECK Docker).
+app.include_router(monitoring_router, dependencies=[Depends(require_roles(*ADMIN_TIER_ROLES))])
 
 # ── Routes PUBLIQUES (gèrent leur propre authentification) ──
 app.include_router(auth_router)           # Login admin → retourne le JWT
@@ -208,4 +244,31 @@ def root():
 
 @app.get("/health", tags=["Système"])
 def health():
-    return {"status": "ok", "database": "connected"}
+    """Étape F : avant, ce endpoint renvoyait toujours "connected" sans
+    rien vérifier — exactement l'anti-motif "API up ≠ tout opérationnel".
+    Vérifie maintenant réellement PostgreSQL et Redis (ce dernier
+    conditionne désormais aussi la file de tâches, pas seulement le cache
+    dashboard finance)."""
+    from sqlalchemy import text
+    from app.core.database import SessionLocal
+    from app.core.cache import redis_is_reachable
+
+    db_status = "down"
+    try:
+        db = SessionLocal()
+        try:
+            db.execute(text("SELECT 1"))
+            db_status = "up"
+        finally:
+            db.close()
+    except Exception:
+        db_status = "down"
+
+    # Étape G : redis_is_reachable() fait un vrai PING à chaque appel,
+    # contrairement à get_redis_client() (pensé pour le cache) qui ne
+    # détectait ni une panne survenue après un succès initial, ni un
+    # retour après panne (voir app/core/cache.py).
+    redis_status = "up" if redis_is_reachable() else "down"
+
+    overall = "ok" if db_status == "up" else "degraded"
+    return {"status": overall, "database": db_status, "redis": redis_status}

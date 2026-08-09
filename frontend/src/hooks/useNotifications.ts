@@ -4,10 +4,22 @@
  * Centralise les appels API liés aux messages de communication.
  * Utilisé par TopbarNotifications et potentiellement la page /communication.
  *
- * refactor(topbar): extraire la logique de notifications dans un hook custom
+ * Offline-first (§Étape B — module Notifications, READ_ONLY_OFFLINE +
+ * WRITE_OFFLINE_SAFE) : la lecture passe par React Query (déjà monté à la
+ * racine, cache persisté dans localStorage — voir components/QueryProvider.tsx
+ * /lib/queryClient.ts, même mécanisme déjà utilisé pour Classes/Élèves/
+ * Dashboard), donc les derniers messages connus restent affichés hors-ligne.
+ * `markAllAsRead` continue de passer par un simple `api.put(...)` — c'est
+ * l'intercepteur global (lib/api.ts) qui le met en file offline en cas de
+ * coupure réseau, réutilisant la même file/moteur de synchro que
+ * notes/présences (pas de nouvelle Offline Queue créée). Opération choisie
+ * car naturellement idempotente côté serveur (UPDATE ... WHERE statut =
+ * 'ENVOYE', un rejeu ne fait rien de plus la 2e fois) : aucun
+ * idempotency-key ni changement backend nécessaire.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -31,61 +43,60 @@ interface UseNotificationsReturn {
     refresh: () => Promise<void>;
 }
 
+const NOTIFICATIONS_QUERY_KEY = ['notifications-messages'];
+
 // ─── Hook ────────────────────────────────────────────────────────────────────
 export function useNotifications(pollIntervalMs = 30000): UseNotificationsReturn {
-    const [messages, setMessages]         = useState<Message[]>([]);
-    const [unreadCount, setUnreadCount]   = useState(0);
-    const [loading, setLoading]           = useState(true);
+    const queryClient = useQueryClient();
+    const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('smartschool_token');
 
-    const fetchMessages = useCallback(async () => {
-        try {
+    const messagesQuery = useQuery({
+        queryKey: NOTIFICATIONS_QUERY_KEY,
+        queryFn: async () => {
             const res = await api.get('/api/communication/messages?role=ADMIN');
-            const data: Message[] = res.data || [];
-            setMessages(data.slice(0, 8));
-            setUnreadCount(
-                data.filter(m => m.statut === 'ENVOYE' && m.expediteur_type !== 'ADMIN').length
-            );
-        } catch {
-            // Silencieux — ne pas afficher d'erreur pour les notifications
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+            return (res.data || []) as Message[];
+        },
+        enabled: hasToken,
+        // Poll régulier comme avant (visibilitychange remplacé par
+        // refetchOnWindowFocus, équivalent React Query) — override du
+        // défaut global refetchOnWindowFocus:false (lib/queryClient.ts) :
+        // les notifications sont plus sensibles au temps qu'une liste de
+        // classes, ça justifie le refresh immédiat au retour sur l'onglet.
+        refetchInterval: hasToken ? pollIntervalMs : false,
+        refetchOnWindowFocus: true,
+    });
 
-    // Chargement initial + polling (seulement si authentifié)
-    useEffect(() => {
-        const token = typeof window !== 'undefined'
-            ? localStorage.getItem('smartschool_token')
-            : null;
-        // Ne pas démarrer le polling si pas de token
-        if (!token) {
-            setLoading(false);
-            return;
-        }
+    const allMessages = messagesQuery.data ?? [];
+    const messages = allMessages.slice(0, 8);
+    const unreadCount = allMessages.filter((m) => m.statut === 'ENVOYE' && m.expediteur_type !== 'ADMIN').length;
 
-        fetchMessages();
-        const handleVisibility = () => {
-            if (!document.hidden) fetchMessages();
-        };
-        document.addEventListener('visibilitychange', handleVisibility);
-        return () => document.removeEventListener('visibilitychange', handleVisibility);
-    }, [fetchMessages]);
-
-    // Marquer tous comme lus
     const markAllAsRead = useCallback(async () => {
         try {
             await api.put('/api/communication/messages/marquer-tous-lus');
-            setUnreadCount(0);
+            // Succès réel OU mise en file hors-ligne réussie (l'intercepteur
+            // résout alors optimistiquement l'appel, voir lib/api.ts) : dans
+            // les deux cas le serveur appliquera la même opération —
+            // immédiatement, ou à la prochaine synchronisation. L'UI n'a pas
+            // besoin d'attendre ce round-trip pour refléter "tout est lu".
+            queryClient.setQueryData<Message[]>(NOTIFICATIONS_QUERY_KEY, (old) =>
+                (old ?? []).map((m) => (m.statut === 'ENVOYE' ? { ...m, statut: 'LU' } : m))
+            );
         } catch {
-            // Silencieux
+            // Échec réel (pas une simple coupure réseau — l'intercepteur
+            // l'aurait déjà résolu en succès optimiste) — silencieux comme
+            // avant, l'UI reste inchangée plutôt que d'afficher "lu" à tort.
         }
-    }, []);
+    }, [queryClient]);
+
+    const refresh = useCallback(async () => {
+        await messagesQuery.refetch();
+    }, [messagesQuery]);
 
     return {
         messages,
         unreadCount,
-        loading,
+        loading: messagesQuery.isLoading,
         markAllAsRead,
-        refresh: fetchMessages,
+        refresh,
     };
 }

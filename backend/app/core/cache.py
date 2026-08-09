@@ -29,6 +29,13 @@ def get_redis_client():
     Le client est instancié une seule fois (lazy singleton). Si la
     connexion échoue une première fois, on évite de retenter à chaque
     appel pour ne pas ralentir les requêtes suivantes.
+
+    N'est PAS adapté à un contrôle de santé (`/health`, `/api/monitoring`) :
+    une fois `_redis_unavailable` posé, il reste vrai pour la durée de vie
+    du process (aucune détection de retour), et à l'inverse un client déjà
+    mis en cache n'est jamais re-vérifié (aucune détection de panne
+    survenue après coup). Voir `redis_is_reachable()` ci-dessous, pensée
+    spécifiquement pour un statut à jour à chaque appel.
     """
     global _redis_client, _redis_unavailable
 
@@ -55,6 +62,41 @@ def get_redis_client():
         logger.warning("Redis indisponible (%s) — cache désactivé.", exc)
         _redis_unavailable = True
         return None
+
+
+_health_check_client = None
+
+
+def redis_is_reachable() -> bool:
+    """Vérifie l'accessibilité RÉELLE de Redis à l'instant présent (PING à
+    chaque appel), pour `/health` et `/api/monitoring` — contrairement à
+    `get_redis_client()` (pensé pour le cache, met en cache le résultat de
+    la toute première tentative, ne détecte donc ni une panne survenue
+    après coup, ni un retour après panne). Un PING est de l'ordre de la
+    milliseconde : appelé à chaque requête de santé/monitoring (pas en
+    boucle serrée), ce n'est pas l'interrogation répétitive coûteuse que
+    l'on cherche à éviter.
+
+    Trouvé en corrigeant ce point (Étape G) : `get_redis_client()` seul
+    aurait rendu impossible à valider le scénario "Redis indisponible puis
+    à nouveau disponible" explicitement demandé, dans les deux sens (une
+    panne après un succès initial n'aurait jamais été détectée non plus).
+    """
+    global _health_check_client
+    try:
+        import redis
+
+        if _health_check_client is None:
+            _health_check_client = redis.from_url(
+                REDIS_URL,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+                decode_responses=True,
+            )
+        _health_check_client.ping()
+        return True
+    except Exception:
+        return False
 
 
 def cache_get(key: str) -> Optional[dict]:

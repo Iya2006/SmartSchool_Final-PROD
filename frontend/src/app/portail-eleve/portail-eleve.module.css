@@ -1,18 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════
    SMARTSCHOOL — Portail Élève Theme
    Premium, Modern, Glassmorphism, Responsive CSS System
+   Variables globales (--bg-main, etc.) : voir portail-eleve-theme.css,
+   importé une fois depuis page.tsx.
    ═══════════════════════════════════════════════════════════════ */
-
-:root {
-  --bg-main: #f8fafc;
-  --bg-card: rgba(255, 255, 255, 0.85);
-  --text-main: #0f172a;
-  --text-muted: #64748b;
-  --border: rgba(226, 232, 240, 0.7);
-  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.03), 0 2px 4px -1px rgba(0, 0, 0, 0.02);
-  --shadow-lg: 0 10px 30px -5px rgba(0, 0, 0, 0.05), 0 8px 16px -5px rgba(0, 0, 0, 0.03);
-  --shadow-premium: 0 20px 40px -15px rgba(0, 0, 0, 0.08);
-}
 
 .container {
   display: flex;

@@ -4,7 +4,7 @@ Couvre TOUTES les tables du système : Structure, Académique, Évaluations, Fin
 Vérifiés contre le DDL Oracle original.
 """
 from sqlalchemy import (
-    Column, Integer, String, Date, Float, ForeignKey, DateTime, Text, Numeric, CheckConstraint, Time, JSON
+    Column, Integer, String, Date, Float, ForeignKey, DateTime, Text, Numeric, CheckConstraint, Time, JSON, Index
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -261,7 +261,11 @@ class Eleve(Base):
     created_by = Column(String(100))
     created_date = Column(DateTime, server_default=func.now())
     modified_by = Column(String(100))
-    modified_date = Column(DateTime)
+    # onupdate=func.now() : ajouté pour la synchro delta (Étape C,
+    # backend/app/api/eleves.py GET /delta) — même pattern que Note/Presence
+    # (updated_at, ajouté pour sync.py Phase 1). Les lignes déjà en base ont
+    # modified_date=NULL, backfillées par backend/migrations/add_sync_tracking.py.
+    modified_date = Column(DateTime, onupdate=func.now())
 
     etablissement = relationship("Etablissement", back_populates="eleves")
     inscriptions = relationship("Inscription", back_populates="eleve")
@@ -1119,6 +1123,27 @@ class AuditLog(Base):
     details = Column(Text)
     ip_address = Column(String(45))
     created_date = Column(DateTime, server_default=func.now())
+
+
+class SyncTombstone(Base):
+    """Journal des suppressions — Étape C (synchro delta), backend/app/api/eleves.py.
+
+    `ss_audit_log` ci-dessus a été envisagée pour ce rôle et écartée :
+    c'est un journal d'actions admin en texte libre (`details`), sans
+    `entity_id`/`entity_type` typés ni indexés — inefficace pour la requête
+    qu'un delta doit faire ("quelles entités de tel type, tel établissement,
+    supprimées depuis tel instant ?"). Table dédiée à la place, une ligne
+    par suppression, écrite dans la même transaction que le DELETE réel.
+    """
+    __tablename__ = "ss_sync_tombstones"
+    __table_args__ = (
+        Index("ix_sync_tombstones_lookup", "entity_type", "etablissement_id", "deleted_at"),
+    )
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    entity_type = Column(String(50), nullable=False)
+    entity_id = Column(Integer, nullable=False)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    deleted_at = Column(DateTime, server_default=func.now(), nullable=False)
 
 
 # ============================================================================
