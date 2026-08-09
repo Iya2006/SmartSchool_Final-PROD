@@ -13,6 +13,7 @@ services:
   - type: web
     name: smartschool-api
     runtime: docker
+    region: frankfurt
     dockerfilePath: ./Dockerfile.prod
     dockerContext: .
     dockerCommand: sh render_start.sh
@@ -54,6 +55,7 @@ services:
 
   - type: redis
     name: smartschool-redis
+    region: frankfurt
     plan: starter
     ipAllowList: []
     maxmemoryPolicy: volatile-lru
