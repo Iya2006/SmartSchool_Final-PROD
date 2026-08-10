@@ -640,16 +640,12 @@ function BulletinsContent() {
                                             <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '16px' }}>
                                                 <thead>
                                                     <tr style={{ background: 'linear-gradient(135deg, #064e3b, #059669)' }}>
+                                                        {/* Trois colonnes seulement : coefficient, moyenne, appréciation.
+                                                            Moyenne de classe, min et max encombraient le bulletin
+                                                            d'un élève avec des chiffres qui parlent de la classe. */}
                                                         <th style={{ padding: '10px 12px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'left', letterSpacing: '0.5px' }}>MATIÈRE</th>
-                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '50px' }}>COEF</th>
-                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: '#fbbf24', textAlign: 'center', width: '80px' }}>MOY. ÉLÈVE</th>
-                                                        {docSettings.champ_moyenne_classe !== false && <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '70px' }}>MOY. CL.</th>}
-                                                        {docSettings.champ_min_max !== false && (
-                                                            <>
-                                                                <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '45px' }}>MIN</th>
-                                                                <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '45px' }}>MAX</th>
-                                                            </>
-                                                        )}
+                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '80px' }}>COEFFICIENT</th>
+                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: '#fbbf24', textAlign: 'center', width: '90px' }}>MOYENNE</th>
                                                         <th style={{ padding: '10px 12px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'left' }}>APPRÉCIATION</th>
                                                     </tr>
                                                 </thead>
@@ -671,21 +667,6 @@ function BulletinsContent() {
                                                                             {moyEleve !== null ? Number(moyEleve).toFixed(2) : '—'}
                                                                         </span>
                                                                     </td>
-                                                                    {docSettings.champ_moyenne_classe !== false && (
-                                                                        <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#64748b' }}>
-                                                                            {l.moyenne_classe !== null ? Number(l.moyenne_classe).toFixed(1) : '—'}
-                                                                        </td>
-                                                                    )}
-                                                                    {docSettings.champ_min_max !== false && (
-                                                                        <>
-                                                                            <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#94a3b8' }}>
-                                                                                {l.note_min !== null ? Number(l.note_min).toFixed(0) : '—'}
-                                                                            </td>
-                                                                            <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#059669', fontWeight: 600 }}>
-                                                                                {l.note_max !== null ? Number(l.note_max).toFixed(0) : '—'}
-                                                                            </td>
-                                                                        </>
-                                                                    )}
                                                                     <td style={{ padding: '9px 12px', fontSize: '11px', color: '#475569', fontStyle: 'italic' }}>
                                                                         {l.appreciation || '—'}
                                                                     </td>
@@ -694,7 +675,7 @@ function BulletinsContent() {
                                                         })
                                                     ) : (
                                                         <tr>
-                                                            <td colSpan={7} style={{ padding: '30px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                                                            <td colSpan={4} style={{ padding: '30px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
                                                                 Détails par matière non disponibles
                                                             </td>
                                                         </tr>

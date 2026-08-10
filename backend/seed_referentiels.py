@@ -48,14 +48,14 @@ existing_types = db.query(TypeEvaluation).count()
 if existing_types > 0:
     print(f"ℹ️  {existing_types} type(s) d'évaluation déjà existants — ignorés.")
 else:
+    # Deux types seulement : c'est ce que font réellement les écoles visées.
+    # Le libellé d'une épreuve est un texte libre (« Évaluation de Janvier »,
+    # « Composition du 1er Trimestre ») — inutile de multiplier les types pour
+    # dire la même chose. Une école qui en veut d'autres peut les ajouter
+    # depuis Paramètres > Notation.
     types_data = [
         {"code": "EVAL", "libelle": "Évaluation", "coefficient": 1, "statut": "ACTIF"},
-        {"code": "INTERRO", "libelle": "Interrogation", "coefficient": 1, "statut": "ACTIF"},
         {"code": "COMPO", "libelle": "Composition", "coefficient": 2, "statut": "ACTIF"},
-        {"code": "EXAMEN", "libelle": "Examen", "coefficient": 2, "statut": "ACTIF"},
-        {"code": "TP", "libelle": "Travaux Pratiques", "coefficient": 1, "statut": "ACTIF"},
-        {"code": "EXPOSE", "libelle": "Exposé / Présentation", "coefficient": 1, "statut": "ACTIF"},
-        {"code": "PARTICIPATION", "libelle": "Participation", "coefficient": 1, "statut": "ACTIF"},
     ]
     for t in types_data:
         te = TypeEvaluation(**t)

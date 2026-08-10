@@ -997,12 +997,21 @@ def resultat_eleve_sur_epreuves(
 # ════════════════════════════════════════════════════════════
 
 def resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int, dict]:
-    """Moyenne annuelle et total de points d'un lot d'inscriptions, en une requête.
+    """Moyenne annuelle et détail par matière d'un lot d'inscriptions.
 
-    Agrège les BulletinLigne de toutes les périodes de l'année : chaque matière
-    est moyennée sur les périodes où elle apparaît, puis pondérée par son
-    coefficient. L'annuel se construit donc sur les résultats de période déjà
-    calculés, pas sur les notes brutes.
+    **Moyenne générale annuelle = somme des moyennes de période ÷ nombre de
+    périodes.** C'est la règle que l'école annonce aux familles, et elle reste
+    juste quel que soit le nombre de périodes (2 ou 3) et quel que soit le
+    nombre d'épreuves de chacune.
+
+    Elle n'est volontairement PAS recalculée à partir des matières : dès qu'une
+    matière manque à une période (option abandonnée, matière introduite en
+    cours d'année), repondérer les matières donne un résultat différent de la
+    moyenne des bulletins que la famille a déjà reçus. Entre les deux, c'est le
+    chiffre déjà communiqué qui fait foi.
+
+    Le détail par matière reste calculé — le bulletin annuel affiche bien une
+    ligne par matière — mais il sert l'affichage, pas la moyenne générale.
     """
     if not inscription_ids:
         return {}
@@ -1021,11 +1030,20 @@ def resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int,
             (float(ligne.moyenne_matiere), float(ligne.coefficient or 1))
         )
 
+    # Moyennes générales de période, telles qu'elles figurent sur les bulletins
+    moyennes_periode: Dict[int, List[float]] = {}
+    for b in db.query(Bulletin).filter(
+        Bulletin.inscription_id.in_(inscription_ids),
+        Bulletin.type_bulletin != "ANNUEL",
+        Bulletin.moyenne_generale.isnot(None),
+    ).all():
+        moyennes_periode.setdefault(b.inscription_id, []).append(float(b.moyenne_generale))
+
     resultats: Dict[int, dict] = {}
     for inscription_id, par_matiere in par_inscription.items():
+        details = []
         total_points = 0.0
         total_coef = 0.0
-        details = []
         for matiere_id, valeurs in par_matiere.items():
             moyenne_annuelle_matiere = sum(v for v, _ in valeurs) / len(valeurs)
             coef = valeurs[-1][1]  # constant sur l'année en pratique
@@ -1037,13 +1055,18 @@ def resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int,
                 "coefficient": coef,
                 "nb_periodes": len(valeurs),
             })
-        if total_coef > 0:
-            resultats[inscription_id] = {
-                "moyenne": round(total_points / total_coef, 2),
-                "total_points": round(total_points, 2),
-                "total_coefficients": total_coef,
-                "lignes": details,
-            }
+
+        periodes = moyennes_periode.get(inscription_id, [])
+        if not periodes:
+            continue
+        resultats[inscription_id] = {
+            "moyenne": round(sum(periodes) / len(periodes), 2),
+            "nb_periodes": len(periodes),
+            "moyennes_periodes": [round(m, 2) for m in periodes],
+            "total_points": round(total_points, 2),
+            "total_coefficients": total_coef,
+            "lignes": details,
+        }
     return resultats
 
 
@@ -1080,6 +1103,10 @@ def calculer_resultats_annuels(
             "moyenne_generale": r["moyenne"] if r else None,
             "total_points": r["total_points"] if r else None,
             "total_coefficients": r["total_coefficients"] if r else None,
+            # Le détail qui justifie la moyenne annuelle : sans lui, une famille
+            # qui recompte à la main ne peut pas retrouver le chiffre.
+            "nb_periodes": r["nb_periodes"] if r else 0,
+            "moyennes_periodes": r["moyennes_periodes"] if r else [],
         })
 
     donnees.sort(key=lambda x: x["moyenne_generale"] or 0, reverse=True)

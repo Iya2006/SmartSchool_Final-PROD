@@ -2059,8 +2059,12 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     # pas seulement la moyenne finale de matière) + Points (moyenne × coefficient).
     # show_rang résolu plus haut (fusion Notation+Documents) ; moy.classe/min/max
     # pilotés par le même toggle unique "stats_matiere".
-    show_moy_cl = show_stats_matiere
-    show_minmax = show_stats_matiere
+    # Le bulletin d'un élève ne porte plus de statistiques de classe :
+    # moyenne de classe, min et max répondaient à « où en est la classe ? »,
+    # pas à « où en est mon enfant ? ». Ces chiffres restent disponibles pour
+    # l'école sur la fiche de classement et dans le tableau de centralisation.
+    show_moy_cl = False
+    show_minmax = False
 
     # Détail par type d'évaluation : les colonnes suivent les types réellement
     # utilisés par l'école (plus de trio figé Écrit/Oral/Composition). Chargé en
@@ -2080,15 +2084,13 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
 
     col_matiere_w = 3.3 * cm
     col_detail_w = (2.55 * cm / nb_detail) if nb_detail else 0  # même largeur totale qu'avant
-    col_moy_w = 1.3 * cm
-    col_coeff_w = 0.9 * cm
-    col_pts_w = 1.2 * cm
-    col_extra_w = 1.1 * cm     # Moy.Cl / Min / Max
-    col_appr_w = tab_w - col_matiere_w - (col_detail_w * nb_detail) - col_moy_w - col_coeff_w - col_pts_w
-    if show_moy_cl:
-        col_appr_w -= col_extra_w
-    if show_minmax:
-        col_appr_w -= col_extra_w * 2
+    col_coeff_w = 1.6 * cm
+    col_moy_w = 1.6 * cm
+    # La colonne « Points » (moyenne × coefficient) disparaît de la grille : elle
+    # se déduit des deux colonnes voisines et n'apporte rien à la lecture ligne
+    # par ligne. Le total de points reste affiché dans la synthèse en bas.
+    col_extra_w = 1.1 * cm
+    col_appr_w = tab_w - col_matiere_w - (col_detail_w * nb_detail) - col_moy_w - col_coeff_w
 
     # En-tête du tableau (2 lignes : groupe "NOTES" au-dessus de Écrit/Oral/Compo)
     row_h = 0.55 * cm
@@ -2113,12 +2115,12 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
             x += col_detail_w
 
     pdf.setFont(tmpl["police_titre"], tmpl["taille_entete_tableau"])
-    pdf.drawCentredString(x + col_moy_w / 2, y - header_h + 0.2 * cm, "MOY")
-    x += col_moy_w
-    pdf.drawCentredString(x + col_coeff_w / 2, y - header_h + 0.2 * cm, "COEF")
+    # « COEFFICIENT » en toutes lettres débordait sur la colonne voisine à
+    # cette largeur : abrégé, comme le reste des en-têtes du tableau.
+    pdf.drawCentredString(x + col_coeff_w / 2, y - header_h + 0.2 * cm, "COEF.")
     x += col_coeff_w
-    pdf.drawCentredString(x + col_pts_w / 2, y - header_h + 0.2 * cm, "PTS")
-    x += col_pts_w
+    pdf.drawCentredString(x + col_moy_w / 2, y - header_h + 0.2 * cm, "MOYENNE")
+    x += col_moy_w
     if show_moy_cl:
         pdf.drawCentredString(x + col_extra_w / 2, y - header_h + 0.2 * cm, "MOY.CL")
         x += col_extra_w
@@ -2174,12 +2176,10 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
                 x += col_detail_w
             pdf.setFont(tmpl["police_corps"], tmpl["taille_corps_tableau"])
 
-        pdf.drawCentredString(x + col_moy_w / 2, y - 0.38 * cm, f"{moy:.2f}")
-        x += col_moy_w
         pdf.drawCentredString(x + col_coeff_w / 2, y - 0.38 * cm, f"{coeff:.0f}")
         x += col_coeff_w
-        pdf.drawCentredString(x + col_pts_w / 2, y - 0.38 * cm, f"{points:.1f}")
-        x += col_pts_w
+        pdf.drawCentredString(x + col_moy_w / 2, y - 0.38 * cm, f"{moy:.2f}")
+        x += col_moy_w
 
         if show_moy_cl:
             mc = float(ligne.moyenne_classe) if ligne.moyenne_classe is not None else 0
@@ -2210,10 +2210,12 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     pdf.setFillColorRGB(*cp)
     x = marge_gauche + 0.15 * cm
     pdf.drawString(x, y - 0.38 * cm, "TOTAUX")
-    x += col_matiere_w + col_detail_w * nb_detail + col_moy_w
+    # Colonnes dans l'ordre du tableau : coefficient, puis moyenne. Le total de
+    # points, qui occupait sa propre colonne, est rappelé dans la synthèse.
+    x += col_matiere_w + col_detail_w * nb_detail
     pdf.drawCentredString(x + col_coeff_w / 2, y - 0.38 * cm, f"{total_coeff:.0f}")
     x += col_coeff_w
-    pdf.drawCentredString(x + col_pts_w / 2, y - 0.38 * cm, f"{total_points:.1f}")
+    pdf.drawCentredString(x + col_moy_w / 2, y - 0.38 * cm, f"{total_points:.1f} pts")
     y -= row_h
 
     pdf.setStrokeColorRGB(*cl)
