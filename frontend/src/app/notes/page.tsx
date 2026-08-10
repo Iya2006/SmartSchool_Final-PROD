@@ -420,8 +420,6 @@ export default function CentralisationNotesPage() {
             setApercu(res.data);
             setApercuEvaluationIds(evals.map(e => e.evaluation_id));
             setApercuPage(1);
-            setSelectedClasse(evals[0].classe_id);
-            setSelectedTrimestre(evals[0].trimestre_id);
         } catch (e: any) {
             alert(e?.response?.data?.detail || 'Erreur');
         }
@@ -1061,72 +1059,6 @@ export default function CentralisationNotesPage() {
                         )}
                     </AnimatePresence>
 
-                    {/* ═══ APERÇU DU CLASSEMENT (suivi, ne modifie aucun bulletin) ═══ */}
-                    <AnimatePresence>
-                        {apercu && (
-                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
-                                style={{ overflow: 'hidden', marginBottom: '20px' }}>
-                                <div style={{ padding: '18px', borderRadius: '16px', background: 'white', border: '1px solid #e2e8f0' }}>
-                                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '12px', gap: '16px' }}>
-                                        <div>
-                                            <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
-                                                Classement par ordre de mérite — {apercu.classe} — {trimestres.find((t: any) => t.trimestre_id === selectedTrimestre)?.libelle || `Trimestre ${selectedTrimestre}`}
-                                            </div>
-                                            {/* Sans le détail des épreuves, un classement est ininterprétable :
-                                                « ordre de mérite de janvier » et « ordre de mérite de fin de
-                                                trimestre » se ressemblent à l'écran mais ne disent pas la même chose. */}
-                                            {(apercu.epreuves || []).length > 0 && (
-                                                <div style={{ fontSize: '12px', color: '#475569', marginTop: '3px' }}>
-                                                    D&apos;après : {apercu.epreuves.map((e: any) =>
-                                                        e.type ? `${e.libelle} (${e.type})` : e.libelle).join(' + ')}
-                                                </div>
-                                            )}
-                                            <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px' }}>
-                                                Effectif : {apercu.effectif} élèves · Outil de suivi : aucun bulletin n&apos;est modifié.
-                                                {(apercu.epreuves || []).length > 0
-                                                    && apercu.epreuves.every((e: any) => e.est_coefficientee === 'N')
-                                                    && ' · Sans coefficients de matière'}
-                                            </div>
-                                        </div>
-                                        <button onClick={() => setApercu(null)} style={{ padding: '6px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer' }}>
-                                            <X size={15} color="#64748b" />
-                                        </button>
-                                    </div>
-                                    <div>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                                            <thead>
-                                                <tr style={{ background: '#f8fafc' }}>
-                                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>RANG</th>
-                                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>ÉLÈVE</th>
-                                                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>MOYENNE</th>
-                                                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>MENTION</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {(apercu.resultats || [])
-                                                    .slice((apercuPage - 1) * APERCU_PAGE_SIZE, apercuPage * APERCU_PAGE_SIZE)
-                                                    .map((r: any) => {
-                                                        const el = classeData.eleves.find(e => e.inscription_id === r.inscription_id);
-                                                        return (
-                                                            <tr key={r.inscription_id} style={{ borderTop: '1px solid #f1f5f9' }}>
-                                                                <td style={{ padding: '8px 12px', fontWeight: 800, color: '#6366f1' }}>{r.rang}</td>
-                                                                <td style={{ padding: '8px 12px', color: '#0f172a' }}>{el ? `${el.prenom} ${el.nom}` : `#${r.inscription_id}`}</td>
-                                                                <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 700, color: '#0f172a' }}>
-                                                                    {r.moyenne_generale !== null ? r.moyenne_generale.toFixed(2) : '—'}
-                                                                </td>
-                                                                <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: '11.5px', color: '#64748b' }}>{r.mention || '—'}</td>
-                                                            </tr>
-                                                        );
-                                                    })}
-                                            </tbody>
-                                        </table>
-                                        <Pagination page={apercuPage} pageSize={APERCU_PAGE_SIZE}
-                                            total={(apercu.resultats || []).length} onPageChange={setApercuPage} />
-                                    </div>
-                                </div>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
 
                     {/* ═══ TABLEAU PIVOT ═══ */}
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
@@ -1328,6 +1260,87 @@ export default function CentralisationNotesPage() {
                                         <Save size={15} /> {savingNotes ? 'Enregistrement...' : 'Enregistrer les notes'}
                                     </button>
                                 </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ═══ CLASSEMENT PAR ORDRE DE MÉRITE ═══
+                Rendu en fenêtre, hors des deux vues (liste et détail de classe) :
+                le classement se demande aussi bien depuis la liste des épreuves
+                que depuis une classe, et il n'avait aucune raison de n'exister
+                que dans l'une des deux. Les noms viennent du résultat lui-même,
+                pas de `classeData` — absent quand on arrive depuis la liste. */}
+            <AnimatePresence>
+                {apercu && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={() => setApercu(null)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 1000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 20px', overflowY: 'auto' }}>
+                        <motion.div initial={{ scale: 0.97, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.97 }}
+                            onClick={e => e.stopPropagation()}
+                            style={{ background: 'white', borderRadius: '18px', width: '100%', maxWidth: '860px', overflow: 'hidden' }}>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px', padding: '20px 24px', borderBottom: '1px solid #e2e8f0' }}>
+                                <div>
+                                    <div style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>
+                                        Classement par ordre de mérite — {apercu.classe}
+                                    </div>
+                                    {/* Sans le détail des épreuves, un classement est ininterprétable :
+                                        « ordre de mérite de janvier » et « ordre de mérite de fin de
+                                        trimestre » se ressemblent à l'écran mais ne disent pas la même chose. */}
+                                    {(apercu.epreuves || []).length > 0 && (
+                                        <div style={{ fontSize: '12.5px', color: '#475569', marginTop: '4px' }}>
+                                            D&apos;après : {apercu.epreuves.map((e: any) =>
+                                                e.type ? `${e.libelle} (${e.type})` : e.libelle).join(' + ')}
+                                        </div>
+                                    )}
+                                    <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
+                                        Effectif : {apercu.effectif} élèves · Outil de suivi : aucun bulletin n&apos;est modifié.
+                                        {(apercu.epreuves || []).length > 0
+                                            && apercu.epreuves.every((e: any) => e.est_coefficientee === 'N')
+                                            && ' · Sans coefficients de matière'}
+                                        {apercu.mode_agregation === 'PAR_EPREUVE' && ' · Règle : par épreuve'}
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                                    <button onClick={() => imprimerClassement(apercuEvaluationIds || undefined, apercu.classe_id, apercu.trimestre_id)}
+                                        style={{ padding: '7px 14px', borderRadius: '9px', border: '1px solid #059669', background: 'white', color: '#059669', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                        <FileText size={14} /> Imprimer
+                                    </button>
+                                    <button onClick={() => setApercu(null)} style={{ padding: '7px', borderRadius: '9px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer' }}>
+                                        <X size={16} color="#64748b" />
+                                    </button>
+                                </div>
+                            </div>
+                            <div style={{ padding: '4px 24px 20px' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                    <thead>
+                                        <tr style={{ background: '#f8fafc' }}>
+                                            {['RANG', 'ÉLÈVE', 'MATRICULE', 'MOYENNE', 'MENTION'].map((h, i) => (
+                                                <th key={h} style={{ padding: '9px 12px', textAlign: i >= 3 ? 'center' : 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>{h}</th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {(apercu.resultats || [])
+                                            .slice((apercuPage - 1) * APERCU_PAGE_SIZE, apercuPage * APERCU_PAGE_SIZE)
+                                            .map((r: any) => (
+                                                <tr key={r.inscription_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                                    <td style={{ padding: '9px 12px', fontWeight: 800, color: '#6366f1' }}>{r.rang}</td>
+                                                    <td style={{ padding: '9px 12px', color: '#0f172a' }}>
+                                                        {r.nom ? `${r.nom} ${r.prenom}` : `#${r.inscription_id}`}
+                                                    </td>
+                                                    <td style={{ padding: '9px 12px', color: '#94a3b8', fontSize: '12px' }}>{r.matricule || '—'}</td>
+                                                    <td style={{ padding: '9px 12px', textAlign: 'center', fontWeight: 700, color: r.moyenne_generale !== null && r.moyenne_generale < 10 ? '#b91c1c' : '#0f172a' }}>
+                                                        {r.moyenne_generale !== null ? r.moyenne_generale.toFixed(2) : '—'}
+                                                    </td>
+                                                    <td style={{ padding: '9px 12px', textAlign: 'center', fontSize: '11.5px', color: '#64748b' }}>{r.mention || '—'}</td>
+                                                </tr>
+                                            ))}
+                                    </tbody>
+                                </table>
+                                <Pagination page={apercuPage} pageSize={APERCU_PAGE_SIZE}
+                                    total={(apercu.resultats || []).length} onPageChange={setApercuPage} />
                             </div>
                         </motion.div>
                     </motion.div>

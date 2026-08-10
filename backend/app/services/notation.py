@@ -31,8 +31,8 @@ from sqlalchemy.orm import Session
 
 from app.models.academique import (
     AnneeScolaire, Bulletin, BulletinLigne, Classe, ClasseMatiere, Cycle,
-    Evaluation, Inscription, Matiere, Niveau, Note, ParametreEtablissement,
-    PeriodeEpreuve, Trimestre, TypeEvaluation,
+    Eleve, Evaluation, Inscription, Matiere, Niveau, Note,
+    ParametreEtablissement, PeriodeEpreuve, Trimestre, TypeEvaluation,
 )
 
 # Codes de cycle (ss_cycles.code) -> clé utilisée par le frontend et ss_parametres
@@ -734,6 +734,15 @@ def calculer_resultats_periode(
     ).all()
     effectif = len(inscriptions)
 
+    # Identité des élèves, en une requête : un classement doit pouvoir
+    # s'afficher seul, sans que l'appelant ait à recharger la classe pour
+    # traduire des inscription_id en noms.
+    eleves = {
+        e.eleve_id: e for e in db.query(Eleve).filter(
+            Eleve.eleve_id.in_([i.eleve_id for i in inscriptions])
+        ).all()
+    } if inscriptions else {}
+
     bulletins_data = []
     for insc in inscriptions:
         total_coef = 0.0
@@ -758,8 +767,13 @@ def calculer_resultats_periode(
                 "appreciation": get_appreciation(moy_mat, echelle) if moy_mat is not None else None,
             })
 
+        el = eleves.get(insc.eleve_id)
         bulletins_data.append({
             "inscription_id": insc.inscription_id,
+            "eleve_id": insc.eleve_id,
+            "nom": el.nom if el else None,
+            "prenom": el.prenom if el else None,
+            "matricule": el.matricule if el else None,
             "moyenne_generale": round(total_points / total_coef, 2) if total_coef > 0 else None,
             "total_points": round(total_points, 2),
             "total_coefficients": total_coef,
