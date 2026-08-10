@@ -435,6 +435,9 @@ def get_classement_eleve(
     est renvoyée — aucune donnée d'un camarade ne sort d'ici.
     """
     from app.api.evaluations import get_bulletin_display_flags
+    from app.services.notation import (
+        get_bareme_defaut_cycle, get_cycle_key, get_lettres_config, lettre_pour_note,
+    )
     from app.services.notation import resultat_eleve_sur_epreuves
 
     inscription = _inscription_active(db, eleve_id)
@@ -476,7 +479,13 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depen
 
     from app.api.evaluations import get_bulletin_display_flags
     cl_for_flags = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
-    flags = get_bulletin_display_flags(db, cl_for_flags.etablissement_id if cl_for_flags else 1)
+    _etab = cl_for_flags.etablissement_id if cl_for_flags else 1
+    flags = get_bulletin_display_flags(db, _etab)
+    # Notation par lettres : la famille doit lire la même chose que le
+    # bulletin papier, sinon la lettre n'existe que sur le PDF.
+    _cycle = get_cycle_key(inscription.classe_id, db)
+    _echelle = get_bareme_defaut_cycle(db, _etab, _cycle)
+    _lettres = get_lettres_config(db, _etab, _cycle)
 
     lignes = db.query(BulletinLigne, Matiere)\
         .join(Matiere, BulletinLigne.matiere_id == Matiere.matiere_id)\
@@ -491,6 +500,10 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depen
             "note_min": float(ligne.note_min) if ligne.note_min is not None and flags["show_stats_matiere"] else None,
             "note_max": float(ligne.note_max) if ligne.note_max is not None and flags["show_stats_matiere"] else None,
             "appreciation": ligne.appreciation if flags["show_appreciation"] else None,
+            "lettre": lettre_pour_note(
+                float(ligne.moyenne_matiere) if ligne.moyenne_matiere is not None else None,
+                _lettres, _echelle,
+            ),
         })
 
     cl = cl_for_flags
@@ -502,6 +515,10 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depen
         "trimestre": tri.libelle if tri else f"Trimestre {trimestre_id}",
         "trimestre_id": trimestre_id,
         "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+        "lettre_generale": lettre_pour_note(
+            float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+            _lettres, _echelle,
+        ),
         "rang": bulletin.rang if flags["show_rang"] else None,
         # Le portail élève affiche rang+effectif dans une seule phrase
         # ("Xe sur Y") — on ne peut pas montrer l'effectif seul sans le rang,

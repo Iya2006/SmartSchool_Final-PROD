@@ -436,7 +436,16 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
     # Info classe
     cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
     from app.api.evaluations import get_bulletin_display_flags
-    flags = get_bulletin_display_flags(db, cl.etablissement_id if cl else 1)
+    from app.services.notation import (
+        get_bareme_defaut_cycle, get_cycle_key, get_lettres_config, lettre_pour_note,
+    )
+    _etab = cl.etablissement_id if cl else 1
+    flags = get_bulletin_display_flags(db, _etab)
+    # Notation par lettres : la famille doit lire la même chose que le bulletin
+    # papier, sinon la lettre n'existe que sur le PDF.
+    _cycle = get_cycle_key(inscription.classe_id, db)
+    _echelle = get_bareme_defaut_cycle(db, _etab, _cycle)
+    _lettres = get_lettres_config(db, _etab, _cycle)
 
     matieres = []
     total_coef = 0
@@ -450,6 +459,10 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
             "note_min": float(ligne.note_min) if ligne.note_min is not None and flags["show_stats_matiere"] else None,
             "note_max": float(ligne.note_max) if ligne.note_max is not None and flags["show_stats_matiere"] else None,
             "appreciation": ligne.appreciation if flags["show_appreciation"] else None,
+            "lettre": lettre_pour_note(
+                float(ligne.moyenne_matiere) if ligne.moyenne_matiere is not None else None,
+                _lettres, _echelle,
+            ),
         })
         total_coef += float(ligne.coefficient) if ligne.coefficient else 1
 
@@ -458,6 +471,10 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
         "classe": cl.libelle if cl else "?",
         "trimestre_id": trimestre_id,
         "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+        "lettre_generale": lettre_pour_note(
+            float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+            _lettres, _echelle,
+        ),
         "rang": bulletin.rang if flags["show_rang"] else None,
         "effectif_classe": bulletin.effectif_classe if flags["show_rang"] and flags["show_effectif"] else None,
         "mention": bulletin.mention if flags["show_mention"] else None,

@@ -1150,6 +1150,7 @@ export default function PortailParent() {
                                                                         <td style={{ padding: '10px 12px', textAlign: 'center' }}>
                                                                             <span style={{ fontSize: '14px', fontWeight: 800, color: m.moyenne_eleve !== null && m.moyenne_eleve >= 10 ? '#10b981' : '#ef4444' }}>
                                                                                 {m.moyenne_eleve !== null ? m.moyenne_eleve.toFixed(2) : '—'}
+                                                                                {m.lettre ? ` ${m.lettre}` : ''}
                                                                             </span>
                                                                         </td>
                                                                         <td style={{ padding: '10px 12px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>{m.moyenne_classe !== null ? m.moyenne_classe.toFixed(2) : '—'}</td>

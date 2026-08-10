@@ -537,6 +537,25 @@ class EvaluationSessionUpdate(BaseModel):
     date_evaluation: Optional[date] = None
     est_coefficientee: Optional[str] = None
     statut: Optional[str] = None
+    # Corriger le barème après coup est le cas le plus fréquent : une épreuve
+    # créée « notée sur 1 » (le coefficient saisi dans la mauvaise case) était
+    # jusqu'ici impossible à rattraper depuis l'interface.
+    note_sur: Optional[float] = None
+    type_eval_id: Optional[int] = None
+    # Surcharge du coefficient, propagée à toutes les matières de la session :
+    # une composition pèse le même poids dans chaque matière.
+    coefficient_override: Optional[float] = None
+
+
+class EvaluationUpdate(BaseModel):
+    """Correction d'une épreuve isolée (hors session)."""
+    libelle: Optional[str] = None
+    date_evaluation: Optional[date] = None
+    note_sur: Optional[float] = None
+    type_eval_id: Optional[int] = None
+    enseignant_id: Optional[int] = None
+    est_coefficientee: Optional[str] = None
+    coefficient_override: Optional[float] = None
 
 class EvaluationSessionOut(OrmBase):
     session_id: int

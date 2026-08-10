@@ -6,7 +6,7 @@ import {
     ClipboardList, Search, Filter, BarChart3, Users, BookOpen, Trophy,
     ChevronDown, AlertCircle, Check, Edit3, Save, Eye, Calculator,
     FileText, X, ArrowUpDown, TrendingUp, TrendingDown, Minus, CheckCircle2,
-    ListChecks
+    ListChecks, Settings2, Trash2
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
@@ -37,6 +37,8 @@ interface EvalCentralisee {
     enseignant: string; note_sur: number; coefficient: number;
     nb_notes: number; moyenne: number | null; statut: string;
     session_id: number | null;
+    type_eval_id: number; enseignant_id: number | null;
+    est_coefficientee: string; coefficient_override: number | null;
 }
 interface TypeEvalInfo {
     type_eval_id: number; code: string; libelle: string;
@@ -122,6 +124,18 @@ export default function CentralisationNotesPage() {
     const [loadingSaisie, setLoadingSaisie] = useState(false);
     const [savingNotes, setSavingNotes] = useState(false);
     const [statutFiltre, setStatutFiltre] = useState<string>('');
+
+    // Correction d'une épreuve déjà créée. Une composition enregistrée avec la
+    // mauvaise date, le mauvais barème ou le mauvais type était définitive :
+    // rien dans l'écran ne permettait de la reprendre ni de l'effacer.
+    const [epreuveEditee, setEpreuveEditee] = useState<LigneEval | null>(null);
+    const [formEdition, setFormEdition] = useState({
+        libelle: '', date_evaluation: '', type_eval_id: 0,
+        note_sur: '' as string | number, est_coefficientee: true,
+        coefficient_override: '' as string | number,
+    });
+    const [savingEdition, setSavingEdition] = useState(false);
+    const [suppressionEnCours, setSuppressionEnCours] = useState<string | null>(null);
 
     // Aperçu intermédiaire (classement de suivi, sans toucher aux bulletins).
     // Paginé comme le tableau pivot : une classe réelle dépasse souvent 150 élèves.
@@ -512,6 +526,84 @@ export default function CentralisationNotesPage() {
         return { cle: 'PLANIFIEE', label: 'À saisir', couleur: '#b45309', fond: '#fef3c7' };
     };
 
+    // ═══ CORRECTION / SUPPRESSION D'UNE ÉPREUVE ═══
+    // Une composition porte les mêmes valeurs sur toutes ses matières : on la
+    // corrige d'un seul geste côté serveur, sans une requête par matière.
+    const ouvrirEdition = (ligne: LigneEval) => {
+        const ref = ligne.evaluations[0];
+        setFormEdition({
+            libelle: ligne.libelle,
+            date_evaluation: (ligne.date_evaluation || '').slice(0, 10),
+            type_eval_id: ref.type_eval_id || 0,
+            note_sur: ref.note_sur ?? '',
+            est_coefficientee: ref.est_coefficientee !== 'N',
+            coefficient_override: ref.coefficient_override ?? '',
+        });
+        setEpreuveEditee(ligne);
+    };
+
+    const enregistrerEdition = async () => {
+        if (!epreuveEditee) return;
+        const corps: Record<string, unknown> = {
+            libelle: formEdition.libelle || undefined,
+            date_evaluation: formEdition.date_evaluation || undefined,
+            type_eval_id: formEdition.type_eval_id || undefined,
+            note_sur: formEdition.note_sur === '' ? undefined : Number(formEdition.note_sur),
+            est_coefficientee: formEdition.est_coefficientee ? 'O' : 'N',
+            // Champ vidé = retour au coefficient du type ; le serveur distingue
+            // « absent » (ne rien changer) de « null » (retirer la surcharge).
+            coefficient_override: formEdition.coefficient_override === ''
+                ? null : Number(formEdition.coefficient_override),
+        };
+        setSavingEdition(true);
+        try {
+            const url = epreuveEditee.session_id
+                ? `/api/evaluations/sessions/${epreuveEditee.session_id}`
+                : `/api/evaluations/${epreuveEditee.evaluations[0].evaluation_id}`;
+            await api.put(url, corps);
+            setSuccessMsg('Épreuve corrigée');
+            setTimeout(() => setSuccessMsg(''), 4000);
+            setEpreuveEditee(null);
+            await rechargerEvals();
+            if (showEpreuves) loadEpreuves();
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || e.message);
+        }
+        setSavingEdition(false);
+    };
+
+    // Suppression volontairement bavarde : elle efface les notes déjà saisies,
+    // et le serveur la refuse sur une épreuve centralisée (ses notes comptent
+    // dans des bulletins). On annonce les deux avant de demander confirmation.
+    const supprimerEpreuve = async (ligne: LigneEval) => {
+        const nbNotes = ligne.evaluations.reduce((n, e) => n + (e.nb_notes || 0), 0);
+        const quoi = ligne.session_id
+            ? `la composition « ${ligne.libelle} » et ses ${ligne.evaluations.length} matières`
+            : `l'épreuve « ${ligne.libelle} »`;
+        if (!confirm(
+            `Supprimer ${quoi} ?\n\n`
+            + (nbNotes > 0
+                ? `${nbNotes} note(s) déjà saisie(s) seront définitivement effacées.\n\n`
+                : '')
+            + 'Cette action est irréversible.'
+        )) return;
+
+        setSuppressionEnCours(ligne.cle);
+        try {
+            const url = ligne.session_id
+                ? `/api/evaluations/sessions/${ligne.session_id}`
+                : `/api/evaluations/${ligne.evaluations[0].evaluation_id}`;
+            const res = await api.delete(url);
+            setSuccessMsg(res.data?.message || 'Épreuve supprimée');
+            setTimeout(() => setSuccessMsg(''), 4000);
+            await rechargerEvals();
+            if (showEpreuves) loadEpreuves();
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || e.message);
+        }
+        setSuppressionEnCours(null);
+    };
+
     // Une composition couvre toutes les matières d'une classe : on l'affiche
     // sur UNE ligne, pas une par matière. Les évaluations créées hors session
     // (saisie directe d'un enseignant) restent sur leur propre ligne.
@@ -750,8 +842,24 @@ export default function CentralisationNotesPage() {
                                                         </button>
                                                         <button onClick={() => imprimerClassementEpreuve(ligne)} disabled={saisies === 0}
                                                             title={saisies === 0 ? 'Aucune note saisie' : 'Fiche imprimable de cette épreuve'}
-                                                            style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #059669', background: 'white', color: '#059669', fontSize: '12px', fontWeight: 700, cursor: saisies ? 'pointer' : 'not-allowed', opacity: saisies ? 1 : 0.45, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                                            style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #059669', background: 'white', color: '#059669', fontSize: '12px', fontWeight: 700, cursor: saisies ? 'pointer' : 'not-allowed', opacity: saisies ? 1 : 0.45, display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '6px' }}>
                                                             <FileText size={13} /> Fiche
+                                                        </button>
+                                                        {/* Corriger une épreuve mal créée (date, barème, type,
+                                                            coefficient) et la supprimer : ces deux gestes
+                                                            n'existaient nulle part dans l'interface. */}
+                                                        <button onClick={() => ouvrirEdition(ligne)}
+                                                            title="Corriger cette épreuve (date, barème, type, coefficient)"
+                                                            style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #cbd5e1', background: 'white', color: '#475569', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', marginRight: '6px' }}>
+                                                            <Settings2 size={13} />
+                                                        </button>
+                                                        <button onClick={() => supprimerEpreuve(ligne)}
+                                                            disabled={suppressionEnCours === ligne.cle || toutesCentralisees}
+                                                            title={toutesCentralisees
+                                                                ? 'Épreuve centralisée : ses notes comptent dans les bulletins. Passez-la en « Annulée » pour l’exclure du calcul.'
+                                                                : 'Supprimer cette épreuve et ses notes'}
+                                                            style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #fecaca', background: 'white', color: '#b91c1c', fontSize: '12px', fontWeight: 700, cursor: toutesCentralisees ? 'not-allowed' : 'pointer', opacity: toutesCentralisees ? 0.4 : 1, display: 'inline-flex', alignItems: 'center' }}>
+                                                            <Trash2 size={13} />
                                                         </button>
                                                     </td>
                                                 </tr>
@@ -1192,6 +1300,114 @@ export default function CentralisationNotesPage() {
                     <p>Chargement des données...</p>
                 </div>
             ) : null}
+
+            {/* ═══ CORRECTION D'UNE ÉPREUVE ═══ */}
+            <AnimatePresence>
+                {epreuveEditee && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}
+                        onClick={() => !savingEdition && setEpreuveEditee(null)}>
+                        <motion.div initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0 }}
+                            onClick={e => e.stopPropagation()}
+                            style={{ background: 'white', borderRadius: '16px', width: '100%', maxWidth: '560px', overflow: 'hidden' }}>
+
+                            <div style={{ padding: '18px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div>
+                                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>Corriger l&apos;épreuve</div>
+                                    <div style={{ fontSize: '12.5px', color: '#64748b' }}>
+                                        {epreuveEditee.classe} · {epreuveEditee.trimestre}
+                                        {epreuveEditee.session_id
+                                            ? ` · ${epreuveEditee.evaluations.length} matières`
+                                            : ` · ${epreuveEditee.evaluations[0].matiere}`}
+                                    </div>
+                                </div>
+                                <button onClick={() => setEpreuveEditee(null)}
+                                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#94a3b8' }}>
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            <div style={{ padding: '20px 22px', display: 'grid', gap: '14px' }}>
+                                <div>
+                                    <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>INTITULÉ</label>
+                                    <input value={formEdition.libelle}
+                                        onChange={e => setFormEdition(f => ({ ...f, libelle: e.target.value }))}
+                                        style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13.5px' }} />
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>DATE</label>
+                                        <input type="date" value={formEdition.date_evaluation}
+                                            onChange={e => setFormEdition(f => ({ ...f, date_evaluation: e.target.value }))}
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13.5px' }} />
+                                        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px' }}>
+                                            Doit rester dans {epreuveEditee.trimestre}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>TYPE</label>
+                                        <select value={formEdition.type_eval_id}
+                                            onChange={e => setFormEdition(f => ({ ...f, type_eval_id: Number(e.target.value) }))}
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13.5px' }}>
+                                            {typesEval.map(t => (
+                                                <option key={t.type_eval_id} value={t.type_eval_id}>
+                                                    {t.libelle} (coef. {t.coefficient})
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>NOTÉE SUR</label>
+                                        <input type="number" min={1} step={0.5} value={formEdition.note_sur}
+                                            onChange={e => setFormEdition(f => ({ ...f, note_sur: e.target.value }))}
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13.5px' }} />
+                                        {Number(formEdition.note_sur) > 0 && Number(formEdition.note_sur) < 5 && (
+                                            <div style={{ fontSize: '11px', color: '#b45309', marginTop: '3px', fontWeight: 600 }}>
+                                                Barème inhabituel — s&apos;agit-il du coefficient ?
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>COEFFICIENT DE L&apos;ÉPREUVE</label>
+                                        <input type="number" min={0.5} step={0.5} value={formEdition.coefficient_override}
+                                            placeholder="celui du type"
+                                            onChange={e => setFormEdition(f => ({ ...f, coefficient_override: e.target.value }))}
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13.5px' }} />
+                                        <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '3px' }}>
+                                            Laisser vide pour garder le coefficient du type
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '9px', cursor: 'pointer', padding: '10px 12px', borderRadius: '10px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                                    <input type="checkbox" checked={formEdition.est_coefficientee}
+                                        onChange={e => setFormEdition(f => ({ ...f, est_coefficientee: e.target.checked }))}
+                                        style={{ marginTop: '2px', width: '16px', height: '16px' }} />
+                                    <span style={{ fontSize: '12.5px', color: '#475569' }}>
+                                        <strong style={{ color: '#0f172a' }}>Appliquer les coefficients de matière</strong><br />
+                                        Décoché, toutes les matières comptent pour 1 sur cette épreuve.
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div style={{ padding: '14px 22px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button onClick={() => setEpreuveEditee(null)}
+                                    style={{ padding: '9px 18px', borderRadius: '10px', border: '1.5px solid #e2e8f0', background: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', color: '#475569' }}>
+                                    Annuler
+                                </button>
+                                <button onClick={enregistrerEdition} disabled={savingEdition}
+                                    style={{ padding: '9px 20px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+                                    <Save size={15} /> {savingEdition ? 'Enregistrement…' : 'Enregistrer'}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* ═══ SAISIE DES NOTES D'UNE ÉVALUATION ═══ */}
             <AnimatePresence>

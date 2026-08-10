@@ -143,9 +143,10 @@ export default function NotationPage() {
     const [baremes, setBaremes] = useState<Record<string,number>>({
         primaire: 10, college: 20, lycee: 20,
     });
-    const [passages, setPassages] = useState<Record<string,number>>({
-        primaire: 5, college: 10, lycee: 10,
-    });
+    // « Note de passage » (onglet Barème) et « Seuil de redoublement » (onglet
+    // Redoublement) désignaient la même chose dans deux états différents, et
+    // seul le second était lu par le serveur : régler le premier n'avait aucun
+    // effet. Un seul état désormais, visible à deux endroits.
     const [rangMode, setRangMode] = useState('classe');
 
     // ── Coefficients des types d'évaluation, surchargeables par cycle ──
@@ -253,11 +254,6 @@ export default function NotationPage() {
                         college:  (s['bareme.college'] as number)  ?? 20,
                         lycee:    (s['bareme.lycee'] as number)    ?? 20,
                     });
-                    setPassages({
-                        primaire: (s['passage.primaire'] as number) ?? 5,
-                        college:  (s['passage.college'] as number)  ?? 10,
-                        lycee:    (s['passage.lycee'] as number)    ?? 10,
-                    });
                     setRangMode((s['rang_mode'] as string) ?? 'classe');
                     // Surcharges de coefficient par cycle : clés coef_type.{cycle}.{code}
                     const parCycle: Record<string, Record<string, number>> = { primaire: {}, college: {}, lycee: {} };
@@ -316,9 +312,12 @@ export default function NotationPage() {
                     
                     const srGlobal = (s['seuil_redoublement'] as number) ?? 10;
                     setSeuilRedoublement({
-                        primaire: (s['seuil_redoublement.primaire'] as number) ?? (srGlobal === 10 ? 5 : srGlobal / 2),
-                        college:  (s['seuil_redoublement.college'] as number)  ?? srGlobal,
-                        lycee:    (s['seuil_redoublement.lycee'] as number)    ?? srGlobal,
+                        primaire: (s['seuil_redoublement.primaire'] as number)
+                            ?? (s['passage.primaire'] as number) ?? (srGlobal === 10 ? 5 : srGlobal / 2),
+                        college:  (s['seuil_redoublement.college'] as number)
+                            ?? (s['passage.college'] as number) ?? srGlobal,
+                        lycee:    (s['seuil_redoublement.lycee'] as number)
+                            ?? (s['passage.lycee'] as number) ?? srGlobal,
                     });
 
                     if (s['lettres_table.primaire']) {
@@ -366,7 +365,7 @@ export default function NotationPage() {
 
     // ─── Helpers setters ──────────────────────────────────────────────────
     const setBareme  = (cycle: string, v: number) => { setBaremes(p => ({...p,[cycle]:v}));  markChanged(); };
-    const setPassage = (cycle: string, v: number) => { setPassages(p => ({...p,[cycle]:v})); markChanged(); };
+    const setPassage = (cycle: string, v: number) => { setSeuilRedoublement(p => ({...p,[cycle]:v})); markChanged(); };
     const setMention = (cycle: string, key: string, v: number) => {
         setMentions(p => ({ ...p, [cycle]: { ...p[cycle], [key]: v } }));
         markChanged();
@@ -401,9 +400,11 @@ export default function NotationPage() {
                 buildParam('bareme.primaire', baremes.primaire),
                 buildParam('bareme.college',  baremes.college),
                 buildParam('bareme.lycee',    baremes.lycee),
-                buildParam('passage.primaire', passages.primaire),
-                buildParam('passage.college',  passages.college),
-                buildParam('passage.lycee',    passages.lycee),
+                // Même valeur sous les deux clés historiques : selon sa
+                // version, une base déjà en service lit l'une ou l'autre.
+                buildParam('passage.primaire', seuilRedoublement.primaire),
+                buildParam('passage.college',  seuilRedoublement.college),
+                buildParam('passage.lycee',    seuilRedoublement.lycee),
                 buildParam('rang_mode', rangMode),
                 // Surcharges de coefficient par cycle (seules celles réellement définies)
                 ...(['primaire','college','lycee'] as const).flatMap(cycle =>
@@ -587,10 +588,13 @@ export default function NotationPage() {
                                                         <input
                                                             type="number" className={styles.inputFancy}
                                                             min={0} max={baremes[cycle.key]} step={0.5}
-                                                            value={passages[cycle.key]}
+                                                            value={seuilRedoublement[cycle.key] ?? 10}
                                                             onChange={e => setPassage(cycle.key, Number(e.target.value))}
                                                         />
-                                                        <span className={styles.infoHint}>Moyenne minimale pour valider /{baremes[cycle.key]}</span>
+                                                        <span className={styles.infoHint}>
+                                                            Moyenne minimale pour valider /{baremes[cycle.key]} — c&apos;est le seuil
+                                                            qui décide du passage, le même que dans l&apos;onglet Redoublement.
+                                                        </span>
                                                     </div>
                                                 </div>
                                             </div>

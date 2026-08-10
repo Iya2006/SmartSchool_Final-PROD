@@ -666,6 +666,11 @@ function BulletinsContent() {
                                                                         }}>
                                                                             {moyEleve !== null ? Number(moyEleve).toFixed(2) : '—'}
                                                                         </span>
+                                                                        {/* Notation par lettres : affichée seulement
+                                                                            si l'école l'a activée pour ce cycle. */}
+                                                                        {l.lettre && (
+                                                                            <span style={{ marginLeft: '6px', fontWeight: 800, fontSize: '12px', color: '#6366f1' }}>{l.lettre}</span>
+                                                                        )}
                                                                     </td>
                                                                     <td style={{ padding: '9px 12px', fontSize: '11px', color: '#475569', fontStyle: 'italic' }}>
                                                                         {l.appreciation || '—'}
@@ -698,7 +703,9 @@ function BulletinsContent() {
                                                     <div style={{ fontSize: '32px', fontWeight: 900, color: getNoteColor(selectedBulletin.moyenne_generale), lineHeight: 1 }}>
                                                         {selectedBulletin.moyenne_generale !== null ? Number(selectedBulletin.moyenne_generale).toFixed(2) : '—'}
                                                     </div>
-                                                    <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>/20</div>
+                                                    <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>
+                                                        /20{selectedBulletin.lettre_generale ? ` · ${selectedBulletin.lettre_generale}` : ''}
+                                                    </div>
                                                 </div>
 
                                                 {/* Rang */}

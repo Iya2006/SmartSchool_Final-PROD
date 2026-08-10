@@ -21,7 +21,8 @@ from app.models.academique import (
 from app.schemas.schemas import (
     EvaluationCreate, EvaluationOut, NoteCreate, NoteUpdate, NoteOut,
     TypeEvaluationCreate, TypeEvaluationUpdate, TypeEvaluationOut,
-    EvaluationSessionCreate, EvaluationSessionUpdate, EvaluationSessionOut
+    EvaluationSessionCreate, EvaluationSessionUpdate, EvaluationSessionOut,
+    EvaluationUpdate
 )
 from app.core.annee_lock import verifier_annee_modifiable
 from app.services.notation import (
@@ -44,7 +45,9 @@ from app.services.notation import (
     get_mention,
     get_mode_agregation,
     get_notation_seuils,
+    get_lettres_config,
     get_types_evaluation_coefficients,
+    lettre_pour_note,
     moyenne_matiere_eleve,
     normaliser_note,
     precharger_notes as _precharger_notes,
@@ -305,6 +308,14 @@ def get_evaluations_centralisees(
             # Permet au frontend de regrouper les évaluations d'une même
             # composition en une seule ligne plutôt qu'une par matière.
             "session_id": ev.session_id,
+            # Nécessaires pour pré-remplir le formulaire de correction d'une
+            # épreuve : sans eux, corriger un barème repartait d'un champ vide.
+            "type_eval_id": ev.type_eval_id,
+            "enseignant_id": ev.enseignant_id,
+            "est_coefficientee": getattr(ev, "est_coefficientee", "O"),
+            "coefficient_override": (
+                float(ev.coefficient_override) if ev.coefficient_override is not None else None
+            ),
         })
     return result
 
@@ -1326,15 +1337,44 @@ def modifier_session(session_id: int, data: EvaluationSessionUpdate, db: Session
         for e in evals:
             e.libelle = data.libelle
     if data.date_evaluation is not None:
+        # Même contrôle qu'à la création : une composition déplacée hors de sa
+        # période compterait dans un trimestre auquel elle n'appartient pas.
+        try:
+            verifier_date_dans_periode(db, trimestre, data.date_evaluation)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         session.date_evaluation = data.date_evaluation
         for e in evals:
             e.date_evaluation = data.date_evaluation
+    if data.note_sur is not None:
+        if data.note_sur <= 0:
+            raise HTTPException(400, "Le barème doit être strictement positif")
+        _verifier_bareme_compatible(db, [e.evaluation_id for e in evals], data.note_sur)
+        session.note_sur = data.note_sur
+        for e in evals:
+            e.note_sur = data.note_sur
+    if data.type_eval_id is not None:
+        if not db.query(TypeEvaluation).filter(
+            TypeEvaluation.type_eval_id == data.type_eval_id
+        ).first():
+            raise HTTPException(404, "Type d'évaluation introuvable")
+        session.type_eval_id = data.type_eval_id
+        for e in evals:
+            e.type_eval_id = data.type_eval_id
     if data.est_coefficientee is not None:
         session.est_coefficientee = data.est_coefficientee
         # Propagé sur les évaluations filles : le moteur de calcul lit ce
         # drapeau sur l'évaluation, sans jointure vers la session.
         for e in evals:
             e.est_coefficientee = data.est_coefficientee
+    # `coefficient_override` absent du corps = ne pas y toucher ; envoyé à null
+    # = revenir au coefficient du type. Sans cette distinction, une surcharge
+    # posée par erreur ne pouvait plus jamais être retirée.
+    if "coefficient_override" in data.model_fields_set:
+        if data.coefficient_override is not None and data.coefficient_override <= 0:
+            raise HTTPException(400, "Le coefficient doit être strictement positif")
+        for e in evals:
+            e.coefficient_override = data.coefficient_override
     if data.statut is not None:
         session.statut = data.statut
         for e in evals:
@@ -1367,6 +1407,153 @@ def supprimer_session(session_id: int, db: Session = Depends(get_db)):
     db.delete(session)
     db.commit()
     return {"message": f"Session supprimée ({len(eval_ids)} évaluations)"}
+
+
+# ════════════════════════════════════════════════════════════
+# CORRECTION ET SUPPRESSION D'UNE ÉPREUVE
+# ════════════════════════════════════════════════════════════
+# Une épreuve créée avec la mauvaise date, le mauvais barème ou le mauvais type
+# était définitive : rien dans l'interface ne permettait de la corriger ni de
+# l'effacer, et aucune route ne supprimait une évaluation isolée.
+
+def _epreuve_modifiable(db: Session, ev: Evaluation) -> Classe:
+    """Garde-fous communs : année ouverte, période non clôturée."""
+    classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — modification impossible.")
+    return classe
+
+
+def _verifier_bareme_compatible(db: Session, evaluation_ids: List[int], note_sur: float) -> None:
+    """Refuse un barème inférieur à une note déjà saisie.
+
+    Abaisser le barème sous une note existante ne lèverait aucune erreur : la
+    note serait simplement normalisée au-dessus du maximum et gonflerait la
+    moyenne. C'est exactement le mécanisme qui avait produit des moyennes de
+    250/20 sur cette base.
+    """
+    if not evaluation_ids or not note_sur or note_sur <= 0:
+        return
+    maxi = db.query(func.max(Note.valeur)).filter(
+        Note.evaluation_id.in_(evaluation_ids),
+        Note.valeur.isnot(None),
+    ).scalar()
+    if maxi is not None and float(maxi) > float(note_sur):
+        raise HTTPException(
+            400,
+            f"Barème refusé : une note de {float(maxi):g} est déjà saisie, "
+            f"elle ne tiendrait pas dans un barème sur {float(note_sur):g}. "
+            "Corrigez d'abord les notes concernées.",
+        )
+
+
+@router.put("/{evaluation_id}", response_model=EvaluationOut)
+def modifier_evaluation(evaluation_id: int, data: EvaluationUpdate, db: Session = Depends(get_db)):
+    """Corrige une épreuve : libellé, date, barème, type, enseignant, coefficient.
+
+    La date reste contrôlée contre les bornes de sa période — corriger une
+    épreuve ne doit pas permettre de la déplacer hors du trimestre auquel elle
+    compte, ce que la création interdit déjà.
+    """
+    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
+    if not ev:
+        raise HTTPException(404, "Évaluation non trouvée")
+    _epreuve_modifiable(db, ev)
+
+    if data.date_evaluation is not None:
+        trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+        try:
+            verifier_date_dans_periode(db, trimestre, data.date_evaluation)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        ev.date_evaluation = data.date_evaluation
+
+    if data.note_sur is not None:
+        if data.note_sur <= 0:
+            raise HTTPException(400, "Le barème doit être strictement positif")
+        _verifier_bareme_compatible(db, [evaluation_id], data.note_sur)
+        ev.note_sur = data.note_sur
+
+    if data.type_eval_id is not None:
+        if not db.query(TypeEvaluation).filter(
+            TypeEvaluation.type_eval_id == data.type_eval_id
+        ).first():
+            raise HTTPException(404, "Type d'évaluation introuvable")
+        ev.type_eval_id = data.type_eval_id
+
+    if data.libelle is not None:
+        ev.libelle = data.libelle
+    if data.enseignant_id is not None:
+        ev.enseignant_id = data.enseignant_id
+    if data.est_coefficientee is not None:
+        ev.est_coefficientee = "N" if data.est_coefficientee in ("N", "false", False) else "O"
+    if "coefficient_override" in data.model_fields_set:
+        # null = retour au coefficient du type (voir modifier_session)
+        if data.coefficient_override is not None and data.coefficient_override <= 0:
+            raise HTTPException(400, "Le coefficient doit être strictement positif")
+        ev.coefficient_override = data.coefficient_override
+
+    db.commit()
+    db.refresh(ev)
+    return ev
+
+
+@router.delete("/{evaluation_id}")
+def supprimer_evaluation(evaluation_id: int, db: Session = Depends(get_db)):
+    """Supprime une épreuve et ses notes.
+
+    Refusée quand l'épreuve est centralisée : ses notes sont entrées dans des
+    bulletins déjà calculés, et les effacer laisserait des moyennes que plus
+    rien ne justifie. Le bon geste dans ce cas est de passer l'épreuve en
+    ANNULEE (`PUT /{id}/statut`), qui la sort du calcul sans détruire la saisie.
+    """
+    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
+    if not ev:
+        raise HTTPException(404, "Évaluation non trouvée")
+    _epreuve_modifiable(db, ev)
+
+    if ev.statut == "CENTRALISEE":
+        raise HTTPException(
+            400,
+            "Cette épreuve est centralisée : ses notes comptent déjà dans les "
+            "bulletins. Passez-la en « Annulée » pour l'exclure du calcul sans "
+            "perdre la saisie.",
+        )
+
+    nb_notes = db.query(func.count(Note.note_id)).filter(
+        Note.evaluation_id == evaluation_id
+    ).scalar() or 0
+    db.query(Note).filter(Note.evaluation_id == evaluation_id).delete(synchronize_session=False)
+    db.query(PeriodeEpreuve).filter(
+        PeriodeEpreuve.evaluation_id == evaluation_id
+    ).delete(synchronize_session=False)
+
+    session_id = ev.session_id
+    db.delete(ev)
+    db.flush()
+
+    # Une session vidée de toutes ses matières n'a plus d'objet : la laisser
+    # ferait apparaître une composition fantôme dans la liste des épreuves.
+    session_supprimee = False
+    if session_id:
+        restantes = db.query(func.count(Evaluation.evaluation_id)).filter(
+            Evaluation.session_id == session_id
+        ).scalar() or 0
+        if restantes == 0:
+            db.query(EvaluationSession).filter(
+                EvaluationSession.session_id == session_id
+            ).delete(synchronize_session=False)
+            session_supprimee = True
+
+    db.commit()
+    return {
+        "message": f"Épreuve supprimée ({nb_notes} note(s) effacée(s))",
+        "evaluation_id": evaluation_id,
+        "notes_supprimees": nb_notes,
+        "session_supprimee": session_supprimee,
+    }
 
 
 @router.put("/{evaluation_id}/coefficient")
@@ -1465,6 +1652,11 @@ def get_bulletins_classe(
     # modale d'aperçu de cette page (rendu HTML, pas le PDF) reste synchronisée
     # avec Paramètres > Notation > Affichage sans dupliquer la logique côté front.
     flags = get_bulletin_display_flags(db, classe.etablissement_id)
+    # Notation par lettres : réglage par cycle, sans effet tant que l'école ne
+    # l'active pas — `lettre` vaut alors null et l'affichage ne change pas.
+    cycle_key = get_cycle_key(classe_id, db)
+    echelle = get_bareme_defaut_cycle(db, classe.etablissement_id, cycle_key)
+    lettres = get_lettres_config(db, classe.etablissement_id, cycle_key)
 
     bulletin_ids = [b.bulletin_id for b in bulletins]
     all_lignes = db.query(BulletinLigne).filter(BulletinLigne.bulletin_id.in_(bulletin_ids)).all()
@@ -1494,6 +1686,10 @@ def get_bulletins_classe(
                 "note_min": float(l.note_min) if l.note_min is not None and flags["show_stats_matiere"] else None,
                 "note_max": float(l.note_max) if l.note_max is not None and flags["show_stats_matiere"] else None,
                 "appreciation": l.appreciation if flags["show_appreciation"] else None,
+                "lettre": lettre_pour_note(
+                    float(l.moyenne_matiere) if l.moyenne_matiere is not None else None,
+                    lettres, echelle,
+                ),
             })
             if l.coefficient:
                 total_coef += float(l.coefficient)
@@ -1507,6 +1703,10 @@ def get_bulletins_classe(
             "sexe": eleve.sexe,
             "photo": eleve.photo_url,
             "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+            "lettre_generale": lettre_pour_note(
+                float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+                lettres, echelle,
+            ),
             "rang": bulletin.rang if flags["show_rang"] else None,
             "effectif_classe": bulletin.effectif_classe if flags["show_rang"] and flags["show_effectif"] else None,
             "mention": bulletin.mention if flags["show_mention"] else None,
@@ -2173,6 +2373,12 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     # Fusion Notation > Affichage Bulletins + Documents > Champs bulletin (voir
     # get_bulletin_display_flags — deux pages Paramètres pilotaient auparavant
     # des espaces de clés disjoints, chacune ignorant l'autre).
+    # Barème réel du cycle : le bulletin affichait « / 20 » en dur, y compris
+    # pour une école du primaire qui note sur 10.
+    _cycle_key_bulletin = get_cycle_key(classe.classe_id, db)
+    echelle_lettres = get_bareme_defaut_cycle(db, classe.etablissement_id, _cycle_key_bulletin)
+    lettres_cfg = get_lettres_config(db, classe.etablissement_id, _cycle_key_bulletin)
+
     _flags = get_bulletin_display_flags(db, classe.etablissement_id)
     show_rang = _flags["show_rang"]
     show_mention = _flags["show_mention"]
@@ -2515,7 +2721,13 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
 
         pdf.drawCentredString(x + col_coeff_w / 2, y - 0.38 * cm, f"{coeff:.0f}")
         x += col_coeff_w
-        pdf.drawCentredString(x + col_moy_w / 2, y - 0.38 * cm, f"{moy:.2f}")
+        # La lettre suit la note quand l'école a activé la notation par lettres
+        # pour ce cycle ; sinon le tableau est inchangé.
+        lettre_mat = lettre_pour_note(moy, lettres_cfg, echelle_lettres)
+        pdf.drawCentredString(
+            x + col_moy_w / 2, y - 0.38 * cm,
+            f"{moy:.2f}  {lettre_mat}" if lettre_mat else f"{moy:.2f}",
+        )
         x += col_moy_w
 
         if show_moy_cl:
@@ -2566,7 +2778,12 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     moy_gen = float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else (
         total_points / total_coeff if total_coeff > 0 else 0
     )
-    pdf.drawString(1.8 * cm, y, f"Moyenne Générale : {moy_gen:.2f} / 20")
+    _lettre_gen = lettre_pour_note(moy_gen, lettres_cfg, echelle_lettres)
+    pdf.drawString(
+        1.8 * cm, y,
+        "Moyenne Générale : %.2f / %g%s" % (
+            moy_gen, echelle_lettres, f"   ({_lettre_gen})" if _lettre_gen else ""),
+    )
 
     if show_rang:
         rang_text = f"Rang : {bulletin.rang or 'N/A'}"
@@ -2630,8 +2847,8 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
         y -= 0.5 * cm
         pdf.setFont(tmpl["police_corps"], 8)
         pdf.setFillColorRGB(0.3, 0.3, 0.3)
-        pdf.drawString(1.8 * cm, y, f"Meilleure moyenne de la classe : {meilleure_moyenne_classe:.2f}/20")
-        pdf.drawRightString(marge_droite, y, f"Plus faible moyenne de la classe : {plus_faible_moyenne_classe:.2f}/20")
+        pdf.drawString(1.8 * cm, y, "Meilleure moyenne de la classe : %.2f/%g" % (meilleure_moyenne_classe, echelle_lettres))
+        pdf.drawRightString(marge_droite, y, "Plus faible moyenne de la classe : %.2f/%g" % (plus_faible_moyenne_classe, echelle_lettres))
         pdf.setFillColorRGB(0, 0, 0)
 
     # ── GRAPHIQUE DES PERFORMANCES PAR MATIÈRE (élève vs moyenne de classe) ──
@@ -2655,8 +2872,8 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
             pdf.setFillColorRGB(0.2, 0.2, 0.2)
             pdf.drawString(marge_gauche, by + 0.05 * cm, lbl)
             bar_x0 = marge_gauche + chart_label_w
-            bar_w_e = chart_bar_max_w * min(moy_e, 20) / 20
-            bar_w_c = chart_bar_max_w * min(moy_c, 20) / 20
+            bar_w_e = chart_bar_max_w * min(moy_e, echelle_lettres) / echelle_lettres
+            bar_w_c = chart_bar_max_w * min(moy_c, echelle_lettres) / echelle_lettres
             pdf.setFillColorRGB(0.85, 0.85, 0.9)
             pdf.rect(bar_x0, by - 0.02 * cm, chart_bar_max_w, 0.14 * cm, fill=1, stroke=0)
             pdf.setFillColorRGB(*cp)

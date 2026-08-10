@@ -461,6 +461,90 @@ def get_seuil_passage(db: Session, etablissement_id: int, cycle_key: str) -> flo
     return SEUIL_PASSAGE_DEFAUT
 
 
+# ════════════════════════════════════════════════════════════
+# Notation par lettres (A+ / A / B / C / D / F)
+# ════════════════════════════════════════════════════════════
+
+# Table par défaut, alignée sur celle proposée par l'écran Paramètres. Exprimée
+# en fraction du barème et non en points : une école au primaire note sur 10,
+# et une table figée sur 20 y donnerait « F » à tout le monde.
+_LETTRES_DEFAUT = [
+    {"lettre": "A+", "label": "Excellent", "min": 0.90, "max": 1.00},
+    {"lettre": "A", "label": "Très Bien", "min": 0.80, "max": 0.899},
+    {"lettre": "B", "label": "Bien", "min": 0.70, "max": 0.799},
+    {"lettre": "C", "label": "Assez Bien", "min": 0.60, "max": 0.699},
+    {"lettre": "D", "label": "Passable", "min": 0.50, "max": 0.599},
+    {"lettre": "F", "label": "Insuffisant", "min": 0.00, "max": 0.499},
+]
+
+
+def get_lettres_config(db: Session, etablissement_id: int, cycle_key: str) -> dict:
+    """Notation par lettres d'un cycle (`notation.lettres_actif|lettres_table`).
+
+    L'écran Paramètres proposait ce réglage depuis le début sans qu'aucun code
+    ne le lise : activer les lettres n'avait strictement aucun effet.
+
+    Le tableau est stocké en JSON par l'écran, avec des bornes exprimées en
+    points du barème du cycle. Un tableau illisible ou vide ne fait pas échouer
+    un bulletin : on retombe sur la table par défaut.
+    """
+    import json
+
+    actif, table = False, None
+    try:
+        for p in db.query(ParametreEtablissement).filter(
+            ParametreEtablissement.etablissement_id == etablissement_id,
+            ParametreEtablissement.categorie == "NOTATION",
+            ParametreEtablissement.cle.in_([
+                f"notation.lettres_actif.{cycle_key}", f"lettres_actif.{cycle_key}",
+                f"notation.lettres_table.{cycle_key}", f"lettres_table.{cycle_key}",
+            ]),
+        ).all():
+            if "lettres_actif" in p.cle:
+                actif = str(p.valeur).lower() in ("true", "1", "oui", "o")
+            elif p.valeur:
+                try:
+                    lu = json.loads(p.valeur)
+                    if isinstance(lu, list) and lu:
+                        table = [
+                            r for r in lu
+                            if isinstance(r, dict) and "lettre" in r
+                            and r.get("min") is not None and r.get("max") is not None
+                        ] or None
+                except (ValueError, TypeError):
+                    table = None
+    except Exception:
+        pass
+    return {"actif": actif, "table": table}
+
+
+def lettre_pour_note(
+    valeur: Optional[float], config: dict, note_sur: float = BAREME_DEFAUT,
+) -> Optional[str]:
+    """Lettre correspondant à une note, ou None si les lettres sont désactivées.
+
+    Les bornes de la table de l'école sont en points ; la table par défaut est
+    en fraction du barème. On borne par le haut plutôt que d'exiger que le
+    `max` de la meilleure ligne soit exactement le barème : une école qui écrit
+    « A+ de 18 à 20 » ne doit pas se retrouver sans lettre pour un 20,00.
+    """
+    if valeur is None or not config or not config.get("actif"):
+        return None
+    echelle = note_sur if note_sur and note_sur > 0 else BAREME_DEFAUT
+    table = config.get("table")
+    if table:
+        lignes = [(float(r["min"]), float(r["max"]), r["lettre"]) for r in table]
+    else:
+        lignes = [(r["min"] * echelle, r["max"] * echelle, r["lettre"])
+                  for r in _LETTRES_DEFAUT]
+
+    lignes.sort(key=lambda r: r[0], reverse=True)
+    for mini, _maxi, lettre in lignes:
+        if valeur >= mini:
+            return lettre
+    return lignes[-1][2] if lignes else None
+
+
 def get_appreciation(moyenne: float, note_sur: float = BAREME_DEFAUT) -> str:
     """Appréciation textuelle, proportionnelle au barème (fonctionne pour /10, /20, /100)."""
     if not note_sur or note_sur <= 0:
@@ -672,6 +756,151 @@ def detail_par_type_classe(
 
 
 # ════════════════════════════════════════════════════════════
+# Classement : par classe ou par niveau
+# ════════════════════════════════════════════════════════════
+
+RANG_CLASSE = "classe"
+RANG_NIVEAU = "niveau"
+RANG_MODE_DEFAUT = RANG_CLASSE
+
+
+def get_rang_mode(db: Session, etablissement_id: int) -> str:
+    """Périmètre du classement choisi par l'école (`notation.rang_mode`).
+
+    `classe` : l'élève est classé parmi les seuls élèves de sa classe.
+    `niveau` : il est classé parmi tous les élèves du même niveau — les trois
+    7ème d'un établissement sont alors comparées entre elles, ce qui est la
+    pratique des écoles qui dédoublent leurs niveaux.
+
+    Le réglage existait à l'écran depuis le début et n'était lu par aucun code :
+    quel que soit le choix, le classement restait celui de la classe.
+    """
+    try:
+        param = db.query(ParametreEtablissement).filter(
+            ParametreEtablissement.etablissement_id == etablissement_id,
+            ParametreEtablissement.categorie == "NOTATION",
+            ParametreEtablissement.cle.in_(["notation.rang_mode", "rang_mode"]),
+        ).order_by(ParametreEtablissement.cle.desc()).first()
+        if param and param.valeur in (RANG_CLASSE, RANG_NIVEAU):
+            return param.valeur
+    except Exception:
+        pass
+    return RANG_MODE_DEFAUT
+
+
+def _classes_du_niveau(db: Session, classe: Classe) -> List[int]:
+    """Classes du même niveau, même année, même établissement."""
+    if not classe or not classe.niveau_id:
+        return []
+    return [
+        c.classe_id for c in db.query(Classe).filter(
+            Classe.niveau_id == classe.niveau_id,
+            Classe.annee_id == classe.annee_id,
+            Classe.etablissement_id == classe.etablissement_id,
+        ).all()
+    ]
+
+
+def _moyennes_persistees(
+    db: Session, classe_ids: List[int], trimestre_id: Optional[int], type_bulletin: str,
+) -> List[Tuple[int, float]]:
+    """(inscription_id, moyenne) déjà en base pour un lot de classes."""
+    if not classe_ids:
+        return []
+    q = db.query(Bulletin.inscription_id, Bulletin.moyenne_generale).join(
+        Inscription, Bulletin.inscription_id == Inscription.inscription_id
+    ).filter(
+        Inscription.classe_id.in_(classe_ids),
+        Bulletin.type_bulletin == type_bulletin,
+        Bulletin.moyenne_generale.isnot(None),
+    )
+    q = (q.filter(Bulletin.trimestre_id == trimestre_id) if trimestre_id
+         else q.filter(Bulletin.trimestre_id.is_(None)))
+    return [(i, float(m)) for i, m in q.all()]
+
+
+def appliquer_rangs(
+    db: Session, classe: Classe, donnees: List[dict], *,
+    trimestre_id: Optional[int], type_bulletin: str, etablissement_id: int,
+) -> dict:
+    """Écrit `rang` sur chaque ligne et décrit le périmètre du classement.
+
+    En mode `niveau`, les élèves des autres classes du niveau entrent dans la
+    comparaison avec leur moyenne déjà calculée. Une classe dont la période
+    n'a pas encore été calculée n'y figure donc pas : le rang se resserre au
+    fur et à mesure que l'école calcule ses classes, ce qui est visible et
+    réversible, plutôt que faux et silencieux.
+    """
+    donnees.sort(key=lambda x: x["moyenne_generale"] or 0, reverse=True)
+    mode = get_rang_mode(db, etablissement_id)
+
+    if mode != RANG_NIVEAU or classe is None:
+        for idx, d in enumerate(donnees):
+            d["rang"] = idx + 1
+        return {
+            "rang_mode": RANG_CLASSE,
+            "effectif_reference": len(donnees),
+            "libelle_reference": classe.libelle if classe else None,
+        }
+
+    autres = [
+        c for c in _classes_du_niveau(db, classe) if c != classe.classe_id
+    ]
+    reference = _moyennes_persistees(db, autres, trimestre_id, type_bulletin)
+    reference += [
+        (d["inscription_id"], d["moyenne_generale"])
+        for d in donnees if d["moyenne_generale"] is not None
+    ]
+    reference.sort(key=lambda x: x[1], reverse=True)
+    rang_par_inscription = {
+        insc: idx + 1 for idx, (insc, _) in enumerate(reference)
+    }
+
+    for idx, d in enumerate(donnees):
+        d["rang"] = rang_par_inscription.get(d["inscription_id"], idx + 1)
+
+    niveau = db.query(Niveau).filter(Niveau.niveau_id == classe.niveau_id).first()
+    return {
+        "rang_mode": RANG_NIVEAU,
+        "effectif_reference": len(reference),
+        "libelle_reference": niveau.libelle if niveau else classe.libelle,
+    }
+
+
+def repercuter_rangs_niveau(
+    db: Session, classe: Classe, *, trimestre_id: Optional[int], type_bulletin: str,
+) -> int:
+    """Réécrit le rang de TOUS les bulletins du niveau pour cette période.
+
+    Sans cela, la classe qu'on vient de calculer porterait un rang de niveau
+    pendant que les classes calculées avant garderaient leur ancien rang :
+    deux élèves du même niveau afficheraient le même rang sur leur bulletin.
+    """
+    classe_ids = _classes_du_niveau(db, classe)
+    lignes = _moyennes_persistees(db, classe_ids, trimestre_id, type_bulletin)
+    if not lignes:
+        return 0
+    lignes.sort(key=lambda x: x[1], reverse=True)
+    rangs = {insc: idx + 1 for idx, (insc, _) in enumerate(lignes)}
+    effectif = len(lignes)
+
+    q = db.query(Bulletin).join(
+        Inscription, Bulletin.inscription_id == Inscription.inscription_id
+    ).filter(
+        Inscription.classe_id.in_(classe_ids),
+        Bulletin.type_bulletin == type_bulletin,
+    )
+    q = (q.filter(Bulletin.trimestre_id == trimestre_id) if trimestre_id
+         else q.filter(Bulletin.trimestre_id.is_(None)))
+    for bulletin in q.all():
+        if bulletin.inscription_id in rangs:
+            bulletin.rang = rangs[bulletin.inscription_id]
+            bulletin.effectif_classe = effectif
+    db.commit()
+    return effectif
+
+
+# ════════════════════════════════════════════════════════════
 # Calcul de période (trimestre / semestre)
 # ════════════════════════════════════════════════════════════
 
@@ -828,9 +1057,12 @@ def calculer_resultats_periode(
             "lignes": lignes_data,
         })
 
-    bulletins_data.sort(key=lambda x: x["moyenne_generale"] or 0, reverse=True)
-    for idx, bd in enumerate(bulletins_data):
-        bd["rang"] = idx + 1
+    portee_rang = appliquer_rangs(
+        db, classe, bulletins_data,
+        trimestre_id=trimestre_id, type_bulletin="TRIMESTRIEL",
+        etablissement_id=etablissement_id,
+    )
+    for bd in bulletins_data:
         bd["mention"] = (
             get_mention(bd["moyenne_generale"], db, cycle_key, etablissement_id)
             if bd["moyenne_generale"] is not None else None
@@ -883,12 +1115,16 @@ def calculer_resultats_periode(
         # voyant des moyennes différentes sur les mêmes notes n'ont aucun
         # moyen de savoir pourquoi.
         "mode_agregation": mode_agregation,
+        # Périmètre du classement (classe ou niveau) et effectif de référence :
+        # « 3ème sur 17 » et « 3ème sur 51 » ne se lisent pas pareil.
+        **portee_rang,
         "persiste": persist,
     }
 
     if not persist:
         return resultat
 
+    effectif_rang = portee_rang["effectif_reference"]
     bulletins_crees = 0
     for bd in bulletins_data:
         existing = db.query(Bulletin).filter(
@@ -899,7 +1135,7 @@ def calculer_resultats_periode(
         if existing:
             existing.moyenne_generale = bd["moyenne_generale"]
             existing.rang = bd["rang"]
-            existing.effectif_classe = effectif
+            existing.effectif_classe = effectif_rang
             existing.mention = bd["mention"]
             existing.statut = "CALCULE"
             bulletin = existing
@@ -913,7 +1149,7 @@ def calculer_resultats_periode(
                 type_bulletin="TRIMESTRIEL",
                 moyenne_generale=bd["moyenne_generale"],
                 rang=bd["rang"],
-                effectif_classe=effectif,
+                effectif_classe=effectif_rang,
                 mention=bd["mention"],
                 statut="CALCULE",
             )
@@ -935,6 +1171,16 @@ def calculer_resultats_periode(
             ))
 
     db.commit()
+
+    # En mode niveau, les classes calculées avant celle-ci portent encore leur
+    # ancien rang : on réécrit le classement de tout le niveau d'un coup.
+    if portee_rang["rang_mode"] == RANG_NIVEAU:
+        effectif_niveau = repercuter_rangs_niveau(
+            db, classe, trimestre_id=trimestre_id, type_bulletin="TRIMESTRIEL",
+        )
+        if effectif_niveau:
+            resultat["effectif_reference"] = effectif_niveau
+
     resultat["bulletins_crees"] = bulletins_crees
     resultat["bulletins_total"] = len(bulletins_data)
     return resultat
@@ -1224,9 +1470,12 @@ def calculer_resultats_annuels(
             "periodes": r["periodes"] if r else [],
         })
 
-    donnees.sort(key=lambda x: x["moyenne_generale"] or 0, reverse=True)
-    for idx, d in enumerate(donnees):
-        d["rang"] = idx + 1
+    portee_rang = appliquer_rangs(
+        db, classe, donnees,
+        trimestre_id=None, type_bulletin="ANNUEL",
+        etablissement_id=etablissement_id,
+    )
+    for d in donnees:
         d["mention"] = (
             get_mention(d["moyenne_generale"], db, cycle_key, etablissement_id)
             if d["moyenne_generale"] is not None else None
@@ -1265,6 +1514,7 @@ def calculer_resultats_annuels(
         "resultats": donnees,
         "stats_matieres": stats_matieres,
         "synthese": synthese_annuelle(donnees, db, cycle_key, etablissement_id),
+        **portee_rang,
         "persiste": persist,
     }
 
@@ -1272,6 +1522,7 @@ def calculer_resultats_annuels(
         return resultat
 
     echelle = get_bareme_defaut_cycle(db, etablissement_id, cycle_key)
+    effectif_rang = portee_rang["effectif_reference"]
     bulletins_crees = 0
     for d in donnees:
         existing = db.query(Bulletin).filter(
@@ -1282,7 +1533,7 @@ def calculer_resultats_annuels(
         if existing:
             existing.moyenne_generale = d["moyenne_generale"]
             existing.rang = d["rang"]
-            existing.effectif_classe = effectif
+            existing.effectif_classe = effectif_rang
             existing.mention = d["mention"]
             existing.statut = "CALCULE"
             bulletin = existing
@@ -1296,7 +1547,7 @@ def calculer_resultats_annuels(
                 type_bulletin="ANNUEL",
                 moyenne_generale=d["moyenne_generale"],
                 rang=d["rang"],
-                effectif_classe=effectif,
+                effectif_classe=effectif_rang,
                 mention=d["mention"],
                 statut="CALCULE",
             )
@@ -1318,6 +1569,14 @@ def calculer_resultats_annuels(
             ))
 
     db.commit()
+
+    if portee_rang["rang_mode"] == RANG_NIVEAU:
+        effectif_niveau = repercuter_rangs_niveau(
+            db, classe, trimestre_id=None, type_bulletin="ANNUEL",
+        )
+        if effectif_niveau:
+            resultat["effectif_reference"] = effectif_niveau
+
     resultat["bulletins_crees"] = bulletins_crees
     resultat["bulletins_total"] = len(donnees)
     return resultat
