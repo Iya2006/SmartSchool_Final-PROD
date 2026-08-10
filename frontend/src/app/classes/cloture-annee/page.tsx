@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 import Stepper, { StepDef, StepStatus } from '@/components/Stepper';
+import Pagination from '@/components/Pagination';
 
 interface Annee { annee_id: number; code: string; libelle: string; est_courante: string; }
 interface ClasseItem { classe_id: number; libelle: string; code: string; effectif_actuel: number; niveau_id: number; }
@@ -17,6 +18,8 @@ interface ElevePreview {
     moyenne_annuelle: number | null; total_points: number | null; rang: number | null;
     decision: string; classe_cible_id: number | null;
     statut_promotion: string | null;
+    /** Résultat officiel du Ministère (classes d'examen uniquement) */
+    resultat_officiel?: string | null;
 }
 interface Apercu {
     classe: { classe_id: number; libelle: string };
@@ -27,6 +30,10 @@ interface Apercu {
     redoublement_actif: boolean;
     deja_calcule: boolean;
     eleves: ElevePreview[];
+    /** Niveau d'examen national (6e/CEE, 10e/BEPC, Terminale/BAC) */
+    classe_examen?: boolean;
+    examen_national?: string | null;
+    en_attente_resultat_officiel?: number;
 }
 interface Controle { code: string; label: string; severite: string; ok: boolean; detail: string; }
 interface VerificationCloture {
@@ -46,6 +53,7 @@ const DECISION_STYLE: Record<string, { bg: string; color: string; label: string 
     EN_ATTENTE_FILIERE: { bg: '#dbeafe', color: '#1d4ed8', label: 'En attente du choix de filière' },
     DIPLOME: { bg: '#e0e7ff', color: '#4338ca', label: 'Diplômé' },
     EXCLU: { bg: '#fee2e2', color: '#b91c1c', label: 'Exclu' },
+    EN_ATTENTE_RESULTAT_OFFICIEL: { bg: '#ffedd5', color: '#c2410c', label: 'En attente du résultat officiel' },
 };
 
 const REINSCRIPTION_LABEL: Record<string, string> = {
@@ -212,6 +220,55 @@ export default function ClotureAnneePage() {
         if (!selectedClasse) return;
         const res = await api.get(`/api/promotion/classe/${selectedClasse.classe_id}/apercu`);
         setApercu(res.data);
+    };
+
+    // ═══ RÉSULTATS OFFICIELS DU MINISTÈRE (classes d'examen) ═══
+    // Pour 6e/CEE, 10e/BEPC et Terminale/BAC, le passage ne dépend pas de la
+    // moyenne interne mais du résultat publié par le Ministère : il se saisit ici.
+    const [saisieOfficielle, setSaisieOfficielle] = useState<Record<number, string>>({});
+    const [savingOfficiels, setSavingOfficiels] = useState(false);
+    // Paginé : une classe d'examen dépasse souvent la centaine d'élèves. La
+    // saisie est conservée dans `saisieOfficielle` (clé = inscription), donc
+    // changer de page ne perd rien.
+    const [officielsPage, setOfficielsPage] = useState(1);
+    const OFFICIELS_PAGE_SIZE = 25;
+
+    useEffect(() => {
+        // Pré-remplir avec les résultats déjà saisis quand on ouvre une classe d'examen
+        if (apercu?.classe_examen) {
+            const initial: Record<number, string> = {};
+            apercu.eleves.forEach(el => {
+                if (el.resultat_officiel) initial[el.inscription_id] = el.resultat_officiel;
+            });
+            setSaisieOfficielle(initial);
+        } else {
+            setSaisieOfficielle({});
+        }
+    }, [apercu]);
+
+    const enregistrerResultatsOfficiels = async () => {
+        const resultats = Object.entries(saisieOfficielle)
+            .filter(([, v]) => v === 'ADMIS' || v === 'NON_ADMIS')
+            .map(([inscription_id, resultat]) => ({ inscription_id: Number(inscription_id), resultat }));
+        if (!resultats.length) {
+            showMsg('Aucun résultat à enregistrer.', 'error');
+            return;
+        }
+        setSavingOfficiels(true);
+        try {
+            const res = await api.post('/api/promotion/resultats-officiels/bulk', { resultats });
+            showMsg(res.data?.message || 'Résultats enregistrés.', 'success');
+            // Le recalcul applique immédiatement les décisions issues du Ministère
+            if (selectedClasse && anneeCibleId) {
+                await api.post(`/api/promotion/classe/${selectedClasse.classe_id}/calculer-resultats`, { annee_cible_id: anneeCibleId });
+            }
+            await rafraichirApercu();
+            await loadEtatPromotion();
+        } catch (e: any) {
+            showMsg(e.response?.data?.detail || 'Échec de l’enregistrement des résultats officiels.', 'error');
+        } finally {
+            setSavingOfficiels(false);
+        }
     };
 
     const calculerResultats = async (classeId: number) => {
@@ -798,8 +855,78 @@ export default function ClotureAnneePage() {
                                         Frontière Collège → Lycée : les élèves admis passent « en attente du choix de filière ». La série (SE/SM/SS) sera choisie au moment de leur réinscription, pas ici.
                                     </div>
                                 )}
+                                {apercu.classe_examen && (
+                                    <div style={{ padding: '12px 16px', background: '#fff7ed', color: '#9a3412', borderRadius: '10px', fontSize: '13px', marginBottom: '14px', border: '1px solid #fed7aa' }}>
+                                        <strong>Classe d&apos;examen{apercu.examen_national ? ` — ${apercu.examen_national}` : ''}.</strong> Le passage de ces élèves
+                                        dépend du résultat officiel publié par le Ministère, jamais de la moyenne interne. La moyenne
+                                        affichée reste un indicateur pédagogique (examens blancs compris) mais n&apos;a aucune valeur
+                                        décisionnelle. Saisissez ci-dessous les résultats officiels une fois publiés — la validation
+                                        de la classe reste bloquée tant qu&apos;un élève n&apos;a pas son résultat.
+                                    </div>
+                                )}
+
+                                {apercu.classe_examen && apercu.eleves.length > 0 && (
+                                    <div style={{ padding: '16px', border: '2px dashed #fb923c', borderRadius: '12px', marginBottom: '16px', background: '#fffbf5' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
+                                            <div style={{ fontWeight: 800, fontSize: '14px', color: '#7c2d12' }}>
+                                                Saisie des résultats officiels du Ministère
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                                <button type="button" onClick={() => {
+                                                    const tous: Record<number, string> = {};
+                                                    apercu.eleves.forEach(el => { tous[el.inscription_id] = 'ADMIS'; });
+                                                    setSaisieOfficielle(tous);
+                                                }} style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #d1d5db', background: 'white', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                                                    Tout admis
+                                                </button>
+                                                <button onClick={enregistrerResultatsOfficiels} disabled={savingOfficiels}
+                                                    style={{ padding: '8px 18px', borderRadius: '8px', border: 'none', background: '#ea580c', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                    {savingOfficiels ? <Loader2 size={14} className="animate-spin" /> : null}
+                                                    Enregistrer et appliquer
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            {apercu.eleves
+                                                .slice((officielsPage - 1) * OFFICIELS_PAGE_SIZE, officielsPage * OFFICIELS_PAGE_SIZE)
+                                                .map(el => (
+                                                <div key={el.inscription_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', borderBottom: '1px solid #fed7aa', gap: '12px' }}>
+                                                    <span style={{ fontSize: '13px', color: '#1f2937' }}>
+                                                        {el.prenom} {el.nom}
+                                                        <span style={{ color: '#9ca3af', fontSize: '11.5px' }}> · {el.matricule}</span>
+                                                        {el.moyenne_annuelle !== null && (
+                                                            <span style={{ color: '#9ca3af', fontSize: '11.5px' }}> · moy. interne {el.moyenne_annuelle}</span>
+                                                        )}
+                                                    </span>
+                                                    <div style={{ display: 'flex', gap: '6px' }}>
+                                                        {(['ADMIS', 'NON_ADMIS'] as const).map(v => (
+                                                            <button key={v} type="button"
+                                                                onClick={() => setSaisieOfficielle(prev => ({ ...prev, [el.inscription_id]: v }))}
+                                                                style={{
+                                                                    padding: '5px 12px', borderRadius: '7px', cursor: 'pointer',
+                                                                    fontSize: '12px', fontWeight: 700,
+                                                                    border: `1px solid ${saisieOfficielle[el.inscription_id] === v ? (v === 'ADMIS' ? '#059669' : '#dc2626') : '#e5e7eb'}`,
+                                                                    background: saisieOfficielle[el.inscription_id] === v ? (v === 'ADMIS' ? '#059669' : '#dc2626') : 'white',
+                                                                    color: saisieOfficielle[el.inscription_id] === v ? 'white' : '#6b7280',
+                                                                }}>
+                                                                {v === 'ADMIS' ? 'Admis' : 'Non admis'}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            <Pagination page={officielsPage} pageSize={OFFICIELS_PAGE_SIZE}
+                                                total={apercu.eleves.length} onPageChange={setOfficielsPage} />
+                                        </div>
+                                    </div>
+                                )}
+
                                 <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '0 0 12px' }}>
-                                    Redoublement automatique {apercu.redoublement_actif ? `activé (seuil ${apercu.seuil_redoublement}/20)` : 'désactivé — tous les élèves seront admis par défaut'}.
+                                    {apercu.classe_examen ? (
+                                        <>Le seuil de redoublement interne ne s&apos;applique pas à cette classe.</>
+                                    ) : (
+                                        <>Redoublement automatique {apercu.redoublement_actif ? `activé (seuil ${apercu.seuil_redoublement}/20)` : 'désactivé — tous les élèves seront admis par défaut'}.</>
+                                    )}
                                     {apercu.niveau_suivant && <> Classe suivante : <strong>{apercu.niveau_suivant.libelle}</strong>.</>}
                                     {!apercu.deja_calcule && <> Aperçu calculé à la volée — cliquez « Calculer les résultats » pour le rendre définitif et l&apos;ouvrir à la validation.</>}
                                 </p>

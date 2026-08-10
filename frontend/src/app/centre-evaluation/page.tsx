@@ -128,7 +128,7 @@ export default function CentreEvaluationPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             {/* Breadcrumb */}
             <div className="breadcrumb">
-                <Link href="/">Accueil</Link><ChevronRight size={14} /><span>Centre d&apos;Évaluation</span>
+                <Link href="/">Accueil</Link><ChevronRight size={14} /><span>Centre des Examens</span>
             </div>
 
             {/* Toasts */}
@@ -158,7 +158,7 @@ export default function CentreEvaluationPage() {
                             <Award size={28} />
                         </div>
                         <div>
-                            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 800 }}>Centre d&apos;Évaluation</h1>
+                            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 800 }}>Centre des Examens</h1>
                             <p style={{ margin: '4px 0 0', fontSize: '14px', opacity: 0.9 }}>Réception et validation des sujets d&apos;examen</p>
                         </div>
                     </div>

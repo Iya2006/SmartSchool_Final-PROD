@@ -49,14 +49,13 @@ if existing_types > 0:
     print(f"ℹ️  {existing_types} type(s) d'évaluation déjà existants — ignorés.")
 else:
     types_data = [
-        {"code": "DEVOIR", "libelle": "Devoir", "poids_pourcentage": 25.0, "statut": "ACTIF"},
-        {"code": "INTERRO", "libelle": "Interrogation", "poids_pourcentage": 15.0, "statut": "ACTIF"},
-        {"code": "COMPO", "libelle": "Composition", "poids_pourcentage": 40.0, "statut": "ACTIF"},
-        {"code": "EXAMEN", "libelle": "Examen", "poids_pourcentage": 50.0, "statut": "ACTIF"},
-        {"code": "TP", "libelle": "Travaux Pratiques", "poids_pourcentage": 10.0, "statut": "ACTIF"},
-        {"code": "ORAL", "libelle": "Evaluation Orale", "poids_pourcentage": 10.0, "statut": "ACTIF"},
-        {"code": "EXPOSE", "libelle": "Exposé / Présentation", "poids_pourcentage": 10.0, "statut": "ACTIF"},
-        {"code": "PARTICIPATION", "libelle": "Participation", "poids_pourcentage": 5.0, "statut": "ACTIF"},
+        {"code": "EVAL", "libelle": "Évaluation", "coefficient": 1, "statut": "ACTIF"},
+        {"code": "INTERRO", "libelle": "Interrogation", "coefficient": 1, "statut": "ACTIF"},
+        {"code": "COMPO", "libelle": "Composition", "coefficient": 2, "statut": "ACTIF"},
+        {"code": "EXAMEN", "libelle": "Examen", "coefficient": 2, "statut": "ACTIF"},
+        {"code": "TP", "libelle": "Travaux Pratiques", "coefficient": 1, "statut": "ACTIF"},
+        {"code": "EXPOSE", "libelle": "Exposé / Présentation", "coefficient": 1, "statut": "ACTIF"},
+        {"code": "PARTICIPATION", "libelle": "Participation", "coefficient": 1, "statut": "ACTIF"},
     ]
     for t in types_data:
         te = TypeEvaluation(**t)

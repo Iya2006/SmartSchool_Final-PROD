@@ -38,7 +38,10 @@ const SEARCH_ITEMS = [
     { label: 'Fournitures', href: '/fournitures', keywords: ['fournitures', 'materiel', 'matériel'] },
     { label: 'Notes', href: '/notes', keywords: ['notes', 'evaluations', 'évaluations'] },
     { label: 'Bulletins', href: '/bulletins', keywords: ['bulletins', 'bulletin'] },
-    { label: 'Centre d\'évaluation', href: '/centre-evaluation', keywords: ['centre evaluation', 'évaluation'] },
+    // Page de validation des sujets d'examen — l'ancien nom "Centre d'évaluation"
+    // était trompeur (les notes/moyennes vivent sous /notes et /bulletins).
+    // Les anciens mots-clés restent pour ne pas casser la recherche des habitués.
+    { label: 'Centre des Examens', href: '/centre-evaluation', keywords: ['centre examens', 'sujets', 'centre evaluation', 'évaluation'] },
     { label: 'Comptabilité', href: '/comptabilite', keywords: ['comptabilite', 'comptabilité', 'paiements', 'finance'] },
     { label: 'Paramètres', href: '/parametres', keywords: ['parametres', 'paramètres', 'settings'] },
 ];

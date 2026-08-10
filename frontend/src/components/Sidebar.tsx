@@ -199,7 +199,7 @@ export default function Sidebar() {
                     <li className={pathname.startsWith('/centre-evaluation') ? styles.currentPage : ''}>
                         <Link href="/centre-evaluation">
                             <Award size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Centre d&apos;Évaluation</span>
+                            <span className={styles.menuText}>Centre des Examens</span>
                         </Link>
                     </li>
                     <li className={pathname.startsWith('/archive') ? styles.currentPage : ''}>

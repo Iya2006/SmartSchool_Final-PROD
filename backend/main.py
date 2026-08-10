@@ -134,6 +134,18 @@ PERSONNEL_ROLES = (
 # sujet d'examen (fuite possible avant l'épreuve).
 EXAMENS_ROLES = (*ADMIN_TIER_ROLES, "ENSEIGNANT")
 
+# Pointage des agents (scan QR, historique, statistiques) : données RH internes
+# — heures d'arrivée/départ de chaque agent. Un élève ou un parent authentifié
+# ne doit jamais pouvoir les consulter, ni enregistrer un passage.
+PRESENCES_AGENTS_ROLES = (
+    *ADMIN_TIER_ROLES,
+    "COMPTABLE",
+    "BIBLIOTHECAIRE",
+    "INFORMATICIEN",
+    "SURVEILLANT",
+    "OPERATEUR",
+)
+
 # ── Routes PROTÉGÉES par JWT (admin uniquement) ──
 app.include_router(dashboard_router, dependencies=[Depends(get_current_user)])
 app.include_router(eleves_router, dependencies=[Depends(get_current_user)])
@@ -158,7 +170,7 @@ app.include_router(devoirs_router, dependencies=[Depends(get_current_user)])
 app.include_router(photos_router, dependencies=[Depends(get_current_user)])
 app.include_router(fournitures_router, dependencies=[Depends(get_current_user)])
 app.include_router(personnel_router, dependencies=[Depends(require_roles(*PERSONNEL_ROLES))])
-app.include_router(presence_agent_router, dependencies=[Depends(get_current_user)])
+app.include_router(presence_agent_router, dependencies=[Depends(require_roles(*PRESENCES_AGENTS_ROLES))])
 app.include_router(pointage_eleves_router, dependencies=[Depends(get_current_user)])
 app.include_router(evenements_router, dependencies=[Depends(get_current_user)])
 app.include_router(activites_router, dependencies=[Depends(get_current_user)])

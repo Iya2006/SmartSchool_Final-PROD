@@ -98,7 +98,8 @@ interface TypeEval {
     type_eval_id: number;
     code: string;
     libelle: string;
-    poids_pourcentage: number;
+    /** Coefficient du type dans la moyenne de matière (Composition 2, Évaluation 1...) */
+    coefficient: number;
     statut: string;
 }
 
@@ -147,8 +148,13 @@ export default function NotationPage() {
     });
     const [rangMode, setRangMode] = useState('classe');
 
-    // ── Pondération Écrit/Oral/Composition (moteur de calcul réel — voir guide) ──
-    const [poidsEval, setPoidsEval] = useState({ ecrit: 1, oral: 1, composition: 2 });
+    // ── Coefficients des types d'évaluation, surchargeables par cycle ──
+    // Clé backend : notation.coef_type.{cycle}.{code}. Vide = on utilise le
+    // coefficient de référence du type (TypeEvaluation.coefficient).
+    const [coefTypeCycle, setCoefTypeCycle] = useState('college');
+    const [coefsParCycle, setCoefsParCycle] = useState<Record<string, Record<string, number>>>({
+        primaire: {}, college: {}, lycee: {},
+    });
 
     // ── Mentions par cycle ──
     const [mentionCycle, setMentionCycle] = useState('college');
@@ -246,11 +252,15 @@ export default function NotationPage() {
                         lycee:    (s['passage.lycee'] as number)    ?? 10,
                     });
                     setRangMode((s['rang_mode'] as string) ?? 'classe');
-                    setPoidsEval({
-                        ecrit:       (s['poids_ecrit'] as number)       ?? 1,
-                        oral:        (s['poids_oral'] as number)        ?? 1,
-                        composition: (s['poids_composition'] as number) ?? 2,
+                    // Surcharges de coefficient par cycle : clés coef_type.{cycle}.{code}
+                    const parCycle: Record<string, Record<string, number>> = { primaire: {}, college: {}, lycee: {} };
+                    Object.entries(s).forEach(([cle, valeur]) => {
+                        const m = cle.match(/^coef_type\.(primaire|college|lycee)\.(.+)$/);
+                        if (m && valeur !== null && valeur !== '') {
+                            parCycle[m[1]][m[2]] = Number(valeur);
+                        }
                     });
+                    setCoefsParCycle(parCycle);
                     setMentions({
                         primaire: { 
                             tb: (s['mention.primaire.tb'] as number) ?? 9,  
@@ -383,9 +393,12 @@ export default function NotationPage() {
                 buildParam('passage.college',  passages.college),
                 buildParam('passage.lycee',    passages.lycee),
                 buildParam('rang_mode', rangMode),
-                buildParam('poids_ecrit', poidsEval.ecrit),
-                buildParam('poids_oral', poidsEval.oral),
-                buildParam('poids_composition', poidsEval.composition),
+                // Surcharges de coefficient par cycle (seules celles réellement définies)
+                ...(['primaire','college','lycee'] as const).flatMap(cycle =>
+                    Object.entries(coefsParCycle[cycle] || {})
+                        .filter(([, v]) => v !== null && v !== undefined && !Number.isNaN(v))
+                        .map(([code, v]) => buildParam(`coef_type.${cycle}.${code}`, v))
+                ),
                 ...(['primaire','college','lycee'] as const).flatMap(cycle =>
                     ['tb','b','ab','p'].map(mk => buildParam(`mention.${cycle}.${mk}`, mentions[cycle][mk]))
                 ),
@@ -1164,75 +1177,60 @@ export default function NotationPage() {
 
 
                 {/* ══════════════════════════════════════
-                    TAB : ÉVALUATIONS & PONDÉRATION
+                    TAB : ÉVALUATIONS & COEFFICIENTS
                 ══════════════════════════════════════ */}
                 {activeTab === 'evaluations' && (
                     <motion.div initial={{ opacity:0, y:10 }} animate={{ opacity:1, y:0 }} transition={{ duration: 0.25 }}>
                         <section className={styles.section}>
                             <div className={styles.sectionHeader}>
                                 <Calculator size={20} className={styles.sectionIcon} />
-                                <h3>Pondération de la moyenne — Écrit / Oral / Composition</h3>
+                                <h3>Types d&apos;évaluation et leurs coefficients</h3>
                                 <span className={styles.sectionSubtitle}>
-                                    C&apos;est CETTE pondération qui détermine réellement le calcul des moyennes.
-                                    Formule : moyenne de matière = (Écrit×{poidsEval.ecrit} + Oral×{poidsEval.oral} + Composition×{poidsEval.composition}) ÷ ({poidsEval.ecrit} + {poidsEval.oral} + {poidsEval.composition}).
-                                    Si une catégorie n&apos;a aucune note pour une matière (ex : pas d&apos;oral), elle est automatiquement exclue et la moyenne se recalcule sur les catégories restantes.
-                                </span>
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '0.5rem' }}>
-                                {([
-                                    { key: 'ecrit' as const, label: 'Écrit', hint: 'Meilleure note parmi devoirs/interros/examens' },
-                                    { key: 'oral' as const, label: 'Oral', hint: 'Meilleure note orale' },
-                                    { key: 'composition' as const, label: 'Composition', hint: 'Examen de fin de trimestre' },
-                                ]).map(f => (
-                                    <div key={f.key} style={{ padding: '1rem 1.25rem', borderRadius: '12px', background: 'white', border: '1px solid #e2e8f0' }}>
-                                        <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155', display: 'block', marginBottom: '0.4rem' }}>{f.label}</label>
-                                        <input type="number" min={0} step={0.5} value={poidsEval[f.key]}
-                                            onChange={e => { setPoidsEval(p => ({ ...p, [f.key]: Number(e.target.value) })); markChanged(); }}
-                                            style={{ width: '100%', padding: '0.5rem', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '1rem', fontWeight: 800, textAlign: 'center' }} />
-                                        <span style={{ fontSize: '0.72rem', color: '#94a3b8', display: 'block', marginTop: '0.3rem' }}>{f.hint}</span>
-                                    </div>
-                                ))}
-                            </div>
-                            <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                <button type="button" onClick={() => { setPoidsEval({ ecrit: 1, oral: 1, composition: 2 }); markChanged(); }}
-                                    style={{ padding: '0.4rem 0.8rem', borderRadius: '8px', background: '#f1f5f9', border: '1px solid #e2e8f0', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600, color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                    <RotateCcw size={13} /> Réinitialiser au standard guinéen (1 / 1 / 2)
-                                </button>
-                            </div>
-                        </section>
-
-                        <section className={styles.section} style={{ marginTop: '1.5rem' }}>
-                            <div className={styles.sectionHeader}>
-                                <ClipboardList size={20} className={styles.sectionIcon} />
-                                <h3>Types d&apos;Évaluation</h3>
-                                <span className={styles.sectionSubtitle}>
-                                    Gestion des libellés (Devoir, Interrogation, Composition, Oral...) — chaque type est rattaché
-                                    à l&apos;une des 3 catégories ci-dessus via son code. Le pourcentage ci-dessous est informatif
-                                    (utile pour vos propres statistiques) : il n&apos;intervient PAS dans le calcul de la moyenne,
-                                    contrairement à la pondération Écrit/Oral/Composition définie plus haut.
+                                    Chaque type d&apos;évaluation a un coefficient qui détermine son poids dans la moyenne de la matière.
+                                    Les notes d&apos;un même type sont d&apos;abord moyennées entre elles, puis pondérées par ce coefficient.
+                                    Exemple : 3 évaluations (coef. 1) et 1 composition (coef. 2) → moyenne = (moyenne des 3 évaluations × 1 + composition × 2) ÷ 3.
+                                    Le nombre d&apos;évaluations ne change donc pas leur poids face à la composition.
                                 </span>
                             </div>
 
-                            {/* Total informatif (n'a plus besoin de faire 100 — n'affecte pas le calcul) */}
-                            {(() => {
-                                const total = typesEval.filter(t => t.statut === 'ACTIF').reduce((s, t) => s + Number(t.poids_pourcentage), 0);
-                                return (
-                                    <div style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem', borderRadius: '12px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#64748b' }}>
-                                                <Info size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Total informatif (libre — n&apos;a pas besoin de faire 100%)
-                                            </span>
-                                            <span style={{ fontWeight: 800, fontSize: '1rem', color: '#334155' }}>{total.toFixed(1)}%</span>
-                                        </div>
-                                    </div>
-                                );
-                            })()}
+                            {/* Sélecteur de cycle : chaque cycle peut avoir ses propres coefficients */}
+                            <div style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem', borderRadius: '12px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155', marginBottom: '0.6rem' }}>
+                                    Coefficients appliqués au cycle :
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    {([
+                                        { key: 'primaire', label: 'Primaire' },
+                                        { key: 'college', label: 'Collège' },
+                                        { key: 'lycee', label: 'Lycée' },
+                                    ]).map(c => (
+                                        <button key={c.key} type="button" onClick={() => setCoefTypeCycle(c.key)}
+                                            style={{
+                                                padding: '0.45rem 1rem', borderRadius: '8px', cursor: 'pointer',
+                                                fontSize: '0.85rem', fontWeight: 700,
+                                                background: coefTypeCycle === c.key ? 'var(--brand-primary, #3b82f6)' : 'white',
+                                                color: coefTypeCycle === c.key ? 'white' : '#475569',
+                                                border: `1px solid ${coefTypeCycle === c.key ? 'var(--brand-primary, #3b82f6)' : '#cbd5e1'}`,
+                                            }}>
+                                            {c.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.6rem' }}>
+                                    <Info size={13} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} />
+                                    Les réalités diffèrent d&apos;un cycle à l&apos;autre : au primaire tout peut valoir 1, alors qu&apos;au collège
+                                    la composition pèse plus lourd. Laissez vide pour utiliser le coefficient par défaut du type.
+                                </div>
+                            </div>
 
-                            {/* Type list */}
+                            {/* Liste des types */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                {typesEval.map(te => (
+                                {typesEval.map(te => {
+                                    const surcharge = coefsParCycle[coefTypeCycle]?.[te.code];
+                                    const effectif = surcharge ?? te.coefficient;
+                                    return (
                                     <div key={te.type_eval_id} style={{
-                                        display: 'grid', gridTemplateColumns: '100px 1fr 120px 80px',
+                                        display: 'grid', gridTemplateColumns: '110px 1fr 120px 140px 80px',
                                         alignItems: 'center', gap: '1rem', padding: '1rem 1.25rem',
                                         borderRadius: '12px', background: 'white', border: '1px solid #e2e8f0',
                                         opacity: te.statut === 'INACTIF' ? 0.5 : 1,
@@ -1240,21 +1238,22 @@ export default function NotationPage() {
                                         {editingTypeId === te.type_eval_id ? (
                                             <>
                                                 <input value={te.code} style={{ padding: '0.3rem 0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem', fontWeight: 700 }}
-                                                    onChange={e => setTypesEval(prev => prev.map(t => t.type_eval_id === te.type_eval_id ? {...t, code: e.target.value} : t))} />
+                                                    onChange={e => setTypesEval(prev => prev.map(t => t.type_eval_id === te.type_eval_id ? {...t, code: e.target.value.toUpperCase()} : t))} />
                                                 <input value={te.libelle} style={{ padding: '0.3rem 0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}
                                                     onChange={e => setTypesEval(prev => prev.map(t => t.type_eval_id === te.type_eval_id ? {...t, libelle: e.target.value} : t))} />
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                                                    <input type="number" value={te.poids_pourcentage} min={0} max={100} step={0.5}
-                                                        style={{ width: '70px', padding: '0.3rem 0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem', textAlign: 'center' }}
-                                                        onChange={e => setTypesEval(prev => prev.map(t => t.type_eval_id === te.type_eval_id ? {...t, poids_pourcentage: Number(e.target.value)} : t))} />
-                                                    <span style={{ fontSize: '0.85rem', color: '#64748b' }}>%</span>
+                                                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>coef.</span>
+                                                    <input type="number" value={te.coefficient} min={0.5} step={0.5}
+                                                        style={{ width: '70px', padding: '0.3rem 0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.85rem', textAlign: 'center', fontWeight: 700 }}
+                                                        onChange={e => setTypesEval(prev => prev.map(t => t.type_eval_id === te.type_eval_id ? {...t, coefficient: Number(e.target.value)} : t))} />
                                                 </div>
+                                                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>coefficient de base</span>
                                                 <div style={{ display: 'flex', gap: '0.4rem' }}>
                                                     <button onClick={async () => {
                                                         try {
-                                                            await api.put(`/api/evaluations/types/${te.type_eval_id}`, { code: te.code, libelle: te.libelle, poids_pourcentage: te.poids_pourcentage });
+                                                            await api.put(`/api/evaluations/types/${te.type_eval_id}`, { code: te.code, libelle: te.libelle, coefficient: te.coefficient });
                                                             setEditingTypeId(null);
-                                                        } catch(e) { console.error(e); }
+                                                        } catch(e: any) { alert(e?.response?.data?.detail || 'Erreur'); }
                                                     }} style={{ padding: '0.3rem 0.6rem', borderRadius: '6px', background: 'var(--brand-primary, #3b82f6)', color: 'white', border: 'none', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
                                                         <Check size={14} />
                                                     </button>
@@ -1264,59 +1263,83 @@ export default function NotationPage() {
                                         ) : (
                                             <>
                                                 <span style={{ fontWeight: 800, color: 'var(--brand-primary, #3b82f6)', fontSize: '0.9rem', fontFamily: 'monospace' }}>{te.code}</span>
-                                                <span style={{ color: '#334155', fontSize: '0.9rem' }}>{te.libelle}</span>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                                    <div style={{ width: '50px', height: '6px', borderRadius: '99px', background: '#e5e7eb', overflow: 'hidden' }}>
-                                                        <div style={{ height: '100%', width: `${te.poids_pourcentage}%`, borderRadius: '99px', background: 'var(--brand-primary, #3b82f6)' }} />
-                                                    </div>
-                                                    <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#1e293b' }}>{te.poids_pourcentage}%</span>
+                                                <span style={{ color: '#334155', fontSize: '0.9rem' }}>
+                                                    {te.libelle}
+                                                    {te.statut === 'INACTIF' && <span style={{ fontSize: '0.72rem', color: '#94a3b8', marginLeft: '0.5rem' }}>(désactivé)</span>}
+                                                </span>
+                                                <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                                    base : <strong style={{ color: '#1e293b' }}>{te.coefficient}</strong>
+                                                </span>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                    <input type="number" min={0.5} step={0.5}
+                                                        placeholder={String(te.coefficient)}
+                                                        value={surcharge ?? ''}
+                                                        onChange={e => {
+                                                            const v = e.target.value;
+                                                            setCoefsParCycle(prev => {
+                                                                const cycle = { ...(prev[coefTypeCycle] || {}) };
+                                                                if (v === '') delete cycle[te.code];
+                                                                else cycle[te.code] = Number(v);
+                                                                return { ...prev, [coefTypeCycle]: cycle };
+                                                            });
+                                                            markChanged();
+                                                        }}
+                                                        style={{
+                                                            width: '70px', padding: '0.35rem', borderRadius: '8px',
+                                                            border: `1px solid ${surcharge !== undefined ? 'var(--brand-primary, #3b82f6)' : '#cbd5e1'}`,
+                                                            fontSize: '0.9rem', textAlign: 'center', fontWeight: 800,
+                                                        }} />
+                                                    <span style={{ fontSize: '0.72rem', color: surcharge !== undefined ? 'var(--brand-primary, #3b82f6)' : '#94a3b8' }}>
+                                                        {surcharge !== undefined ? 'personnalisé' : `= ${effectif}`}
+                                                    </span>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '0.4rem' }}>
-                                                    <button onClick={() => setEditingTypeId(te.type_eval_id)} style={{ padding: '0.3rem', borderRadius: '6px', background: '#f1f5f9', border: '1px solid #e2e8f0', cursor: 'pointer' }}>
+                                                    <button onClick={() => setEditingTypeId(te.type_eval_id)} title="Modifier le type" style={{ padding: '0.3rem', borderRadius: '6px', background: '#f1f5f9', border: '1px solid #e2e8f0', cursor: 'pointer' }}>
                                                         <Pencil size={14} color="#64748b" />
                                                     </button>
                                                     <button onClick={async () => {
-                                                        if (!confirm('Supprimer ce type d\'évaluation ?')) return;
+                                                        if (!confirm('Supprimer ce type ?')) return;
                                                         try {
                                                             await api.delete(`/api/evaluations/types/${te.type_eval_id}`);
                                                             setTypesEval(prev => prev.filter(t => t.type_eval_id !== te.type_eval_id));
                                                         } catch(e: any) { alert(e?.response?.data?.detail || 'Erreur'); }
-                                                    }} style={{ padding: '0.3rem', borderRadius: '6px', background: '#fef2f2', border: '1px solid #fecaca', cursor: 'pointer' }}>
+                                                    }} title="Supprimer" style={{ padding: '0.3rem', borderRadius: '6px', background: '#fef2f2', border: '1px solid #fecaca', cursor: 'pointer' }}>
                                                         <Trash2 size={14} color="#ef4444" />
                                                     </button>
                                                 </div>
                                             </>
                                         )}
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
 
-                            {/* Add new type */}
+                            {/* Ajout d'un type */}
                             {showNewTypeForm ? (
                                 <div style={{ marginTop: '1rem', padding: '1.25rem', borderRadius: '12px', border: '2px dashed var(--brand-primary, #3b82f6)', background: 'var(--brand-primary-light, #eff6ff)' }}>
                                     <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '1rem', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '4px' }}><Plus size={16} /> Nouveau type d&apos;évaluation</div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 100px auto', gap: '0.75rem', alignItems: 'end' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 110px auto', gap: '0.75rem', alignItems: 'end' }}>
                                         <div>
                                             <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '0.25rem' }}>Code</label>
-                                            <input placeholder="EX" value={newTypeCode} onChange={e => setNewTypeCode(e.target.value.toUpperCase())}
+                                            <input placeholder="EVAL" value={newTypeCode} onChange={e => setNewTypeCode(e.target.value.toUpperCase())}
                                                 style={{ width: '100%', padding: '0.5rem', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.88rem', fontWeight: 700 }} />
                                         </div>
                                         <div>
                                             <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '0.25rem' }}>Libellé</label>
-                                            <input placeholder="Examen" value={newTypeLibelle} onChange={e => setNewTypeLibelle(e.target.value)}
+                                            <input placeholder="Évaluation" value={newTypeLibelle} onChange={e => setNewTypeLibelle(e.target.value)}
                                                 style={{ width: '100%', padding: '0.5rem', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.88rem' }} />
                                         </div>
                                         <div>
-                                            <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '0.25rem' }}>Poids (%)</label>
-                                            <input type="number" placeholder="60" value={newTypePoids || ''} min={0} max={100} step={0.5}
+                                            <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '0.25rem' }}>Coefficient</label>
+                                            <input type="number" placeholder="1" value={newTypePoids || ''} min={0.5} step={0.5}
                                                 onChange={e => setNewTypePoids(Number(e.target.value))}
-                                                style={{ width: '100%', padding: '0.5rem', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.88rem', textAlign: 'center' }} />
+                                                style={{ width: '100%', padding: '0.5rem', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '0.88rem', textAlign: 'center', fontWeight: 700 }} />
                                         </div>
                                         <div style={{ display: 'flex', gap: '0.5rem' }}>
                                             <button onClick={async () => {
                                                 if (!newTypeCode || !newTypeLibelle || !newTypePoids) return;
                                                 try {
-                                                    const res = await api.post('/api/evaluations/types', { code: newTypeCode, libelle: newTypeLibelle, poids_pourcentage: newTypePoids, statut: 'ACTIF' });
+                                                    const res = await api.post('/api/evaluations/types', { code: newTypeCode, libelle: newTypeLibelle, coefficient: newTypePoids, statut: 'ACTIF' });
                                                     setTypesEval(prev => [...prev, res.data]);
                                                     setNewTypeCode(''); setNewTypeLibelle(''); setNewTypePoids(0); setShowNewTypeForm(false);
                                                 } catch(e: any) { alert(e?.response?.data?.detail || 'Erreur'); }

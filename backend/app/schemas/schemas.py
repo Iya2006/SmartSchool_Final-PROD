@@ -470,13 +470,18 @@ class MatiereOut(OrmBase, MatiereBase):
 class TypeEvaluationBase(BaseModel):
     code: str
     libelle: str
-    poids_pourcentage: float
+    # Coefficient du type dans la moyenne de matière (Composition 2, Évaluation 1...).
+    # Surchargeable par cycle — voir app/services/notation.py.
+    coefficient: float = 1
+    # Legacy : plus lu par le moteur de notation, conservé pour compatibilité
+    poids_pourcentage: Optional[float] = None
     statut: str = "ACTIF"
 
 class TypeEvaluationCreate(TypeEvaluationBase): pass
 class TypeEvaluationUpdate(BaseModel):
     code: Optional[str] = None
     libelle: Optional[str] = None
+    coefficient: Optional[float] = None
     poids_pourcentage: Optional[float] = None
     statut: Optional[str] = None
 
@@ -492,13 +497,52 @@ class EvaluationBase(BaseModel):
     enseignant_id: int
     libelle: str
     date_evaluation: date
-    note_sur: float = 20
+    # None => barème résolu depuis la configuration de la classe/matière/cycle
+    note_sur: Optional[float] = None
     coefficient: float = 1
+    # "O"/"N" : les coefficients de matière s'appliquent-ils à cette évaluation ?
+    est_coefficientee: str = "O"
 
 class EvaluationCreate(EvaluationBase): pass
 class EvaluationOut(OrmBase, EvaluationBase):
     evaluation_id: int
     statut: str = "PLANIFIEE"
+    session_id: Optional[int] = None
+    coefficient_override: Optional[float] = None
+
+
+# ============================================================================
+# SESSIONS D'ÉVALUATION (création groupée multi-matières : composition, examen blanc...)
+class EvaluationSessionCreate(BaseModel):
+    classe_id: int
+    trimestre_id: int
+    type_eval_id: int
+    libelle: str  # texte libre, ex. "Composition du 1er Trimestre"
+    date_evaluation: date
+    note_sur: Optional[float] = None  # None => barème configuré par matière
+    est_coefficientee: str = "O"
+    enseignant_id: Optional[int] = None
+    # None => toutes les matières actives de la classe
+    matiere_ids: Optional[List[int]] = None
+
+class EvaluationSessionUpdate(BaseModel):
+    libelle: Optional[str] = None
+    date_evaluation: Optional[date] = None
+    est_coefficientee: Optional[str] = None
+    statut: Optional[str] = None
+
+class EvaluationSessionOut(OrmBase):
+    session_id: int
+    classe_id: int
+    trimestre_id: int
+    type_eval_id: int
+    etablissement_id: int
+    libelle: str
+    date_evaluation: date
+    note_sur: Optional[float] = None
+    est_coefficientee: str
+    enseignant_id: Optional[int] = None
+    statut: str
 
 class NoteBase(BaseModel):
     evaluation_id: int

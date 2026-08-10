@@ -16,6 +16,15 @@ from app.models.academique import (
     AnneeScolaire, RessourcePedagogique, ClasseMatiere, ParametreEtablissement
 )
 from app.core.annee_lock import verifier_annee_modifiable
+# Moteur de notation partagé avec evaluations.py — ne jamais redéfinir
+# localement une logique de coefficient/moyenne : les deux copies avaient
+# déjà divergé une première fois.
+from app.services.notation import (
+    get_bareme_effectif,
+    get_cycle_key,
+    get_types_evaluation_coefficients,
+    valider_note,
+)
 
 router = APIRouter(prefix="/api/portail-enseignant", tags=["Portail Enseignant"])
 
@@ -554,43 +563,23 @@ def enregistrer_appel(enseignant_id: int, data: AppelRequest, _auth: dict = Depe
 # SAISIE DES NOTES (créer évaluation + sauvegarder notes)
 # ================================================================
 
-_POIDS_EVAL_DEFAUT = {"ecrite": 1.0, "orale": 1.0, "composition": 2.0}
+def _type_eval_par_defaut(db: Session) -> int:
+    """Type d'évaluation à utiliser quand l'enseignant n'en précise aucun.
 
-
-def _categorie_evaluation(type_eval_code):
-    if type_eval_code == "COMPO":
-        return "composition"
-    if type_eval_code == "ORAL":
-        return "orale"
-    return "ecrite"
-
-
-def _coefficient_pour_evaluation(db: Session, type_eval_id: int, matiere_id: int, classe_id: int, etablissement_id: int = 1) -> float:
-    """Système guinéen à 3 notes, pondérations Écrit/Oral/Composition
-    configurables par l'administrateur (Paramètres > Notation, défaut 1/1/2 —
-    la composition compte double). Le coefficient de la matière n'intervient
-    jamais ici (il ne pondère que la moyenne de matière dans la moyenne
-    générale, un niveau au-dessus) — jamais un choix manuel de l'enseignant.
+    Cherche le type générique "EVAL" (Évaluation), sinon le premier type actif.
+    Remplace un `type_eval_id or 1` qui supposait qu'un type utilisable portait
+    forcément l'identifiant 1.
     """
-    type_eval = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == type_eval_id).first()
-    cat = _categorie_evaluation(type_eval.code if type_eval else None)
-    poids = dict(_POIDS_EVAL_DEFAUT)
-    try:
-        params = db.query(ParametreEtablissement).filter(
-            ParametreEtablissement.etablissement_id == etablissement_id,
-            ParametreEtablissement.categorie == 'NOTATION',
-            ParametreEtablissement.cle.in_([
-                'notation.poids_ecrit', 'notation.poids_oral', 'notation.poids_composition'
-            ]),
-        ).all()
-        mapping = {'notation.poids_ecrit': 'ecrite', 'notation.poids_oral': 'orale', 'notation.poids_composition': 'composition'}
-        for p in params:
-            key = mapping.get(p.cle)
-            if key:
-                poids[key] = float(p.valeur)
-    except Exception:
-        pass
-    return poids[cat]
+    t = db.query(TypeEvaluation).filter(
+        TypeEvaluation.code == "EVAL", TypeEvaluation.statut == "ACTIF"
+    ).first()
+    if not t:
+        t = db.query(TypeEvaluation).filter(TypeEvaluation.statut == "ACTIF").order_by(
+            TypeEvaluation.type_eval_id
+        ).first()
+    if not t:
+        raise HTTPException(400, "Aucun type d'évaluation actif n'est configuré pour l'établissement.")
+    return t.type_eval_id
 
 
 class NoteItem(BaseModel):
@@ -603,8 +592,8 @@ class SaisieNotesRequest(BaseModel):
     matiere_id: int
     trimestre_id: Optional[int] = None
     type_evaluation_id: Optional[int] = None
-    libelle: str  # ex: "Devoir 1", "Interrogation 2"
-    note_sur: float = 20
+    libelle: str  # texte libre saisi par l'école, ex: "Évaluation de Janvier"
+    note_sur: Optional[float] = None  # None => barème configuré pour la classe/matière
     coefficient: float = 1
     notes: list[NoteItem]
 
@@ -631,8 +620,22 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
 
     from datetime import date
 
-    type_eval_id = data.type_evaluation_id or 1
-    coefficient = _coefficient_pour_evaluation(db, type_eval_id, data.matiere_id, data.classe_id)
+    type_eval_id = data.type_evaluation_id or _type_eval_par_defaut(db)
+    etablissement_id = classe.etablissement_id if classe else 1
+    cycle_key = get_cycle_key(data.classe_id, db)
+    coefficient = get_types_evaluation_coefficients(db, etablissement_id, cycle_key).get(type_eval_id, 1.0)
+    note_sur = data.note_sur or get_bareme_effectif(
+        db, data.classe_id, data.matiere_id, cycle_key, etablissement_id
+    )
+
+    # Barème vérifié avant de créer quoi que ce soit : sinon une note hors
+    # barème laisse derrière elle une évaluation vide, à supprimer à la main.
+    valeurs = []
+    for n in data.notes:
+        try:
+            valeurs.append(None if n.est_absent else valider_note(n.valeur, note_sur))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     # 1. Créer l'évaluation
     evaluation = Evaluation(
@@ -643,7 +646,7 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
         type_eval_id=type_eval_id,
         libelle=data.libelle,
         date_evaluation=date.today(),
-        note_sur=data.note_sur,
+        note_sur=note_sur,
         coefficient=coefficient,
         statut="PUBLIEE",
     )
@@ -652,11 +655,11 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
 
     # 2. Sauvegarder les notes
     count = 0
-    for n in data.notes:
+    for n, valeur in zip(data.notes, valeurs):
         note = Note(
             evaluation_id=evaluation.evaluation_id,
             inscription_id=n.inscription_id,
-            valeur=n.valeur if not n.est_absent else None,
+            valeur=valeur,
             est_absent="O" if n.est_absent else "N",
         )
         db.add(note)
@@ -807,6 +810,13 @@ def update_notes_batch_enseignant(
     if trimestre and trimestre.statut == "CLOTURE":
         raise HTTPException(400, f"{trimestre.libelle} est clôturé — impossible de modifier des notes pour cette période.")
 
+    valeurs = {}
+    for item in data.notes:
+        try:
+            valeurs[item.note_id] = None if item.est_absent else valider_note(item.valeur, ev.note_sur)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
     updated = 0
     for item in data.notes:
         note = db.query(Note).filter(
@@ -814,7 +824,7 @@ def update_notes_batch_enseignant(
             Note.evaluation_id == evaluation_id
         ).first()
         if note:
-            note.valeur = item.valeur if not item.est_absent else None
+            note.valeur = valeurs[item.note_id]
             note.est_absent = "O" if item.est_absent else "N"
             note.observation = item.observation
             updated += 1

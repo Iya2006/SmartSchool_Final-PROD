@@ -30,9 +30,30 @@ interface ClasseData {
 }
 interface EvalCentralisee {
     evaluation_id: number; libelle: string; date_evaluation: string;
-    matiere: string; classe: string; classe_id: number; trimestre: string;
+    matiere: string; matiere_id: number; classe: string; classe_id: number; trimestre: string;
     enseignant: string; note_sur: number; coefficient: number;
     nb_notes: number; moyenne: number | null; statut: string;
+    session_id: number | null;
+}
+interface TypeEvalInfo {
+    type_eval_id: number; code: string; libelle: string;
+    coefficient: number; statut: string;
+}
+interface SessionInfo {
+    session_id: number; libelle: string; date_evaluation: string;
+    type_libelle: string; est_coefficientee: string;
+    statut: string; nb_evaluations: number;
+}
+interface MoisCalendrier {
+    cle: string; libelle: string; date_debut: string; date_fin: string;
+    trimestre_id: number | null; trimestre: string | null; disponible: boolean;
+}
+interface EpreuvePeriode {
+    cle: string; session_id: number | null; evaluation_ids: number[];
+    libelle: string; type: string; coefficient_type: number;
+    date_evaluation: string | null; est_coefficientee: string;
+    nb_matieres: number; nb_centralisees: number;
+    centralisee: boolean; retenue: boolean;
 }
 
 export default function CentralisationNotesPage() {
@@ -60,33 +81,80 @@ export default function CentralisationNotesPage() {
     const [classeElevesPage, setClasseElevesPage] = useState(1);
     const CLASSE_ELEVES_PAGE_SIZE = 25;
 
-    // Pondération Écrit/Oral/Composition réellement configurée (Paramètres >
-    // Notation) — affichée en clair pour que l'admin voie EXACTEMENT comment
-    // les moyennes ci-dessous ont été calculées, avec les vraies valeurs.
-    const [poids, setPoids] = useState({ ecrit: 1, oral: 1, composition: 2 });
+    // Types d'évaluation configurés (Paramètres > Notation) — affichés en clair
+    // pour que l'admin voie EXACTEMENT comment les moyennes ont été calculées.
+    const [typesEval, setTypesEval] = useState<TypeEvalInfo[]>([]);
+
+    // Création d'une session (composition / évaluation sur toutes les matières)
+    const [showSessionForm, setShowSessionForm] = useState(false);
+    const [sessionForm, setSessionForm] = useState({
+        type_eval_id: 0,
+        libelle: '',
+        mois: '',
+        date_evaluation: new Date().toISOString().slice(0, 10),
+        est_coefficientee: true,
+        note_sur: '' as string | number,
+    });
+
+    // Calendrier de l'année scolaire : quel mois appartient à quelle période.
+    // Le rattachement vient du backend (dates réelles des périodes), pas d'une
+    // correspondance devinée côté navigateur.
+    const [moisAnnee, setMoisAnnee] = useState<MoisCalendrier[]>([]);
+    const [creatingSession, setCreatingSession] = useState(false);
+    const [sessions, setSessions] = useState<SessionInfo[]>([]);
+    // Matières retenues pour la session. null = toutes (cas courant d'une
+    // composition) ; un tableau = sélection explicite quand l'école exclut
+    // certaines matières de l'épreuve.
+    const [matieresSession, setMatieresSession] = useState<number[] | null>(null);
+
+    // Saisie des notes d'une évaluation, côté administration (l'enseignant
+    // saisit normalement depuis son portail ; l'admin peut corriger ou saisir
+    // à sa place, par exemple pour une composition organisée par l'école).
+    const [saisieEval, setSaisieEval] = useState<any | null>(null);
+    const [notesSaisie, setNotesSaisie] = useState<any[]>([]);
+    const [loadingSaisie, setLoadingSaisie] = useState(false);
+    const [savingNotes, setSavingNotes] = useState(false);
+    const [statutFiltre, setStatutFiltre] = useState<string>('');
+
+    // Aperçu intermédiaire (classement de suivi, sans toucher aux bulletins).
+    // Paginé comme le tableau pivot : une classe réelle dépasse souvent 150 élèves.
+    const [apercu, setApercu] = useState<any | null>(null);
+    const [loadingApercu, setLoadingApercu] = useState(false);
+    const [apercuPage, setApercuPage] = useState(1);
+    const APERCU_PAGE_SIZE = 25;
+    // Épreuves sur lesquelles porte l'aperçu affiché : null = toute la période.
+    // Conservé pour que « Fiche de classement » imprime exactement ce qui est
+    // à l'écran, et non un autre périmètre.
+    const [apercuEvaluationIds, setApercuEvaluationIds] = useState<number[] | null>(null);
+
+    // Épreuves de la période et sélection de celles qui comptent pour le
+    // résultat officiel (une période peut se jouer sur deux évaluations sans
+    // composition, ou sur une composition seule — c'est l'école qui décide).
+    const [epreuves, setEpreuves] = useState<EpreuvePeriode[]>([]);
+    const [loadingEpreuves, setLoadingEpreuves] = useState(false);
+    const [showEpreuves, setShowEpreuves] = useState(false);
+    const [selectionEpreuves, setSelectionEpreuves] = useState<string[]>([]);
+    const [selectionPersonnalisee, setSelectionPersonnalisee] = useState(false);
+    const [savingSelection, setSavingSelection] = useState(false);
 
     // Load initial data (classes/trimestres/stats une seule fois)
     useEffect(() => {
         const loadInit = async () => {
             try {
-                const [clsRes, triRes, statsRes, paramRes] = await Promise.all([
+                const [clsRes, triRes, statsRes, typesRes, moisRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}`),
                     api.get('/api/portail-enseignant/referentiels/trimestres'),
                     api.get('/api/evaluations/centralisation/stats'),
-                    api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=NOTATION`).catch(() => ({ data: [] })),
+                    api.get('/api/evaluations/types').catch(() => ({ data: [] })),
+                    api.get('/api/evaluations/calendrier/mois').catch(() => ({ data: { mois: [] } })),
                 ]);
                 setClasses(clsRes.data);
                 setTrimestres(triRes.data);
                 setStats(statsRes.data);
-                const get = (cle: string, fb: number) => {
-                    const p = (paramRes.data || []).find((s: any) => s.cle === cle);
-                    return p ? parseFloat(p.valeur) : fb;
-                };
-                setPoids({
-                    ecrit: get('notation.poids_ecrit', 1),
-                    oral: get('notation.poids_oral', 1),
-                    composition: get('notation.poids_composition', 2),
-                });
+                setMoisAnnee(moisRes.data?.mois || []);
+                const actifs = (typesRes.data || []).filter((t: TypeEvalInfo) => t.statut === 'ACTIF');
+                setTypesEval(actifs);
+                if (actifs.length) setSessionForm(f => ({ ...f, type_eval_id: actifs[0].type_eval_id }));
             } catch (e) { console.error(e); }
         };
         loadInit();
@@ -95,18 +163,18 @@ export default function CentralisationNotesPage() {
     // Liste des évaluations centralisées — paginée côté serveur (avant : un seul
     // fetch sans limite qui, avec 998 évaluations réelles, faisait timeout la
     // page entière — X-Total-Count lu pour piloter la pagination).
-    useEffect(() => {
-        const loadEvals = async () => {
-            try {
-                const skip = (evalsPage - 1) * EVALS_PAGE_SIZE;
-                const res = await api.get(`/api/evaluations/centralisees?skip=${skip}&limit=${EVALS_PAGE_SIZE}`);
-                setEvalsCentralisees(res.data);
-                const totalCount = res.headers?.['x-total-count'];
-                setEvalsTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
-            } catch (e) { console.error(e); }
-        };
-        loadEvals();
-    }, [evalsPage]);
+    const rechargerEvals = useCallback(async () => {
+        try {
+            const skip = (evalsPage - 1) * EVALS_PAGE_SIZE;
+            const q = statutFiltre ? `&statut=${statutFiltre}` : '';
+            const res = await api.get(`/api/evaluations/centralisees?skip=${skip}&limit=${EVALS_PAGE_SIZE}${q}`);
+            setEvalsCentralisees(res.data);
+            const totalCount = res.headers?.['x-total-count'];
+            setEvalsTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
+        } catch (e) { console.error(e); }
+    }, [evalsPage, statutFiltre]);
+
+    useEffect(() => { rechargerEvals(); }, [rechargerEvals]);
 
     // Revenir à la page 1 quand la recherche change
     useEffect(() => { setEvalsPage(1); }, [search]);
@@ -138,8 +206,212 @@ export default function CentralisationNotesPage() {
             setSuccessMsg(res.data.message);
             setTimeout(() => setSuccessMsg(''), 5000);
             await loadClasseDetail();
-        } catch (e: any) { alert(e.message); }
+        } catch (e: any) { alert(e?.response?.data?.detail || e.message); }
         setCalculating(false);
+    };
+
+    // Sessions déjà créées pour la classe/période sélectionnée
+    const loadSessions = useCallback(async () => {
+        if (!selectedClasse) { setSessions([]); return; }
+        try {
+            const res = await api.get(`/api/evaluations/sessions?classe_id=${selectedClasse}&trimestre_id=${selectedTrimestre}`);
+            setSessions(res.data || []);
+        } catch { setSessions([]); }
+    }, [selectedClasse, selectedTrimestre]);
+
+    useEffect(() => { loadSessions(); }, [loadSessions]);
+
+    // Un barème inférieur à 5 est presque toujours un coefficient saisi dans la
+    // mauvaise case : on ne l'interdit pas (une école peut noter /1), on alerte.
+    const baremeDouteux = sessionForm.note_sur !== '' && Number(sessionForm.note_sur) > 0 && Number(sessionForm.note_sur) < 5;
+
+    const moisChoisi = moisAnnee.find(m => m.cle === sessionForm.mois) || null;
+    // La période de l'épreuve découle du mois choisi. Sans mois, on retombe sur
+    // la période sélectionnée en haut de page (cas d'une composition de fin de
+    // trimestre, où le mois importe moins que la période).
+    const trimestreSession = moisChoisi?.trimestre_id ?? selectedTrimestre;
+    const trimestreSessionLibelle = moisChoisi?.trimestre
+        || trimestres.find((t: any) => t.trimestre_id === selectedTrimestre)?.libelle
+        || `Trimestre ${selectedTrimestre}`;
+
+    // Choisir un mois positionne la date dans ce mois : sans ça, la date reste
+    // celle du jour et l'épreuve se retrouve datée hors de sa propre période.
+    useEffect(() => {
+        if (!moisChoisi) return;
+        setSessionForm(f => (
+            f.date_evaluation >= moisChoisi.date_debut && f.date_evaluation <= moisChoisi.date_fin
+                ? f
+                : { ...f, date_evaluation: moisChoisi.date_debut }
+        ));
+    }, [moisChoisi]);
+
+    // Création groupée : une évaluation par matière, en une seule action
+    const handleCreerSession = async () => {
+        if (!selectedClasse || !sessionForm.type_eval_id || !sessionForm.libelle.trim()) return;
+        setCreatingSession(true);
+        try {
+            const res = await api.post('/api/evaluations/sessions', {
+                classe_id: selectedClasse,
+                trimestre_id: trimestreSession,
+                type_eval_id: sessionForm.type_eval_id,
+                libelle: sessionForm.libelle.trim(),
+                date_evaluation: sessionForm.date_evaluation,
+                est_coefficientee: sessionForm.est_coefficientee ? 'O' : 'N',
+                note_sur: sessionForm.note_sur === '' ? null : Number(sessionForm.note_sur),
+                matiere_ids: matieresSession,
+            });
+            setSuccessMsg(res.data.message);
+            setTimeout(() => setSuccessMsg(''), 6000);
+            setShowSessionForm(false);
+            setSessionForm(f => ({ ...f, libelle: '', note_sur: '', mois: '' }));
+            setMatieresSession(null);
+            await loadSessions();
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || 'Erreur lors de la création');
+        }
+        setCreatingSession(false);
+    };
+
+    // Toutes les matières de la composition en cours de saisie : on passe de
+    // l'une à l'autre sans quitter la fenêtre.
+    const [matieresSaisie, setMatieresSaisie] = useState<EvalCentralisee[]>([]);
+
+    // Ouvre la saisie : crée d'abord les lignes de notes manquantes pour que
+    // chaque élève inscrit apparaisse, même si l'enseignant n'a rien saisi.
+    const ouvrirSaisie = async (ev: any, groupe?: EvalCentralisee[]) => {
+        if (groupe) setMatieresSaisie(groupe);
+        setSaisieEval(ev);
+        setLoadingSaisie(true);
+        try {
+            await api.post(`/api/evaluations/${ev.evaluation_id}/initialiser`).catch(() => null);
+            const res = await api.get(`/api/evaluations/${ev.evaluation_id}/notes`);
+            setNotesSaisie(res.data || []);
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || 'Impossible de charger les notes');
+            setSaisieEval(null);
+        }
+        setLoadingSaisie(false);
+    };
+
+    const enregistrerNotes = async () => {
+        if (!saisieEval) return;
+        setSavingNotes(true);
+        try {
+            await api.put(`/api/evaluations/${saisieEval.evaluation_id}/notes/batch-update`, {
+                notes: notesSaisie.map(n => ({
+                    note_id: n.note_id,
+                    // Une case laissée vide signifie « pas encore noté » : la
+                    // matière est alors ignorée dans la moyenne de l'élève.
+                    valeur: n.valeur === '' || n.valeur === null || n.valeur === undefined ? null : Number(n.valeur),
+                    est_absent: false,
+                    observation: n.observation || null,
+                })),
+            });
+            // Une évaluation saisie devient exploitable par le calcul des
+            // moyennes, qui ne retient que les évaluations centralisées.
+            await api.put(`/api/evaluations/${saisieEval.evaluation_id}/statut`, { statut: 'CENTRALISEE' })
+                .catch(() => null);
+
+            // Enchaîner sur la matière suivante non saisie de la composition
+            const suivante = matieresSaisie.find(m =>
+                m.evaluation_id !== saisieEval.evaluation_id && m.nb_notes === 0);
+            setSuccessMsg(suivante
+                ? `${saisieEval.matiere} enregistrée — passage à ${suivante.matiere}`
+                : 'Notes enregistrées');
+            setTimeout(() => setSuccessMsg(''), 4000);
+            await rechargerEvals();
+            if (suivante) {
+                await ouvrirSaisie(suivante);
+            } else {
+                setSaisieEval(null);
+            }
+            await loadClasseDetail();
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || 'Erreur lors de l’enregistrement');
+        }
+        setSavingNotes(false);
+    };
+
+    // Fiche de classement imprimable (PDF généré par le serveur). Le jeton
+    // d'authentification ne passe pas dans une simple ouverture d'onglet :
+    // on récupère le fichier via l'API puis on l'ouvre depuis le navigateur.
+    const imprimerClassement = async (evaluationIds?: number[]) => {
+        if (!selectedClasse) return;
+        try {
+            const filtre = evaluationIds?.length ? `&evaluation_ids=${evaluationIds.join(',')}` : '';
+            const res = await api.get(
+                `/api/evaluations/classe/${selectedClasse}/classement/pdf?trimestre_id=${selectedTrimestre}${filtre}`,
+                { responseType: 'blob' }
+            );
+            const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+            const onglet = window.open(url, '_blank');
+            if (onglet) onglet.onload = () => onglet.print();
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+        } catch (e: any) {
+            // Une erreur renvoyée en blob doit être relue pour afficher son message
+            let msg = 'Impossible de générer la fiche';
+            try {
+                const texte = await e?.response?.data?.text?.();
+                if (texte) msg = JSON.parse(texte).detail || msg;
+            } catch { /* message par défaut */ }
+            alert(msg);
+        }
+    };
+
+    // Classement de suivi : calcule sans rien écrire dans les bulletins.
+    // `evaluationIds` restreint le classement à une épreuve précise (résultats
+    // d'une composition seule) ou à la sélection cochée par l'école.
+    const handleApercu = async (evaluationIds?: number[]) => {
+        if (!selectedClasse) return;
+        setLoadingApercu(true);
+        try {
+            const filtre = evaluationIds?.length ? `&evaluation_ids=${evaluationIds.join(',')}` : '';
+            const res = await api.get(
+                `/api/evaluations/classe/${selectedClasse}/resultats-intermediaires?trimestre_id=${selectedTrimestre}${filtre}`);
+            setApercu(res.data);
+            setApercuEvaluationIds(evaluationIds || null);
+            setApercuPage(1);
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || 'Erreur');
+        }
+        setLoadingApercu(false);
+    };
+
+    // ── Épreuves de la période : voir les résultats de chacune, et choisir
+    //    lesquelles comptent pour le résultat officiel ────────────────────────
+    const loadEpreuves = async () => {
+        if (!selectedClasse) return;
+        setLoadingEpreuves(true);
+        try {
+            const res = await api.get(
+                `/api/evaluations/classe/${selectedClasse}/periode/${selectedTrimestre}/epreuves`);
+            setEpreuves(res.data.epreuves || []);
+            setSelectionPersonnalisee(res.data.selection_personnalisee);
+            setSelectionEpreuves(
+                (res.data.epreuves || []).filter((e: EpreuvePeriode) => e.retenue).map((e: EpreuvePeriode) => e.cle));
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || 'Erreur');
+        }
+        setLoadingEpreuves(false);
+    };
+
+    const evaluationIdsDeSelection = () =>
+        epreuves.filter(e => selectionEpreuves.includes(e.cle)).flatMap(e => e.evaluation_ids);
+
+    const enregistrerSelection = async () => {
+        if (!selectedClasse) return;
+        setSavingSelection(true);
+        try {
+            const res = await api.put(
+                `/api/evaluations/classe/${selectedClasse}/periode/${selectedTrimestre}/epreuves`,
+                { evaluation_ids: evaluationIdsDeSelection() });
+            setSuccessMsg(res.data.message);
+            setTimeout(() => setSuccessMsg(''), 6000);
+            await loadEpreuves();
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || 'Erreur');
+        }
+        setSavingSelection(false);
     };
 
     // Filtered classes by cycle
@@ -159,6 +431,30 @@ export default function CentralisationNotesPage() {
         ev.classe.toLowerCase().includes(search.toLowerCase()) ||
         ev.matiere.toLowerCase().includes(search.toLowerCase()) ||
         ev.enseignant.toLowerCase().includes(search.toLowerCase())
+    );
+
+    // Une composition couvre toutes les matières d'une classe : on l'affiche
+    // sur UNE ligne, pas une par matière. Les évaluations créées hors session
+    // (saisie directe d'un enseignant) restent sur leur propre ligne.
+    type LigneEval = {
+        cle: string;
+        session_id: number | null;
+        libelle: string; classe: string; classe_id: number;
+        date_evaluation: string; trimestre: string;
+        evaluations: EvalCentralisee[];
+    };
+    const lignesEvals: LigneEval[] = Object.values(
+        filteredEvals.reduce((acc: Record<string, LigneEval>, ev) => {
+            const cle = ev.session_id ? `S${ev.session_id}` : `E${ev.evaluation_id}`;
+            if (!acc[cle]) acc[cle] = {
+                cle, session_id: ev.session_id ?? null,
+                libelle: ev.libelle, classe: ev.classe, classe_id: ev.classe_id,
+                date_evaluation: ev.date_evaluation, trimestre: ev.trimestre,
+                evaluations: [],
+            };
+            acc[cle].evaluations.push(ev);
+            return acc;
+        }, {})
     );
 
     // Note coloring
@@ -211,13 +507,19 @@ export default function CentralisationNotesPage() {
                 )}
             </AnimatePresence>
 
-            {/* ═══ EXPLICATION DU CALCUL ═══ — transparence pour l'admin : c'est
-                exactement la pondération configurée dans Paramètres > Notation
-                qui est utilisée ici, pas une formule figée dans le code. */}
+            {/* ═══ EXPLICATION DU CALCUL ═══ — transparence pour l'admin : la
+                formule affichée reflète les types réellement configurés dans
+                Paramètres > Notation, pas une formule figée dans le code. */}
             <div style={{ padding: '12px 18px', borderRadius: '12px', background: '#f5f3ff', border: '1px solid #ddd6fe', marginBottom: '20px', fontSize: '12.5px', color: '#5b21b6', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
                 <ClipboardList size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
                 <span>
-                    <strong>Comment les moyennes sont calculées :</strong> pour chaque matière, moyenne = (meilleure note Écrite×{poids.ecrit} + meilleure note Orale×{poids.oral} + Composition×{poids.composition}) ÷ ({poids.ecrit} + {poids.oral} + {poids.composition}) — une catégorie sans note est exclue du calcul. La moyenne générale = somme (moyenne matière × coefficient matière) ÷ somme des coefficients. Cette pondération est modifiable dans <Link href="/parametres/notation" style={{ color: '#5b21b6', fontWeight: 700 }}>Paramètres &gt; Notation</Link> (onglet « Évaluations &amp; Poids »).
+                    <strong>Comment les moyennes sont calculées :</strong> pour chaque matière, les notes d&apos;un même
+                    type sont d&apos;abord moyennées entre elles, puis pondérées par le coefficient du type
+                    {typesEval.length > 0 && (
+                        <> — {typesEval.map(t => `${t.libelle} (coef. ${t.coefficient})`).join(', ')}</>
+                    )}. Un type sans note est exclu du calcul, et le nombre d&apos;évaluations d&apos;un même type ne
+                    change pas son poids. La moyenne générale = somme (moyenne matière × coefficient matière) ÷ somme
+                    des coefficients. Modifiable dans <Link href="/parametres/notation" style={{ color: '#5b21b6', fontWeight: 700 }}>Paramètres &gt; Notation</Link> (onglet « Évaluations &amp; Coefficients »).
                 </span>
             </div>
 
@@ -277,58 +579,85 @@ export default function CentralisationNotesPage() {
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                         style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
                         <div style={{ padding: '18px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><ClipboardList size={18} /> Évaluations Centralisées par les Enseignants</h3>
+                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><ClipboardList size={18} /> Évaluations &amp; Compositions</h3>
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                            <select value={statutFiltre} onChange={e => { setStatutFiltre(e.target.value); setEvalsPage(1); }}
+                                style={{ padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600 }}>
+                                <option value="">Tous les statuts</option>
+                                <option value="PLANIFIEE">Planifiée (notes à saisir)</option>
+                                <option value="PUBLIEE">Publiée</option>
+                                <option value="CENTRALISEE">Centralisée (prise en compte)</option>
+                            </select>
                             <div style={{ position: 'relative' }}>
                                 <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                 <input type="text" placeholder="Rechercher dans cette page..." value={search} onChange={e => setSearch(e.target.value)}
                                     style={{ padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '240px' }} />
+                            </div>
                             </div>
                         </div>
 
                         {filteredEvals.length === 0 ? (
                             <div style={{ padding: '60px 24px', textAlign: 'center', color: '#94a3b8' }}>
                                 <ClipboardList size={48} style={{ marginBottom: '12px', opacity: 0.3 }} />
-                                <p style={{ fontSize: '15px', fontWeight: 600 }}>Aucune évaluation centralisée</p>
-                                <p style={{ fontSize: '13px' }}>Les évaluations apparaîtront ici lorsque les enseignants les auront centralisées.</p>
+                                <p style={{ fontSize: '15px', fontWeight: 600 }}>Aucune évaluation</p>
+                                <p style={{ fontSize: '13px' }}>Créez une composition depuis une classe, ou attendez que les enseignants saisissent leurs notes.</p>
                             </div>
                         ) : (
                             <div style={{ overflowX: 'auto' }}>
                                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                                     <thead>
                                         <tr style={{ background: '#f8fafc' }}>
-                                            {['Évaluation', 'Classe', 'Matière', 'Enseignant', 'Date', 'Notes', 'Moyenne', 'Statut'].map(h => (
+                                            {['Évaluation / Composition', 'Classe', 'Période', 'Date', 'Matières', 'Notes saisies', 'Statut', ''].map(h => (
                                                 <th key={h} style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#64748b', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{h}</th>
                                             ))}
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredEvals.map((ev, i) => (
-                                            <tr key={ev.evaluation_id} style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.15s' }}
-                                                onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
-                                                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                                                <td style={{ padding: '14px 16px' }}>
-                                                    <div style={{ fontSize: '14px', fontWeight: 600, color: '#0f172a' }}>{ev.libelle}</div>
-                                                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>/{ev.note_sur} • Coef {ev.coefficient}</div>
-                                                </td>
-                                                <td style={{ padding: '14px 16px', fontSize: '13px', fontWeight: 600 }}>{ev.classe}</td>
-                                                <td style={{ padding: '14px 16px', fontSize: '13px' }}>{ev.matiere}</td>
-                                                <td style={{ padding: '14px 16px', fontSize: '13px' }}>{ev.enseignant}</td>
-                                                <td style={{ padding: '14px 16px', fontSize: '13px', color: '#64748b' }}>{ev.date_evaluation}</td>
-                                                <td style={{ padding: '14px 16px' }}>
-                                                    <span style={{ padding: '4px 10px', borderRadius: '20px', background: '#eef2ff', color: '#6366f1', fontSize: '12px', fontWeight: 700 }}>{ev.nb_notes}</span>
-                                                </td>
-                                                <td style={{ padding: '14px 16px' }}>
-                                                    <span style={{ fontSize: '14px', fontWeight: 700, color: getNoteColor(ev.moyenne) }}>
-                                                        {ev.moyenne !== null ? ev.moyenne.toFixed(1) : '—'}
-                                                    </span>
-                                                </td>
-                                                <td style={{ padding: '14px 16px' }}>
-                                                    <span style={{ padding: '4px 12px', borderRadius: '20px', background: '#ecfdf5', color: '#059669', fontSize: '11px', fontWeight: 700 }}>
-                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><CheckCircle2 size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Centralisée</span>
-                                                    </span>
-                                                </td>
-                                            </tr>
-                                        ))}
+                                        {lignesEvals.map(ligne => {
+                                            const nbMat = ligne.evaluations.length;
+                                            const saisies = ligne.evaluations.filter(e => e.nb_notes > 0).length;
+                                            const toutesCentralisees = ligne.evaluations.every(e => e.statut === 'CENTRALISEE');
+                                            return (
+                                                <tr key={ligne.cle} style={{ borderBottom: '1px solid #f1f5f9' }}
+                                                    onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
+                                                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                                                    <td style={{ padding: '14px 16px' }}>
+                                                        <div style={{ fontSize: '14px', fontWeight: 600, color: '#0f172a' }}>{ligne.libelle}</div>
+                                                        <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                                                            {ligne.session_id
+                                                                ? `Composition sur ${nbMat} matière${nbMat > 1 ? 's' : ''}`
+                                                                : `${ligne.evaluations[0].matiere} · ${ligne.evaluations[0].enseignant}`}
+                                                        </div>
+                                                    </td>
+                                                    <td style={{ padding: '14px 16px', fontSize: '13px', fontWeight: 600 }}>{ligne.classe}</td>
+                                                    <td style={{ padding: '14px 16px', fontSize: '13px', color: '#64748b' }}>{ligne.trimestre}</td>
+                                                    <td style={{ padding: '14px 16px', fontSize: '13px', color: '#64748b' }}>{ligne.date_evaluation}</td>
+                                                    <td style={{ padding: '14px 16px' }}>
+                                                        <span style={{ padding: '4px 10px', borderRadius: '20px', background: '#eef2ff', color: '#6366f1', fontSize: '12px', fontWeight: 700 }}>{nbMat}</span>
+                                                    </td>
+                                                    <td style={{ padding: '14px 16px', fontSize: '13px', fontWeight: 700, color: saisies === nbMat ? '#059669' : '#b45309' }}>
+                                                        {saisies} / {nbMat}
+                                                    </td>
+                                                    <td style={{ padding: '14px 16px' }}>
+                                                        {toutesCentralisees ? (
+                                                            <span style={{ padding: '4px 12px', borderRadius: '20px', background: '#ecfdf5', color: '#059669', fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                                <CheckCircle2 size={12} /> Centralisée
+                                                            </span>
+                                                        ) : (
+                                                            <span style={{ padding: '4px 12px', borderRadius: '20px', background: '#fef3c7', color: '#b45309', fontSize: '11px', fontWeight: 700 }}>
+                                                                À saisir
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                    <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                                                        <button onClick={() => ouvrirSaisie(ligne.evaluations[0], ligne.evaluations)}
+                                                            style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #6366f1', background: 'white', color: '#4338ca', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                                            <Edit3 size={13} /> {saisies > 0 ? 'Modifier' : 'Saisir'}
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
                                     </tbody>
                                 </table>
                             </div>
@@ -348,7 +677,28 @@ export default function CentralisationNotesPage() {
                                 {classeData.effectif} élèves • {classeData.matieres.length} matières • {trimestres.find((t: any) => t.trimestre_id === selectedTrimestre)?.libelle || `Trimestre ${selectedTrimestre}`}
                             </p>
                         </div>
-                        <div style={{ display: 'flex', gap: '10px' }}>
+                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                            <button onClick={() => setShowSessionForm(v => !v)}
+                                style={{ padding: '10px 20px', borderRadius: '12px', border: '1.5px solid #6366f1', background: showSessionForm ? '#eef2ff' : 'white', fontSize: '14px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', color: '#4338ca' }}>
+                                <ClipboardList size={16} /> Nouvelle composition / évaluation
+                            </button>
+                            {/* Épreuves de la période : leurs résultats un par un, et
+                                le choix de celles qui comptent pour le bulletin. */}
+                            <button onClick={() => { setShowEpreuves(v => !v); if (!showEpreuves) loadEpreuves(); }}
+                                style={{ padding: '10px 20px', borderRadius: '12px', border: '1.5px solid #e2e8f0', background: showEpreuves ? '#f1f5f9' : 'white', fontSize: '14px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', color: '#0f172a' }}>
+                                <ListChecks size={16} /> Épreuves &amp; résultats
+                            </button>
+                            <button onClick={() => handleApercu()} disabled={loadingApercu}
+                                style={{ padding: '10px 20px', borderRadius: '12px', border: '1.5px solid #e2e8f0', background: 'white', fontSize: '14px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', color: '#0f172a' }}>
+                                <Eye size={16} /> {loadingApercu ? 'Calcul...' : 'Aperçu du classement'}
+                            </button>
+                            {/* Fiche imprimable : ouverte dans un onglet, le PDF est
+                                généré par le serveur avec l'en-tête de l'établissement.
+                                Elle porte sur le même périmètre que l'aperçu affiché. */}
+                            <button onClick={() => imprimerClassement(apercuEvaluationIds || undefined)}
+                                style={{ padding: '10px 20px', borderRadius: '12px', border: '1.5px solid #059669', background: 'white', fontSize: '14px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', color: '#059669' }}>
+                                <FileText size={16} /> Fiche de classement
+                            </button>
                             <button onClick={handleCalculerMoyennes} disabled={calculating}
                                 style={{ padding: '10px 24px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', fontSize: '14px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 15px rgba(99,102,241,0.3)' }}>
                                 <Calculator size={16} /> {calculating ? 'Calcul en cours...' : 'Calculer Moyennes & Classements'}
@@ -359,6 +709,238 @@ export default function CentralisationNotesPage() {
                             </button>
                         </div>
                     </div>
+
+                    {/* ═══ CRÉATION D'UNE SESSION (toutes les matières d'un coup) ═══ */}
+                    <AnimatePresence>
+                        {showSessionForm && (
+                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                                style={{ overflow: 'hidden', marginBottom: '20px' }}>
+                                <div style={{ padding: '20px', borderRadius: '16px', background: 'white', border: '2px dashed #6366f1' }}>
+                                    <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a', marginBottom: '4px' }}>
+                                        Créer une composition ou une évaluation
+                                    </div>
+                                    <div style={{ fontSize: '12.5px', color: '#64748b', marginBottom: '10px' }}>
+                                        Une seule saisie crée l&apos;épreuve pour <strong>toutes les matières</strong> de {classeData.classe.libelle} ({classeData.matieres.length} matières).
+                                        Les enseignants n&apos;auront plus qu&apos;à saisir leurs notes.
+                                    </div>
+                                    {/* Le rattachement est affiché en clair : c'est lui qui décide sur
+                                        quel bulletin l'épreuve comptera. */}
+                                    <div style={{ fontSize: '12.5px', color: '#4338ca', background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: '10px', padding: '8px 12px', marginBottom: '16px' }}>
+                                        Comptera pour&nbsp;: <strong>{trimestreSessionLibelle}</strong>
+                                        {moisChoisi
+                                            ? <> — d&apos;après le mois choisi ({moisChoisi.libelle}).</>
+                                            : <> — aucun mois choisi, la période sélectionnée en haut de page s&apos;applique.</>}
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr 170px 130px 120px', gap: '12px', alignItems: 'end' }}>
+                                        <div>
+                                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>TYPE</label>
+                                            <select value={sessionForm.type_eval_id} onChange={e => setSessionForm(f => ({ ...f, type_eval_id: Number(e.target.value) }))}
+                                                style={{ width: '100%', padding: '9px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '13px', fontWeight: 600 }}>
+                                                {typesEval.map(t => (
+                                                    <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle} (coef. {t.coefficient})</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>INTITULÉ</label>
+                                            <input value={sessionForm.libelle} placeholder="ex : Composition du 1er Trimestre, Évaluation de Janvier"
+                                                onChange={e => setSessionForm(f => ({ ...f, libelle: e.target.value }))}
+                                                style={{ width: '100%', padding: '9px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                                        </div>
+                                        {/* Le mois pilote la période : une « évaluation de janvier » doit
+                                            compter pour la période qui contient janvier, pas pour celle
+                                            qui se trouvait sélectionnée à l'écran. */}
+                                        <div>
+                                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>MOIS</label>
+                                            <select value={sessionForm.mois} onChange={e => setSessionForm(f => ({ ...f, mois: e.target.value }))}
+                                                style={{ width: '100%', padding: '9px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '13px', fontWeight: 600 }}>
+                                                <option value="">— choisir —</option>
+                                                {moisAnnee.map(m => (
+                                                    <option key={m.cle} value={m.cle} disabled={!m.disponible}>
+                                                        {m.libelle}{m.trimestre ? ` — ${m.trimestre}` : ' — hors période'}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>DATE</label>
+                                            <input type="date" value={sessionForm.date_evaluation}
+                                                min={moisChoisi?.date_debut} max={moisChoisi?.date_fin}
+                                                onChange={e => setSessionForm(f => ({ ...f, date_evaluation: e.target.value }))}
+                                                style={{ width: '100%', padding: '9px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '13px' }} />
+                                        </div>
+                                        <div>
+                                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>NOTÉE SUR</label>
+                                            <input type="number" min={1} placeholder="20 (par défaut)" value={sessionForm.note_sur}
+                                                onChange={e => setSessionForm(f => ({ ...f, note_sur: e.target.value }))}
+                                                style={{ width: '100%', padding: '9px', borderRadius: '10px', border: `1px solid ${baremeDouteux ? '#f59e0b' : '#cbd5e1'}`, fontSize: '13px', textAlign: 'center' }} />
+                                            {/* Un barème saisi ici par erreur (le coefficient, par exemple) ne se
+                                                voit qu'au bulletin : une note de 15 sur une épreuve notée /1
+                                                remonterait à 300/20. Mieux vaut alerter à la saisie. */}
+                                            <div style={{ fontSize: '10.5px', color: baremeDouteux ? '#b45309' : '#94a3b8', marginTop: '4px', lineHeight: 1.35 }}>
+                                                {baremeDouteux
+                                                    ? `Note maximale de l'épreuve, pas le coefficient. Sur ${sessionForm.note_sur}, aucune note ne pourra dépasser ${sessionForm.note_sur}.`
+                                                    : 'Note maximale de l’épreuve. Vide = barème de la matière.'}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {/* Sélection des matières : toutes par défaut, décochables */}
+                                    <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+                                            <span style={{ fontSize: '11px', fontWeight: 700, color: '#64748b' }}>
+                                                MATIÈRES CONCERNÉES — {(matieresSession ?? classeData.matieres.map(m => m.matiere_id)).length} / {classeData.matieres.length}
+                                            </span>
+                                            <div style={{ display: 'flex', gap: '6px' }}>
+                                                <button type="button" onClick={() => setMatieresSession(null)}
+                                                    style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', background: 'white', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer', color: '#475569' }}>
+                                                    Tout cocher
+                                                </button>
+                                                <button type="button" onClick={() => setMatieresSession([])}
+                                                    style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', background: 'white', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer', color: '#475569' }}>
+                                                    Tout décocher
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '140px', overflowY: 'auto' }}>
+                                            {classeData.matieres.map(m => {
+                                                const selection = matieresSession ?? classeData.matieres.map(x => x.matiere_id);
+                                                const coche = selection.includes(m.matiere_id);
+                                                return (
+                                                    <button key={m.matiere_id} type="button"
+                                                        onClick={() => {
+                                                            const base = matieresSession ?? classeData.matieres.map(x => x.matiere_id);
+                                                            setMatieresSession(coche
+                                                                ? base.filter(id => id !== m.matiere_id)
+                                                                : [...base, m.matiere_id]);
+                                                        }}
+                                                        style={{
+                                                            padding: '5px 11px', borderRadius: '999px', cursor: 'pointer',
+                                                            fontSize: '12px', fontWeight: 600,
+                                                            border: `1px solid ${coche ? '#6366f1' : '#e2e8f0'}`,
+                                                            background: coche ? '#eef2ff' : 'white',
+                                                            color: coche ? '#4338ca' : '#94a3b8',
+                                                        }}>
+                                                        {coche ? '✓ ' : ''}{m.libelle}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px', gap: '16px', flexWrap: 'wrap' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: '#334155' }}>
+                                            <input type="checkbox" checked={sessionForm.est_coefficientee}
+                                                onChange={e => setSessionForm(f => ({ ...f, est_coefficientee: e.target.checked }))}
+                                                style={{ width: '17px', height: '17px', cursor: 'pointer' }} />
+                                            <span>
+                                                <strong>Coefficienter les matières</strong>
+                                                <span style={{ color: '#64748b' }}> — {sessionForm.est_coefficientee
+                                                    ? 'les coefficients définis pour cette classe s’appliquent'
+                                                    : 'toutes les matières comptent pour 1 sur cette épreuve'}</span>
+                                            </span>
+                                        </label>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button onClick={handleCreerSession} disabled={creatingSession || !sessionForm.libelle.trim()}
+                                                style={{ padding: '10px 22px', borderRadius: '10px', border: 'none', background: sessionForm.libelle.trim() ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : '#cbd5e1', color: 'white', fontSize: '13px', fontWeight: 700, cursor: sessionForm.libelle.trim() ? 'pointer' : 'not-allowed' }}>
+                                                {creatingSession ? 'Création...' : 'Créer pour toutes les matières'}
+                                            </button>
+                                            <button onClick={() => setShowSessionForm(false)}
+                                                style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', fontSize: '13px', cursor: 'pointer' }}>
+                                                Annuler
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {sessions.length > 0 && (
+                                        <div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+                                            <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '8px' }}>
+                                                DÉJÀ CRÉÉES POUR CETTE PÉRIODE
+                                            </div>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                {sessions.map(s => (
+                                                    <div key={s.session_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: '8px', background: '#f8fafc', fontSize: '12.5px' }}>
+                                                        <span style={{ color: '#0f172a', fontWeight: 600 }}>
+                                                            {s.libelle}
+                                                            <span style={{ color: '#94a3b8', fontWeight: 500 }}> · {s.type_libelle} · {s.nb_evaluations} matières</span>
+                                                            {s.est_coefficientee === 'N' && <span style={{ color: '#d97706', fontWeight: 600 }}> · non coefficientée</span>}
+                                                        </span>
+                                                        <span style={{ color: '#64748b' }}>{s.date_evaluation}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    {/* ═══ APERÇU DU CLASSEMENT (suivi, ne modifie aucun bulletin) ═══ */}
+                    <AnimatePresence>
+                        {apercu && (
+                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                                style={{ overflow: 'hidden', marginBottom: '20px' }}>
+                                <div style={{ padding: '18px', borderRadius: '16px', background: 'white', border: '1px solid #e2e8f0' }}>
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '12px', gap: '16px' }}>
+                                        <div>
+                                            <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
+                                                Classement par ordre de mérite — {apercu.classe} — {trimestres.find((t: any) => t.trimestre_id === selectedTrimestre)?.libelle || `Trimestre ${selectedTrimestre}`}
+                                            </div>
+                                            {/* Sans le détail des épreuves, un classement est ininterprétable :
+                                                « ordre de mérite de janvier » et « ordre de mérite de fin de
+                                                trimestre » se ressemblent à l'écran mais ne disent pas la même chose. */}
+                                            {(apercu.epreuves || []).length > 0 && (
+                                                <div style={{ fontSize: '12px', color: '#475569', marginTop: '3px' }}>
+                                                    D&apos;après : {apercu.epreuves.map((e: any) =>
+                                                        e.type ? `${e.libelle} (${e.type})` : e.libelle).join(' + ')}
+                                                </div>
+                                            )}
+                                            <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px' }}>
+                                                Effectif : {apercu.effectif} élèves · Outil de suivi : aucun bulletin n&apos;est modifié.
+                                                {(apercu.epreuves || []).length > 0
+                                                    && apercu.epreuves.every((e: any) => e.est_coefficientee === 'N')
+                                                    && ' · Sans coefficients de matière'}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => setApercu(null)} style={{ padding: '6px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer' }}>
+                                            <X size={15} color="#64748b" />
+                                        </button>
+                                    </div>
+                                    <div>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                            <thead>
+                                                <tr style={{ background: '#f8fafc' }}>
+                                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>RANG</th>
+                                                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>ÉLÈVE</th>
+                                                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>MOYENNE</th>
+                                                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>MENTION</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {(apercu.resultats || [])
+                                                    .slice((apercuPage - 1) * APERCU_PAGE_SIZE, apercuPage * APERCU_PAGE_SIZE)
+                                                    .map((r: any) => {
+                                                        const el = classeData.eleves.find(e => e.inscription_id === r.inscription_id);
+                                                        return (
+                                                            <tr key={r.inscription_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                                                <td style={{ padding: '8px 12px', fontWeight: 800, color: '#6366f1' }}>{r.rang}</td>
+                                                                <td style={{ padding: '8px 12px', color: '#0f172a' }}>{el ? `${el.prenom} ${el.nom}` : `#${r.inscription_id}`}</td>
+                                                                <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 700, color: '#0f172a' }}>
+                                                                    {r.moyenne_generale !== null ? r.moyenne_generale.toFixed(2) : '—'}
+                                                                </td>
+                                                                <td style={{ padding: '8px 12px', textAlign: 'center', fontSize: '11.5px', color: '#64748b' }}>{r.mention || '—'}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                            </tbody>
+                                        </table>
+                                        <Pagination page={apercuPage} pageSize={APERCU_PAGE_SIZE}
+                                            total={(apercu.resultats || []).length} onPageChange={setApercuPage} />
+                                    </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
 
                     {/* ═══ TABLEAU PIVOT ═══ */}
                     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
@@ -463,6 +1045,108 @@ export default function CentralisationNotesPage() {
                     <p>Chargement des données...</p>
                 </div>
             ) : null}
+
+            {/* ═══ SAISIE DES NOTES D'UNE ÉVALUATION ═══ */}
+            <AnimatePresence>
+                {saisieEval && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}
+                        onClick={() => !savingNotes && setSaisieEval(null)}>
+                        <motion.div initial={{ scale: 0.95, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0 }}
+                            onClick={e => e.stopPropagation()}
+                            style={{ background: 'white', borderRadius: '16px', width: '100%', maxWidth: '760px', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+                            <div style={{ padding: '18px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px' }}>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a' }}>{saisieEval.libelle}</div>
+                                    <div style={{ fontSize: '12.5px', color: '#64748b' }}>
+                                        {saisieEval.classe} · noté sur {saisieEval.note_sur}
+                                        {saisieEval.enseignant ? ` · ${saisieEval.enseignant}` : ''}
+                                    </div>
+                                    {/* Composition multi-matières : on navigue de l'une à
+                                        l'autre sans refermer la fenêtre. */}
+                                    {matieresSaisie.length > 1 && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '10px' }}>
+                                            {matieresSaisie.map(m => {
+                                                const active = m.evaluation_id === saisieEval.evaluation_id;
+                                                const fait = m.nb_notes > 0;
+                                                return (
+                                                    <button key={m.evaluation_id} type="button"
+                                                        onClick={() => !savingNotes && !active && ouvrirSaisie(m)}
+                                                        style={{
+                                                            padding: '4px 10px', borderRadius: '999px', cursor: active ? 'default' : 'pointer',
+                                                            fontSize: '11.5px', fontWeight: 700,
+                                                            border: `1px solid ${active ? '#4f46e5' : fait ? '#a7f3d0' : '#e2e8f0'}`,
+                                                            background: active ? '#4f46e5' : fait ? '#ecfdf5' : 'white',
+                                                            color: active ? 'white' : fait ? '#059669' : '#94a3b8',
+                                                        }}>
+                                                        {fait && !active ? '✓ ' : ''}{m.matiere}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                                <button onClick={() => setSaisieEval(null)} disabled={savingNotes}
+                                    style={{ padding: '6px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer' }}>
+                                    <X size={16} color="#64748b" />
+                                </button>
+                            </div>
+
+                            <div style={{ flex: 1, overflowY: 'auto', padding: '8px 22px' }}>
+                                {loadingSaisie ? (
+                                    <p style={{ textAlign: 'center', color: '#94a3b8', padding: '40px' }}>Chargement des élèves...</p>
+                                ) : notesSaisie.length === 0 ? (
+                                    <p style={{ textAlign: 'center', color: '#94a3b8', padding: '40px' }}>Aucun élève inscrit dans cette classe.</p>
+                                ) : (
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                        <thead>
+                                            <tr style={{ background: '#f8fafc' }}>
+                                                <th style={{ padding: '8px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>ÉLÈVE</th>
+                                                <th style={{ padding: '8px', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 700, width: '120px' }}>NOTE</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {notesSaisie.map((n, i) => (
+                                                <tr key={n.note_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                                    <td style={{ padding: '7px 8px', color: '#0f172a' }}>
+                                                        {n.nom} {n.prenom}
+                                                        <span style={{ color: '#94a3b8', fontSize: '11.5px' }}> · {n.matricule}</span>
+                                                    </td>
+                                                    <td style={{ padding: '7px 8px', textAlign: 'center' }}>
+                                                        <input type="number" min={0} max={saisieEval.note_sur} step={0.25}
+                                                            value={n.valeur ?? ''}
+                                                            placeholder="—"
+                                                            onChange={e => setNotesSaisie(prev => prev.map((x, j) =>
+                                                                j === i ? { ...x, valeur: e.target.value } : x))}
+                                                            style={{ width: '90px', padding: '6px', borderRadius: '8px', border: '1px solid #cbd5e1', textAlign: 'center', fontWeight: 700 }} />
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </div>
+
+                            <div style={{ padding: '16px 22px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '12px', color: '#64748b' }}>
+                                    Case vide = élève non noté (la matière est alors ignorée dans sa moyenne).
+                                </span>
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button onClick={() => setSaisieEval(null)} disabled={savingNotes}
+                                        style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                                        Annuler
+                                    </button>
+                                    <button onClick={enregistrerNotes} disabled={savingNotes || notesSaisie.length === 0}
+                                        style={{ padding: '10px 22px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <Save size={15} /> {savingNotes ? 'Enregistrement...' : 'Enregistrer les notes'}
+                                    </button>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

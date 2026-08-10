@@ -126,15 +126,35 @@ async def upload_etablissement_file(id: int, field: str, fichier: UploadFile = F
 # ANNÉES SCOLAIRES
 # ============================================================================
 
+def _ordinal_fr(n: int) -> str:
+    """1 -> '1er', 2 -> '2ème', ... pour un nombre de périodes quelconque."""
+    return "1er" if n == 1 else f"{n}ème"
+
+
+def _lire_parametre(db: Session, etablissement_id: int, categorie: str, cle: str):
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.categorie == categorie,
+        ParametreEtablissement.cle == cle,
+    ).first()
+    return param.valeur if param else None
+
+
 def _creer_trimestres_auto(db: Session, annee: AnneeScolaire) -> int:
     """
-    Crée automatiquement les trimestres (3) ou semestres (2) d'une année
-    scolaire tout juste créée, selon le découpage configuré dans Paramètres >
-    Calendrier (ss_parametres, categorie='CALENDRIER', clé
-    'calendrier.mode_decoupage' = 'TRIMESTRE' ou 'SEMESTRE', défaut TRIMESTRE
-    si jamais configuré). Avant cette fonction, la création d'une année ne
-    créait aucune période — il fallait toujours les saisir une par une à la
-    main dans Paramètres > Calendrier.
+    Crée automatiquement les périodes d'une année scolaire tout juste créée,
+    selon le découpage configuré dans Paramètres > Calendrier (ss_parametres,
+    categorie='CALENDRIER') :
+
+      - `calendrier.mode_decoupage` : TRIMESTRE (3, défaut), SEMESTRE (2), ou
+        PERSONNALISE pour un nombre libre de périodes ;
+      - `calendrier.nb_periodes`    : nombre de périodes en mode PERSONNALISE ;
+      - `calendrier.libelle_periode`: nom affiché ("Trimestre", "Semestre",
+        "Période"...), déduit du mode si absent.
+
+    Chaque école organise son année comme elle l'entend : le nombre de périodes
+    n'est plus limité à 2 ou 3 (l'ancienne version plantait au-delà de 3, sa
+    liste d'ordinaux étant figée à trois entrées).
 
     Découpage simple en parts égales entre date_debut et date_fin de l'année
     (les dates restent modifiables ensuite via PUT /trimestres/{id} si le
@@ -143,17 +163,22 @@ def _creer_trimestres_auto(db: Session, annee: AnneeScolaire) -> int:
     if db.query(Trimestre).filter(Trimestre.annee_id == annee.annee_id).count() > 0:
         return 0  # des périodes existent déjà (ex: créées manuellement entre-temps)
 
-    param = db.query(ParametreEtablissement).filter(
-        ParametreEtablissement.etablissement_id == annee.etablissement_id,
-        ParametreEtablissement.categorie == "CALENDRIER",
-        ParametreEtablissement.cle == "calendrier.mode_decoupage",
-    ).first()
-    mode = (param.valeur if param else "TRIMESTRE") or "TRIMESTRE"
+    etab = annee.etablissement_id
+    mode = (_lire_parametre(db, etab, "CALENDRIER", "calendrier.mode_decoupage") or "TRIMESTRE").upper()
 
-    nb_periodes = 2 if mode.upper() == "SEMESTRE" else 3
-    prefixe = "Semestre" if nb_periodes == 2 else "Trimestre"
-    code_prefixe = "S" if nb_periodes == 2 else "T"
-    ordinaux = ["1er", "2ème", "3ème"]
+    if mode == "SEMESTRE":
+        nb_periodes, prefixe_defaut, code_prefixe = 2, "Semestre", "S"
+    elif mode == "PERSONNALISE":
+        try:
+            nb_periodes = int(float(_lire_parametre(db, etab, "CALENDRIER", "calendrier.nb_periodes") or 3))
+        except (TypeError, ValueError):
+            nb_periodes = 3
+        nb_periodes = max(1, min(nb_periodes, 12))  # garde-fou : 1 à 12 périodes
+        prefixe_defaut, code_prefixe = "Période", "P"
+    else:
+        nb_periodes, prefixe_defaut, code_prefixe = 3, "Trimestre", "T"
+
+    prefixe = _lire_parametre(db, etab, "CALENDRIER", "calendrier.libelle_periode") or prefixe_defaut
 
     duree_totale = (annee.date_fin - annee.date_debut).days
     if duree_totale <= 0:
@@ -169,7 +194,7 @@ def _creer_trimestres_auto(db: Session, annee: AnneeScolaire) -> int:
         db.add(Trimestre(
             annee_id=annee.annee_id,
             code=f"{code_prefixe}{i + 1}",
-            libelle=f"{ordinaux[i]} {prefixe}",
+            libelle=f"{_ordinal_fr(i + 1)} {prefixe}",
             numero=i + 1,
             date_debut=debut,
             date_fin=fin,

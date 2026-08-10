@@ -362,6 +362,8 @@ class ClasseMatiere(Base):
     coefficient = Column(Numeric(3, 1), default=1, nullable=False)
     nb_heures_semaine = Column(Integer, default=2)
     est_active = Column(String(1), default="O")
+    # NULL = pas de surcharge ; cascade complète dans services/notation.py
+    note_sur = Column(Numeric(5, 2), nullable=True)
 
 
 class CreneauEmploi(Base):
@@ -426,6 +428,25 @@ class Inscription(Base):
     classe = relationship("Classe", back_populates="inscriptions", foreign_keys=[classe_id])
 
 
+class ResultatOfficielExamen(Base):
+    """Résultat officiel du Ministère pour les classes d'examen (Niveau.est_examen='O').
+
+    Pour ces classes (6e/CEE, 10e/BEPC, Terminale/BAC), le passage ne dépend pas
+    de la moyenne annuelle interne mais de ce résultat, saisi manuellement une
+    fois publié : c'est la seule source de vérité pour leur passage. Table
+    distincte de Inscription pour que le recalcul de la proposition interne
+    n'écrase jamais la saisie ministérielle.
+    """
+    __tablename__ = "ss_resultats_officiels_examen"
+    resultat_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False, unique=True)
+    examen_national = Column(String(30), nullable=True)  # CEE | BEPC | BAC (copié de Niveau)
+    resultat = Column(String(20), nullable=False)  # ADMIS | NON_ADMIS
+    date_saisie = Column(Date, server_default=func.current_date())
+    saisi_par = Column(String(100), nullable=True)
+    observation = Column(String(500), nullable=True)
+
+
 # ============================================================================
 # MODULE 3 : ÉVALUATIONS & BULLETINS
 # ============================================================================
@@ -435,8 +456,33 @@ class TypeEvaluation(Base):
     type_eval_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     code = Column(String(20), unique=True, nullable=False)
     libelle = Column(String(100), nullable=False)
-    poids_pourcentage = Column(Numeric(5, 2), nullable=False)
+    # Legacy : jamais lu par le moteur de notation, conservé pour compat (cf. MIGRATION_NOTES.md)
+    poids_pourcentage = Column(Numeric(5, 2), nullable=True)
+    # Coefficient de référence du type. Surchargeable par cycle via
+    # ParametreEtablissement (notation.coef_type.{cycle}.{code}) — cf. services/notation.py
+    coefficient = Column(Numeric(4, 2), default=1, nullable=False)
     statut = Column(String(20), default="ACTIF")
+
+
+class EvaluationSession(Base):
+    """Regroupe les Evaluation créées en une seule action ("création groupée").
+
+    Une composition couvre normalement toutes les matières d'une classe le même
+    jour : la session porte le choix unique "coefficientée ou non" pour tout le
+    groupe, au lieu de le répéter matière par matière.
+    """
+    __tablename__ = "ss_evaluation_sessions"
+    session_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
+    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=False)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    libelle = Column(String(200), nullable=False)
+    date_evaluation = Column(Date, nullable=False)
+    note_sur = Column(Numeric(5, 2), default=20)
+    est_coefficientee = Column(String(1), default="O", nullable=False)
+    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    statut = Column(String(20), default="PLANIFIEE", nullable=False)
 
 
 class Evaluation(Base):
@@ -452,6 +498,33 @@ class Evaluation(Base):
     note_sur = Column(Numeric(5, 2), default=20)
     coefficient = Column(Numeric(3, 1), default=1)
     statut = Column(String(20), default="PLANIFIEE")
+    # NULL pour les évaluations mono-matière (création directe / portail enseignant)
+    session_id = Column(Integer, ForeignKey("ss_evaluation_sessions.session_id"), nullable=True)
+    # Copié depuis la session : évite de joindre EvaluationSession dans le moteur de calcul
+    est_coefficientee = Column(String(1), default="O", nullable=False)
+    # NULL = utiliser le coefficient du type ; sinon surcharge ponctuelle
+    coefficient_override = Column(Numeric(4, 2), nullable=True)
+
+
+class PeriodeEpreuve(Base):
+    """Quelles épreuves comptent pour le résultat officiel d'une période.
+
+    Le résultat d'une période n'est pas forcément « tout ce qui a été noté » :
+    une école peut retenir deux évaluations sans composition, une composition
+    seule, ou toute autre combinaison. Cette table trace ce choix pour que le
+    calcul reste reproductible et vérifiable après coup.
+
+    Compatibilité ascendante : aucune ligne pour (classe, trimestre) = toutes
+    les évaluations centralisées comptent, comme avant l'introduction de cette
+    table. Voir `epreuves_retenues_periode()` dans services/notation.py.
+    """
+    __tablename__ = "ss_periode_epreuves"
+    periode_epreuve_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
+    evaluation_id = Column(Integer, ForeignKey("ss_evaluations.evaluation_id"), nullable=False)
+    created_date = Column(DateTime, server_default=func.now())
+    created_by = Column(String(100), nullable=True)
 
 
 class Note(Base):
