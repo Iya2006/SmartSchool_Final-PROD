@@ -5,10 +5,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     ClipboardList, Search, Filter, BarChart3, Users, BookOpen, Trophy,
     ChevronDown, AlertCircle, Check, Edit3, Save, Eye, Calculator,
-    FileText, X, ArrowUpDown, TrendingUp, TrendingDown, Minus, CheckCircle2
+    FileText, X, ArrowUpDown, TrendingUp, TrendingDown, Minus, CheckCircle2,
+    ListChecks
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
+import { lancerTache } from '@/lib/taskPolling';
 import Pagination from '@/components/Pagination';
 import Link from 'next/link';
 
@@ -69,6 +71,8 @@ export default function CentralisationNotesPage() {
     const [stats, setStats] = useState({ total_evaluations: 0, centralisees: 0, non_centralisees: 0, taux_centralisation: 0 });
     const [loading, setLoading] = useState(false);
     const [calculating, setCalculating] = useState(false);
+    // Avancement d'une tâche mise en file (« en file d'attente… » / « en cours… »)
+    const [etatTache, setEtatTache] = useState('');
     const [viewMode, setViewMode] = useState<'overview' | 'detail'>('overview');
     const [successMsg, setSuccessMsg] = useState('');
     const [search, setSearch] = useState('');
@@ -197,16 +201,33 @@ export default function CentralisationNotesPage() {
         if (selectedClasse) loadClasseDetail();
     }, [selectedClasse, selectedTrimestre, loadClasseDetail]);
 
-    // Calculer moyennes
+    // Calculer moyennes — passe par la file de tâches (le calcul grossit avec
+    // l'effectif : sur 160 élèves × 12 matières la version synchrone tient la
+    // requête ouverte plusieurs dizaines de secondes). Repli automatique sur
+    // l'endpoint synchrone si la file est indisponible, pour qu'une école dont
+    // le Redis est éteint puisse quand même calculer.
     const handleCalculerMoyennes = async () => {
         if (!selectedClasse) return;
         setCalculating(true);
+        setEtatTache('');
         try {
-            const res = await api.post(`/api/evaluations/classe/${selectedClasse}/calculer-moyennes?trimestre_id=${selectedTrimestre}`);
-            setSuccessMsg(res.data.message);
+            const base = `/api/evaluations/classe/${selectedClasse}`;
+            const res: any = await lancerTache(
+                `${base}/calculer-moyennes-async?trimestre_id=${selectedTrimestre}`,
+                {
+                    urlSynchrone: `${base}/calculer-moyennes?trimestre_id=${selectedTrimestre}`,
+                    onProgress: e => setEtatTache(
+                        e.status === 'PENDING' ? 'Calcul en file d’attente…'
+                            : e.status === 'RUNNING' ? 'Calcul en cours…' : ''),
+                });
+            setSuccessMsg(res.message
+                || `Moyennes calculées pour ${res.classe} — ${res.bulletins_total} bulletins`);
             setTimeout(() => setSuccessMsg(''), 5000);
             await loadClasseDetail();
-        } catch (e: any) { alert(e?.response?.data?.detail || e.message); }
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || e.message);
+        }
+        setEtatTache('');
         setCalculating(false);
     };
 
@@ -414,10 +435,11 @@ export default function CentralisationNotesPage() {
         setSavingSelection(false);
     };
 
-    // Filtered classes by cycle
+    // Regroupement par cycle réel, tel que la base le déclare (Classe → Niveau
+    // → Cycle). L'ancienne version le devinait du libellé — « contient Année »
+    // = primaire — ce qui rangeait la 7ème à la 12ème Année dans le primaire.
     const groupedClasses = classes.reduce((acc: any, cls: any) => {
-        const cycle = cls.libelle?.includes('Année') ? 'Primaire' :
-            cls.libelle?.match(/[7-9]|10/) ? 'Collège' : 'Lycée';
+        const cycle = cls.cycle_libelle || 'Autres';
         if (!acc[cycle]) acc[cycle] = [];
         acc[cycle].push(cls);
         return acc;
@@ -701,7 +723,7 @@ export default function CentralisationNotesPage() {
                             </button>
                             <button onClick={handleCalculerMoyennes} disabled={calculating}
                                 style={{ padding: '10px 24px', borderRadius: '12px', border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', fontSize: '14px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 15px rgba(99,102,241,0.3)' }}>
-                                <Calculator size={16} /> {calculating ? 'Calcul en cours...' : 'Calculer Moyennes & Classements'}
+                                <Calculator size={16} /> {calculating ? (etatTache || 'Calcul en cours...') : 'Calculer Moyennes & Classements'}
                             </button>
                             <button onClick={() => window.location.href = `/bulletins?classe_id=${selectedClasse}&trimestre_id=${selectedTrimestre}`}
                                 style={{ padding: '10px 20px', borderRadius: '12px', border: '1.5px solid #e2e8f0', background: 'white', fontSize: '14px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', color: '#0f172a' }}>
@@ -869,6 +891,120 @@ export default function CentralisationNotesPage() {
                                                 ))}
                                             </div>
                                         </div>
+                                    )}
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    {/* ═══ ÉPREUVES DE LA PÉRIODE ═══
+                        Deux usages distincts sur le même écran : consulter le résultat
+                        d'une épreuve isolée (le classement d'une composition seule), et
+                        décider lesquelles comptent pour le bulletin de la période. */}
+                    <AnimatePresence>
+                        {showEpreuves && (
+                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                                style={{ overflow: 'hidden', marginBottom: '20px' }}>
+                                <div style={{ padding: '18px', borderRadius: '16px', background: 'white', border: '1px solid #e2e8f0' }}>
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '14px', gap: '16px' }}>
+                                        <div>
+                                            <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>
+                                                Épreuves de {trimestres.find((t: any) => t.trimestre_id === selectedTrimestre)?.libelle || `Trimestre ${selectedTrimestre}`}
+                                            </div>
+                                            <div style={{ fontSize: '12px', color: '#64748b', marginTop: '3px' }}>
+                                                {selectionPersonnalisee
+                                                    ? 'L’école a choisi les épreuves qui comptent pour le résultat de cette période.'
+                                                    : 'Aucun choix enregistré : toutes les épreuves centralisées comptent pour le résultat.'}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => setShowEpreuves(false)} style={{ padding: '6px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer' }}>
+                                            <X size={15} color="#64748b" />
+                                        </button>
+                                    </div>
+
+                                    {loadingEpreuves ? (
+                                        <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>Chargement…</div>
+                                    ) : epreuves.length === 0 ? (
+                                        <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                                            Aucune épreuve sur cette période.
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div style={{ overflowX: 'auto' }}>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                                    <thead>
+                                                        <tr style={{ background: '#f8fafc' }}>
+                                                            <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>COMPTE</th>
+                                                            <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>ÉPREUVE</th>
+                                                            <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>TYPE</th>
+                                                            <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>DATE</th>
+                                                            <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>MATIÈRES</th>
+                                                            <th style={{ padding: '8px 12px', textAlign: 'right', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>RÉSULTATS</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {epreuves.map(ep => {
+                                                            const coche = selectionEpreuves.includes(ep.cle);
+                                                            return (
+                                                                <tr key={ep.cle} style={{ borderTop: '1px solid #f1f5f9', opacity: ep.centralisee ? 1 : 0.55 }}>
+                                                                    <td style={{ padding: '9px 12px' }}>
+                                                                        {/* Une épreuve non centralisée ne peut pas compter :
+                                                                            toutes ses notes ne sont pas encore remontées. */}
+                                                                        <input type="checkbox" checked={coche} disabled={!ep.centralisee}
+                                                                            onChange={() => setSelectionEpreuves(s =>
+                                                                                coche ? s.filter(c => c !== ep.cle) : [...s, ep.cle])}
+                                                                            style={{ width: '16px', height: '16px', cursor: ep.centralisee ? 'pointer' : 'not-allowed' }} />
+                                                                    </td>
+                                                                    <td style={{ padding: '9px 12px', color: '#0f172a', fontWeight: 600 }}>
+                                                                        {ep.libelle}
+                                                                        {ep.est_coefficientee === 'N' && (
+                                                                            <span style={{ fontSize: '11px', color: '#b45309', fontWeight: 600 }}> · sans coef. de matière</span>
+                                                                        )}
+                                                                    </td>
+                                                                    <td style={{ padding: '9px 12px', color: '#475569' }}>
+                                                                        {ep.type} <span style={{ color: '#94a3b8' }}>(coef. {ep.coefficient_type})</span>
+                                                                    </td>
+                                                                    <td style={{ padding: '9px 12px', textAlign: 'center', color: '#64748b' }}>
+                                                                        {ep.date_evaluation ? new Date(ep.date_evaluation).toLocaleDateString('fr-FR') : '—'}
+                                                                    </td>
+                                                                    <td style={{ padding: '9px 12px', textAlign: 'center', color: ep.centralisee ? '#059669' : '#b45309', fontWeight: 700 }}>
+                                                                        {ep.nb_centralisees} / {ep.nb_matieres}
+                                                                    </td>
+                                                                    <td style={{ padding: '9px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                                                        <button onClick={() => handleApercu(ep.evaluation_ids)} disabled={!ep.nb_centralisees}
+                                                                            style={{ padding: '5px 11px', borderRadius: '8px', border: '1px solid #6366f1', background: 'white', color: '#4338ca', fontSize: '11.5px', fontWeight: 700, cursor: ep.nb_centralisees ? 'pointer' : 'not-allowed', marginRight: '6px' }}>
+                                                                            Classement
+                                                                        </button>
+                                                                        <button onClick={() => imprimerClassement(ep.evaluation_ids)} disabled={!ep.nb_centralisees}
+                                                                            style={{ padding: '5px 11px', borderRadius: '8px', border: '1px solid #059669', background: 'white', color: '#059669', fontSize: '11.5px', fontWeight: 700, cursor: ep.nb_centralisees ? 'pointer' : 'not-allowed' }}>
+                                                                            Fiche
+                                                                        </button>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginTop: '14px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+                                                <div style={{ fontSize: '12.5px', color: '#475569' }}>
+                                                    <strong>{selectionEpreuves.length}</strong> épreuve{selectionEpreuves.length > 1 ? 's' : ''} retenue{selectionEpreuves.length > 1 ? 's' : ''} pour le résultat de la période.
+                                                    {selectionEpreuves.length === 0 && ' Tout décocher revient au comportement par défaut (tout ce qui est centralisé compte).'}
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '8px' }}>
+                                                    <button onClick={() => handleApercu(evaluationIdsDeSelection())}
+                                                        disabled={loadingApercu || selectionEpreuves.length === 0}
+                                                        style={{ padding: '8px 16px', borderRadius: '10px', border: '1px solid #cbd5e1', background: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', color: '#0f172a' }}>
+                                                        Classement sur la sélection
+                                                    </button>
+                                                    <button onClick={enregistrerSelection} disabled={savingSelection}
+                                                        style={{ padding: '8px 18px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>
+                                                        {savingSelection ? 'Enregistrement…' : 'Enregistrer ce choix'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </>
                                     )}
                                 </div>
                             </motion.div>

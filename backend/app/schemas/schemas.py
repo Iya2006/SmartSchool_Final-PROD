@@ -430,6 +430,13 @@ class ClasseOut(OrmBase, ClasseBase):
     effectif_actuel: int = 0
     nb_matieres: Optional[int] = 0
     niveau_libelle: Optional[str] = None
+    # Cycle réel, lu via Niveau -> Cycle. Sans lui, le frontend déduisait le
+    # cycle du libellé de la classe (« contient "Année" » = primaire), ce qui
+    # rangeait 7ème à 12ème Année dans le primaire.
+    cycle_code: Optional[str] = None
+    cycle_libelle: Optional[str] = None
+    niveau_ordre: Optional[int] = None
+    est_examen: Optional[str] = None
 
 
 # ============================================================================

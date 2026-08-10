@@ -442,6 +442,134 @@ def calculer_moyennes(classe_id: int, trimestre_id: int = 1, db: Session = Depen
     }
 
 
+def _enqueue(fonction, *args, timeout: int):
+    """Met une tâche en file, ou échoue franchement si Redis est indisponible.
+
+    Une tâche perdue silencieusement n'est jamais acceptable : contrairement au
+    cache (app/core/cache.py), l'appelant doit savoir que le calcul n'a pas été
+    accepté. Même contrat que `generer_bulletin_pdf_async`.
+
+    Pas de `Retry` ici, à la différence du PDF de bulletin : ces calculs
+    écrivent en base et leurs seuls échecs plausibles (période clôturée entre
+    temps, classe déplacée d'établissement) sont définitifs — les rejouer
+    retarderait le passage en FAILED sans aucune chance de succès.
+    """
+    from app.core.task_queue import get_queue
+    try:
+        return get_queue().enqueue(
+            fonction, *args, job_timeout=timeout, result_ttl=86400, failure_ttl=86400,
+        )
+    except Exception as exc:
+        raise HTTPException(503, f"File de tâches indisponible : {exc}")
+
+
+@router.post("/classe/{classe_id}/calculer-moyennes-async")
+def calculer_moyennes_async(classe_id: int, trimestre_id: int = 1, db: Session = Depends(get_db)):
+    """Version asynchrone du calcul de période — suivre via GET /api/tasks/{id}.
+
+    C'est le seul calcul du module qui grossit avec l'effectif : sur une classe
+    de 160 élèves et 12 matières, la version synchrone tient la connexion HTTP
+    ouverte plusieurs dizaines de secondes. L'endpoint synchrone reste en place
+    pour les petites classes et les recalculs ponctuels.
+
+    Les contrôles refaits ici (classe, année, période clôturée) évitent de
+    mettre en file un calcul voué à échouer ; le worker les refait de son côté,
+    car l'état peut changer entre la mise en file et l'exécution.
+    """
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    verifier_annee_modifiable(db, classe.annee_id)
+
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+    if not trimestre:
+        raise HTTPException(404, "Période non trouvée")
+    if trimestre.statut == "CLOTURE":
+        raise HTTPException(
+            400,
+            f"{trimestre.libelle} est clôturé — impossible de recalculer les moyennes de cette période.",
+        )
+
+    from app.tasks.notation_tasks import calculer_periode_task
+    job = _enqueue(
+        calculer_periode_task, classe_id, trimestre_id, classe.etablissement_id,
+        timeout=600,
+    )
+    return {
+        "task_id": job.id,
+        "status": "PENDING",
+        "message": f"Calcul de {trimestre.libelle} mis en file pour {classe.libelle}.",
+    }
+
+
+@router.post("/classe/{classe_id}/calculer-moyennes-annuelles-async")
+def calculer_moyennes_annuelles_async(classe_id: int, db: Session = Depends(get_db)):
+    """Version asynchrone du calcul annuel — suivre via GET /api/tasks/{id}."""
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    verifier_annee_modifiable(db, classe.annee_id)
+
+    from app.tasks.notation_tasks import calculer_annuel_task
+    job = _enqueue(calculer_annuel_task, classe_id, classe.etablissement_id, timeout=600)
+    return {
+        "task_id": job.id,
+        "status": "PENDING",
+        "message": f"Calcul annuel mis en file pour {classe.libelle}.",
+    }
+
+
+@router.post("/classe/{classe_id}/bulletins/generer-pdf-async")
+def generer_bulletins_classe_async(
+    classe_id: int,
+    trimestre_id: Optional[int] = None,
+    type_bulletin: str = "TRIMESTRIEL",
+    db: Session = Depends(get_db),
+):
+    """Génère en une fois les PDF de tous les bulletins d'une classe.
+
+    Imprimer une classe entière déclenchait jusqu'ici autant d'appels HTTP que
+    d'élèves, chacun reconstruisant son PDF pendant la requête. Ce lot est
+    exactement le cas que la génération asynchrone d'un bulletin unique
+    préparait sans le couvrir.
+
+    Suivre l'avancement via GET /api/tasks/{id} : le résultat liste les
+    fichiers produits et, séparément, les élèves en échec.
+    """
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+
+    # On vérifie ici qu'il y a quelque chose à imprimer : mettre en file un lot
+    # vide ne renverrait l'erreur qu'après un aller-retour sur la file.
+    query = db.query(func.count(Bulletin.bulletin_id)).join(
+        Inscription, Inscription.inscription_id == Bulletin.inscription_id
+    ).filter(
+        Inscription.classe_id == classe_id,
+        Bulletin.type_bulletin == type_bulletin,
+    )
+    query = (query.filter(Bulletin.trimestre_id == trimestre_id)
+             if trimestre_id else query.filter(Bulletin.trimestre_id.is_(None)))
+    nb = query.scalar() or 0
+    if nb == 0:
+        raise HTTPException(
+            400, "Aucun bulletin à imprimer : calculez d'abord les moyennes de la période."
+        )
+
+    from app.tasks.notation_tasks import generer_bulletins_classe_task
+    job = _enqueue(
+        generer_bulletins_classe_task,
+        classe_id, classe.etablissement_id, trimestre_id, type_bulletin,
+        timeout=1800,
+    )
+    return {
+        "task_id": job.id,
+        "status": "PENDING",
+        "nb_bulletins": nb,
+        "message": f"Génération de {nb} bulletins mise en file pour {classe.libelle}.",
+    }
+
+
 @router.get("/classe/{classe_id}/resultats-intermediaires")
 def resultats_intermediaires(
     classe_id: int,

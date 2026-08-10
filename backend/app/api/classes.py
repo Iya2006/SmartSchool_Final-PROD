@@ -8,7 +8,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from app.core.database import get_db
 from app.core.auth import get_current_user
-from app.models.academique import Classe, Inscription, Eleve, Niveau, Enseignant, ClasseMatiere, Matiere
+from app.models.academique import Classe, Cycle, Inscription, Eleve, Niveau, Enseignant, ClasseMatiere, Matiere
 from app.schemas.schemas import ClasseCreate, ClasseOut, InscriptionCreate, InscriptionOut
 
 router = APIRouter(prefix="/api/classes", tags=["Classes"])
@@ -148,13 +148,31 @@ def list_classes(
     if statut:
         query = query.filter(Classe.statut == statut)
     classes = query.order_by(Classe.code).offset(skip).limit(limit).all()
+
+    # Niveaux et cycles préchargés en deux requêtes, pas une par classe.
+    niveaux = {
+        n.niveau_id: n for n in db.query(Niveau).filter(
+            Niveau.niveau_id.in_([cl.niveau_id for cl in classes])
+        ).all()
+    } if classes else {}
+    cycles = {
+        c.cycle_id: c for c in db.query(Cycle).filter(
+            Cycle.cycle_id.in_({n.cycle_id for n in niveaux.values()})
+        ).all()
+    } if niveaux else {}
+
     for cl in classes:
         cl.nb_matieres = db.query(ClasseMatiere).filter(
             ClasseMatiere.classe_id == cl.classe_id,
             ClasseMatiere.est_active == "O"
         ).count()
-        niv = db.query(Niveau).filter(Niveau.niveau_id == cl.niveau_id).first()
+        niv = niveaux.get(cl.niveau_id)
         cl.niveau_libelle = niv.libelle if niv else None
+        cl.niveau_ordre = niv.ordre if niv else None
+        cl.est_examen = niv.est_examen if niv else None
+        cyc = cycles.get(niv.cycle_id) if niv else None
+        cl.cycle_code = cyc.code if cyc else None
+        cl.cycle_libelle = cyc.libelle if cyc else None
     return classes
 
 

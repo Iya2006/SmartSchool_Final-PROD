@@ -173,9 +173,10 @@ function BulletinsContent() {
         setCalculAnnuel(false);
     };
 
+    // Cycle réel issu de la base (Classe → Niveau → Cycle), et non déduit du
+    // libellé : « contient Année » rangeait la 7ème à la 12ème dans le primaire.
     const groupedClasses = classes.reduce((acc: any, cls: any) => {
-        const cycle = cls.libelle?.includes('Année') ? 'Primaire' :
-            cls.libelle?.match(/[7-9]|10/) ? 'Collège' : 'Lycée';
+        const cycle = cls.cycle_libelle || 'Autres';
         if (!acc[cycle]) acc[cycle] = [];
         acc[cycle].push(cls);
         return acc;
