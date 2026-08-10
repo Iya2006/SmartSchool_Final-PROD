@@ -26,6 +26,11 @@ python-dotenv
 # Upload fichiers
 python-multipart
 
+# Lecture des classeurs Excel téléversés (import des résultats d'examen
+# national). Optionnelle au sens strict : sans elle, l'import CSV fonctionne
+# toujours et le message d'erreur renvoie l'école vers ce format.
+openpyxl
+
 # Rate limiting
 slowapi
 

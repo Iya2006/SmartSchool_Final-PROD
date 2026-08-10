@@ -262,6 +262,57 @@ est réexportée par `evaluations.py` : cet import doit continuer de fonctionner
   automatiquement toute colonne manquante — 39 colonnes ajoutées sur la base de
   développement, qui avait plusieurs versions de retard).
 
+### Fin d'année : fiche de classe, bulletins annuels, examens nationaux (août 2026)
+
+- **Moyenne annuelle = somme des moyennes de période ÷ nombre de périodes.**
+  Règle explicite de l'établissement, et non un recalcul à partir des matières :
+  dès qu'une matière manque à une période (option abandonnée, matière introduite
+  en cours d'année), repondérer les matières donne un chiffre différent de celui
+  des bulletins déjà remis aux familles. Entre les deux, c'est le chiffre déjà
+  communiqué qui fait foi. Fonctionne pour 1, 2 ou 3 périodes, avec un nombre
+  d'épreuves différent dans chacune — y compris une période sans aucune
+  évaluation, avec seulement une composition.
+- **La composition finale n'est pas un objet particulier** : c'est une
+  composition comme les autres, la dernière de l'année. Aucun traitement
+  spécifique, et une composition sans évaluation mensuelle associée est un cas
+  normal.
+- **Ordre des périodes** : les moyennes de période sont désormais lues avec une
+  jointure sur `ss_trimestres` et triées par `numero`. Sans elle, elles
+  ressortaient dans l'ordre physique des lignes et le 3ème trimestre pouvait
+  s'afficher sous l'étiquette du 1er.
+- **Écran dédié `/resultats-annuels`** : classement annuel avec une colonne par
+  période réellement calculée, synthèse de classe (moyenne, part des élèves
+  atteignant le seuil de passage configuré, répartition des mentions), bulletin
+  annuel de chaque élève, et bloc examen national **autonome** — il s'affiche
+  même quand aucune moyenne annuelle n'a été calculée, sinon la saisie des
+  résultats nationaux restait invisible tant que le calcul pédagogique n'avait
+  pas tourné (c'est exactement ce qui a été signalé en recette).
+- **Fiche de résultats de fin d'année** :
+  `GET /api/evaluations/classe/{id}/fiche-annuelle/pdf` — A4 paysage, en-tête
+  établissement, bandeau de synthèse, une colonne par période, moyenne annuelle,
+  mention, et pour une classe d'examen le résultat national. Répartition des
+  mentions et signatures en pied.
+- **Bulletin annuel** : rappelle les moyennes de période qui composent la
+  moyenne annuelle, et pour une classe d'examen la mention du résultat national
+  avec le rappel qu'il est seul décisif. Correction au passage : les repères de
+  classe (meilleure / plus faible moyenne) étaient vides sur tout bulletin
+  annuel — la requête comparait `trimestre_id = NULL`, qui ne remonte jamais rien.
+- **Import des résultats d'examen national** :
+  `GET  /api/promotion/classe/{id}/resultats-officiels/modele` (CSV pré-rempli
+  avec la liste réelle des élèves) et
+  `POST /api/promotion/classe/{id}/resultats-officiels/import`.
+  `dry_run=true` par défaut : le rapport est affiché avant toute écriture, un
+  résultat déjà saisi n'est jamais remplacé sans que l'école ait vu ce qui
+  changeait. Rapprochement par matricule puis par nom + prénom ; toute ligne non
+  rapprochée ou illisible est remontée nommément, jamais ignorée en silence.
+  Lecture par `services/import_tabulaire.py` : CSV `;`/`,`/tabulation, encodages
+  UTF-8 / cp1252, en-têtes tolérants (`N° Matricule`, `Résultat final`…), et
+  `.xlsx` via **openpyxl** (nouvelle dépendance ; sans elle l'import CSV
+  fonctionne toujours et le message renvoie vers ce format). Le vocabulaire du
+  fichier est traduit (« Admise », « Ajourné », « Recalé », « oui », « 1 »…) mais
+  jamais deviné : une valeur inconnue est refusée. Couvert par
+  `tests/test_import_resultats_examen.py`.
+
 ### Reste à faire
 
 - [ ] Recette fonctionnelle par l'établissement pilote sur une classe réelle

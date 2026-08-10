@@ -14,7 +14,7 @@ Séquence d'utilisation : calculer-resultats (classe ou année entière) → aju
 manuellement au besoin (decision, choisir-filiere) → valider (classe ou année
 entière, verrouille définitivement et ouvre la campagne de réinscription).
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import Optional, Dict, List
@@ -707,6 +707,226 @@ def saisir_resultats_officiels(data: ResultatsOfficielsBulk, db: Session = Depen
         "enregistres": enregistres,
         "rappel": "Relancez le calcul des résultats de la classe pour appliquer ces décisions.",
     }
+
+
+# ── Import d'un fichier de résultats d'examen national ──────────────────
+# Une classe d'examen, c'est 40 à 120 élèves dont le résultat arrive sous forme
+# de liste préfectorale. Les ressaisir un par un dans un menu déroulant est à la
+# fois long et une source d'erreur qu'on ne détecte qu'au moment du litige.
+
+# Ce que l'école peut écrire dans la colonne résultat. On accepte largement :
+# le fichier reçu n'est pas normalisé, et refuser "Admise" au motif que le
+# gabarit dit "ADMIS" ferait perdre plus de temps que la saisie manuelle.
+_SYNONYMES_RESULTAT = {
+    "ADMIS": ("admis", "admise", "adm", "a", "oui", "o", "1", "reussi", "reussie",
+              "succes", "passe", "passee", "recu", "recue"),
+    "NON_ADMIS": ("non admis", "non admise", "non_admis", "nonadmis", "refuse",
+                  "refusee", "echec", "echoue", "n", "non", "0", "ajourne",
+                  "ajournee", "recale", "recalee"),
+}
+
+
+def _normaliser_resultat(brut: str) -> Optional[str]:
+    """Traduit ce qu'a écrit l'école en ADMIS / NON_ADMIS, ou None si illisible."""
+    from app.services.import_tabulaire import normaliser_entete
+    v = normaliser_entete(brut).replace("-", " ").replace("_", " ")
+    for canonique, variantes in _SYNONYMES_RESULTAT.items():
+        if v in variantes or v.replace(" ", "") in [x.replace(" ", "") for x in variantes]:
+            return canonique
+    return None
+
+
+@router.get("/classe/{classe_id}/resultats-officiels/modele")
+def modele_import_resultats_officiels(classe_id: int, db: Session = Depends(get_db)):
+    """Modèle CSV pré-rempli avec la liste réelle des élèves de la classe.
+
+    L'école n'a plus qu'à compléter la colonne RESULTAT : les matricules sont
+    déjà les bons, ce qui supprime la principale cause de lignes non
+    rapprochées à l'import.
+    """
+    from fastapi.responses import Response
+    import csv as _csv, io as _io
+
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+
+    inscriptions = db.query(Inscription, Eleve).join(
+        Eleve, Inscription.eleve_id == Eleve.eleve_id
+    ).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
+    ).order_by(Eleve.nom, Eleve.prenom).all()
+
+    tampon = _io.StringIO()
+    # `;` et BOM UTF-8 : c'est ce qu'attend Excel en configuration française,
+    # sinon le fichier s'ouvre avec tout sur une seule colonne.
+    writer = _csv.writer(tampon, delimiter=";")
+    writer.writerow(["MATRICULE", "NOM", "PRENOM", "RESULTAT", "OBSERVATION"])
+    for insc, eleve in inscriptions:
+        writer.writerow([eleve.matricule or "", eleve.nom or "", eleve.prenom or "", "", ""])
+
+    nom_fichier = f"resultats_{classe.libelle}.csv".replace(" ", "_")
+    return Response(
+        content="﻿" + tampon.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
+    )
+
+
+@router.post("/classe/{classe_id}/resultats-officiels/import")
+async def importer_resultats_officiels(
+    classe_id: int,
+    fichier: UploadFile = File(...),
+    dry_run: bool = True,
+    saisi_par: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Importe les résultats d'examen national d'une classe depuis un fichier.
+
+    `dry_run=true` (défaut) analyse sans rien écrire et renvoie exactement ce
+    qui serait appliqué : on ne remplace pas un résultat officiel déjà saisi
+    sans que l'école ait vu le rapport d'abord.
+
+    Rapprochement par matricule, puis à défaut par nom + prénom. Toute ligne
+    non rapprochée ou dont le résultat est illisible est remontée nommément —
+    jamais ignorée en silence.
+    """
+    from app.services.import_tabulaire import (
+        FichierIllisible, lire_lignes, normaliser_entete, valeur,
+    )
+
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    niveau, cycle, _ = _cycle_key_pour_classe(db, classe)
+    situation = _situation_niveau(niveau, cycle)
+    if not situation["est_examen"]:
+        raise HTTPException(
+            400,
+            f"{classe.libelle} n'est pas une classe d'examen national — "
+            "aucun résultat ministériel à importer.",
+        )
+
+    contenu = await fichier.read()
+    try:
+        _, lignes = lire_lignes(fichier.filename, contenu)
+    except FichierIllisible as e:
+        raise HTTPException(400, str(e))
+    if not lignes:
+        raise HTTPException(400, "Le fichier ne contient aucune ligne de données.")
+
+    inscriptions = db.query(Inscription, Eleve).join(
+        Eleve, Inscription.eleve_id == Eleve.eleve_id
+    ).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
+    ).all()
+    par_matricule = {
+        normaliser_entete(e.matricule): (i, e) for i, e in inscriptions if e.matricule
+    }
+    par_nom = {}
+    for i, e in inscriptions:
+        cle = normaliser_entete(f"{e.nom} {e.prenom}")
+        # Deux homonymes exacts : on refuse de deviner lequel des deux.
+        par_nom[cle] = None if cle in par_nom else (i, e)
+
+    existants = _resultats_officiels_bulk(db, [i.inscription_id for i, _ in inscriptions])
+
+    a_appliquer, ignorees = {}, []
+    for numero, ligne in enumerate(lignes, start=2):  # 1 = ligne d'en-tête
+        matricule = valeur(ligne, "matricule", "n matricule", "no matricule",
+                           "numero", "numero matricule", "code eleve")
+        nom = valeur(ligne, "nom", "nom de l eleve", "nom eleve")
+        prenom = valeur(ligne, "prenom", "prenoms", "prenom de l eleve")
+        brut = valeur(ligne, "resultat", "resultat final", "decision", "mention",
+                      "admis", "statut")
+
+        cible = par_matricule.get(normaliser_entete(matricule)) if matricule else None
+        if cible is None and (nom or prenom):
+            cible = par_nom.get(normaliser_entete(f"{nom} {prenom}"))
+        identite = " ".join(x for x in [matricule, nom, prenom] if x) or "(ligne vide)"
+
+        if cible is None:
+            ignorees.append({"ligne": numero, "eleve": identite,
+                             "raison": "élève non trouvé dans cette classe"})
+            continue
+        resultat = _normaliser_resultat(brut)
+        if resultat is None:
+            ignorees.append({
+                "ligne": numero, "eleve": identite,
+                "raison": f"résultat illisible : « {brut} »" if brut else "résultat non renseigné",
+            })
+            continue
+
+        insc, eleve = cible
+        if insc.inscription_id in a_appliquer:
+            ignorees.append({"ligne": numero, "eleve": identite,
+                             "raison": "élève présent plusieurs fois dans le fichier"})
+            continue
+        ancien = existants.get(insc.inscription_id)
+        a_appliquer[insc.inscription_id] = {
+            "ligne": numero,
+            "inscription_id": insc.inscription_id,
+            "matricule": eleve.matricule,
+            "eleve": f"{eleve.nom} {eleve.prenom}",
+            "resultat": resultat,
+            "observation": valeur(ligne, "observation", "remarque", "commentaire") or None,
+            "ancien_resultat": ancien.resultat if ancien else None,
+            "remplace": bool(ancien and ancien.resultat != resultat),
+        }
+
+    manquants = [
+        {"inscription_id": i.inscription_id, "matricule": e.matricule,
+         "eleve": f"{e.nom} {e.prenom}"}
+        for i, e in inscriptions
+        if i.inscription_id not in a_appliquer and i.inscription_id not in existants
+    ]
+
+    rapport = {
+        "classe": classe.libelle,
+        "examen_national": situation["examen_national"],
+        "fichier": fichier.filename,
+        "lignes_lues": len(lignes),
+        "a_appliquer": len(a_appliquer),
+        "remplacements": sum(1 for v in a_appliquer.values() if v["remplace"]),
+        "admis": sum(1 for v in a_appliquer.values() if v["resultat"] == "ADMIS"),
+        "non_admis": sum(1 for v in a_appliquer.values() if v["resultat"] == "NON_ADMIS"),
+        "details": sorted(a_appliquer.values(), key=lambda d: d["ligne"]),
+        "ignorees": ignorees,
+        "eleves_sans_resultat": manquants,
+        "dry_run": dry_run,
+    }
+
+    if dry_run:
+        rapport["message"] = (
+            f"{len(a_appliquer)} résultat(s) prêt(s) à être importé(s), "
+            f"{len(ignorees)} ligne(s) ignorée(s). Rien n'a été enregistré."
+        )
+        return rapport
+
+    if not a_appliquer:
+        raise HTTPException(400, "Aucune ligne exploitable : rien à importer.")
+
+    for item in a_appliquer.values():
+        existant = existants.get(item["inscription_id"])
+        if existant:
+            existant.resultat = item["resultat"]
+            existant.observation = item["observation"]
+            existant.saisi_par = saisi_par
+        else:
+            db.add(ResultatOfficielExamen(
+                inscription_id=item["inscription_id"],
+                examen_national=niveau.examen_national if niveau else None,
+                resultat=item["resultat"],
+                saisi_par=saisi_par,
+                observation=item["observation"],
+            ))
+    db.commit()
+
+    rapport["message"] = (
+        f"{len(a_appliquer)} résultat(s) importé(s) pour {classe.libelle}."
+    )
+    rapport["rappel"] = "Relancez le calcul des résultats de la classe pour appliquer ces décisions."
+    return rapport
 
 
 @router.get("/annee/{annee_id}/etat")

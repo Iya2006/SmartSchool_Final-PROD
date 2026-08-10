@@ -413,6 +413,26 @@ def get_mention(moyenne: float, db=None, cycle: str = "college", etablissement_i
     return "INSUFFISANT"
 
 
+def get_seuil_passage(db: Session, etablissement_id: int, cycle_key: str) -> float:
+    """Moyenne à partir de laquelle l'élève passe (`notation.seuil_redoublement.{cycle}`).
+
+    Même clé que celle lue par la promotion : la fiche de fin d'année ne doit
+    pas annoncer un taux de réussite calculé sur un autre seuil que celui qui
+    décidera réellement du passage.
+    """
+    try:
+        param = db.query(ParametreEtablissement).filter(
+            ParametreEtablissement.etablissement_id == etablissement_id,
+            ParametreEtablissement.categorie == "NOTATION",
+            ParametreEtablissement.cle == f"notation.seuil_redoublement.{cycle_key}",
+        ).first()
+        if param and param.valeur is not None:
+            return float(param.valeur)
+    except Exception:
+        pass
+    return 10.0
+
+
 def get_appreciation(moyenne: float, note_sur: float = BAREME_DEFAUT) -> str:
     """Appréciation textuelle, proportionnelle au barème (fonctionne pour /10, /20, /100)."""
     if not note_sur or note_sur <= 0:
@@ -1030,14 +1050,24 @@ def resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int,
             (float(ligne.moyenne_matiere), float(ligne.coefficient or 1))
         )
 
-    # Moyennes générales de période, telles qu'elles figurent sur les bulletins
-    moyennes_periode: Dict[int, List[float]] = {}
-    for b in db.query(Bulletin).filter(
+    # Moyennes générales de période, telles qu'elles figurent sur les bulletins.
+    # L'ordre chronologique est imposé par la jointure sur le trimestre : sans
+    # elle, les moyennes ressortaient dans l'ordre physique des lignes et le
+    # 3ème trimestre pouvait s'afficher en premier sous l'étiquette du 1er.
+    moyennes_periode: Dict[int, List[dict]] = {}
+    for b, trim in db.query(Bulletin, Trimestre).join(
+        Trimestre, Bulletin.trimestre_id == Trimestre.trimestre_id
+    ).filter(
         Bulletin.inscription_id.in_(inscription_ids),
         Bulletin.type_bulletin != "ANNUEL",
         Bulletin.moyenne_generale.isnot(None),
-    ).all():
-        moyennes_periode.setdefault(b.inscription_id, []).append(float(b.moyenne_generale))
+    ).order_by(Trimestre.numero, Trimestre.date_debut).all():
+        moyennes_periode.setdefault(b.inscription_id, []).append({
+            "trimestre_id": trim.trimestre_id,
+            "libelle": trim.libelle,
+            "numero": trim.numero,
+            "moyenne": round(float(b.moyenne_generale), 2),
+        })
 
     resultats: Dict[int, dict] = {}
     for inscription_id, par_matiere in par_inscription.items():
@@ -1060,14 +1090,56 @@ def resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int,
         if not periodes:
             continue
         resultats[inscription_id] = {
-            "moyenne": round(sum(periodes) / len(periodes), 2),
+            "moyenne": round(sum(p["moyenne"] for p in periodes) / len(periodes), 2),
             "nb_periodes": len(periodes),
-            "moyennes_periodes": [round(m, 2) for m in periodes],
+            "periodes": periodes,
+            "moyennes_periodes": [p["moyenne"] for p in periodes],
             "total_points": round(total_points, 2),
             "total_coefficients": total_coef,
             "lignes": details,
         }
     return resultats
+
+
+ORDRE_MENTIONS = ("TRÈS BIEN", "BIEN", "ASSEZ BIEN", "PASSABLE", "INSUFFISANT")
+
+
+def synthese_annuelle(
+    donnees: List[dict], db: Session, cycle_key: str, etablissement_id: int,
+) -> dict:
+    """Chiffres de tête d'une fiche de fin d'année.
+
+    Volontairement peu de chiffres, mais ceux qu'un directeur regarde en
+    premier : combien d'élèves ont une moyenne, quelle est la moyenne de la
+    classe, combien atteignent le seuil de passage, et comment se répartissent
+    les mentions. Le seuil vient de la configuration de l'école, jamais de 10
+    codé en dur.
+    """
+    valeurs = [d["moyenne_generale"] for d in donnees if d["moyenne_generale"] is not None]
+    seuil = get_seuil_passage(db, etablissement_id, cycle_key)
+    mentions = {m: 0 for m in ORDRE_MENTIONS}
+    for d in donnees:
+        if d.get("mention") in mentions:
+            mentions[d["mention"]] += 1
+
+    atteignent = sum(1 for v in valeurs if v >= seuil)
+    premier = donnees[0] if donnees and donnees[0]["moyenne_generale"] is not None else None
+    dernier = next(
+        (d for d in reversed(donnees) if d["moyenne_generale"] is not None), None
+    )
+    return {
+        "evalues": len(valeurs),
+        "sans_moyenne": len(donnees) - len(valeurs),
+        "moyenne_classe": round(sum(valeurs) / len(valeurs), 2) if valeurs else None,
+        "moyenne_max": max(valeurs) if valeurs else None,
+        "moyenne_min": min(valeurs) if valeurs else None,
+        "premier": f"{premier['nom']} {premier['prenom']}".strip() if premier else None,
+        "dernier": f"{dernier['nom']} {dernier['prenom']}".strip() if dernier else None,
+        "seuil_passage": seuil,
+        "atteignent_seuil": atteignent,
+        "taux_reussite": round(100.0 * atteignent / len(valeurs), 1) if valeurs else None,
+        "mentions": mentions,
+    }
 
 
 def calculer_resultats_annuels(
@@ -1121,6 +1193,7 @@ def calculer_resultats_annuels(
             # qui recompte à la main ne peut pas retrouver le chiffre.
             "nb_periodes": r["nb_periodes"] if r else 0,
             "moyennes_periodes": r["moyennes_periodes"] if r else [],
+            "periodes": r["periodes"] if r else [],
         })
 
     donnees.sort(key=lambda x: x["moyenne_generale"] or 0, reverse=True)
@@ -1143,12 +1216,27 @@ def calculer_resultats_annuels(
             "max": max(vals) if vals else None,
         }
 
+    # Colonnes de périodes réellement présentes, dans l'ordre chronologique.
+    # Construites à partir des bulletins et non du calendrier : une école qui
+    # n'a calculé que 2 de ses 3 trimestres ne doit pas voir une colonne vide.
+    colonnes: Dict[int, dict] = {}
+    for d in donnees:
+        for p in d["periodes"]:
+            colonnes.setdefault(p["trimestre_id"], {
+                "trimestre_id": p["trimestre_id"],
+                "libelle": p["libelle"],
+                "numero": p["numero"],
+            })
+    periodes_classe = sorted(colonnes.values(), key=lambda p: (p["numero"], p["trimestre_id"]))
+
     resultat = {
         "classe": classe.libelle,
         "classe_id": classe_id,
         "effectif": effectif,
+        "periodes": periodes_classe,
         "resultats": donnees,
         "stats_matieres": stats_matieres,
+        "synthese": synthese_annuelle(donnees, db, cycle_key, etablissement_id),
         "persiste": persist,
     }
 

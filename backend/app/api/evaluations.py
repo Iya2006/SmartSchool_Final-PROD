@@ -829,9 +829,275 @@ def calculer_moyennes_annuelles(classe_id: int, db: Session = Depends(get_db)):
 @router.get("/classe/{classe_id}/resultats-annuels")
 def apercu_resultats_annuels(classe_id: int, db: Session = Depends(get_db)):
     """Aperçu des résultats annuels sans générer les bulletins."""
-    if not db.query(Classe).filter(Classe.classe_id == classe_id).first():
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
         raise HTTPException(404, "Classe non trouvée")
-    return calculer_resultats_annuels(db, classe_id, persist=False)
+    res = calculer_resultats_annuels(db, classe_id, persist=False)
+
+    # Une classe d'examen doit s'annoncer comme telle dès cet aperçu : sans ça,
+    # l'écran de fin d'année n'a aucun moyen de savoir qu'il doit proposer la
+    # saisie du résultat ministériel.
+    niveau = db.query(Niveau).filter(Niveau.niveau_id == classe.niveau_id).first()
+    res["classe_examen"] = bool(niveau and niveau.est_examen == "O")
+    res["examen_national"] = niveau.examen_national if niveau else None
+    return res
+
+
+@router.get("/classe/{classe_id}/fiche-annuelle/pdf")
+def fiche_resultats_annuels_pdf(classe_id: int, db: Session = Depends(get_db)):
+    """Fiche de résultats de fin d'année d'une classe, prête à imprimer.
+
+    Une seule feuille qui répond aux questions qu'on pose réellement en fin
+    d'année : qui est classé où, avec quelle moyenne par période, quelle
+    mention, et — pour une classe d'examen — quel résultat national. Les
+    chiffres de tête (moyenne de classe, taux atteignant le seuil de passage,
+    répartition des mentions) évitent d'avoir à recompter à la main.
+    """
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    from reportlab.lib.utils import ImageReader
+    from app.core.documents_settings import get_documents_settings, dessiner_filigrane
+    from app.models.academique import ResultatOfficielExamen
+    from app.services.notation import ORDRE_MENTIONS
+    import io as _io, os
+
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+
+    res = calculer_resultats_annuels(db, classe_id, persist=False)
+    lignes = [r for r in res["resultats"] if r["moyenne_generale"] is not None]
+    if not lignes:
+        raise HTTPException(
+            400,
+            "Aucun résultat annuel : calculez d'abord les moyennes de chaque période, "
+            "puis les résultats annuels.",
+        )
+
+    periodes = res["periodes"]
+    synthese = res["synthese"]
+    niveau = db.query(Niveau).filter(Niveau.niveau_id == classe.niveau_id).first()
+    classe_examen = bool(niveau and niveau.est_examen == "O")
+    examen_national = (niveau.examen_national if niveau else None) or "Examen national"
+
+    officiels = {}
+    if classe_examen:
+        officiels = {
+            o.inscription_id: o for o in db.query(ResultatOfficielExamen).filter(
+                ResultatOfficielExamen.inscription_id.in_(
+                    [r["inscription_id"] for r in lignes]
+                )
+            ).all()
+        }
+
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == classe.etablissement_id
+    ).first()
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == classe.annee_id).first()
+    settings = get_documents_settings(db, classe.etablissement_id)
+
+    buffer = _io.BytesIO()
+    largeur, hauteur = landscape(A4)
+    pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
+    cp = (0.16, 0.20, 0.45)
+    cs = (0.94, 0.95, 0.98)
+    marge_g, marge_d = 1.2 * cm, largeur - 1.2 * cm
+
+    # Colonnes : rang, matricule, élève, une par période, moyenne, mention,
+    # et le résultat de l'examen quand la classe en passe un.
+    col_rang, col_mat, col_periode = 1.3 * cm, 2.6 * cm, 2.1 * cm
+    col_moy, col_mention = 2.4 * cm, 3.0 * cm
+    col_examen = 2.6 * cm if classe_examen else 0
+    col_eleve = (marge_d - marge_g) - (
+        col_rang + col_mat + col_periode * len(periodes) + col_moy + col_mention + col_examen
+    )
+
+    def entete():
+        y = hauteur - 1.1 * cm
+        logo = (etablissement.logo_url if etablissement else None) or settings.get("documents.logo_url")
+        if logo:
+            chemin = str(logo).lstrip("/")
+            if os.path.exists(chemin):
+                try:
+                    pdf.drawImage(ImageReader(chemin), 1.2 * cm, y - 1.5 * cm,
+                                  width=1.8 * cm, height=1.8 * cm, mask="auto")
+                except Exception:
+                    pass
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.setFillColorRGB(0.35, 0.35, 0.35)
+        pdf.drawCentredString(largeur / 2, y, "RÉPUBLIQUE DE GUINÉE — Travail · Justice · Solidarité")
+        y -= 0.45 * cm
+        pdf.setFont("Helvetica-Bold", 13)
+        pdf.setFillColorRGB(*cp)
+        pdf.drawCentredString(largeur / 2, y, (etablissement.nom if etablissement else "Établissement").upper())
+        y -= 0.5 * cm
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.drawCentredString(
+            largeur / 2, y,
+            "FICHE DE RÉSULTATS DE FIN D'ANNÉE — %s%s" % (
+                classe.libelle, " — %s" % annee.libelle if annee else ""),
+        )
+        y -= 0.42 * cm
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColorRGB(0.4, 0.4, 0.4)
+        pdf.drawCentredString(
+            largeur / 2, y,
+            "Moyenne annuelle = somme des moyennes de période ÷ nombre de périodes"
+            + ("  ·  Classe d'examen %s : le résultat national décide seul du passage." % examen_national
+               if classe_examen else ""),
+        )
+        return y - 0.55 * cm
+
+    def bandeau(y):
+        """Les quatre chiffres qu'un directeur regarde en premier."""
+        cartes = [
+            ("EFFECTIF", str(res["effectif"])),
+            ("MOYENNE DE CLASSE", "%.2f" % synthese["moyenne_classe"] if synthese["moyenne_classe"] is not None else "—"),
+            ("≥ %.0f DE MOYENNE" % synthese["seuil_passage"],
+             "%d / %d  (%.0f%%)" % (synthese["atteignent_seuil"], synthese["evalues"], synthese["taux_reussite"] or 0)),
+            ("PREMIER DE LA CLASSE", synthese["premier"] or "—"),
+        ]
+        if classe_examen:
+            admis = sum(1 for o in officiels.values() if o.resultat == "ADMIS")
+            non_admis = len(officiels) - admis
+            attente = res["effectif"] - len(officiels)
+            cartes.append((
+                examen_national.upper(),
+                "%d admis · %d non admis%s" % (
+                    admis, non_admis, " · %d en attente" % attente if attente else "")
+                if officiels else "aucun résultat saisi",
+            ))
+        w = (marge_d - marge_g) / len(cartes)
+        h = 1.15 * cm
+        for i, (titre, valeur) in enumerate(cartes):
+            x = marge_g + i * w
+            pdf.setFillColorRGB(*cs)
+            pdf.rect(x + 0.06 * cm, y - h, w - 0.12 * cm, h, fill=1, stroke=0)
+            pdf.setFont("Helvetica", 6.5)
+            pdf.setFillColorRGB(0.42, 0.45, 0.55)
+            pdf.drawString(x + 0.25 * cm, y - 0.38 * cm, titre)
+            # Taille réduite plutôt que texte coupé : « 6 admis · 4 non admis ·
+            # 2 en attente » tronqué à 26 caractères mentirait sur le décompte.
+            texte = str(valeur)
+            pdf.setFont("Helvetica-Bold", 9.5 if len(texte) <= 24 else 7.5)
+            pdf.setFillColorRGB(*cp)
+            pdf.drawString(x + 0.25 * cm, y - 0.85 * cm, texte[:40])
+        return y - h - 0.5 * cm
+
+    def entete_tableau(y):
+        pdf.setFillColorRGB(*cp)
+        pdf.rect(marge_g, y - 0.55 * cm, marge_d - marge_g, 0.55 * cm, fill=1, stroke=0)
+        pdf.setFont("Helvetica-Bold", 7)
+        pdf.setFillColorRGB(1, 1, 1)
+        ty = y - 0.37 * cm
+        x = marge_g
+        pdf.drawCentredString(x + col_rang / 2, ty, "RANG"); x += col_rang
+        pdf.drawString(x + 0.1 * cm, ty, "MATRICULE"); x += col_mat
+        pdf.drawString(x + 0.1 * cm, ty, "NOM ET PRÉNOM"); x += col_eleve
+        for p in periodes:
+            # "1er Trimestre" ne tient pas : on garde l'essentiel (T1, S2...)
+            court = "".join(c for c in p["libelle"] if c.isdigit()) or str(p["numero"])
+            prefixe = "S" if "emestre" in p["libelle"] else "T"
+            pdf.drawCentredString(x + col_periode / 2, ty, "%s%s" % (prefixe, court)); x += col_periode
+        pdf.drawCentredString(x + col_moy / 2, ty, "MOY. AN."); x += col_moy
+        pdf.drawCentredString(x + col_mention / 2, ty, "MENTION"); x += col_mention
+        if classe_examen:
+            pdf.drawCentredString(x + col_examen / 2, ty, examen_national.upper()[:10])
+        return y - 0.55 * cm
+
+    y = bandeau(entete())
+    y = entete_tableau(y)
+    row_h = 0.48 * cm
+
+    for idx, l in enumerate(lignes):
+        if y < 3.2 * cm:
+            pdf.showPage()
+            y = entete_tableau(entete())
+        if idx % 2 == 1:
+            pdf.setFillColorRGB(0.975, 0.98, 0.99)
+            pdf.rect(marge_g, y - row_h, marge_d - marge_g, row_h, fill=1, stroke=0)
+
+        ty = y - 0.32 * cm
+        x = marge_g
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.setFillColorRGB(*cp)
+        pdf.drawCentredString(x + col_rang / 2, ty, str(l["rang"])); x += col_rang
+        pdf.setFont("Helvetica", 7)
+        pdf.setFillColorRGB(0.35, 0.35, 0.35)
+        pdf.drawString(x + 0.1 * cm, ty, (l["matricule"] or "—")[:12]); x += col_mat
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.drawString(x + 0.1 * cm, ty, ("%s %s" % (l["nom"] or "", l["prenom"] or "")).strip()[:34])
+        x += col_eleve
+
+        par_periode = {p["trimestre_id"]: p["moyenne"] for p in l["periodes"]}
+        pdf.setFont("Helvetica", 7.5)
+        pdf.setFillColorRGB(0.3, 0.3, 0.3)
+        for p in periodes:
+            v = par_periode.get(p["trimestre_id"])
+            pdf.drawCentredString(x + col_periode / 2, ty, "%.2f" % v if v is not None else "—")
+            x += col_periode
+
+        moy = l["moyenne_generale"]
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.setFillColorRGB(*((0.65, 0.12, 0.12) if moy < synthese["seuil_passage"] else (0, 0, 0)))
+        pdf.drawCentredString(x + col_moy / 2, ty, "%.2f" % moy); x += col_moy
+        pdf.setFont("Helvetica", 7)
+        pdf.setFillColorRGB(0.3, 0.3, 0.3)
+        pdf.drawCentredString(x + col_mention / 2, ty, (l["mention"] or "—")[:14]); x += col_mention
+
+        if classe_examen:
+            o = officiels.get(l["inscription_id"])
+            libelle = "ADMIS" if o and o.resultat == "ADMIS" else ("NON ADMIS" if o else "en attente")
+            pdf.setFont("Helvetica-Bold" if o else "Helvetica-Oblique", 7.5)
+            pdf.setFillColorRGB(*(
+                (0.05, 0.45, 0.3) if o and o.resultat == "ADMIS"
+                else (0.65, 0.12, 0.12) if o else (0.55, 0.55, 0.55)))
+            pdf.drawCentredString(x + col_examen / 2, ty, libelle)
+
+        pdf.setStrokeColorRGB(0.9, 0.92, 0.95)
+        pdf.setLineWidth(0.4)
+        pdf.line(marge_g, y - row_h, marge_d, y - row_h)
+        y -= row_h
+
+    # Répartition des mentions + signatures
+    y -= 0.6 * cm
+    if y < 2.6 * cm:
+        pdf.showPage()
+        y = hauteur - 2.5 * cm
+    pdf.setFont("Helvetica-Bold", 8)
+    pdf.setFillColorRGB(*cp)
+    pdf.drawString(marge_g, y, "Répartition des mentions")
+    y -= 0.4 * cm
+    pdf.setFont("Helvetica", 7.5)
+    pdf.setFillColorRGB(0.3, 0.3, 0.3)
+    pdf.drawString(marge_g, y, "   ".join(
+        "%s : %d" % (m, synthese["mentions"].get(m, 0)) for m in ORDRE_MENTIONS
+    ))
+    y -= 0.9 * cm
+    pdf.setFont("Helvetica", 8)
+    pdf.setFillColorRGB(0.25, 0.25, 0.25)
+    tiers = (marge_d - marge_g) / 3
+    for i, libelle in enumerate(["Le Professeur Principal", "Le Directeur des Études", "Le Directeur"]):
+        x = marge_g + i * tiers
+        pdf.line(x, y, x + tiers - 1.2 * cm, y)
+        pdf.drawString(x, y - 0.35 * cm, libelle)
+
+    try:
+        dessiner_filigrane(pdf, settings, largeur, hauteur)
+    except Exception:
+        pass
+
+    pdf.save()
+    buffer.seek(0)
+    nom_fichier = ("fiche_resultats_annuels_%s.pdf" % classe.libelle).replace(" ", "_")
+    return StreamingResponse(
+        buffer, media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=%s" % nom_fichier},
+    )
 
 
 # ════════════════════════════════════════════════════════════
@@ -1923,16 +2189,20 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
         .all()
     )
 
-    # ── Statistiques classe (meilleure/plus faible moyenne du trimestre) ──
-    moyennes_classe = [
-        float(m) for (m,) in db.query(Bulletin.moyenne_generale).join(
-            Inscription, Bulletin.inscription_id == Inscription.inscription_id
-        ).filter(
-            Inscription.classe_id == classe.classe_id,
-            Bulletin.trimestre_id == bulletin.trimestre_id,
-            Bulletin.moyenne_generale.isnot(None)
-        ).all()
-    ]
+    # ── Statistiques classe (meilleure/plus faible moyenne de la période) ──
+    # `trimestre_id IS NULL` pour un bulletin annuel : comparer avec `= NULL`
+    # ne remonte jamais rien, et le bulletin annuel sortait sans ses repères de
+    # classe alors que le trimestriel les affichait.
+    _q_stats = db.query(Bulletin.moyenne_generale).join(
+        Inscription, Bulletin.inscription_id == Inscription.inscription_id
+    ).filter(
+        Inscription.classe_id == classe.classe_id,
+        Bulletin.type_bulletin == bulletin.type_bulletin,
+        Bulletin.moyenne_generale.isnot(None),
+    )
+    _q_stats = (_q_stats.filter(Bulletin.trimestre_id == bulletin.trimestre_id)
+                if bulletin.trimestre_id else _q_stats.filter(Bulletin.trimestre_id.is_(None)))
+    moyennes_classe = [float(m) for (m,) in _q_stats.all()]
     meilleure_moyenne_classe = max(moyennes_classe) if moyennes_classe else None
     plus_faible_moyenne_classe = min(moyennes_classe) if moyennes_classe else None
 
@@ -1949,6 +2219,26 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     if presences_periode:
         nb_present = sum(1 for p in presences_periode if p.statut_presence == "PRESENT")
         taux_presence = round(nb_present / len(presences_periode) * 100, 1)
+
+    # ── Bulletin annuel : d'où vient la moyenne, et résultat de l'examen ──
+    # Sur un bulletin annuel, la seule question de la famille est « comment
+    # arrive-t-on à ce chiffre ». On rappelle donc les moyennes de période qui
+    # le composent. Pour une classe d'examen (6ème/10ème/Terminale), on rappelle
+    # aussi que c'est le résultat national — pas cette moyenne — qui décide.
+    periodes_annuelles, resultat_officiel = [], None
+    if bulletin.type_bulletin == "ANNUEL":
+        from app.models.academique import ResultatOfficielExamen
+        for b_per, trim in db.query(Bulletin, Trimestre).join(
+            Trimestre, Bulletin.trimestre_id == Trimestre.trimestre_id
+        ).filter(
+            Bulletin.inscription_id == inscription.inscription_id,
+            Bulletin.type_bulletin != "ANNUEL",
+            Bulletin.moyenne_generale.isnot(None),
+        ).order_by(Trimestre.numero, Trimestre.date_debut).all():
+            periodes_annuelles.append((trim.libelle, float(b_per.moyenne_generale)))
+        resultat_officiel = db.query(ResultatOfficielExamen).filter(
+            ResultatOfficielExamen.inscription_id == inscription.inscription_id
+        ).first()
 
     # ── Créer le PDF ──
     buffer = io.BytesIO()
@@ -2295,6 +2585,45 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     if decision:
         pdf.setFont(tmpl["police_corps"], 9)
         pdf.drawRightString(marge_droite, y, f"Décision : {decision}")
+
+    # ── BULLETIN ANNUEL : détail du calcul + résultat de l'examen national ──
+    if periodes_annuelles:
+        y -= 0.6 * cm
+        pdf.setFont(tmpl["police_titre"], 8)
+        pdf.setFillColorRGB(*cp)
+        pdf.drawString(1.8 * cm, y, "Moyennes des périodes")
+        y -= 0.4 * cm
+        pdf.setFont(tmpl["police_corps"], 8)
+        pdf.setFillColorRGB(0.2, 0.2, 0.2)
+        detail = "   |   ".join(f"{lib} : {val:.2f}" for lib, val in periodes_annuelles)
+        pdf.drawString(1.8 * cm, y, detail)
+        y -= 0.35 * cm
+        pdf.setFont(tmpl["police_corps"], 7)
+        pdf.setFillColorRGB(0.45, 0.45, 0.45)
+        pdf.drawString(
+            1.8 * cm, y,
+            "Moyenne annuelle = somme des moyennes de période ÷ %d période(s)"
+            % len(periodes_annuelles),
+        )
+        pdf.setFillColorRGB(0, 0, 0)
+
+    if resultat_officiel is not None:
+        y -= 0.55 * cm
+        libelle_examen = resultat_officiel.examen_national or "Examen national"
+        admis = resultat_officiel.resultat == "ADMIS"
+        pdf.setFont(tmpl["police_titre"], 9)
+        pdf.setFillColorRGB(*((0.05, 0.45, 0.3) if admis else (0.65, 0.12, 0.12)))
+        pdf.drawString(
+            1.8 * cm, y,
+            "%s : %s" % (libelle_examen, "ADMIS" if admis else "NON ADMIS"),
+        )
+        pdf.setFont(tmpl["police_corps"], 7)
+        pdf.setFillColorRGB(0.45, 0.45, 0.45)
+        pdf.drawRightString(
+            marge_droite, y,
+            "Résultat officiel du Ministère — seul décisif pour le passage",
+        )
+        pdf.setFillColorRGB(0, 0, 0)
 
     # ── STATISTIQUES DE CLASSE (meilleure / plus faible moyenne) ──
     if meilleure_moyenne_classe is not None:
