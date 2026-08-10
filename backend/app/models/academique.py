@@ -777,7 +777,11 @@ class SujetExamen(Base):
     enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
-    trimestre = Column(Integer, nullable=False)  # 1, 2, 3
+    # Période réelle de l'établissement. `trimestre` (numéro) est conservée en
+    # miroir pour les clients existants, mais c'est `trimestre_id` qui fait foi :
+    # une école peut avoir 2 semestres ou 3 trimestres, nommés librement.
+    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=True)
+    trimestre = Column(Integer, nullable=True)
     titre = Column(String(300), nullable=False)
     fichier_nom = Column(String(255), nullable=False)
     fichier_path = Column(String(500), nullable=False)

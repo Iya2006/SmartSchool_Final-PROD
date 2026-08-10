@@ -16,7 +16,8 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.academique import (
     SujetExamen, EmploiExamen, CreneauExamen, DemandeEmploi,
-    Message, Enseignant, Matiere, Classe, ClasseMatiere, Affectation
+    Message, Enseignant, Matiere, Classe, ClasseMatiere, Affectation,
+    Trimestre, AnneeScolaire
 )
 
 router = APIRouter(prefix="/api/examens", tags=["Examens"])
@@ -24,6 +25,86 @@ router = APIRouter(prefix="/api/examens", tags=["Examens"])
 # Upload directory
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "sujets")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# ================================================================
+# PÉRIODES
+# ================================================================
+# Ce module imposait trois trimestres (`trimestre` = 1, 2 ou 3), alors que le
+# reste du système gère de 1 à 12 périodes nommées librement. Une école à deux
+# semestres se voyait donc proposer un « T3 » qui ne correspondait à rien, et
+# aucun écran n'affichait le nom réel de la période.
+
+
+def _annee_courante(db: Session) -> Optional[AnneeScolaire]:
+    return (db.query(AnneeScolaire).filter(AnneeScolaire.est_courante == "O").first()
+            or db.query(AnneeScolaire).order_by(AnneeScolaire.date_debut.desc()).first())
+
+
+def _periodes_annee(db: Session) -> List[Trimestre]:
+    """Périodes réellement configurées, dans l'ordre."""
+    annee = _annee_courante(db)
+    if not annee:
+        return []
+    return db.query(Trimestre).filter(
+        Trimestre.annee_id == annee.annee_id
+    ).order_by(Trimestre.numero, Trimestre.date_debut).all()
+
+
+def _resoudre_periode(
+    db: Session, trimestre_id: Optional[int], numero: Optional[int]
+) -> Trimestre:
+    """Résout la période d'un sujet, par identifiant ou par ancien numéro.
+
+    Accepter encore le numéro évite de casser un portail enseignant qui n'aurait
+    pas été mis à jour, sans pour autant laisser entrer un numéro qui ne
+    correspond à aucune période réelle de l'établissement.
+    """
+    if trimestre_id:
+        periode = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+        if not periode:
+            raise HTTPException(404, "Période non trouvée")
+        return periode
+
+    periodes = _periodes_annee(db)
+    if not periodes:
+        raise HTTPException(
+            400,
+            "Aucune période n'est configurée pour l'année en cours — "
+            "définissez-les dans Paramètres > Calendrier avant de déposer un sujet.",
+        )
+    if numero:
+        trouvee = next((p for p in periodes if p.numero == numero), None)
+        if not trouvee:
+            noms = ", ".join(p.libelle for p in periodes)
+            raise HTTPException(
+                400,
+                f"Période {numero} inexistante. Périodes de cette année : {noms}.",
+            )
+        return trouvee
+    raise HTTPException(400, "Période requise (trimestre_id)")
+
+
+@router.get("/periodes")
+def lister_periodes(db: Session = Depends(get_db)):
+    """Périodes de l'année, pour les sélecteurs des deux écrans d'examens.
+
+    Évite que le portail enseignant et le Centre des Examens réinventent
+    chacun une liste « T1 T2 T3 » figée dans leur code.
+    """
+    periodes = _periodes_annee(db)
+    return [
+        {
+            "trimestre_id": p.trimestre_id,
+            "numero": p.numero,
+            "libelle": p.libelle,
+            "code": p.code,
+            "statut": p.statut,
+            "date_debut": str(p.date_debut) if p.date_debut else None,
+            "date_fin": str(p.date_fin) if p.date_fin else None,
+        }
+        for p in periodes
+    ]
 
 
 # ================================================================
@@ -35,8 +116,9 @@ async def upload_sujet(
     fichier: UploadFile = File(...),
     enseignant_id: int = Form(...),
     matiere_id: int = Form(...),
-    trimestre: int = Form(...),
     titre: str = Form(...),
+    trimestre_id: Optional[int] = Form(None),
+    trimestre: Optional[int] = Form(None),
     duree_minutes: int = Form(...),
     classe_id: Optional[int] = Form(None),
     demande_id: Optional[int] = Form(None),
@@ -55,8 +137,10 @@ async def upload_sujet(
     if not mat:
         raise HTTPException(404, "Matière non trouvée")
 
-    if trimestre not in [1, 2, 3]:
-        raise HTTPException(400, "Le trimestre doit être 1, 2 ou 3")
+    # Période : c'est celle de l'établissement qui fait foi. L'ancien numéro
+    # 1/2/3 reste accepté (clients non encore mis à jour) mais il est résolu
+    # vers une vraie période — une école à deux semestres n'a pas de « T3 ».
+    periode = _resoudre_periode(db, trimestre_id, trimestre)
 
     # Check file type
     allowed_types = [
@@ -71,7 +155,7 @@ async def upload_sujet(
 
     # Save file
     ext = os.path.splitext(fichier.filename)[1] if fichier.filename else ".pdf"
-    safe_name = f"sujet_{enseignant_id}_{matiere_id}_T{trimestre}_{int(datetime.now().timestamp())}{ext}"
+    safe_name = f"sujet_{enseignant_id}_{matiere_id}_P{periode.numero}_{int(datetime.now().timestamp())}{ext}"
     file_path = os.path.join(UPLOAD_DIR, safe_name)
 
     with open(file_path, "wb") as buffer:
@@ -85,7 +169,8 @@ async def upload_sujet(
         enseignant_id=enseignant_id,
         matiere_id=matiere_id,
         classe_id=classe_id,
-        trimestre=trimestre,
+        trimestre_id=periode.trimestre_id,
+        trimestre=periode.numero,
         titre=titre,
         fichier_nom=fichier.filename or safe_name,
         fichier_path=safe_name,
@@ -105,10 +190,10 @@ async def upload_sujet(
         expediteur_id=enseignant_id,
         destinataire_type="ADMIN",
         objet_type="EXAMENS",
-        sujet=f"Sujet déposé — {mat.libelle} (T{trimestre})",
+        sujet=f"Sujet déposé — {mat.libelle} ({periode.libelle})",
         contenu=(
             f"{ens.prenom} {ens.nom} a déposé le sujet \u00ab {titre} \u00bb "
-            f"pour la matière {mat.libelle} — Trimestre {trimestre}, "
+            f"pour la matière {mat.libelle} — {periode.libelle}, "
             f"durée {duree_minutes} min (fichier : {fichier.filename or safe_name})."
         )
     )
@@ -127,20 +212,30 @@ async def upload_sujet(
 @router.get("/sujets")
 def get_sujets(
     enseignant_id: Optional[int] = None,
+    trimestre_id: Optional[int] = None,
     trimestre: Optional[int] = None,
     statut: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """Liste des sujets - filtrable par enseignant, trimestre, statut."""
+    """Liste des sujets - filtrable par enseignant, période, statut.
+
+    `trimestre_id` filtre sur la période réelle ; `trimestre` (numéro) reste
+    accepté pour les appelants non mis à jour.
+    """
     query = db.query(SujetExamen)
     if enseignant_id:
         query = query.filter(SujetExamen.enseignant_id == enseignant_id)
-    if trimestre:
+    if trimestre_id:
+        query = query.filter(SujetExamen.trimestre_id == trimestre_id)
+    elif trimestre:
         query = query.filter(SujetExamen.trimestre == trimestre)
     if statut:
         query = query.filter(SujetExamen.statut == statut)
 
     sujets = query.order_by(SujetExamen.date_depot.desc()).all()
+    # Libellés des périodes en une requête : la boucle ci-dessous en émettait
+    # déjà trois par sujet, inutile d'en ajouter une quatrième.
+    periodes = {p.trimestre_id: p for p in db.query(Trimestre).all()}
     result = []
     for s in sujets:
         ens = db.query(Enseignant).filter(Enseignant.enseignant_id == s.enseignant_id).first()
@@ -158,6 +253,11 @@ def get_sujets(
             "classe_id": s.classe_id,
             "classe_libelle": cls.libelle if cls else None,
             "trimestre": s.trimestre,
+            "trimestre_id": s.trimestre_id,
+            "periode_libelle": (
+                periodes[s.trimestre_id].libelle if s.trimestre_id in periodes
+                else (f"Période {s.trimestre}" if s.trimestre else "Période inconnue")
+            ),
             "titre": s.titre,
             "fichier_nom": s.fichier_nom,
             "fichier_path": s.fichier_path,
@@ -204,11 +304,33 @@ def envoyer_sujet(sujet_id: int, db: Session = Depends(get_db)):
 
 @router.put("/sujets/{sujet_id}/valider")
 def valider_sujet(sujet_id: int, db: Session = Depends(get_db)):
-    """L'admin valide un sujet reçu. Met à jour le statut de la demande si tout est validé."""
+    """L'admin valide un sujet reçu. Met à jour le statut de la demande si tout est validé.
+
+    L'enseignant est prévenu, au même titre qu'en cas de rejet : jusqu'ici seule
+    la mauvaise nouvelle circulait, si bien qu'un professeur ayant déposé son
+    sujet ne savait jamais s'il avait été accepté — et relançait.
+    """
     sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
     if not sujet:
         raise HTTPException(404, "Sujet non trouvé")
     sujet.statut = "VALIDE"
+
+    mat = db.query(Matiere).filter(Matiere.matiere_id == sujet.matiere_id).first()
+    periode = db.query(Trimestre).filter(
+        Trimestre.trimestre_id == sujet.trimestre_id
+    ).first() if sujet.trimestre_id else None
+    libelle_periode = periode.libelle if periode else f"Période {sujet.trimestre}"
+    db.add(Message(
+        expediteur_type="ADMIN",
+        destinataire_type="ENSEIGNANT",
+        destinataire_id=sujet.enseignant_id,
+        objet_type="EXAMENS",
+        sujet=f"Sujet validé — {mat.libelle if mat else '?'} ({libelle_periode})",
+        contenu=(
+            f"Votre sujet « {sujet.titre} » a été validé par l'administration. "
+            "Aucune action de votre part n'est nécessaire."
+        ),
+    ))
 
     # Check if all sujets for this demande are now validated → mark demande as TRAITE
     if sujet.demande_id:
@@ -240,12 +362,16 @@ def rejeter_sujet(sujet_id: int, raison: str = "", db: Session = Depends(get_db)
     # Notify teacher
     ens = db.query(Enseignant).filter(Enseignant.enseignant_id == sujet.enseignant_id).first()
     mat = db.query(Matiere).filter(Matiere.matiere_id == sujet.matiere_id).first()
+    _periode = db.query(Trimestre).filter(
+        Trimestre.trimestre_id == sujet.trimestre_id
+    ).first() if sujet.trimestre_id else None
+    _libelle_periode = _periode.libelle if _periode else f"Période {sujet.trimestre}"
     msg = Message(
         expediteur_type="ADMIN",
         destinataire_type="ENSEIGNANT",
         destinataire_id=sujet.enseignant_id,
         objet_type="EXAMENS",
-        sujet=f"Sujet rejeté — {mat.libelle if mat else '?'} (T{sujet.trimestre})",
+        sujet=f"Sujet rejeté — {mat.libelle if mat else '?'} ({_libelle_periode})",
         contenu=f"Votre sujet '{sujet.titre}' a été rejeté. Raison: {raison or 'Non spécifiée'}. Veuillez soumettre un nouveau sujet."
     )
     db.add(msg)
@@ -275,7 +401,8 @@ def supprimer_sujet(sujet_id: int, db: Session = Depends(get_db)):
 class SujetModifier(BaseModel):
     titre: str
     duree_minutes: int
-    trimestre: int
+    trimestre_id: Optional[int] = None
+    trimestre: Optional[int] = None
 
 
 @router.put("/sujets/{sujet_id}/modifier")
@@ -290,7 +417,12 @@ def modifier_sujet(sujet_id: int, data: SujetModifier, db: Session = Depends(get
         raise HTTPException(400, "Un sujet validé ne peut plus être modifié.")
     sujet.titre = data.titre
     sujet.duree_minutes = data.duree_minutes
-    sujet.trimestre = data.trimestre
+    # Même résolution qu'au dépôt : la période réelle fait foi, l'ancien numéro
+    # reste accepté pour un client non mis à jour.
+    if data.trimestre_id or data.trimestre:
+        periode = _resoudre_periode(db, data.trimestre_id, data.trimestre)
+        sujet.trimestre_id = periode.trimestre_id
+        sujet.trimestre = periode.numero
     db.commit()
     return {"message": "Sujet mis à jour.", "sujet_id": sujet_id}
 
@@ -315,10 +447,16 @@ def telecharger_sujet(sujet_id: int, db: Session = Depends(get_db)):
 # ================================================================
 
 @router.get("/admin/stats")
-def get_exam_stats(trimestre: Optional[int] = None, db: Session = Depends(get_db)):
-    """Statistiques pour le centre d'évaluation admin."""
+def get_exam_stats(
+    trimestre_id: Optional[int] = None,
+    trimestre: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """Statistiques pour le Centre des Examens."""
     q = db.query(SujetExamen)
-    if trimestre:
+    if trimestre_id:
+        q = q.filter(SujetExamen.trimestre_id == trimestre_id)
+    elif trimestre:
         q = q.filter(SujetExamen.trimestre == trimestre)
 
     all_sujets = q.all()
@@ -341,6 +479,238 @@ def get_exam_stats(trimestre: Optional[int] = None, db: Session = Depends(get_db
         "enseignants_soumis": len(ens_ids),
         "total_enseignants": total_enseignants,
         "taux_soumission": round(len(ens_ids) / max(total_enseignants, 1) * 100, 1),
+    }
+
+
+# ================================================================
+# SUJETS ATTENDUS ET MANQUANTS
+# ================================================================
+# Le tableau de bord n'affichait qu'un « taux de soumission » : le nombre
+# d'enseignants ayant déposé, divisé par le nombre d'enseignants actifs. Il ne
+# disait ni QUI manquait, ni POUR QUELLE MATIÈRE — pour relancer, il fallait
+# deviner. L'information existe pourtant : les affectations disent exactement
+# quel enseignant assure quelle matière dans quelle classe.
+
+
+def _attendus_par_affectation(db: Session) -> List[dict]:
+    """Un sujet attendu par affectation active de l'année en cours.
+
+    Préchargement en lot : une école de 40 classes × 12 matières produit ~500
+    lignes, et interroger enseignant/matière/classe pour chacune remettrait le
+    N+1 que ce projet a déjà payé cher ailleurs.
+    """
+    annee = _annee_courante(db)
+    if not annee:
+        return []
+
+    affectations = db.query(Affectation).filter(
+        Affectation.annee_id == annee.annee_id,
+        Affectation.statut == "ACTIVE",
+    ).all()
+    if not affectations:
+        return []
+
+    enseignants = {
+        e.enseignant_id: e for e in db.query(Enseignant).filter(
+            Enseignant.enseignant_id.in_({a.enseignant_id for a in affectations})
+        ).all()
+    }
+    matieres = {
+        m.matiere_id: m for m in db.query(Matiere).filter(
+            Matiere.matiere_id.in_({a.matiere_id for a in affectations})
+        ).all()
+    }
+    classes = {
+        c.classe_id: c for c in db.query(Classe).filter(
+            Classe.classe_id.in_({a.classe_id for a in affectations})
+        ).all()
+    }
+
+    attendus = []
+    for a in affectations:
+        ens, mat, cls = (enseignants.get(a.enseignant_id),
+                         matieres.get(a.matiere_id), classes.get(a.classe_id))
+        if not (ens and mat and cls) or cls.statut != "ACTIVE":
+            continue
+        attendus.append({
+            "enseignant_id": a.enseignant_id,
+            "enseignant_nom": f"{ens.prenom} {ens.nom}",
+            "enseignant_telephone": ens.telephone,
+            "matiere_id": a.matiere_id,
+            "matiere_libelle": mat.libelle,
+            "classe_id": a.classe_id,
+            "classe_libelle": cls.libelle,
+        })
+    return attendus
+
+
+@router.get("/sujets/suivi")
+def suivi_sujets(trimestre_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Sujets attendus, reçus et manquants pour une période, nommément.
+
+    Remplace un pourcentage qu'on subit par une liste sur laquelle on agit :
+    « Mathématiques 8ème A — M. Diallo » se relance, « 0 % » ne se relance pas.
+
+    Un sujet compte comme reçu dès qu'il est déposé pour le couple
+    (enseignant, matière) — la classe n'est pas exigée, beaucoup d'écoles
+    déposant un sujet commun à toutes les classes d'un même niveau.
+    """
+    periodes = _periodes_annee(db)
+    if not periodes:
+        return {
+            "periode": None, "attendus": 0, "recus": 0, "manquants": [],
+            "message": "Aucune période configurée pour l'année en cours.",
+        }
+    periode = next((p for p in periodes if p.trimestre_id == trimestre_id), None) if trimestre_id else None
+    if periode is None:
+        periode = next((p for p in periodes if p.statut == "EN_COURS"), periodes[0])
+
+    attendus = _attendus_par_affectation(db)
+    recus = db.query(SujetExamen).filter(
+        SujetExamen.trimestre_id == periode.trimestre_id,
+        SujetExamen.statut.in_(["ENVOYE", "RECU", "VALIDE"]),
+    ).all()
+    couples_recus = {(s.enseignant_id, s.matiere_id) for s in recus}
+
+    manquants = [
+        a for a in attendus
+        if (a["enseignant_id"], a["matiere_id"]) not in couples_recus
+    ]
+    # Une même matière assurée dans plusieurs classes ne se relance qu'une fois.
+    par_enseignant: dict = {}
+    for m in manquants:
+        cle = (m["enseignant_id"], m["matiere_id"])
+        entree = par_enseignant.setdefault(cle, {
+            "enseignant_id": m["enseignant_id"],
+            "enseignant_nom": m["enseignant_nom"],
+            "enseignant_telephone": m["enseignant_telephone"],
+            "matiere_id": m["matiere_id"],
+            "matiere_libelle": m["matiere_libelle"],
+            "classes": [],
+        })
+        entree["classes"].append(m["classe_libelle"])
+
+    lignes = sorted(
+        par_enseignant.values(),
+        key=lambda x: (x["enseignant_nom"], x["matiere_libelle"]),
+    )
+    attendus_uniques = {(a["enseignant_id"], a["matiere_id"]) for a in attendus}
+    nb_attendus = len(attendus_uniques)
+    nb_recus = len(attendus_uniques & couples_recus)
+
+    return {
+        "periode": {
+            "trimestre_id": periode.trimestre_id,
+            "libelle": periode.libelle,
+            "statut": periode.statut,
+        },
+        "attendus": nb_attendus,
+        "recus": nb_recus,
+        "manquants": lignes,
+        "taux_couverture": round(100.0 * nb_recus / nb_attendus, 1) if nb_attendus else None,
+        # Sujets déposés hors affectation connue : ni une erreur ni un manque,
+        # mais l'école doit pouvoir s'en apercevoir.
+        "hors_affectation": len(couples_recus - attendus_uniques),
+    }
+
+
+class RelanceSujets(BaseModel):
+    trimestre_id: int
+    enseignant_ids: Optional[List[int]] = None   # None = tous ceux qui manquent
+    message: Optional[str] = None
+
+
+@router.post("/sujets/relancer")
+def relancer_sujets(data: RelanceSujets, db: Session = Depends(get_db)):
+    """Relance nommément les enseignants dont le sujet manque.
+
+    Relancer tout le monde use la crédibilité du message : un enseignant à jour
+    qui reçoit un rappel cesse de les lire. On n'écrit qu'à ceux qui manquent,
+    et on leur rappelle laquelle de leurs matières est concernée.
+    """
+    suivi = suivi_sujets(data.trimestre_id, db)
+    manquants = suivi["manquants"]
+    if data.enseignant_ids:
+        cibles = set(data.enseignant_ids)
+        manquants = [m for m in manquants if m["enseignant_id"] in cibles]
+    if not manquants:
+        return {"message": "Aucun sujet manquant — personne à relancer.", "relances": 0}
+
+    periode = suivi["periode"]["libelle"] if suivi["periode"] else "la période en cours"
+    par_enseignant: dict = {}
+    for m in manquants:
+        par_enseignant.setdefault(m["enseignant_id"], []).append(m["matiere_libelle"])
+
+    for enseignant_id, matieres in par_enseignant.items():
+        db.add(Message(
+            expediteur_type="ADMIN",
+            destinataire_type="ENSEIGNANT",
+            destinataire_id=enseignant_id,
+            objet_type="EXAMENS",
+            sujet=f"Sujet(s) d'examen attendu(s) — {periode}",
+            contenu=(
+                (data.message + "\n\n" if data.message else "")
+                + "Nous n'avons pas encore reçu votre sujet pour : "
+                + ", ".join(sorted(set(matieres)))
+                + f" ({periode}). Merci de le déposer depuis votre portail."
+            ),
+        ))
+    db.commit()
+    return {
+        "message": f"{len(par_enseignant)} enseignant(s) relancé(s).",
+        "relances": len(par_enseignant),
+    }
+
+
+class DemandeSujets(BaseModel):
+    trimestre_id: int
+    titre: Optional[str] = None
+    description: Optional[str] = None
+
+
+@router.post("/sujets/demander", status_code=201)
+def demander_sujets(data: DemandeSujets, db: Session = Depends(get_db)):
+    """Ouvre une campagne de collecte des sujets et prévient les enseignants.
+
+    Ce geste n'existait que dans l'écran Communication, sous la forme d'une
+    « demande » de type EXAMENS : le Centre des Examens, seul endroit où l'on
+    constate l'absence de sujets, n'offrait aucun moyen de les réclamer.
+    """
+    periode = db.query(Trimestre).filter(
+        Trimestre.trimestre_id == data.trimestre_id
+    ).first()
+    if not periode:
+        raise HTTPException(404, "Période non trouvée")
+
+    titre = data.titre or f"Dépôt des sujets d'examen — {periode.libelle}"
+    description = data.description or (
+        f"Merci de déposer vos sujets d'examen pour {periode.libelle} "
+        "depuis votre portail enseignant, onglet Examens."
+    )
+
+    demande = DemandeEmploi(
+        titre=titre,
+        description=description,
+        objet_type="EXAMENS",
+        classes_concernees="TOUTES",
+        trimestre=periode.numero,
+    )
+    db.add(demande)
+    db.flush()
+
+    db.add(Message(
+        demande_id=demande.demande_id,
+        expediteur_type="ADMIN",
+        destinataire_type="TOUS_ENSEIGNANTS",
+        objet_type="EXAMENS",
+        sujet=titre,
+        contenu=description,
+    ))
+    db.commit()
+    return {
+        "message": "Demande envoyée à tous les enseignants.",
+        "demande_id": demande.demande_id,
+        "periode": periode.libelle,
     }
 
 
