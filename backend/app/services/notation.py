@@ -27,6 +27,7 @@ sont devenues inutilisables par le passé à cause de ça).
 from datetime import date, timedelta
 from typing import Dict, List, Optional, Tuple
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.academique import (
@@ -295,12 +296,18 @@ def coefficient_matiere_effectif(
 # ════════════════════════════════════════════════════════════
 
 def get_bareme_defaut_cycle(db: Session, etablissement_id: int, cycle_key: str) -> float:
-    """Barème par défaut de l'école pour un cycle (`notation.bareme.{cycle}`)."""
+    """Barème par défaut de l'école pour un cycle (`notation.bareme.{cycle}`).
+
+    Les deux écritures de la clé sont acceptées. L'écran Paramètres > Notation
+    préfixe toutes ses clés par `notation.`, alors que cette fonction ne lisait
+    que la forme courte : le barème choisi par l'école était enregistré, réaffiché
+    correctement à l'écran, et purement et simplement ignoré par le calcul.
+    """
     param = db.query(ParametreEtablissement).filter(
         ParametreEtablissement.etablissement_id == etablissement_id,
         ParametreEtablissement.categorie == "NOTATION",
-        ParametreEtablissement.cle == f"bareme.{cycle_key}",
-    ).first()
+        ParametreEtablissement.cle.in_([f"notation.bareme.{cycle_key}", f"bareme.{cycle_key}"]),
+    ).order_by(ParametreEtablissement.cle.desc()).first()
     if param and param.valeur:
         try:
             valeur = float(param.valeur)
@@ -413,24 +420,45 @@ def get_mention(moyenne: float, db=None, cycle: str = "college", etablissement_i
     return "INSUFFISANT"
 
 
-def get_seuil_passage(db: Session, etablissement_id: int, cycle_key: str) -> float:
-    """Moyenne à partir de laquelle l'élève passe (`notation.seuil_redoublement.{cycle}`).
+SEUIL_PASSAGE_DEFAUT = 10.0
 
-    Même clé que celle lue par la promotion : la fiche de fin d'année ne doit
-    pas annoncer un taux de réussite calculé sur un autre seuil que celui qui
-    décidera réellement du passage.
+
+def get_seuil_passage(db: Session, etablissement_id: int, cycle_key: str) -> float:
+    """Moyenne à partir de laquelle l'élève passe, pour un cycle.
+
+    Source unique, partagée par la promotion et par la fiche de fin d'année :
+    annoncer un taux de réussite calculé sur un autre seuil que celui qui
+    décidera réellement du passage serait pire que ne rien annoncer.
+
+    Deux champs de l'écran Paramètres > Notation désignent la même chose —
+    « Note de passage » (onglet Barème, clé `passage.{cycle}`) et « Seuil de
+    redoublement » (onglet Redoublement, clé `seuil_redoublement.{cycle}`).
+    Seul le second était lu : une école qui renseignait le premier voyait sa
+    valeur enregistrée et ignorée. Les deux sont désormais acceptés, avec et
+    sans le préfixe `notation.`, `seuil_redoublement` gardant la priorité car
+    c'est lui qui accompagne l'activation du redoublement.
     """
+    cles = [
+        f"notation.seuil_redoublement.{cycle_key}", f"seuil_redoublement.{cycle_key}",
+        f"notation.passage.{cycle_key}", f"passage.{cycle_key}",
+    ]
     try:
-        param = db.query(ParametreEtablissement).filter(
-            ParametreEtablissement.etablissement_id == etablissement_id,
-            ParametreEtablissement.categorie == "NOTATION",
-            ParametreEtablissement.cle == f"notation.seuil_redoublement.{cycle_key}",
-        ).first()
-        if param and param.valeur is not None:
-            return float(param.valeur)
+        trouves = {
+            p.cle: p.valeur for p in db.query(ParametreEtablissement).filter(
+                ParametreEtablissement.etablissement_id == etablissement_id,
+                ParametreEtablissement.categorie == "NOTATION",
+                ParametreEtablissement.cle.in_(cles),
+            ).all()
+        }
+        for cle in cles:
+            valeur = trouves.get(cle)
+            if valeur not in (None, ""):
+                return float(valeur)
+    except (TypeError, ValueError):
+        pass
     except Exception:
         pass
-    return 10.0
+    return SEUIL_PASSAGE_DEFAUT
 
 
 def get_appreciation(moyenne: float, note_sur: float = BAREME_DEFAUT) -> str:
@@ -1309,15 +1337,23 @@ def get_bulletin_display_flags(db: Session, etablissement_id: int = 1) -> dict:
     coin sans jamais se voir, d'où les toggles qui semblaient sans effet selon
     la page utilisée. `notation.display.*` prend le dessus quand présent ;
     sinon on retombe sur `documents.champ_*`.
+
+    Les deux écritures de la clé sont acceptées (`display.rang` et
+    `notation.display.rang`) : l'écran Notation préfixe tout par `notation.`,
+    donc aucun de ses toggles d'affichage n'était réellement lu ici.
     """
     notation_display = {}
     try:
         for p in db.query(ParametreEtablissement).filter(
             ParametreEtablissement.etablissement_id == etablissement_id,
             ParametreEtablissement.categorie == "NOTATION",
-            ParametreEtablissement.cle.like("display.%"),
+            or_(
+                ParametreEtablissement.cle.like("display.%"),
+                ParametreEtablissement.cle.like("notation.display.%"),
+            ),
         ).all():
-            notation_display[p.cle.replace("display.", "")] = p.valeur
+            cle = p.cle.replace("notation.", "").replace("display.", "")
+            notation_display[cle] = p.valeur
     except Exception:
         pass
 

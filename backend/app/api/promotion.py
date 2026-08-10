@@ -25,7 +25,10 @@ from app.models.academique import (
     Classe, Niveau, Cycle, Inscription, Eleve, AnneeScolaire,
     Bulletin, BulletinLigne, ParametreEtablissement, ResultatOfficielExamen,
 )
-from app.services.notation import resultats_annuels_bulk as _resultats_annuels_bulk
+from app.services.notation import (
+    get_seuil_passage,
+    resultats_annuels_bulk as _resultats_annuels_bulk,
+)
 
 router = APIRouter(prefix="/api/promotion", tags=["Promotion & Clôture d'année"])
 
@@ -185,7 +188,7 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Niveau introuvable pour cette classe")
 
     redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", False)
-    seuil = _get_notation_param(db, classe.etablissement_id, f"notation.seuil_redoublement.{cycle_key}", 10.0)
+    seuil = get_seuil_passage(db, classe.etablissement_id, cycle_key)
     niveau_suivant = _niveau_suivant(db, niveau)
     situation = _situation_niveau(niveau, cycle)
     est_frontiere_lycee = situation["est_frontiere_lycee"]
@@ -281,7 +284,7 @@ def _calculer_resultats_classe_core(
     """
     niveau, cycle, cycle_key = _cycle_key_pour_classe(db, classe)
     redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", False)
-    seuil = _get_notation_param(db, classe.etablissement_id, f"notation.seuil_redoublement.{cycle_key}", 10.0)
+    seuil = get_seuil_passage(db, classe.etablissement_id, cycle_key)
     niveau_suivant = _niveau_suivant(db, niveau) if niveau else None
     situation = _situation_niveau(niveau, cycle)
     est_frontiere_lycee = situation["est_frontiere_lycee"]
