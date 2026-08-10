@@ -156,6 +156,13 @@ export default function NotationPage() {
         primaire: {}, college: {}, lycee: {},
     });
 
+    // Règle de combinaison des épreuves d'une matière, par cycle. Défaut
+    // PAR_TYPE : c'est le comportement historique du moteur, et le changer ne
+    // doit jamais être un effet de bord d'une mise à jour.
+    const [modeAgregation, setModeAgregation] = useState<Record<string, string>>({
+        primaire: 'PAR_TYPE', college: 'PAR_TYPE', lycee: 'PAR_TYPE',
+    });
+
     // ── Mentions par cycle ──
     const [mentionCycle, setMentionCycle] = useState('college');
     const [mentions, setMentions] = useState<Record<string, Record<string,number>>>({
@@ -281,6 +288,11 @@ export default function NotationPage() {
                             p:  (s['mention.lycee.p'] as number) ?? 10   
                         },
                     });
+                    setModeAgregation({
+                        primaire: (s['mode_agregation.primaire'] as string) || 'PAR_TYPE',
+                        college:  (s['mode_agregation.college']  as string) || 'PAR_TYPE',
+                        lycee:    (s['mode_agregation.lycee']    as string) || 'PAR_TYPE',
+                    });
                     setDisplay({
                         rang:          (s['display.rang'] as boolean)          ?? true,
                         mention:       (s['display.mention'] as boolean)       ?? true,
@@ -401,6 +413,10 @@ export default function NotationPage() {
                 ),
                 ...(['primaire','college','lycee'] as const).flatMap(cycle =>
                     ['tb','b','ab','p'].map(mk => buildParam(`mention.${cycle}.${mk}`, mentions[cycle][mk]))
+                ),
+                // Règle de combinaison des épreuves, par cycle
+                ...(['primaire','college','lycee'] as const).map(cycle =>
+                    buildParam(`mode_agregation.${cycle}`, modeAgregation[cycle] || 'PAR_TYPE')
                 ),
                 buildParam('display.rang',          display.rang),
                 buildParam('display.mention',       display.mention),
@@ -1187,9 +1203,7 @@ export default function NotationPage() {
                                 <h3>Types d&apos;évaluation et leurs coefficients</h3>
                                 <span className={styles.sectionSubtitle}>
                                     Chaque type d&apos;évaluation a un coefficient qui détermine son poids dans la moyenne de la matière.
-                                    Les notes d&apos;un même type sont d&apos;abord moyennées entre elles, puis pondérées par ce coefficient.
-                                    Exemple : 3 évaluations (coef. 1) et 1 composition (coef. 2) → moyenne = (moyenne des 3 évaluations × 1 + composition × 2) ÷ 3.
-                                    Le nombre d&apos;évaluations ne change donc pas leur poids face à la composition.
+                                    La façon de les combiner se règle juste en dessous — elle n&apos;est pas imposée.
                                 </span>
                             </div>
 
@@ -1220,6 +1234,55 @@ export default function NotationPage() {
                                     <Info size={13} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} />
                                     Les réalités diffèrent d&apos;un cycle à l&apos;autre : au primaire tout peut valoir 1, alors qu&apos;au collège
                                     la composition pèse plus lourd. Laissez vide pour utiliser le coefficient par défaut du type.
+                                </div>
+                            </div>
+
+                            {/* ── Règle d'agrégation ──
+                                Ce choix change réellement les moyennes ET le classement dès qu'une
+                                période compte plusieurs épreuves du même type : sur une classe de
+                                17 élèves avec 2 évaluations et 1 composition, 12 élèves changent
+                                de rang selon la règle retenue. Il ne peut donc pas rester implicite. */}
+                            <div style={{ marginBottom: '1.25rem', padding: '1rem 1.25rem', borderRadius: '12px', background: '#fffbeb', border: '1px solid #fcd34d' }}>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#92400e', marginBottom: '0.15rem' }}>
+                                    Comment combiner les épreuves d&apos;une même matière ?
+                                </div>
+                                <div style={{ fontSize: '0.75rem', color: '#a16207', marginBottom: '0.8rem' }}>
+                                    Réglage propre au cycle <strong>{({ primaire: 'Primaire', college: 'Collège', lycee: 'Lycée' } as Record<string, string>)[coefTypeCycle]}</strong>.
+                                    Les deux règles ci-dessous sont également répandues et ne donnent pas le même résultat.
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                    {([
+                                        {
+                                            key: 'PAR_TYPE', titre: 'Par type d’évaluation',
+                                            formule: '(moyenne des 2 évaluations × 1 + composition × 2) ÷ 3',
+                                            detail: 'Les notes d’un même type sont d’abord moyennées entre elles. Le nombre d’évaluations ne change pas leur poids face à la composition.',
+                                        },
+                                        {
+                                            key: 'PAR_EPREUVE', titre: 'Par épreuve',
+                                            formule: '(éval. 1 × 1 + éval. 2 × 1 + composition × 2) ÷ 4',
+                                            detail: 'Chaque épreuve pèse son propre coefficient. Plus il y a d’évaluations, plus elles pèsent face à la composition.',
+                                        },
+                                    ]).map(m => {
+                                        const actif = (modeAgregation[coefTypeCycle] || 'PAR_TYPE') === m.key;
+                                        return (
+                                            <button key={m.key} type="button"
+                                                onClick={() => setModeAgregation(prev => ({ ...prev, [coefTypeCycle]: m.key }))}
+                                                style={{
+                                                    flex: '1 1 260px', textAlign: 'left', cursor: 'pointer',
+                                                    padding: '0.8rem 1rem', borderRadius: '10px',
+                                                    background: actif ? 'white' : 'rgba(255,255,255,0.55)',
+                                                    border: `2px solid ${actif ? '#d97706' : '#fde68a'}`,
+                                                }}>
+                                                <div style={{ fontSize: '0.85rem', fontWeight: 800, color: actif ? '#92400e' : '#a16207', marginBottom: '0.3rem' }}>
+                                                    {actif ? '● ' : '○ '}{m.titre}
+                                                </div>
+                                                <div style={{ fontSize: '0.75rem', fontFamily: 'ui-monospace, monospace', color: '#78350f', marginBottom: '0.35rem' }}>
+                                                    {m.formule}
+                                                </div>
+                                                <div style={{ fontSize: '0.72rem', color: '#a16207', lineHeight: 1.4 }}>{m.detail}</div>
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
 

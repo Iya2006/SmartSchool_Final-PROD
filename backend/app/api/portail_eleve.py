@@ -395,6 +395,66 @@ def get_absences_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Se
 
 
 # ================================================================
+# CLASSEMENT SUR UNE ÉPREUVE OU UNE PÉRIODE
+# ================================================================
+
+def _inscription_active(db: Session, eleve_id: int) -> Inscription:
+    inscription = db.query(Inscription).filter(
+        Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
+    ).first()
+    if not inscription:
+        raise HTTPException(404, "Aucune inscription active")
+    return inscription
+
+
+@router.get("/{eleve_id}/epreuves")
+def get_epreuves_eleve(
+    eleve_id: int, trimestre_id: int = 1,
+    _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
+):
+    """Épreuves consultables sur la période (uniquement celles centralisées)."""
+    from app.services.notation import epreuves_consultables
+
+    inscription = _inscription_active(db, eleve_id)
+    return {
+        "trimestre_id": trimestre_id,
+        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id),
+    }
+
+
+@router.get("/{eleve_id}/classement")
+def get_classement_eleve(
+    eleve_id: int, trimestre_id: int = 1,
+    evaluation_ids: Optional[str] = None,
+    _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
+):
+    """Résultat et rang de l'élève sur une sélection d'épreuves.
+
+    `evaluation_ids` absent = toute la période. Le calcul porte sur la classe
+    entière (sans quoi le rang n'a pas de sens), mais seule la ligne de l'élève
+    est renvoyée — aucune donnée d'un camarade ne sort d'ici.
+    """
+    from app.api.evaluations import get_bulletin_display_flags
+    from app.services.notation import resultat_eleve_sur_epreuves
+
+    inscription = _inscription_active(db, eleve_id)
+    ids = None
+    if evaluation_ids:
+        try:
+            ids = [int(x) for x in evaluation_ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(400, "Liste d'identifiants invalide")
+
+    classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    flags = get_bulletin_display_flags(db, classe.etablissement_id if classe else 1)
+
+    return resultat_eleve_sur_epreuves(
+        db, inscription.classe_id, trimestre_id, inscription.inscription_id,
+        evaluation_ids=ids, flags=flags,
+    )
+
+
+# ================================================================
 # BULLETIN
 # ================================================================
 @router.get("/{eleve_id}/bulletin")

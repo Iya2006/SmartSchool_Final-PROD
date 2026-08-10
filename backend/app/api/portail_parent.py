@@ -21,6 +21,16 @@ from app.models.academique import (
 router = APIRouter(prefix="/api/portail-parent", tags=["Portail Parent"])
 
 
+def _parse_ids(valeur: Optional[str]) -> Optional[list]:
+    """« 12,13,14 » -> [12, 13, 14]. None ou vide = pas de filtre."""
+    if not valeur:
+        return None
+    try:
+        return [int(x) for x in valeur.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(400, "Liste d'identifiants invalide")
+
+
 # ── Dépendance de sécurité : ownership check ──────────────────────────────
 async def _parent_auth(
     parent_id: int,
@@ -455,6 +465,79 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
         "total_coefficient": total_coef,
         "matieres": matieres,
     }
+
+
+# ================================================================
+# CLASSEMENT D'UN ENFANT SUR UNE ÉPREUVE OU UNE PÉRIODE
+# ================================================================
+
+def _inscription_enfant(db: Session, parent_id: int, eleve_id: int) -> Inscription:
+    """Vérifie le lien parent → enfant et retourne l'inscription active.
+
+    Le lien est revérifié à chaque appel : `_parent_auth` prouve seulement
+    l'identité du parent, pas qu'il a le droit de consulter CET élève.
+    """
+    link = db.query(EleveParent).filter(
+        EleveParent.parent_id == parent_id,
+        EleveParent.eleve_id == eleve_id,
+    ).first()
+    if not link:
+        raise HTTPException(403, "Accès refusé")
+    inscription = db.query(Inscription).filter(
+        Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
+    ).first()
+    if not inscription:
+        raise HTTPException(404, "Aucune inscription active pour cet élève")
+    return inscription
+
+
+@router.get("/{parent_id}/enfant/{eleve_id}/epreuves")
+def get_epreuves_enfant(
+    parent_id: int, eleve_id: int, trimestre_id: int = 1,
+    _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
+):
+    """Épreuves consultables pour cet enfant sur la période.
+
+    Le parent choisit ensuite ce qu'il veut regarder : le classement du seul
+    mois de janvier, celui d'une composition, ou celui de toute la période.
+    """
+    from app.services.notation import epreuves_consultables
+
+    inscription = _inscription_enfant(db, parent_id, eleve_id)
+    return {
+        "trimestre_id": trimestre_id,
+        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id),
+    }
+
+
+@router.get("/{parent_id}/enfant/{eleve_id}/classement")
+def get_classement_enfant(
+    parent_id: int, eleve_id: int, trimestre_id: int = 1,
+    evaluation_ids: Optional[str] = None,
+    _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
+):
+    """Résultat et rang de l'enfant sur une sélection d'épreuves.
+
+    `evaluation_ids` absent = toute la période. Seule la ligne de l'enfant est
+    renvoyée : le calcul porte sur la classe entière (le rang n'a pas de sens
+    autrement), mais aucune donnée d'un autre élève ne sort d'ici.
+    """
+    from app.api.evaluations import get_bulletin_display_flags
+    from app.services.notation import resultat_eleve_sur_epreuves
+
+    inscription = _inscription_enfant(db, parent_id, eleve_id)
+    ids = _parse_ids(evaluation_ids)
+
+    classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    flags = get_bulletin_display_flags(db, classe.etablissement_id if classe else 1)
+
+    resultat = resultat_eleve_sur_epreuves(
+        db, inscription.classe_id, trimestre_id, inscription.inscription_id,
+        evaluation_ids=ids, flags=flags,
+    )
+    if not resultat:
+        return None
+    return resultat
 
 
 # ================================================================

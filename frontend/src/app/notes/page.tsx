@@ -32,7 +32,8 @@ interface ClasseData {
 }
 interface EvalCentralisee {
     evaluation_id: number; libelle: string; date_evaluation: string;
-    matiere: string; matiere_id: number; classe: string; classe_id: number; trimestre: string;
+    matiere: string; matiere_id: number; classe: string; classe_id: number;
+    trimestre: string; trimestre_id: number;
     enseignant: string; note_sur: number; coefficient: number;
     nb_notes: number; moyenne: number | null; statut: string;
     session_id: number | null;
@@ -356,12 +357,16 @@ export default function CentralisationNotesPage() {
     // Fiche de classement imprimable (PDF généré par le serveur). Le jeton
     // d'authentification ne passe pas dans une simple ouverture d'onglet :
     // on récupère le fichier via l'API puis on l'ouvre depuis le navigateur.
-    const imprimerClassement = async (evaluationIds?: number[]) => {
-        if (!selectedClasse) return;
+    const imprimerClassement = async (
+        evaluationIds?: number[], classeId?: number, trimestreId?: number,
+    ) => {
+        const classe = classeId ?? selectedClasse;
+        const trimestre = trimestreId ?? selectedTrimestre;
+        if (!classe) return;
         try {
             const filtre = evaluationIds?.length ? `&evaluation_ids=${evaluationIds.join(',')}` : '';
             const res = await api.get(
-                `/api/evaluations/classe/${selectedClasse}/classement/pdf?trimestre_id=${selectedTrimestre}${filtre}`,
+                `/api/evaluations/classe/${classe}/classement/pdf?trimestre_id=${trimestre}${filtre}`,
                 { responseType: 'blob' }
             );
             const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
@@ -396,6 +401,38 @@ export default function CentralisationNotesPage() {
             alert(e?.response?.data?.detail || 'Erreur');
         }
         setLoadingApercu(false);
+    };
+
+    // ── Classement d'une épreuve depuis la liste générale ────────────────────
+    // Le classement doit être atteignable d'ici, sans passer par la classe :
+    // c'est sur cette liste que l'école retrouve ses compositions terminées.
+    // La classe et la période de l'épreuve priment sur ce qui est sélectionné
+    // en haut de page — sinon on calculerait le classement d'une autre classe.
+    const ouvrirClassementEpreuve = async (ligne: any) => {
+        const evals: EvalCentralisee[] = ligne.evaluations || [];
+        if (!evals.length) return;
+        setLoadingApercu(true);
+        try {
+            const ids = evals.map(e => e.evaluation_id).join(',');
+            const res = await api.get(
+                `/api/evaluations/classe/${evals[0].classe_id}/resultats-intermediaires`
+                + `?trimestre_id=${evals[0].trimestre_id}&evaluation_ids=${ids}`);
+            setApercu(res.data);
+            setApercuEvaluationIds(evals.map(e => e.evaluation_id));
+            setApercuPage(1);
+            setSelectedClasse(evals[0].classe_id);
+            setSelectedTrimestre(evals[0].trimestre_id);
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || 'Erreur');
+        }
+        setLoadingApercu(false);
+    };
+
+    const imprimerClassementEpreuve = async (ligne: any) => {
+        const evals: EvalCentralisee[] = ligne.evaluations || [];
+        if (!evals.length) return;
+        await imprimerClassement(
+            evals.map(e => e.evaluation_id), evals[0].classe_id, evals[0].trimestre_id);
     };
 
     // ── Épreuves de la période : voir les résultats de chacune, et choisir
@@ -671,10 +708,23 @@ export default function CentralisationNotesPage() {
                                                             </span>
                                                         )}
                                                     </td>
-                                                    <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                                                    {/* Le classement d'une épreuve doit être accessible d'ici,
+                                                        sans passer par la classe : c'est sur cette liste que
+                                                        l'école voit ses compositions une fois terminées. */}
+                                                    <td style={{ padding: '14px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                                                         <button onClick={() => ouvrirSaisie(ligne.evaluations[0], ligne.evaluations)}
-                                                            style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #6366f1', background: 'white', color: '#4338ca', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                                            style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #6366f1', background: 'white', color: '#4338ca', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '6px' }}>
                                                             <Edit3 size={13} /> {saisies > 0 ? 'Modifier' : 'Saisir'}
+                                                        </button>
+                                                        <button onClick={() => ouvrirClassementEpreuve(ligne)} disabled={saisies === 0}
+                                                            title={saisies === 0 ? 'Aucune note saisie' : 'Classement de cette épreuve'}
+                                                            style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #0ea5e9', background: 'white', color: '#0369a1', fontSize: '12px', fontWeight: 700, cursor: saisies ? 'pointer' : 'not-allowed', opacity: saisies ? 1 : 0.45, display: 'inline-flex', alignItems: 'center', gap: '6px', marginRight: '6px' }}>
+                                                            <Trophy size={13} /> Classement
+                                                        </button>
+                                                        <button onClick={() => imprimerClassementEpreuve(ligne)} disabled={saisies === 0}
+                                                            title={saisies === 0 ? 'Aucune note saisie' : 'Fiche imprimable de cette épreuve'}
+                                                            style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #059669', background: 'white', color: '#059669', fontSize: '12px', fontWeight: 700, cursor: saisies ? 'pointer' : 'not-allowed', opacity: saisies ? 1 : 0.45, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                                            <FileText size={13} /> Fiche
                                                         </button>
                                                     </td>
                                                 </tr>

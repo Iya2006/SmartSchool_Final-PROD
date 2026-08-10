@@ -42,6 +42,7 @@ from app.services.notation import (
     get_cycle_key,
     get_etablissement_id,
     get_mention,
+    get_mode_agregation,
     get_notation_seuils,
     get_types_evaluation_coefficients,
     moyenne_matiere_eleve,
@@ -338,6 +339,9 @@ def get_notes_centralisees_classe(
     etablissement_id = classe.etablissement_id
     type_coefs = get_types_evaluation_coefficients(db, etablissement_id, cycle_key)
     echelle = get_bareme_defaut_cycle(db, etablissement_id, cycle_key)
+    # Même règle d'agrégation que le calcul officiel : le tableau affiché doit
+    # montrer exactement les moyennes qui finiront sur le bulletin.
+    mode_agregation = get_mode_agregation(db, etablissement_id, cycle_key)
 
     eleves_data = []
     for insc in inscriptions:
@@ -354,7 +358,8 @@ def get_notes_centralisees_classe(
 
             # Moyenne pondérée par type d'évaluation (cf. services/notation.py)
             moy_mat, nb_notes = moyenne_matiere_eleve(
-                evals, insc.inscription_id, notes_lookup, type_coefs, echelle
+                evals, insc.inscription_id, notes_lookup, type_coefs, echelle,
+                mode_agregation
             )
 
             if moy_mat is not None:

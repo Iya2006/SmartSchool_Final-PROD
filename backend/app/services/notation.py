@@ -41,6 +41,16 @@ _CYCLE_CODE_TO_KEY = {"PRM": "primaire", "CLG": "college", "LYC": "lycee"}
 # Barème par défaut quand rien n'est configuré nulle part
 BAREME_DEFAUT = 20.0
 
+# Règle d'agrégation des épreuves dans la moyenne d'une matière.
+# PAR_TYPE : les évaluations d'un même type sont moyennées entre elles, puis
+#            le type est pondéré une fois — leur nombre ne change pas son poids.
+# PAR_EPREUVE : chaque épreuve pèse son coefficient individuellement.
+# Le défaut reproduit le comportement historique : changer ce réglage ne doit
+# jamais être un effet de bord d'une mise à jour.
+MODE_PAR_TYPE = "PAR_TYPE"
+MODE_PAR_EPREUVE = "PAR_EPREUVE"
+MODE_AGREGATION_DEFAUT = MODE_PAR_TYPE
+
 # Seuils de mentions par défaut, alignés sur les valeurs par défaut du frontend
 # (frontend/src/app/parametres/notation/page.tsx — state `mentions`).
 _SEUILS_MENTIONS_DEFAUT = {
@@ -173,6 +183,35 @@ def get_etablissement_id(db: Session, classe_id: int) -> int:
     """
     row = db.query(Classe.etablissement_id).filter(Classe.classe_id == classe_id).first()
     return row[0] if row else 1
+
+
+# ════════════════════════════════════════════════════════════
+# Règle d'agrégation des épreuves (par cycle)
+# ════════════════════════════════════════════════════════════
+
+def get_mode_agregation(
+    db: Session, etablissement_id: int, cycle_key: Optional[str] = None
+) -> str:
+    """Règle choisie par l'école pour agréger les épreuves d'une matière.
+
+    Paramètre `notation.mode_agregation.{cycle}` (catégorie NOTATION), valeurs
+    `PAR_TYPE` ou `PAR_EPREUVE`. Réglable par cycle : le primaire, qui fait
+    souvent une seule évaluation par période, n'a pas les mêmes habitudes que
+    le lycée qui en enchaîne plusieurs.
+
+    Une valeur inconnue en base retombe sur le défaut plutôt que de faire
+    échouer un calcul de bulletin.
+    """
+    if not cycle_key:
+        return MODE_AGREGATION_DEFAUT
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.categorie == "NOTATION",
+        ParametreEtablissement.cle == f"notation.mode_agregation.{cycle_key}",
+    ).first()
+    if param and param.valeur in (MODE_PAR_TYPE, MODE_PAR_EPREUVE):
+        return param.valeur
+    return MODE_AGREGATION_DEFAUT
 
 
 # ════════════════════════════════════════════════════════════
@@ -413,15 +452,25 @@ def moyenne_matiere_eleve(
     notes_lookup: Dict[Tuple[int, int], Note],
     type_coefs: Dict[int, float],
     echelle_cible: float = BAREME_DEFAUT,
+    mode_agregation: str = MODE_AGREGATION_DEFAUT,
 ) -> Tuple[Optional[float], int]:
     """Moyenne d'un élève dans une matière, sur un ensemble d'évaluations.
 
-    Les notes sont regroupées par type d'évaluation : chaque type donne une
-    moyenne simple, puis ces moyennes sont pondérées par le coefficient du
-    type. Les absences et les notes non saisies sont ignorées (elles ne
-    comptent pas comme des zéros).
+    Deux règles d'agrégation coexistent dans les écoles guinéennes, et elles
+    ne donnent pas le même résultat dès qu'une période compte plusieurs
+    évaluations du même type. Avec deux évaluations (coef. 1) et une
+    composition (coef. 2) :
 
-    Un type absent ne pèse rien : pas de division par un coefficient fictif.
+      MODE_PAR_TYPE     (moyenne des 2 évaluations × 1 + composition × 2) ÷ 3
+      MODE_PAR_EPREUVE  (éval1 × 1 + éval2 × 1 + composition × 2) ÷ 4
+
+    En « par type », le nombre d'évaluations ne change pas leur poids face à
+    la composition ; en « par épreuve », si. C'est à l'école de trancher —
+    voir `get_mode_agregation`.
+
+    Les absences et les notes non saisies sont ignorées (elles ne comptent pas
+    comme des zéros), et un type absent ne pèse rien : pas de division par un
+    coefficient fictif.
 
     Retourne (moyenne arrondie ou None, nombre de notes prises en compte).
     """
@@ -444,17 +493,26 @@ def moyenne_matiere_eleve(
 
     total_points = 0.0
     total_coef = 0.0
-    for valeurs in par_type.values():
-        # Un type compte pour UNE note dans la moyenne, quel que soit le nombre
-        # d'évaluations de ce type : ses notes sont d'abord moyennées entre
-        # elles, puis le résultat est pondéré une seule fois par le coefficient
-        # du type. Le coefficient est identique pour toutes les évaluations
-        # d'un même type, sauf surcharge ponctuelle sur l'une d'elles — d'où la
-        # moyenne des coefficients plutôt qu'une valeur figée.
-        coef_type = sum(c for _, c in valeurs) / len(valeurs)
-        moyenne_type = sum(v for v, _ in valeurs) / len(valeurs)
-        total_points += moyenne_type * coef_type
-        total_coef += coef_type
+
+    if mode_agregation == MODE_PAR_EPREUVE:
+        # Chaque épreuve pèse son propre coefficient : deux évaluations
+        # comptent donc deux fois plus qu'une seule face à la composition.
+        for valeurs in par_type.values():
+            for valeur, coef in valeurs:
+                total_points += valeur * coef
+                total_coef += coef
+    else:
+        for valeurs in par_type.values():
+            # Un type compte pour UNE note dans la moyenne, quel que soit le
+            # nombre d'évaluations de ce type : ses notes sont d'abord moyennées
+            # entre elles, puis le résultat est pondéré une seule fois par le
+            # coefficient du type. Le coefficient est identique pour toutes les
+            # évaluations d'un même type, sauf surcharge ponctuelle sur l'une
+            # d'elles — d'où la moyenne des coefficients plutôt qu'une valeur figée.
+            coef_type = sum(c for _, c in valeurs) / len(valeurs)
+            moyenne_type = sum(v for v, _ in valeurs) / len(valeurs)
+            total_points += moyenne_type * coef_type
+            total_coef += coef_type
 
     if total_coef <= 0:
         return None, nb_notes
@@ -668,6 +726,7 @@ def calculer_resultats_periode(
 
     notes_lookup = precharger_notes(db, [ev.evaluation_id for ev in toutes_evals])
     type_coefs = get_types_evaluation_coefficients(db, etablissement_id, cycle_key)
+    mode_agregation = get_mode_agregation(db, etablissement_id, cycle_key)
 
     inscriptions = db.query(Inscription).filter(
         Inscription.classe_id == classe_id,
@@ -685,6 +744,7 @@ def calculer_resultats_periode(
             evals_matiere = evals_by_matiere.get(mat_id, [])
             moy_mat, _nb = moyenne_matiere_eleve(
                 evals_matiere, insc.inscription_id, notes_lookup, type_coefs, echelle,
+                mode_agregation,
             )
             coef_matiere = coefficient_matiere_effectif(mat_info["coefficient"], evals_matiere)
             if moy_mat is not None:
@@ -757,6 +817,10 @@ def calculer_resultats_periode(
         "resultats": bulletins_data,
         "stats_matieres": stats_matieres,
         "epreuves": sorted(epreuves.values(), key=lambda e: e["date"] or ""),
+        # Règle d'agrégation réellement appliquée : sans elle, deux écoles
+        # voyant des moyennes différentes sur les mêmes notes n'ont aucun
+        # moyen de savoir pourquoi.
+        "mode_agregation": mode_agregation,
         "persiste": persist,
     }
 
@@ -812,6 +876,106 @@ def calculer_resultats_periode(
     resultat["bulletins_crees"] = bulletins_crees
     resultat["bulletins_total"] = len(bulletins_data)
     return resultat
+
+
+# ════════════════════════════════════════════════════════════
+# Consultation familiale (portails parent et élève)
+# ════════════════════════════════════════════════════════════
+
+def epreuves_consultables(db: Session, classe_id: int, trimestre_id: int) -> List[dict]:
+    """Épreuves qu'une famille peut consulter sur une période.
+
+    Uniquement les épreuves **entièrement centralisées** : tant que toutes les
+    matières d'une composition ne sont pas remontées, un classement partiel
+    donnerait un rang faux, que la famille prendrait pour définitif.
+    """
+    evals = db.query(Evaluation).filter(
+        Evaluation.classe_id == classe_id,
+        Evaluation.trimestre_id == trimestre_id,
+    ).all()
+    types = {t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).all()}
+
+    groupes: Dict[str, dict] = {}
+    for ev in evals:
+        cle = f"S{ev.session_id}" if ev.session_id else f"E{ev.evaluation_id}"
+        g = groupes.setdefault(cle, {
+            "cle": cle,
+            "libelle": ev.libelle,
+            "type": types.get(ev.type_eval_id, ""),
+            "date": ev.date_evaluation.isoformat() if ev.date_evaluation else None,
+            "evaluation_ids": [],
+            "nb_matieres": 0,
+            "nb_centralisees": 0,
+        })
+        g["evaluation_ids"].append(ev.evaluation_id)
+        g["nb_matieres"] += 1
+        if ev.statut == "CENTRALISEE":
+            g["nb_centralisees"] += 1
+
+    return sorted(
+        (g for g in groupes.values() if g["nb_centralisees"] == g["nb_matieres"]),
+        key=lambda g: g["date"] or "",
+    )
+
+
+def resultat_eleve_sur_epreuves(
+    db: Session,
+    classe_id: int,
+    trimestre_id: int,
+    inscription_id: int,
+    *,
+    evaluation_ids: Optional[List[int]] = None,
+    flags: Optional[dict] = None,
+) -> Optional[dict]:
+    """Résultat d'UN élève sur une sélection d'épreuves, avec son rang.
+
+    Destinée aux portails parent et élève : un parent doit pouvoir regarder le
+    classement de son enfant sur le seul mois de janvier, sur une composition,
+    ou sur toute la période. Le rang n'a de sens que rapporté à la classe
+    entière — celle-ci est donc calculée, mais **seule la ligne de l'élève est
+    renvoyée** : jamais les moyennes ni les noms des camarades.
+
+    `flags` (get_bulletin_display_flags) est respecté : une école qui a choisi
+    de masquer le rang ou la mention sur les bulletins ne doit pas les voir
+    réapparaître ici.
+
+    Retourne None si l'élève n'a aucune note sur ces épreuves.
+    """
+    res = calculer_resultats_periode(
+        db, classe_id, trimestre_id,
+        evaluation_ids=evaluation_ids, persist=False,
+    )
+    ligne = next(
+        (r for r in res["resultats"] if r["inscription_id"] == inscription_id), None
+    )
+    if not ligne or ligne["moyenne_generale"] is None:
+        return None
+
+    flags = flags or {}
+    montre_rang = flags.get("show_rang", True)
+    moyennes = [r["moyenne_generale"] for r in res["resultats"] if r["moyenne_generale"] is not None]
+
+    return {
+        "moyenne_generale": ligne["moyenne_generale"],
+        "rang": ligne["rang"] if montre_rang else None,
+        "effectif": res["effectif"] if montre_rang and flags.get("show_effectif", True) else None,
+        "mention": ligne["mention"] if flags.get("show_mention", True) else None,
+        # Repères de classe, sans jamais nommer d'autre élève.
+        "moyenne_classe": round(sum(moyennes) / len(moyennes), 2) if moyennes else None,
+        "meilleure_moyenne": max(moyennes) if moyennes and montre_rang else None,
+        "matieres": [
+            {
+                "matiere": l["matiere"],
+                "moyenne": l["moyenne_matiere"],
+                "coefficient": l["coefficient"],
+                "appreciation": l["appreciation"],
+            }
+            for l in ligne["lignes"] if l["moyenne_matiere"] is not None
+        ],
+        "epreuves": res.get("epreuves", []),
+        "mode_agregation": res.get("mode_agregation"),
+        "echelle": res.get("echelle"),
+    }
 
 
 # ════════════════════════════════════════════════════════════
