@@ -47,7 +47,14 @@ services:
     image: redis:7-alpine
     container_name: smartschool_redis
     restart: always
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-change-me} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    # maxmemory-policy : volatile-lru (pas allkeys-lru) — Étape F. Sous
+    # pression mémoire, seules les clés AVEC un TTL peuvent être évincées
+    # (le cache dashboard finance, app/core/cache.py, en pose toujours
+    # un). Les clés de la file de tâches RQ (app/core/task_queue.py)
+    # n'ont pas de TTL — avec allkeys-lru, une tâche en attente pouvait
+    # être silencieusement évincée et perdue sans erreur ; ça ne peut
+    # plus arriver avec volatile-lru.
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-change-me} --maxmemory 512mb --maxmemory-policy volatile-lru
     ports:
       - "127.0.0.1:6379:6379"  # Localhost only
     volumes:
@@ -266,6 +273,75 @@ services:
         reservations:
           cpus: '1'
           memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # ============================================
+  # Worker RQ — traitement asynchrone (Étape F)
+  # Même image que smartschool_api (Dockerfile.prod), seule la commande de
+  # démarrage change. Montée en charge : `docker compose up --scale
+  # smartschool_worker=3` (aucun changement de code nécessaire, voir
+  # app/core/task_queue.py).
+  # ============================================
+  smartschool_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: smartschool_fastapi:prod
+    container_name: smartschool_worker
+    restart: always
+    command: ["rq", "worker", "--url", "redis://:${REDIS_PASSWORD:-change-me}@smartschool_redis:6379/0", "default"]
+    depends_on:
+      smartschool_postgres:
+        condition: service_healthy
+      smartschool_redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+pg8000://admin:${DB_PASSWORD:-change-me}@smartschool_postgres:5432/mydb
+      REDIS_URL: redis://:${REDIS_PASSWORD:-change-me}@smartschool_redis:6379/0
+      ENVIRONMENT: production
+      LOG_LEVEL: info
+    volumes:
+      - ./backend:/app
+      - smartschool_uploads:/app/uploads
+      - smartschool_logs:/app/logs
+    networks:
+      - smartschool_network
+    secrets:
+      - db_password
+    # Étape G : ce service partage l'image de smartschool_api, qui porte un
+    # HEALTHCHECK figé sur `curl localhost:8500/health` (Dockerfile.prod) —
+    # mais ce conteneur lance `rq worker`, jamais uvicorn : le port 8500
+    # n'y est jamais ouvert, donc ce HEALTHCHECK hérité échouerait TOUJOURS
+    # et marquerait le worker "unhealthy" en permanence même s'il tourne
+    # normalement (personne n'en dépend aujourd'hui via `condition:
+    # service_healthy`, mais un futur monitoring qui ferait confiance à
+    # `docker inspect` serait trompé). Remplacé ici par une vérification
+    # propre à ce mode de démarrage : confirme que CE worker (identifié
+    # par le hostname du conteneur, attribué par RQ à l'enregistrement)
+    # est bien inscrit dans Redis — aucune nouvelle dépendance (redis-py
+    # et rq sont déjà dans requirements.txt).
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import os, socket, sys, redis; from rq.worker import Worker; conn = redis.from_url(os.environ['REDIS_URL']); workers = Worker.all(connection=conn); sys.exit(0 if any(w.hostname == socket.gethostname() for w in workers) else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     logging:
       driver: "json-file"
       options:

@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { canAccessPathForRole, getRedirectPathForRole } from '@/lib/roleAccess';
+import { purgeLocalSessionData } from '@/lib/sessionCleanup';
 
 export interface UserInfo {
     id: number;
@@ -109,17 +110,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.removeItem('smartschool_user');
             // Purge des données locales du module offline-first (§13 du guide
             // fourni : "suppression des données locales après déconnexion") —
-            // la file d'attente (idb-keyval) et le cache React Query persisté
-            // (voir components/QueryProvider.tsx) ne doivent pas survivre à
-            // une déconnexion, surtout sur un poste partagé.
+            // le cache React Query persisté (voir components/QueryProvider.tsx),
+            // le Cache Storage du Service Worker, la file offline (si vide) et
+            // le cache delta (Étape C) ne doivent pas survivre à une
+            // déconnexion, surtout sur un poste partagé. Logique commune avec
+            // l'intercepteur 401 (lib/api.ts) — voir lib/sessionCleanup.ts.
             localStorage.removeItem('smartschool-query-cache');
-            try {
-                const { clearAll } = await import('@/lib/offlineQueue');
-                await clearAll();
-            } catch {
-                // IndexedDB indisponible ou déjà vide — la déconnexion ne doit
-                // jamais rester bloquée pour autant.
-            }
+            await purgeLocalSessionData();
             sessionStorage.clear();
             window.location.href = '/login';
         }

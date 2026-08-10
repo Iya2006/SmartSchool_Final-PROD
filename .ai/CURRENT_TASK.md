@@ -1,6 +1,765 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active — Remise à zéro des données, corrections post-reset, module Offline-First Phase 1 (05-06/08/2026)
+## Tâche active — Service Worker Offline-First (Serwist, remplace next-pwa) (09/08/2026)
+Nouvelle spécification détaillée fournie par l'utilisateur pour étendre
+l'offline-first à ~10 modules (classification de risque Niveau A/B/C :
+paiements/comptabilité/utilisateurs traités à part, jamais un blocage
+aveugle module entier). Vu l'ampleur, passage en Plan Mode : investigation
+directe (agent Explore + lecture de code) de l'architecture Phase 1
+existante, cadrage avec l'utilisateur (AskUserQuestion) — scope retenu pour
+cette session : **Service Worker (Serwist) uniquement**, tous les modules
+critiques (paiements/comptabilité/utilisateurs/permissions) **reportés
+entièrement** à une session future dédiée.
+
+### 1. Remplacement de next-pwa par @serwist/next
+Root cause déjà diagnostiquée par le développeur précédent (voir Historique
+ci-dessous) : `next-pwa` ne génère aucun `sw.js` sous Turbopack. Remplacé
+par `@serwist/next` 9.5.12 (successeur maintenu, mécanisme équivalent :
+webpack génère `public/sw.js` via `swSrc`/`swDest`) — écarté
+`@serwist/turbopack` (mécanisme récent/expérimental, backporté en attendant
+Serwist 10, nouveau système de route handler) au profit de la voie stable.
+Contrainte acceptée : le Service Worker n'est généré qu'au build (`next
+build --webpack`, nouveau script `package.json`) — `next dev` reste sous
+Turbopack, aucun changement du poste de développement quotidien (le SW
+était déjà désactivé en dev par défaut).
+
+### 2. Bug CSS bloquant le build --webpack, trouvé et corrigé
+`portail-eleve.module.css` déclarait `:root { --bg-main: ...; }`
+directement dans un CSS Module — invalide pour le loader CSS Modules de
+webpack (déjà repéré par le développeur précédent comme bloquant
+`--webpack`, jamais corrigé). Une première tentative (`:global(:root)`) a
+aussi échoué (sélecteur "pas pur" : aucune classe locale). Fix définitif :
+les variables déplacées dans une vraie feuille globale
+`portail-eleve-theme.css` (pas un CSS Module), importée une fois depuis
+`page.tsx` — comportement runtime identique (les variables CSS
+s'appliquaient déjà globalement), seul le classement build-tool change.
+Seul fichier du projet avec ce pattern (vérifié par recherche exhaustive) ;
+aucun autre module.css touché.
+
+### 3. `src/app/sw.ts` — runtimeCaching réécrit, pas `defaultCache`
+Les 4 règles `runtimeCaching` de l'ancienne config next-pwa portées à
+l'identique (images CacheFirst, style/script/font StaleWhileRevalidate,
+navigation NetworkFirst 3s, API GET NetworkFirst 3s) — **volontairement
+pas** `defaultCache` fourni par `@serwist/next/worker` (met TOUTES les
+routes `/api/*` GET en cache sans distinction, y compris
+finance/comptabilité). Ajout d'une règle prioritaire `NetworkOnly` sur
+`/api/finance`, `/api/comptabilite`, `/api/auth`, `/api/securite` (vérifiés
+par grep des vrais préfixes de routeurs backend) — jamais mises en cache,
+cohérent avec la décision déjà actée "comptabilité = connexion requise".
+Nouvelle page de repli `/hors-ligne` (`src/app/hors-ligne/page.tsx`,
+ajoutée à `FULLSCREEN_PATHS` dans `AppShell.tsx`) précachée manuellement
+via `serwist.addToPrecacheList()` (pas via `additionalPrecacheEntries`
+côté `next.config.ts`, qui aurait remplacé — pas complété — le scan
+automatique de `public/`), servie en fallback quand une navigation échoue
+hors-ligne sans version en cache.
+
+### 4. `sw.ts` exclu du tsconfig principal
+`ServiceWorkerGlobalScope` (lib "webworker") est incompatible avec la lib
+"dom" du reste de l'app dans un même programme TypeScript — `npx tsc
+--noEmit` échouait sur ce seul fichier. Ajouté `"src/app/sw.ts"` à
+`exclude` dans `tsconfig.json` (le fichier est de toute façon compilé
+séparément par le plugin webpack de `@serwist/next`, `compileSrc`) ; `///
+<reference lib="webworker" />` conservé en tête du fichier pour l'IDE.
+
+### 5. Deux correctifs sur `AuthContext.logout()` (trouvés en investiguant, hors périmètre SW)
+- Purge du Cache Storage (`caches.keys()`/`caches.delete()` sur les caches
+  `smartschool-*`) — sans effet avant (le SW ne mettait jamais rien en
+  cache), redevient nécessaire maintenant qu'il fonctionne, pour qu'un
+  autre utilisateur sur un poste partagé ne récupère pas les réponses API
+  du précédent.
+- `clearAll()` sur la file offline n'est plus appelé aveuglément : si des
+  notes/présences saisies hors-ligne n'ont pas encore été synchronisées au
+  moment de la déconnexion, elles restent en base (vérifié `listPending()`
+  avant de purger) au lieu d'être perdues silencieusement — contredisait
+  directement une règle explicite du cahier des charges fourni. Vérifié
+  côté backend (`_enseignant_auth`) que rejouer la file d'un autre
+  enseignant sur le même poste échoue proprement en 403 (pas de fuite de
+  données) ; résidu accepté : retry indéfini sans plafond (bug préexistant,
+  distinct, signalé pour une session dédiée).
+
+### 6. Vérification effectuée
+`npx tsc --noEmit` (0 erreur), `npm run test:run` (29/29 tests verts,
+aucune régression sur `offlineQueue`/`syncEngine`/`useNotifications`/
+`TopbarUserMenu`), `npm run build` (`--webpack`, succès, 66/66 pages
+générées, `public/sw.js` généré avec les 4 caches nommés + exclusion des 4
+préfixes sensibles + précache de `/hors-ligne` confirmés par inspection du
+bundle), serveur de production démarré localement et vérifié au niveau
+HTTP (`/sw.js` 200 `application/javascript`, `/hors-ligne` 200 avec le bon
+contenu, `/login`/`/`/`/manifest.json`/`/portail-enseignant` toujours 200).
+
+**Limite de vérification assumée** : pas d'outil d'automatisation de
+navigateur disponible cette session (comme les sessions précédentes) — le
+comportement réel du Service Worker en conditions hors-ligne (Cache
+Storage effectivement peuplé, page servie depuis le cache après coupure
+réseau, purge des caches au logout visible dans DevTools) n'a PAS été
+vérifié dans un vrai navigateur, seulement au niveau HTTP/build. Protocole
+de test ajouté à `docs/guides/guide_test_offline.html` (nouvelle étape 8)
+pour que l'utilisateur puisse le confirmer lui-même.
+
+### 7. Reprise du chantier (09/08/2026, suite directe) — Étape A stabilisée + plafond de retry (§21)
+Nouveau prompt de reprise fourni : audit de l'état réel (confirmé conforme
+au rapport ci-dessus via `git status`/`git diff --stat`, rien n'avait
+dérivé), puis continuation dans l'ordre demandé (Étape A avant tout nouveau
+développement).
+
+**Étape A — validation** : build/tsc/tests re-vérifiés propres (rien n'avait
+changé depuis la session précédente, pas de nouveau build complet inutile —
+juste re-vérification `tsc` + présence de `public/sw.js` déjà généré).
+
+**§21 — Analyse et correction du plafond de retry**, comme demandé
+("analyse d'abord, ne corrige pas aveuglément") :
+- **Bug le plus sérieux trouvé en analysant** (pas seulement l'absence de
+  plafond signalée précédemment) : `POST /api/sync/{id}/notes` répond
+  toujours HTTP 200, même quand un item précis du batch est refusé
+  (`resultats: [{statut: "REFUSE", ...}]` — évaluation déjà centralisée,
+  trimestre clôturé, note hors périmètre). `flushQueue()` ne lisait jamais
+  ce tableau et appelait `markSynced()` sans condition — un refus métier
+  disparaissait de la file **silencieusement**, comme s'il avait réussi.
+  Corrigé : `extractRefusals()` inspecte `resultats` avant de synchroniser ;
+  tout refus bascule l'élément en erreur au lieu de le faire disparaître.
+- **Classification retenue** : erreurs réseau (aucune réponse) → inchangé,
+  retenté indéfiniment (c'est le comportement correct). Erreurs HTTP
+  définitives (401/403/404/422, ou refus embarqué dans un 200 ci-dessus) →
+  nouveau statut `ECHEC_DEFINITIF` immédiat, jamais retenté automatiquement
+  (retenter un payload identique ne changera pas la décision du serveur).
+  Erreurs serveur transitoires (5xx, etc.) → restent `ERREUR`, retentées
+  automatiquement jusqu'à `MAX_TENTATIVES = 5`, puis basculent aussi en
+  `ECHEC_DEFINITIF`.
+- **Jamais de suppression silencieuse** (règle absolue du cahier des
+  charges) : `ECHEC_DEFINITIF` reste en base, exclu de `listPending()`
+  (donc plus retenté seul) mais visible via `listBlocked()`/`countBlocked()`,
+  et rejouable manuellement (`retry()`/`retryBlocked()`/`retryAllBlocked()`).
+- **UI** : `SyncStatusIndicator.tsx` affiche désormais un second badge rouge
+  distinct "N action(s) requise(s)" quand `blockedCount > 0`, cliquable pour
+  relancer tous les éléments bloqués.
+- **Fichiers modifiés** : `lib/offlineQueue.ts` (nouveau statut, plafond,
+  `listBlocked`/`countBlocked`/`retry`), `lib/syncEngine.ts` (classification
+  d'erreurs, détection des refus embarqués, `retryBlocked`/`retryAllBlocked`),
+  `components/SyncStatusIndicator.tsx` (badge blocked). **Non touché** :
+  `backend/app/api/sync.py` (le fix est côté client, sur l'interprétation de
+  la réponse déjà existante — aucun changement de contrat API nécessaire).
+- **Tests** : suite étendue de 29 à 41 tests. Le test existant "refus 403 →
+  ERREUR" a été **volontairement modifié** (403 est désormais définitif
+  immédiatement, pas rejouable) — changement minimal justifié dans le
+  commentaire du test lui-même. 8 nouveaux tests couvrent : refus embarqué
+  dans un 200 (le bug le plus sérieux), plafond de tentatives atteint,
+  erreurs transitoires vs définitives, `retryBlocked`/`retryAllBlocked`,
+  isolation `listPending`/`listBlocked`. `tsc --noEmit` propre, build
+  `--webpack` propre (66/66 pages).
+
+### 8. Étape B — premier module écrit hors-ligne : Notifications (09/08/2026, suite directe)
+Classification réelle faite en lisant le code (pas supposée) : `eleves.py`,
+`personnel.py`, `classes.py`, `vie_scolaire.py`, `communication.py`.
+Constat clé : étendre la LECTURE offline n'est pas un geste uniforme —
+Classes/Élèves/Dashboard l'ont déjà (React Query), mais Personnel est une
+page de 57 Ko en fetch direct (vrai refactor, pas un copier-coller).
+Question de cadrage posée à l'utilisateur (AskUserQuestion) : "Notifications
+(lecture + accusé de lecture)" retenu — le plus petit/sûr des candidats
+écriture, opération naturellement idempotente côté serveur, zéro risque
+métier.
+
+**Lecture (`READ_ONLY_OFFLINE`)** : `hooks/useNotifications.ts` réécrit sur
+`useQuery` (même mécanisme déjà utilisé par `useEleves.ts`/Classes/
+Dashboard — cache persisté dans `localStorage` via `QueryProvider.tsx`,
+aucune nouvelle infrastructure). Poll 30s repris via `refetchInterval`,
+`refetchOnWindowFocus: true` en override du défaut global (remplace l'ancien
+listener `visibilitychange` manuel).
+
+**Écriture (`WRITE_OFFLINE_SAFE`)** : `PUT
+/api/communication/messages/marquer-tous-lus` passe par la file offline
+EXISTANTE (`lib/offlineQueue.ts`/`lib/syncEngine.ts`), pas une nouvelle —
+généralisation nécessaire de `OFFLINE_QUEUEABLE` (`lib/api.ts`), qui ne
+gérait jusqu'ici qu'un seul pattern POST `/api/sync/{id}/(notes|presences)`
+avec id extrait de l'URL. Devenu une table de routes
+(`OFFLINE_QUEUEABLE_ROUTES`) supportant POST et PUT, et un id dérivé soit de
+l'URL (notes/présences) soit de la session courante (notifications — action
+globale, pas d'id dans l'URL). Conséquence en cascade : `OfflineQueueItem`
+gagne un champ `method?: 'post'|'put'` (absent = 'post', compatibilité avec
+les entrées déjà en file sur un poste réel) et `syncEngine.flushQueue()`
+rejoue désormais via `api.request({method, url, data})` au lieu de
+`api.post()` en dur. Choix de l'opération conforme à §9 (idempotence) :
+`marquer_tous_lus` est un `UPDATE ... WHERE statut='ENVOYE'` — un rejeu ne
+fait rien de plus la 2e fois, aucun idempotency-key ni changement backend
+nécessaire.
+
+**Tests** : 41 → 50. Nouveau fichier `api.offlineQueueing.test.ts` (6 tests)
+— l'intercepteur `mettreEnFileSiHorsLigne` n'avait JAMAIS eu de test dédié
+avant (seulement vérifié en E2E backend, Phase 1) ; ajouté maintenant car sa
+généralisation touche aussi le chemin notes/présences déjà en prod — une
+régression y serait passée inaperçue sans ce test. `useNotifications.test.ts`
+adapté (wrapper `QueryClientProvider`, requis dès qu'un hook utilise
+`useQuery`) + 3 nouveaux tests (mise à jour optimiste hors-ligne, échec réel
+silencieux, absence de token). `tsc --noEmit` propre, build `--webpack`
+propre (66/66 pages).
+
+### 9. Étape H (compression) + Étape I (registre ONLINE_ONLY formalisé) (09/08/2026, suite directe)
+Après "continue", enchaîné sur les deux items signalés comme rapides/sûrs.
+
+**Étape H** : `backend/main.py` — `GZipMiddleware` (Starlette, déjà dans les
+dépendances FastAPI, aucun ajout de paquet) ajouté, `minimum_size=500`
+(défaut). Gzip seulement (Brotli demanderait un reverse proxy/CDN devant
+l'app — aucun nginx/Caddy/Traefik trouvé dans ce dépôt, hors périmètre).
+Compromis assumé et documenté dans le code : les endpoints PDF/photos (déjà
+compressés en interne) passent aussi par ce middleware — Starlette ne filtre
+pas par Content-Type — coût CPU mineur, pas une erreur de correction ; les
+exclure demanderait un middleware sur-mesure pour un gain marginal. Le vrai
+bénéfice visé : le JSON des listes (élèves, classes...) sur connexion
+instable. Vérifié : `py_compile` propre, import du module `GZipMiddleware`
+confirmé résolvable avec la version FastAPI du projet (0.109.0) ; import
+complet de `main.py` non testable dans cet environnement (pas de venv du
+projet installé ici, et le Python système est en 3.11 — un fichier
+préexistant sans rapport, `app/api/activites.py`, utilise une syntaxe
+f-string qui nécessite 3.12+ ; non corrigé, hors périmètre, pas causé par ce
+changement).
+
+**Étape I** : nouveau fichier `frontend/src/lib/offlinePolicy.ts` — registre
+formel `MODULE_POLICY` (un module = préfixes API réels, classification
+`read`/`write` parmi `READ_ONLY_OFFLINE`/`WRITE_OFFLINE_SAFE`/
+`WRITE_OFFLINE_CONTROLLED`/`ONLINE_ONLY`, `excludeFromServiceWorkerCache`,
+justification obligatoire) pour les 8 modules audités cette session
+(notes/présences, notifications, classes, élèves, personnel, vie
+scolaire/incidents, finance/comptabilité, auth, sécurité/permissions).
+**Deux garde-fous vérifiables, pas juste de la doc** :
+- `src/app/sw.ts` importe désormais `ONLINE_ONLY_API_PREFIXES` depuis ce
+  registre au lieu d'une liste dupliquée en local (source unique).
+- `src/tests/offlinePolicy.test.ts` (nouveau, 8 tests) vérifie que
+  `OFFLINE_QUEUEABLE_ROUTES` (`lib/api.ts`, désormais exporté) ne contient
+  QUE des routes dont le module est explicitement `WRITE_OFFLINE_SAFE`
+  (liste blanche — plus strict qu'une simple liste noire des 4 modules les
+  plus critiques) : un futur ajout d'une route offline-queueable pour un
+  module non classé `WRITE_OFFLINE_SAFE` fait échouer ce test.
+Piège trouvé et corrigé PENDANT la construction du registre (pas après) :
+première version dérivait `ONLINE_ONLY_API_PREFIXES` directement de
+`read === 'ONLINE_ONLY'`, ce qui excluait par erreur finance/comptabilité
+(classées `READ_ONLY_OFFLINE` à raison — leur dashboard a un vrai cache
+applicatif React Query + Redis serveur, préexistant) du blocage Service
+Worker — séparé en un champ dédié `excludeFromServiceWorkerCache`,
+indépendant de la classification produit `read`/`write`, trouvé par les
+tests eux-mêmes avant tout commit.
+
+**Tests** : 50 → 66 (nouveau fichier `offlinePolicy.test.ts`). `tsc --noEmit`
+propre, build `--webpack` propre (66/66 pages), `public/sw.js` généré
+vérifié à nouveau (les 4 préfixes sensibles présents via l'import partagé).
+
+### 10. Étape C — Cache intelligent + synchronisation delta, pilote Élèves (09/08/2026, suite directe)
+Nouvelle instruction : "le choix est fait, audit d'abord, plan avant tout
+code". Passage en Plan Mode : 2 agents Explore en parallèle (frontend —
+cartographie React Query/IndexedDB/localStorage/pagination/etablissement_id ;
+backend — colonnes updated_at, suppressions, etablissement_id/JWT,
+pagination, index, volumes, Redis), plan écrit (existant → problèmes →
+options → risques → solution → fichiers → implémentation) et approuvé.
+
+**Constats d'audit clés** (voir le plan pour le détail complet) :
+- Seules Note/Presence ont un vrai `updated_at` (ajouté pour `sync.py`,
+  jamais exposé en lecture). `Eleve`/`Enseignant` ont un `modified_date`
+  mort (jamais assignée, pas de `onupdate`). Suppressions incohérentes :
+  hard-delete sur Eleve/Enseignant/Personnel, soft-delete sur Inscription,
+  aucune suppression possible sur Classe/Message/Note/Presence.
+- `etablissement_id` est figé à `1` dans TOUT le code (frontend ET
+  backend) — déploiement mono-établissement de fait, pas dans le JWT.
+- Incohérence de purge trouvée : le logout manuel purge Cache Storage +
+  file offline conditionnelle, le handler 401 automatique ne touchait
+  QUE `localStorage.clear()`.
+
+**Mécanisme retenu** : timestamp (`updated_at`/`since`), pas curseur
+opaque ni version incrémentale — c'est déjà le pattern Note/Presence,
+zéro nouvelle dépendance, coche les 10 critères posés. `sync_at` généré
+par l'horloge de la BASE (`db.query(func.now())`), capturé AVANT les
+requêtes de lecture (pas de perte silencieuse d'écriture concurrente).
+
+**Pilote Élèves, volontairement isolé de l'UI existante** — `useEleves.ts`
+et `/eleves` ne sont PAS modifiés, le mécanisme est construit et testé de
+façon autonome, le brancher dans une vraie page est une extension future :
+- Backend : `Eleve.modified_date` gagne `onupdate=func.now()` (1 ligne,
+  colonne déjà existante en base, pas d'ALTER TABLE) ; nouvelle table
+  `SyncTombstone`/`ss_sync_tombstones` (`entity_type`, `entity_id`,
+  `etablissement_id`, `deleted_at`, indexée) — `ss_audit_log` existant
+  écarté pour ce rôle (texte libre, pas d'entity_id typé, vérifié en
+  lisant le modèle) ; migration `backend/migrations/add_sync_tracking.py`
+  (même pattern que les 3 scripts déjà existants) ; nouveau
+  `GET /api/eleves/delta?since=&etablissement_id=&annee_id=` (`eleves.py`,
+  enregistré avant `/{eleve_id}` — même pattern déjà utilisé par `/count`) ;
+  tombstone ajouté dans la même transaction que `DELETE /{eleve_id}`.
+  **Limite assumée et documentée** : détecte les modifications du dossier
+  élève, pas un changement de classe seul (`Inscription` n'a pas encore de
+  suivi — hors périmètre du pilote).
+- Frontend : `lib/deltaSync.ts` (nouveau, générique) — persistance du
+  curseur dans **une DB IndexedDB séparée** (`smartschool-sync-cache`, pas
+  `smartschool-offline`) : vérifié dans le code source d'`idb-keyval` que
+  `createStore()` ouvre sans numéro de version, donc ajouter un nouvel
+  object store à une base déjà existante sur un poste réel échouerait
+  silencieusement — même piège retrouvé une 2e fois en interne (un seul
+  object store `kv`, clés préfixées, plutôt que plusieurs stores dans la
+  même nouvelle base). `hooks/useElevesDeltaCache.ts` (nouveau, PAS branché
+  dans `/eleves`) — miroir local upserté/purgé par delta.
+- `lib/sessionCleanup.ts` (nouveau) — extrait la logique de purge
+  dupliquée entre logout manuel et handler 401, corrige l'incohérence
+  trouvée par l'audit (401 purge désormais aussi Cache Storage + file
+  offline conditionnelle + cache delta, comme le logout manuel).
+
+**Vérification** : `tsc --noEmit` propre, suite Vitest 66 → 79 tests
+(`deltaSync.test.ts` 7, `useElevesDeltaCache.test.ts` 6), build `--webpack`
+propre (66/66 pages). Backend : nouveau `backend/tests/test_eleves_delta.py`
+(9 tests, même convention que `test_eleves.py` existant — TestClient,
+fixture `db`, SQLite en mémoire) écrit mais **non exécutable dans cette
+session** (Python 3.11 système vs 3.12+ requis, `SyntaxError` réelle et
+préexistante sur `app/api/activites.py` en important `main.py` — sans
+rapport avec ce chantier). Contourné en important `app.api.eleves`
+directement (sans passer par `main.py`) : script de vérification jetable
+exécutant les 10 scénarios clés (première synchro, delta sans modif, delta
+après modif, isolation établissement, suppression → tombstone → deleted_ids,
+hard-delete confirmé, isolation des tombstones) — tous passés. Piège trouvé
+en le construisant : SQLite `CURRENT_TIMESTAMP` (donc `func.now()` sous ce
+dialecte) a une précision à la SECONDE, pas la microseconde comme
+PostgreSQL — les tests (script ET `test_eleves_delta.py`) utilisent un
+`time.sleep(1.1)` réel entre deux points de comparaison temporelle pour
+rester fiables ; documenté en commentaire pour ne pas être "optimisé" plus
+tard et réintroduire une flakiness.
+
+### 11. Étape D — Sécurité locale (09/08/2026, suite directe)
+Contrôle de cohérence Étape C d'abord (pas de refonte, correct sur tous
+les points vérifiés — cache déjà séparé par établissement dans les clés,
+purge déjà unifiée). Un vrai bug trouvé au passage : chargement initial de
+`useElevesDeltaCache` sans `.catch()` — corrigé (voir §16 ci-dessous).
+
+**Décision de cadrage posée à l'utilisateur** (chiffrement — seul point
+réellement ambigu, menace précise à choisir) : "Dérivée du JWT" retenue —
+clé jamais stockée à part, dérivée à la volée du token courant (HKDF →
+AES-GCM 256). Menace ciblée EXPLICITEMENT documentée dans le code :
+protège contre l'inspection d'IndexedDB sans session active (DevTools sur
+poste partagé, lecture de fichiers du profil navigateur) ; NE protège PAS
+contre du JavaScript malveillant dans l'origine (même accès au token que
+l'appli). Appliqué au miroir élèves du pilote (adresse, groupe sanguin,
+date de naissance) — PAS à `offlineQueue.ts` (déjà en prod, retrofit
+différé pour ne pas risquer de régression sur un mécanisme quotidien).
+
+**Expiration offline** : durée reprise du JWT existant
+(`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`), pas une nouvelle valeur inventée —
+`lib/sessionExpiry.ts` décode (sans vérifier, jamais une décision de
+sécurité) le `exp` pour un signal UI seulement ("Session à renouveler"
+dans `SyncStatusIndicator`, visible hors-ligne avec du travail en attente).
+Aucune écriture offline bloquée par ce signal — le serveur reste l'unique
+autorité (401 déjà géré).
+
+**Invalidation à distance** : investigué, PAS implémenté. `get_current_user`
+(`backend/app/core/auth.py`) est un décodage JWT pur, sans requête DB —
+désactiver un compte ne révoque pas ses tokens déjà émis (fenêtre
+d'exposition : jusqu'à 8h, la durée du token). Modifier ça toucherait la
+dépendance d'auth de TOUS les endpoints protégés — trop large pour cette
+passe sans cadrage dédié. Proposition minimale documentée pour plus tard :
+vérifier `Utilisateur.statut` dans `get_current_user`, mise en cache Redis
+courte (réutilise `app/core/cache.py` existant) pour ne pas ajouter une
+requête DB à chaque appel.
+
+**Durcissement §16/§17** : `syncEngine.flushQueue` séparée en
+`flushQueue`/`flushQueueUnsafe` — une panne IndexedDB ne produit plus un
+rejet de promesse non géré (elle est fréquemment appelée en
+fire-and-forget). `useElevesDeltaCache` : `.catch()` ajouté au chargement
+initial. Nouveau `lib/storageHealth.ts` (`navigator.storage.estimate()`,
+détection seuil critique 90%, détection `QuotaExceededError`) — DÉTECTION
+seulement, pas encore de politique d'éviction automatique (même report
+assumé qu'à l'Étape C, pas de donnée d'usage réelle pour la calibrer).
+
+**Fichiers** : `lib/localEncryption.ts`, `lib/sessionExpiry.ts`,
+`lib/storageHealth.ts` (nouveaux) ; `hooks/useElevesDeltaCache.ts`
+(chiffrement + `.catch()`), `lib/syncEngine.ts` (durcissement),
+`components/SyncStatusIndicator.tsx` (badge session) modifiés. Aucun
+module métier touché (élèves/enseignants/comptabilité/notes/présences/UI
+intacts, comme demandé).
+
+**Tests** : 79 → **99** (`localEncryption.test.ts` 7 — round-trip réel Web
+Crypto, mauvais token → échec propre ; `sessionExpiry.test.ts` 7 ;
+`sessionCleanup.test.ts` 6 — isolation multi-compte/multi-école explicite).
+Piège de mock trouvé et corrigé pendant l'écriture des tests : un mock
+`idb-keyval` avec une seule Map partagée entre "stores" masquait un vrai
+bug potentiel (purge du cache delta qui aurait aussi effacé la file
+offline) — corrigé en simulant la vraie isolation par base/store.
+`tsc` propre, build `--webpack` propre (66/66 pages).
+
+### 12. Étape F — Infrastructure serveur asynchrone : Redis + workers (RQ) (09/08/2026, suite directe)
+Audit d'abord, comme exigé ("ne commence pas directement par installer une
+librairie") : backend 100% synchrone confirmé (aucun `BackgroundTasks`/
+`threading`/`asyncio.create_task` nulle part), un seul Redis déjà en place
+(`app/core/cache.py`, cache TTL dashboard finance uniquement), aucune
+lib de queue, email/SMS/Excel confirmés **0% implémentés** (pas seulement
+non asynchrones — inexistants, variables `AFRICASTALKING_*` mortes dans
+`.env.example`). Bug trouvé pendant l'audit, corrigé en prérequis direct
+(pas un chantier séparé) : `docker-compose.prod.yml` configurait Redis en
+`--maxmemory-policy allkeys-lru` — sous pression mémoire, Redis peut
+évincer n'importe quelle clé, y compris les futurs jobs de queue (sans TTL,
+contrairement aux clés de cache qui en ont toujours un). Passé à
+`volatile-lru` (n'évince que les clés AVEC TTL).
+
+**Techno retenue : RQ (redis-queue) 2.10.0**, pas Celery/Dramatiq/arq/
+Streams bruts — comparatif documenté dans le plan approuvé. Raison
+principale : le code existant est 100% `def` synchrone, RQ colle
+exactement à ce style ("appelle une fonction plus tard") sans nouvelle
+dépendance lourde (Celery aurait ajouté un result backend + `beat` +
+config de pool pour un besoin de 2 familles de tâches seulement — jugé
+disproportionné).
+
+**Pilote choisi** : génération du bulletin PDF (le plus lourd des 4
+générateurs reportlab, QR code + tableau dynamique). Seul refactor touchant
+du code déjà en prod dans ce chantier, justifié et mécanique : le corps de
+`generer_bulletin_pdf` (`evaluations.py`, ~530 lignes mêlant requêtes DB +
+dessin + `StreamingResponse`) extrait tel quel dans
+`_build_bulletin_pdf_bytes(bulletin_id, db) -> bytes`, la route existante
+devient un mince appel + `StreamingResponse` (comportement identique, zéro
+ligne de logique changée) ; nouvel endpoint `POST .../pdf-async` (202 +
+`task_id`) réutilise la même fonction depuis le worker.
+
+**Isolation multi-école** : le payload transporte `etablissement_id`, mais
+`generate_bulletin_pdf_task` (`app/tasks/bulletin_tasks.py`) le
+**revérifie** contre la classe réelle en base avant de générer quoi que ce
+soit — ne fait jamais confiance au payload (même principe "le serveur
+reste l'autorité" que le reste du projet). Vérifié par script direct
+(3 scénarios : mauvais établissement → `PermissionError`, bulletin
+inexistant → `ValueError`, bon établissement → passe la validation).
+
+**Nouveaux fichiers** : `app/core/task_queue.py` (connexion RQ dédiée,
+`decode_responses=False`, séparée de celle du cache), `app/tasks/
+bulletin_tasks.py`, `app/api/tasks.py` (`GET /api/tasks/{id}`, statut
+générique réutilisable par toute future tâche), `tests/test_task_queue.py`.
+**Modifiés** : `requirements.txt` (+`rq`), `evaluations.py` (extraction +
+endpoint `pdf-async`), `main.py` (`include_router` + `/health` qui ne
+répondait auparavant qu'un statut fixe **sans jamais rien vérifier**,
+étendu pour un vrai `SELECT 1` Postgres + `get_redis_client()`),
+`docker-compose.prod.yml` (+service `smartschool_worker`, même image que
+l'API, scalable via `--scale` sans changement de code, correction
+`maxmemory-policy`).
+
+**Découverte Windows importante (corrige une hypothèse du plan)** :
+`SpawnWorker` (recommandé par la doc RQ pour Windows/macOS) échoue en
+réalité sur ce poste — `os.spawnv()` fonctionne, mais `wait_for_horse()`
+(hérité de `Worker`, jamais surchargé par `SpawnWorker`) appelle
+`os.wait4()`, inexistant sur Windows quel que soit le cas. Confirmé
+empiriquement (`AttributeError: module 'os' has no attribute 'wait4'`).
+`SimpleWorker` (exécute le job dans le même process, ni fork ni spawn)
+testé et confirmé fonctionnel sur Windows (smoke test `fakeredis` : succès,
+échec→`FailedJobRegistry`, retry puis succès — 3/3). Recommandation pour
+le dev local Windows : `rq worker --worker-class rq.worker.SimpleWorker
+default`. En production (conteneur Linux), le `Worker` standard (fork,
+avec heartbeats, déjà configuré dans `docker-compose.prod.yml`) reste le
+bon choix — non affecté par cette limitation.
+
+**Tests** : `test_task_queue.py` écrit (mécanique de file contre Redis réel
+— recommandation officielle RQ, ne pas mocker Redis — + isolation
+multi-école de la tâche bulletin). **Non exécutable dans cette session** :
+Docker Desktop confirmé arrêté (`docker info` échoue) → Redis injoignable ;
+et indépendamment, `pytest` réel bloqué par le bug préexistant hors
+périmètre de `app/api/activites.py` (f-string avec backslash, invalide
+avant Python 3.12, ce poste n'a que 3.11) — les deux blocages confirmés
+séparément cette session, à exécuter par l'utilisateur
+(`docker compose -f docker-compose.dev.yml up -d && pytest
+backend/tests/test_task_queue.py`).
+
+**Vérifié réellement** : `py_compile` propre sur tous les fichiers
+touchés/créés ; logique d'isolation multi-école validée par script direct
+(bypass `main.py`, technique déjà établie) ; mécanique RQ (enqueue/retry/
+échec définitif/`FailedJobRegistry`) validée par smoke test personnel
+`fakeredis` (jetable, hors suite officielle) ; **zéro régression
+frontend** confirmée (`tsc --noEmit` propre, `npm run test:run` 99/99,
+`npm run build` 66/66 pages — cette étape est backend-only, aucun fichier
+frontend touché).
+
+**Bugs préexistants trouvés, non corrigés (hors périmètre F, enregistrés)** :
+`DELETE /api/eleves/{id}` probablement cassé (FK sans CASCADE) ;
+`delete_photo` (SQL brut, `photos.py`) ne met pas à jour `modified_date` —
+trou dans la synchro delta élèves ; rate limiting `slowapi` en mémoire
+locale, non partagé entre les 4 workers uvicorn (limite réellement 4× plus
+permissive qu'affichée) — pourrait réutiliser le Redis de cette étape
+(`storage_uri`) mais pas fait ici, signalé seulement.
+
+### ⚠️ Reste à faire (modules reportés, actés avec l'utilisateur)
+Le nouveau cahier des charges (classification Niveau A/B/C par opération)
+couvre l'extension à ~10 modules — élèves, personnel, classes,
+notifications, paramètres (Priorité 1-2), et surtout
+paiements/comptabilité/utilisateurs/permissions (Priorité 3, stratégie
+beaucoup plus stricte : idempotency-key, transaction atomique, conflits
+jamais résolus automatiquement). Rien de tout cela n'a été commencé cette
+session — reporté entièrement, comme demandé. Bug de retry sans plafond
+(§5 ci-dessus, `syncEngine.ts`) également non traité, distinct du
+périmètre SW. Étape F (ci-dessus) : câblage réel du service worker en
+production (nécessite un vrai déploiement Docker, hors de cette session) ;
+extension aux 3 autres générateurs PDF et aux 2 traitements batch finance
+une fois le pilote validé en conditions réelles, un par un ; tests de
+charge réels (p50/p95/p99, débit) — aucune capacité affirmée sans mesure.
+
+### 13. Étape F — Validation RÉELLE (Redis + Postgres + worker, pas de simulation) (09/08/2026, suite directe)
+Le rapport F précédent listait explicitement `test_task_queue.py` comme
+"non exécuté cette session" (Docker arrêté). Consigne reçue : ne jamais
+traiter ce rapport comme une preuve suffisante — le valider pour de vrai
+avant de continuer. Docker Desktop démarré (était éteint), `docker-compose.dev.yml`
+lancé : `smartschool_postgres`/`smartschool_redis` existaient déjà depuis le
+26/06/2026 (pas des conteneurs neufs — Docker Desktop les avait
+auto-redémarrés). Python 3.12+ obtenu sans toucher au poste hôte (toujours
+seulement 3.11 dispo) : `Dockerfile.prod` confirme que le projet cible déjà
+`python:3.12-slim`, donc `test_task_queue.py` exécuté réellement dans un
+conteneur `python:3.12-slim` jetable, réseau partagé avec `smartschool_redis`.
+
+**2 bugs réels trouvés en exécutant réellement les tests (jamais avant)** :
+1. `test_retry_puis_succes` échouait à 100% (pas flaky) : le compteur de
+   tentatives était un `dict` Python en mémoire (`_ATTEMPT_COUNTER`) — invisible
+   entre tentatives car le `Worker` standard (fork, comportement de
+   production Linux) exécute CHAQUE tentative dans un process ENFANT séparé
+   (`os.fork()`), et une mutation dans l'enfant ne survit jamais au retour
+   au parent (copy-on-write). Le mécanisme de retry de RQ lui-même
+   fonctionnait correctement (3 tentatives bien effectuées) — c'est le test
+   qui ne pouvait structurellement jamais observer un succès. Corrigé :
+   compteur déplacé dans Redis (`INCR`), seule ressource réellement partagée
+   entre les forks.
+2. `job.result` (déprécié dans RQ 2.10, warning vu à l'exécution) remplacé
+   par `job.return_value()` — piège trouvé en le faisant : `return_value`
+   est une **méthode**, pas une propriété comme l'était `.result` ; un
+   premier remplacement naïf (`job.return_value` sans parenthèses) a fait
+   régresser 3 tests qui passaient auparavant (comparaison d'une méthode
+   liée à une valeur, toujours fausse) — détecté en ré-exécutant réellement,
+   pas supposé. Corrigé dans `tests/test_task_queue.py` ET `app/api/tasks.py`
+   (usage identique en production).
+
+**Résultat final, réel, reproductible : 6/6 tests passent** contre un vrai
+Redis et le vrai `Worker` (fork), pas un mock.
+
+**Validation manuelle de la chaîne complète** (Redis → RQ → Worker → Postgres
+→ résultat), demandée explicitement, au-delà de la suite pytest :
+fixtures Postgres minimales créées dans un **conteneur Postgres isolé et
+jetable dédié** (`localhost:15432`, pas le Postgres dev partagé — son schéma
+s'est révélé désynchronisé des modèles actuels, colonne `favicon_url`
+manquante sur `ss_etablissements`, aucune migration Alembic réellement
+outillée malgré la dépendance présente ; plutôt que de faire un `ALTER
+TABLE` sur des données dev inconnues, l'environnement isolé neuf a été
+préféré — zéro risque sur l'existant). 6 scénarios exécutés pour de vrai,
+avec le vrai code de production (`generate_bulletin_pdf_task`,
+`SimpleWorker` pour le dev Windows) :
+- **Test 1 (succès)** : PDF réellement généré de bout en bout — 5357 octets,
+  en-tête `%PDF` valide, écrit sur disque. Première fois cette session que
+  la génération PDF complète (pas seulement la vérification d'isolation en
+  amont) est vérifiée avec de vraies données.
+- **Test 2 (retry puis succès)**, **Test 3 (échec définitif →
+  FailedJobRegistry)**, **Test 6 (job non perdu quand aucun worker n'est
+  actif, récupéré au démarrage suivant)** : tous conformes.
+- **Test 4 (mauvais établissement)** et **Test 5 (bulletin inexistant)** :
+  rejet confirmé (`PermissionError`/`ValueError`, `FailedJobRegistry`) —
+  mais a révélé que `Retry(max=3, interval=[10,30,90])` s'applique
+  aveuglément à TOUTE exception, y compris ces rejets définitifs qui ne
+  réussiront jamais en retentant (~130s avant `FAILED` au lieu
+  d'immédiat). **Non corrigé** (pas une régression : le résultat final
+  reste correct, juste plus lent que l'idéal) — analysé selon la boucle
+  anti-régression demandée : impact réel nul aujourd'hui car le seul
+  point d'appel (`generer_bulletin_pdf_async`) transmet toujours la vraie
+  valeur d'établissement fraîchement lue en base, donc ce rejet ne peut
+  pas se produire en pratique via ce chemin ; corriger demanderait un
+  exception handler RQ dédié aux erreurs métier définitives, hors du
+  minimum nécessaire. Documenté en commentaire directement dans
+  `evaluations.py` à l'endroit de l'enqueue, pas juste dans ce fichier.
+
+**Zéro régression frontend reconfirmée après ces corrections** : `tsc
+--noEmit` propre, `npm run test:run` 99/99, `npm run build` 66/66 pages —
+étape backend-only, comme F.
+
+**Fichiers modifiés** : `backend/tests/test_task_queue.py` (2 bugs
+corrigés), `backend/app/api/tasks.py` (`.return_value()`),
+`backend/app/api/evaluations.py` (commentaire de documentation, aucune
+ligne de logique changée). **Infrastructure jetable utilisée puis
+nettoyée** : conteneurs `python:3.12-slim` et Postgres isolé
+(`validation_postgres_etape_f`, port 15432), aucun n'affecte l'état
+persistant du dépôt ni les conteneurs dev partagés.
+
+**Étape F est maintenant réellement verrouillée** — plus seulement "écrite
+et relue", mais exécutée avec un vrai Redis, un vrai Postgres et le vrai
+`Worker` de production (fork), résultats reproductibles.
+
+### 14. Étape G — Monitoring (09/08/2026, suite directe)
+Audit d'abord (aucun fichier touché avant présentation du diagnostic,
+comme demandé), passé en Plan Mode vu l'ampleur. Constat central : RQ/Redis
+exposent déjà presque tout nativement (`Queue.count`, `*Registry.count`,
+`Worker.all()`) — pas de nouvelle table, pas de nouvelle structure Redis.
+
+**2 bugs trouvés pendant l'audit, corrigés car ils empêchaient directement
+le monitoring de fonctionner (§16 du cahier des charges le permettait
+explicitement dans ce cas précis)** :
+1. `get_redis_client()` (`app/core/cache.py`, Étape F) a un flag
+   "indisponible" **permanent** — une fois Redis tombé une fois, plus
+   jamais retenté, même après un vrai retour. Utilisé par `/health`, ça
+   aurait affiché "redis: down" indéfiniment après un incident résolu.
+   **Non modifié** (usage cache préservé tel quel) — contourné par une
+   nouvelle fonction séparée `redis_is_reachable()` (PING réel à chaque
+   appel, coût négligeable), utilisée par `/health` et `/api/monitoring`.
+   Vérifié réellement contre un vrai conteneur Redis arrêté PUIS
+   redémarré (pas simulé) : détection de panne et de reprise confirmées.
+2. Le `HEALTHCHECK` de `Dockerfile.prod` (`curl localhost:8500/health`)
+   est hérité par `smartschool_worker` (même image) qui ne lance jamais
+   uvicorn — ce healthcheck aurait toujours échoué, marquant le worker
+   "unhealthy" en permanence. Corrigé par un `healthcheck:` propre à ce
+   service dans `docker-compose.prod.yml` (vérifie que CE worker, par
+   hostname, est bien inscrit dans Redis — aucune nouvelle dépendance).
+   **Vérifié réellement** dans un conteneur jetable : healthy avec un
+   worker actif, unhealthy (exit 1) sans worker.
+
+**Nouveau `GET /api/monitoring`** (`app/api/monitoring.py`), réservé aux
+rôles admin (`require_roles(*ADMIN_TIER_ROLES)`, même dependency que
+finance/personnel) — `/health` reste public et inchangé dans son contrat.
+Réponse : statut global OK/WARNING/CRITICAL + raisons explicites,
+PostgreSQL (statut + latence), Redis, file (pending/started/finished/
+failed/deferred/scheduled), workers (total/idle/busy/noms) — jamais de
+compteur fabriqué : si Redis est injoignable, `queue`/`workers` restent
+`null`. Seuils de WARNING (profondeur de file, taux d'échec, latence
+Postgres) explicitement documentés comme **provisoires**, faute de mesure
+de charge réelle. Portée volontairement globale (pas par établissement) :
+infrastructure partagée, cohérent avec le mono-tenant actuel.
+
+**Frontend** (décidé avec l'utilisateur, inclus dans cette étape) :
+`frontend/src/app/monitoring/page.tsx` — page admin minimale, statut +
+compteurs, actualisation toutes les 25s. `lib/roleAccess.ts` étendu
+(`/monitoring` ajouté aux 5 rôles admin) — c'est le garde central
+(`AuthContext`, déjà utilisé par toutes les autres pages) qui protège
+réellement la route, pas la page elle-même. Lien ajouté à la recherche du
+`Topbar` (`SEARCH_ITEMS`), visible seulement pour `isAdminSystemRole`.
+
+**2 bugs de méthodologie de test trouvés et corrigés en vérifiant
+réellement** (pas des bugs produit) : le premier script de vérification de
+`redis_is_reachable()` utilisait `docker run --rm` puis `stop`/`start` sur
+le même conteneur — `--rm` supprime le conteneur au premier `stop`, rendant
+le `start` suivant sans effet (le test échouait en disant "toujours down"
+après redémarrage, alors que Redis n'avait en fait jamais pu redémarrer).
+Corrigé (suppression de `--rm`, nettoyage explicite en fin de test) et
+reconfirmé : 3/3 scénarios réels (up/down/reprise) passent. Le fichier de
+test formel `test_cache_redis_recovery.py` a ensuite échoué une fois
+exécuté via le conteneur `python:3.12-slim` jetable (celui-ci partageait
+l'espace réseau de `smartschool_redis` pour d'autres tests, incompatible
+avec le port publié par le conteneur Redis jetable propre à CE test) —
+diagnostiqué comme un artefact de la méthode de vérification imbriquée de
+cette session, pas un défaut du correctif (déjà prouvé correct
+séparément, sans cette contrainte réseau). Documenté précisément, pas
+caché.
+
+**Tests** : `test_monitoring.py` (7 tests) + `test_cache_redis_recovery.py`
+(2 tests) nouveaux. **13/13 réellement exécutés et verts** (`test_monitoring.py`
++ `test_task_queue.py`, contre un vrai Redis, dans un conteneur Python 3.12
+jetable). `test_cache_redis_recovery.py` : logique du correctif prouvée
+séparément (3/3, script direct + vrai Docker), le fichier de test lui-même
+non concluant dans cet environnement précis pour la raison réseau
+ci-dessus — à ré-exécuter sur un poste/CI avec Python 3.12+ natif et accès
+Docker direct (sans l'imbrication de conteneurs de cette session).
+
+**Zéro régression** : backend `py_compile` propre partout. Frontend touché
+cette fois (nouvelle page + `roleAccess.ts` + `Topbar.tsx`) — vérifié pour
+de vrai : `tsc --noEmit` propre, `npm run test:run` 99 → **102/102**
+(3 nouveaux tests monitoring), `npm run build` 66 → **67/67** pages.
+
+**Fichiers créés** : `backend/app/api/monitoring.py`, `backend/tests/test_monitoring.py`,
+`backend/tests/test_cache_redis_recovery.py`, `frontend/src/app/monitoring/page.tsx`,
+`frontend/src/app/monitoring/Monitoring.module.css`, `frontend/src/tests/monitoring.test.tsx`.
+**Modifiés** : `backend/app/core/cache.py` (+`redis_is_reachable()`),
+`backend/main.py` (routeur + `/health` utilise la nouvelle fonction),
+`docker-compose.prod.yml` (healthcheck worker), `frontend/src/lib/roleAccess.ts`,
+`frontend/src/components/Topbar.tsx`. **Non touchés** : `app/core/task_queue.py`,
+`app/tasks/bulletin_tasks.py`, `app/api/tasks.py`, `app/api/evaluations.py`,
+tout le frontend offline, tous les modules métier, `docker-compose.dev.yml`,
+`Dockerfile.prod`.
+
+### 15. Validation préproduction avant pilote (09/08/2026, suite directe)
+Mission explicite : auditer et valider que tout le socle A→G fonctionne
+ensemble en conditions proches production, corriger le minimum nécessaire,
+puis rendre un verdict. Audit d'abord (aucune modification avant d'avoir
+présenté les constats), puis tests réels.
+
+**Trouvailles d'audit (documentées, pas toutes corrigées)** :
+- Tout le travail de la session (Étapes A→G) est resté **non committé** en
+  git jusqu'ici (informatif, pas une action prise sans demande).
+- Pas d'Alembic réellement câblé malgré la dépendance présente — seulement
+  `Base.metadata.create_all()` (crée, n'altère jamais) + scripts manuels
+  ponctuels (`backend/migrations/add_sync_tracking.py`). Chantier futur
+  distinct, pas corrigé.
+- `secrets/` n'existe pas encore dans le dépôt — prérequis de déploiement
+  réel (attendu, pas un bug), 4 fichiers nécessaires
+  (`db_password.txt`/`jwt_secret.txt`/`minio_password.txt`/`keycloak_password.txt`).
+- Aucun script de sauvegarde PostgreSQL trouvé — risque réel pour des
+  données d'école réelles, signalé comme le point le plus important à
+  trancher avant le pilote, pas construit unilatéralement (nouvelle
+  fonctionnalité, hors du minimum).
+- Aucun reverse proxy (nginx/Caddy/Traefik) — attendu (tous les ports
+  liés à `127.0.0.1` uniquement dans `docker-compose.prod.yml`), prérequis
+  de déploiement, pas un bug.
+- `NEXT_PUBLIC_API_URL` : aucun fichier `.env` frontend n'existe, et les
+  valeurs de repli codées en dur divergent selon les fichiers (`:8300`,
+  `:8000`) — aucune ne correspond au port réel de prod (`:8500`). Sans
+  configuration explicite au build, le frontend déployé viserait le
+  mauvais port. Prérequis de déploiement à documenter, pas un bug de
+  code (comportement de repli fonctionnant comme conçu).
+- `.env.example` ne documentait pas `REDIS_URL` (ajoutée en F/G) — **corrigé**
+  (1 ligne, cohérence).
+- `docker-compose.dev.yml` et `docker-compose.prod.yml` utilisent les
+  **mêmes noms de conteneurs** — ne peuvent pas tourner simultanément sur
+  le même hôte (rencontré réellement en testant). Signalé, pas corrigé
+  (changer les noms toucherait aux deux fichiers pour un besoin de confort
+  de développement, pas de correction).
+
+**Rate limiting Redis (§11 de la consigne, audité puis corrigé)** :
+`slowapi` était en mémoire locale, seulement sur les 3 endpoints de
+connexion (`auth.py`, `portail_eleve.py`, `portail_parent.py`) — avec
+`WORKERS=4` (Dockerfile.prod), la protection anti-brute-force réelle
+pouvait être jusqu'à 4x plus permissive qu'affichée. **Corrigé** :
+`storage_uri=REDIS_URL` + `in_memory_fallback_enabled=True` (retombe sur
+le comportement actuel si Redis est indisponible — jamais un échec dur).
+Vérifié réellement à trois niveaux : (1) construction sûre même avec Redis
+injoignable, (2) fallback fonctionnel (3 requêtes passent, 2 bloquées,
+aucune 500), (3) **partage réel confirmé entre deux process Python
+distincts** simulant 2 workers uvicorn contre un vrai Redis.
+
+**2 bugs réels trouvés en exécutant pour la première fois la suite
+complète des 11 fichiers de test ensemble (jamais fait avant cette
+session — chaque étape n'avait lancé que ses propres fichiers)** :
+1. **Fuite d'isolation multi-école dans `test_eleves_delta.py`** — pas un
+   bug produit : `GET /api/eleves/delta` filtre correctement par
+   `etablissement_id`. Le test créait un « autre établissement » dont
+   l'id auto-incrémenté valait accidentellement **1** (aucun autre test du
+   dépôt ne crée jamais de vraie ligne `Etablissement` — tous utilisent
+   `etablissement_id=1` comme un entier nu), collisionnant avec l'école
+   « principale » implicite partout ailleurs. Corrigé : `_ensure_etablissement_1()`
+   garantit qu'une ligne `Etablissement(id=1)` existe avant de créer
+   « l'autre » école, quel que soit l'ordre d'exécution des tests.
+2. **RBAC réellement cassé sur `GET /api/presences-agents/historique`** —
+   celui-ci n'était protégé que par `get_current_user` (authentification
+   seule), pas par `require_roles`, contrairement à ses 3 routeurs
+   jumeaux (finance/comptabilité/personnel, déjà corrigés par le passé —
+   `tests/test_rbac_modules_sensibles.py` documentait explicitement cet
+   historique et attendait ce correctif). Un token ENSEIGNANT, PARENT ou
+   ELEVE valide suffisait à consulter l'historique de présence du
+   personnel de tout l'établissement. **Corrigé** : `require_roles(*PERSONNEL_ROLES)`,
+   même garde que `personnel_router`.
+
+**Suite complète re-exécutée après corrections : 154 passed, 2 skipped
+(limite Docker-in-Docker déjà documentée en Étape G), 0 failed.**
+
+**Test réel du démarrage complet de la stack prod-like** (jamais fait
+avant cette session) : `docker-compose.prod.yml` construit et démarré
+pour de vrai (Postgres + Redis + API + worker, en écartant Elasticsearch/
+MinIO/Keycloak/Tesseract — non intégrés au code, confirmé par l'audit).
+Secrets et `.env` jetables créés uniquement pour ce test (jamais commités,
+supprimés après). Conflit de noms avec les conteneurs dev résolu par un
+renommage temporaire (réversible, aucune perte de données) plutôt qu'une
+suppression. Résultat : **les 4 services démarrent, communiquent, et
+passent `healthy`** — y compris `smartschool_worker` (confirmation en
+conditions réelles du correctif B.2 de l'Étape G). `GET /health` et
+`GET /api/monitoring` testés avec un vrai JWT généré depuis le secret
+réellement chargé par le conteneur — `/api/monitoring` détecte
+correctement le vrai worker (`workers.total: 1`). Rate limiting testé en
+conditions réelles : 5 tentatives de connexion passent, la 6e est bloquée
+(429). Logs API/worker propres, aucune erreur. Stack, volumes et fichiers
+jetables entièrement nettoyés après coup — conteneurs dev restaurés à
+l'identique.
+
+**Zéro régression** : suite frontend re-vérifiée après les correctifs
+backend (aucun fichier frontend touché cette fois) — `tsc` propre,
+`npm run test:run` 102/102, `npm run build` 67/67 pages.
+
+**Fichiers modifiés** : `backend/app/core/rate_limit.py`, `.env.example`,
+`backend/main.py` (RBAC presence_agent_router), `backend/tests/test_eleves_delta.py`.
+**Aucun fichier créé de production** — uniquement des corrections ciblées
+et des tests.
+
+## Historique (sous-session précédente) — Remise à zéro des données, corrections post-reset, module Offline-First Phase 1 (05-06/08/2026)
 Suite directe de la Phase 5 (même session). Trois volets enchaînés dans
 l'ordre où l'utilisateur les a demandés : (1) remise à zéro complète de la
 base + reseed 5000 élèves (voir mémoire projet, entrée dédiée), (2) une série

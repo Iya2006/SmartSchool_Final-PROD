@@ -18,6 +18,8 @@ import { usePathname, useRouter } from 'next/navigation';
 import { Search, Calendar, PanelLeftClose, PanelLeftOpen, Command } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useUI } from '@/context/UIContext';
+import { useAuth } from '@/context/AuthContext';
+import { isAdminSystemRole } from '@/lib/roleAccess';
 import TopbarNotifications from './TopbarNotifications';
 import TopbarUserMenu from './TopbarUserMenu';
 import styles from './Topbar.module.css';
@@ -46,21 +48,34 @@ const SEARCH_ITEMS = [
     { label: 'Paramètres', href: '/parametres', keywords: ['parametres', 'paramètres', 'settings'] },
 ];
 
+// Réservé aux rôles admin (Étape G) — contrairement au reste de
+// SEARCH_ITEMS ci-dessus, jamais filtré par rôle jusqu'ici : un clic sur
+// une entrée non autorisée est de toute façon bloqué par le garde de
+// route (AuthContext, canAccessPathForRole), mais un lien d'infrastructure
+// (file d'attente, workers) n'a pas sa place dans la recherche d'un
+// enseignant/parent/élève.
+const MONITORING_SEARCH_ITEM = { label: 'Monitoring', href: '/monitoring', keywords: ['monitoring', 'infrastructure', 'redis', 'workers', 'file d\'attente'] };
+
 export default function Topbar() {
     const { anneeLibelle } = useApp();
     const pathname = usePathname();
     const router = useRouter();
     const { sidebarCollapsed, toggleSidebarCollapsed } = useUI();
+    const { user } = useAuth();
     const [query, setQuery] = useState('');
     const [isFocused, setIsFocused] = useState(false);
+
+    const searchItems = useMemo(() => {
+        return isAdminSystemRole(user?.role) ? [...SEARCH_ITEMS, MONITORING_SEARCH_ITEM] : SEARCH_ITEMS;
+    }, [user?.role]);
 
     const searchResults = useMemo(() => {
         const q = query.trim().toLowerCase();
         if (!q) return [];
-        return SEARCH_ITEMS.filter(item =>
+        return searchItems.filter(item =>
             item.label.toLowerCase().includes(q) || item.keywords.some(k => k.includes(q))
         ).slice(0, 6);
-    }, [query]);
+    }, [query, searchItems]);
 
     return (
         <header className={styles.topbar}>
