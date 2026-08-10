@@ -7,7 +7,7 @@ Ce module ne fait qu'exposer les routes HTTP.
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, or_
 from typing import List, Optional
 from datetime import date
 from pydantic import BaseModel
@@ -176,17 +176,46 @@ def initialiser_notes(evaluation_id: int, db: Session = Depends(get_db)):
 # CENTRALISATION DES NOTES — Vue Admin
 # ════════════════════════════════════════════════════════════
 
+# Recherche insensible aux accents : personne ne tape « Mathématiques » ni
+# « 8ème » avec leurs accents dans une barre de recherche. Sans ça, chercher
+# « Mathematiques » ne renvoyait rien du tout.
+_ACCENTS = "àáâãäåçèéêëìíîïñòóôõöùúûüýÿ"
+_SANS = "aaaaaaceeeeiiiinooooouuuuyy"
+
+
+def _dépouiller(texte: str) -> str:
+    """Retire les accents d'un terme saisi, côté Python."""
+    table = str.maketrans(_ACCENTS + _ACCENTS.upper(), _SANS + _SANS.upper())
+    return texte.translate(table)
+
+
+def _sans_accents(colonne, db: Session):
+    """Même dépouillement, côté base — via translate() natif de Postgres.
+
+    Les autres moteurs (SQLite en test) n'ont pas cette fonction : on retombe
+    alors sur la colonne brute, la recherche reste fonctionnelle mais devient
+    sensible aux accents.
+    """
+    dialecte = getattr(getattr(db, "bind", None), "dialect", None)
+    if dialecte is not None and dialecte.name == "postgresql":
+        return func.translate(colonne, _ACCENTS + _ACCENTS.upper(), _SANS + _SANS.upper())
+    return colonne
+
+
 @router.get("/centralisees")
 def get_evaluations_centralisees(
     response: Response,
     classe_id: Optional[int] = None,
     trimestre_id: Optional[int] = None,
     statut: Optional[str] = None,
+    q: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
     """Liste les évaluations d'une classe/période, paginée.
+
+    `q` recherche sur l'intitulé, la matière, la classe et l'enseignant.
 
     `statut` filtre sur un état précis (PLANIFIEE, PUBLIEE, CENTRALISEE) ;
     sans lui, toutes les évaluations sont retournées — l'administration doit
@@ -205,6 +234,24 @@ def get_evaluations_centralisees(
         query = query.filter(Evaluation.classe_id == classe_id)
     if trimestre_id:
         query = query.filter(Evaluation.trimestre_id == trimestre_id)
+
+    # Recherche sur toute la base, pas seulement sur la page affichée : avec une
+    # pagination à 50 lignes et près de mille évaluations, un filtre appliqué
+    # côté navigateur ne trouvait une épreuve que si elle était déjà à l'écran.
+    if q and q.strip():
+        terme = q.strip()
+        query = (
+            query.outerjoin(Matiere, Matiere.matiere_id == Evaluation.matiere_id)
+            .outerjoin(Classe, Classe.classe_id == Evaluation.classe_id)
+            .outerjoin(Enseignant, Enseignant.enseignant_id == Evaluation.enseignant_id)
+            .filter(or_(*[
+                _sans_accents(colonne, db).ilike(f"%{_dépouiller(terme)}%")
+                for colonne in (
+                    Evaluation.libelle, Matiere.libelle, Classe.libelle,
+                    Enseignant.nom, Enseignant.prenom,
+                )
+            ]))
+        )
 
     response.headers["X-Total-Count"] = str(query.count())
     evals = query.order_by(desc(Evaluation.date_evaluation)).offset(skip).limit(limit).all()

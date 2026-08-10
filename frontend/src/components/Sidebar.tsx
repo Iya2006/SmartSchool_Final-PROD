@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, Trophy } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useUI } from '@/context/UIContext';
@@ -194,6 +194,12 @@ export default function Sidebar() {
                         <Link href="/bulletins">
                             <FileText size={18} className={styles.menuIcon} />
                             <span className={styles.menuText}>Bulletins</span>
+                        </Link>
+                    </li>
+                    <li className={pathname.startsWith('/resultats-annuels') ? styles.currentPage : ''}>
+                        <Link href="/resultats-annuels">
+                            <Trophy size={18} className={styles.menuIcon} />
+                            <span className={styles.menuText}>Résultats de fin d&apos;année</span>
                         </Link>
                     </li>
                     <li className={pathname.startsWith('/centre-evaluation') ? styles.currentPage : ''}>

@@ -1093,13 +1093,27 @@ def calculer_resultats_annuels(
     effectif = len(inscriptions)
     resultats_bulk = resultats_annuels_bulk(db, [i.inscription_id for i in inscriptions])
 
+    # Identité des élèves, comme pour les résultats de période : un classement
+    # annuel doit pouvoir s'afficher sans recharger la classe pour traduire les
+    # inscription_id en noms.
+    eleves_annuel = {
+        e.eleve_id: e for e in db.query(Eleve).filter(
+            Eleve.eleve_id.in_([i.eleve_id for i in inscriptions])
+        ).all()
+    } if inscriptions else {}
+
     lignes_par_inscription = {}
     donnees = []
     for insc in inscriptions:
         r = resultats_bulk.get(insc.inscription_id)
+        el = eleves_annuel.get(insc.eleve_id)
         lignes_par_inscription[insc.inscription_id] = r["lignes"] if r else []
         donnees.append({
             "inscription_id": insc.inscription_id,
+            "eleve_id": insc.eleve_id,
+            "nom": el.nom if el else None,
+            "prenom": el.prenom if el else None,
+            "matricule": el.matricule if el else None,
             "moyenne_generale": r["moyenne"] if r else None,
             "total_points": r["total_points"] if r else None,
             "total_coefficients": r["total_coefficients"] if r else None,

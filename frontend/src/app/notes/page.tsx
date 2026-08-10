@@ -77,6 +77,8 @@ export default function CentralisationNotesPage() {
     const [viewMode, setViewMode] = useState<'overview' | 'detail'>('overview');
     const [successMsg, setSuccessMsg] = useState('');
     const [search, setSearch] = useState('');
+    // Terme réellement envoyé au serveur (temporisé), distinct de la saisie
+    const [rechercheEnvoyee, setRechercheEnvoyee] = useState('');
     const [evalsPage, setEvalsPage] = useState(1);
     const [evalsTotal, setEvalsTotal] = useState(0);
     const EVALS_PAGE_SIZE = 50;
@@ -171,18 +173,27 @@ export default function CentralisationNotesPage() {
     const rechargerEvals = useCallback(async () => {
         try {
             const skip = (evalsPage - 1) * EVALS_PAGE_SIZE;
-            const q = statutFiltre ? `&statut=${statutFiltre}` : '';
-            const res = await api.get(`/api/evaluations/centralisees?skip=${skip}&limit=${EVALS_PAGE_SIZE}${q}`);
+            const filtres = (statutFiltre ? `&statut=${statutFiltre}` : '')
+                + (rechercheEnvoyee ? `&q=${encodeURIComponent(rechercheEnvoyee)}` : '');
+            const res = await api.get(`/api/evaluations/centralisees?skip=${skip}&limit=${EVALS_PAGE_SIZE}${filtres}`);
             setEvalsCentralisees(res.data);
             const totalCount = res.headers?.['x-total-count'];
             setEvalsTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
         } catch (e) { console.error(e); }
-    }, [evalsPage, statutFiltre]);
+    }, [evalsPage, statutFiltre, rechercheEnvoyee]);
 
     useEffect(() => { rechargerEvals(); }, [rechargerEvals]);
 
-    // Revenir à la page 1 quand la recherche change
-    useEffect(() => { setEvalsPage(1); }, [search]);
+    // La recherche porte sur toute la base, pas sur la page affichée : elle part
+    // donc au serveur. Court délai pour ne pas déclencher une requête par
+    // frappe, et retour à la page 1 puisque le nombre de résultats change.
+    useEffect(() => {
+        const t = setTimeout(() => {
+            setRechercheEnvoyee(search.trim());
+            setEvalsPage(1);
+        }, 350);
+        return () => clearTimeout(t);
+    }, [search]);
     // Revenir à la page 1 des élèves quand on change de classe/trimestre
     useEffect(() => { setClasseElevesPage(1); }, [selectedClasse, selectedTrimestre]);
 
@@ -480,15 +491,26 @@ export default function CentralisationNotesPage() {
         return acc;
     }, {});
 
-    // Filtre texte — s'applique uniquement à la page actuellement chargée
-    // (la liste complète est paginée côté serveur ; utilisez le sélecteur de
-    // classe ci-dessus pour filtrer sur l'ensemble des évaluations).
-    const filteredEvals = evalsCentralisees.filter(ev =>
-        ev.libelle.toLowerCase().includes(search.toLowerCase()) ||
-        ev.classe.toLowerCase().includes(search.toLowerCase()) ||
-        ev.matiere.toLowerCase().includes(search.toLowerCase()) ||
-        ev.enseignant.toLowerCase().includes(search.toLowerCase())
-    );
+    // La recherche est faite par le serveur (paramètre `q`) : re-filtrer ici
+    // masquerait des lignes légitimes le temps que la requête revienne, et
+    // ferait mentir le compteur de pagination.
+    const filteredEvals = evalsCentralisees;
+
+    // Statut d'une épreuve regroupée : une composition porte une évaluation par
+    // matière, qui peuvent être à des états différents. On affiche l'état le
+    // moins avancé — celui qui reste à traiter — plutôt qu'une moyenne trompeuse.
+    const statutEpreuve = (evals: EvalCentralisee[]) => {
+        const statuts = new Set(evals.map(e => e.statut));
+        if (statuts.size === 1 && statuts.has('ANNULEE'))
+            return { cle: 'ANNULEE', label: 'Annulée', couleur: '#94a3b8', fond: '#f1f5f9' };
+        if (evals.every(e => e.statut === 'CENTRALISEE'))
+            return { cle: 'CENTRALISEE', label: 'Centralisée', couleur: '#059669', fond: '#ecfdf5' };
+        if (evals.every(e => e.statut === 'CENTRALISEE' || e.statut === 'PUBLIEE'))
+            return { cle: 'PUBLIEE', label: 'Publiée', couleur: '#1d4ed8', fond: '#eff6ff' };
+        if (evals.some(e => e.nb_notes > 0))
+            return { cle: 'PARTIEL', label: 'Saisie en cours', couleur: '#b45309', fond: '#fef3c7' };
+        return { cle: 'PLANIFIEE', label: 'À saisir', couleur: '#b45309', fond: '#fef3c7' };
+    };
 
     // Une composition couvre toutes les matières d'une classe : on l'affiche
     // sur UNE ligne, pas une par matière. Les évaluations créées hors session
@@ -640,15 +662,18 @@ export default function CentralisationNotesPage() {
                             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                             <select value={statutFiltre} onChange={e => { setStatutFiltre(e.target.value); setEvalsPage(1); }}
                                 style={{ padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600 }}>
+                                {/* Les quatre états du cycle de vie d'une évaluation,
+                                    tels que le backend les accepte (PUT /{id}/statut). */}
                                 <option value="">Tous les statuts</option>
-                                <option value="PLANIFIEE">Planifiée (notes à saisir)</option>
-                                <option value="PUBLIEE">Publiée</option>
-                                <option value="CENTRALISEE">Centralisée (prise en compte)</option>
+                                <option value="PLANIFIEE">Planifiée — notes à saisir</option>
+                                <option value="PUBLIEE">Publiée — notes saisies, pas encore validées</option>
+                                <option value="CENTRALISEE">Centralisée — compte dans les moyennes</option>
+                                <option value="ANNULEE">Annulée — ne compte pas</option>
                             </select>
                             <div style={{ position: 'relative' }}>
                                 <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                                <input type="text" placeholder="Rechercher dans cette page..." value={search} onChange={e => setSearch(e.target.value)}
-                                    style={{ padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '240px' }} />
+                                <input type="text" placeholder="Rechercher une épreuve, une classe, un enseignant…" value={search} onChange={e => setSearch(e.target.value)}
+                                    style={{ padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '300px' }} />
                             </div>
                             </div>
                         </div>
@@ -695,16 +720,20 @@ export default function CentralisationNotesPage() {
                                                     <td style={{ padding: '14px 16px', fontSize: '13px', fontWeight: 700, color: saisies === nbMat ? '#059669' : '#b45309' }}>
                                                         {saisies} / {nbMat}
                                                     </td>
+                                                    {/* Le badge ne connaissait que « Centralisée » et « À saisir » :
+                                                        une épreuve publiée ou annulée s'affichait donc à tort comme
+                                                        « à saisir », alors que ses notes sont déjà là ou qu'elle ne
+                                                        compte plus. Les quatre états sont maintenant distingués. */}
                                                     <td style={{ padding: '14px 16px' }}>
-                                                        {toutesCentralisees ? (
-                                                            <span style={{ padding: '4px 12px', borderRadius: '20px', background: '#ecfdf5', color: '#059669', fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                                                <CheckCircle2 size={12} /> Centralisée
-                                                            </span>
-                                                        ) : (
-                                                            <span style={{ padding: '4px 12px', borderRadius: '20px', background: '#fef3c7', color: '#b45309', fontSize: '11px', fontWeight: 700 }}>
-                                                                À saisir
-                                                            </span>
-                                                        )}
+                                                        {(() => {
+                                                            const st = statutEpreuve(ligne.evaluations);
+                                                            return (
+                                                                <span style={{ padding: '4px 12px', borderRadius: '20px', background: st.fond, color: st.couleur, fontSize: '11px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                                                    {st.cle === 'CENTRALISEE' && <CheckCircle2 size={12} />}
+                                                                    {st.label}
+                                                                </span>
+                                                            );
+                                                        })()}
                                                     </td>
                                                     {/* Le classement d'une épreuve doit être accessible d'ici,
                                                         sans passer par la classe : c'est sur cette liste que
