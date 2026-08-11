@@ -120,9 +120,19 @@ def get_etablissement_public(id: int, db: Session = Depends(get_db)):
 @router.post("/etablissements", response_model=EtablissementOut, status_code=201,
              dependencies=[Depends(_require_super_admin)])
 def create_etablissement(data: EtablissementCreate, db: Session = Depends(get_db)):
-    """Creation d'une ecole : operation plateforme, SUPER_ADMIN seul (Lot 10)."""
+    """Creation d'une ecole : operation plateforme, SUPER_ADMIN seul (Lot 10).
+
+    L'ecole recoit sa liste de depart de types d'evaluation. Depuis que ces
+    types lui appartiennent en propre, une ecole creee sans eux ne pourrait ni
+    creer une epreuve, ni calculer une moyenne. Elle reste libre de les
+    renommer, d'en ajouter ou d'en desactiver ensuite, sans toucher personne.
+    """
+    from app.services.referentiel_evaluation import amorcer_types_evaluation
+
     e = Etablissement(**data.model_dump())
     db.add(e)
+    db.flush()
+    amorcer_types_evaluation(db, e.etablissement_id)
     db.commit()
     db.refresh(e)
     return e

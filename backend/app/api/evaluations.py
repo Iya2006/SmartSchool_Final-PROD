@@ -801,7 +801,11 @@ def lister_epreuves_periode(classe_id: int, trimestre_id: int, db: Session = Dep
         Evaluation.classe_id == classe_id,
         Evaluation.trimestre_id == trimestre_id,
     ).all()
-    types = {t.type_eval_id: t for t in db.query(TypeEvaluation).all()}
+    types = {
+        t.type_eval_id: t for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
+        ).all()
+    }
     retenues = epreuves_retenues_periode(db, classe_id, trimestre_id)
     personnalisee = retenues is not None
     retenues_set = set(retenues or [])
@@ -1228,8 +1232,11 @@ def creer_session_evaluation(data: EvaluationSessionCreate, db: Session = Depend
     except ValueError as e:
         raise HTTPException(400, str(e))
 
+    # Le type doit appartenir à l'école appelante : désigner celui d'une
+    # autre école reviendrait à lui emprunter son coefficient de référence.
     type_eval = db.query(TypeEvaluation).filter(
-        TypeEvaluation.type_eval_id == data.type_eval_id
+        TypeEvaluation.type_eval_id == data.type_eval_id,
+        TypeEvaluation.etablissement_id == etablissement_id,
     ).first()
     if not type_eval:
         raise HTTPException(404, "Type d'évaluation non trouvé")
@@ -1340,7 +1347,11 @@ def lister_sessions(
         return []
 
     # Comptages groupés — jamais une requête par session
-    types = {t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).all()}
+    types = {
+        t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
+        ).all()
+    }
     compte = dict(
         db.query(Evaluation.session_id, func.count(Evaluation.evaluation_id))
         .filter(Evaluation.session_id.in_([s.session_id for s in sessions]))
@@ -1439,7 +1450,8 @@ def modifier_session(session_id: int, data: EvaluationSessionUpdate, db: Session
             e.note_sur = data.note_sur
     if data.type_eval_id is not None:
         if not db.query(TypeEvaluation).filter(
-            TypeEvaluation.type_eval_id == data.type_eval_id
+            TypeEvaluation.type_eval_id == data.type_eval_id,
+            TypeEvaluation.etablissement_id == etablissement_id,
         ).first():
             raise HTTPException(404, "Type d'évaluation introuvable")
         session.type_eval_id = data.type_eval_id
@@ -1556,7 +1568,8 @@ def modifier_evaluation(evaluation_id: int, data: EvaluationUpdate, db: Session 
 
     if data.type_eval_id is not None:
         if not db.query(TypeEvaluation).filter(
-            TypeEvaluation.type_eval_id == data.type_eval_id
+            TypeEvaluation.type_eval_id == data.type_eval_id,
+            TypeEvaluation.etablissement_id == etablissement_id,
         ).first():
             raise HTTPException(404, "Type d'évaluation introuvable")
         ev.type_eval_id = data.type_eval_id
@@ -2065,52 +2078,98 @@ def update_notes_batch(notes: List[NoteUpdate], note_ids: List[int], db: Session
 # ════════════════════════════════════════════════════════════
 # TYPE EVALUATION CRUD
 # ════════════════════════════════════════════════════════════
-# VOLONTAIREMENT SANS `require_etablissement` : `TypeEvaluation` est classée
-# GLOBAL (.ai/MULTI_TENANT_PLAN.md) — c'est un catalogue partagé, au même titre
-# que le plan comptable. Ce que chaque école règle pour elle-même, c'est le
-# POIDS de ces types, via `notation.coef_type.{cycle}.{code}` dans
-# ss_parametres, qui est bien filtré par établissement (voir
-# services/notation.py::get_types_evaluation_coefficients).
+# Chaque école a SA liste de types (Composition, Interrogation, Oral…) et la
+# nomme comme elle l'entend. Cette table était partagée : renommer un type dans
+# une école changeait l'intitulé des colonnes de bulletin de toutes les autres.
+# Voir migration 2026_08_notation_09_type_evaluation_etablissement.py.
 #
-# À SURVEILLER : une écriture ici (création, renommage, suppression d'un type)
-# est donc visible par toutes les écoles. L'accès reste borné au tiers admin au
-# niveau du routeur, mais aucune école ne devrait pouvoir renommer le catalogue
-# des autres. Point à trancher avec le chantier multi-écoles avant d'ouvrir ces
-# routes plus largement.
+# Le POIDS de chaque type reste réglable par cycle, en plus, via
+# `notation.coef_type.{cycle}.{code}` — cf. get_types_evaluation_coefficients.
+
+def _type_evaluation_ou_404(db: Session, type_eval_id: int, etablissement_id: int) -> TypeEvaluation:
+    t = db.query(TypeEvaluation).filter(
+        TypeEvaluation.type_eval_id == type_eval_id,
+        TypeEvaluation.etablissement_id == etablissement_id,
+    ).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Type d'évaluation non trouvé")
+    return t
+
+
 @router.get("/types", response_model=List[TypeEvaluationOut])
-def get_types_evaluation(db: Session = Depends(get_db)):
-    return db.query(TypeEvaluation).all()
+def get_types_evaluation(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    return db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id
+    ).order_by(TypeEvaluation.type_eval_id).all()
+
 
 @router.post("/types", response_model=TypeEvaluationOut, status_code=201)
-def create_type_evaluation(data: TypeEvaluationCreate, db: Session = Depends(get_db)):
-    type_ev = TypeEvaluation(**data.model_dump())
+def create_type_evaluation(
+    data: TypeEvaluationCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    payload = data.model_dump()
+    # L'établissement vient du jeton, jamais du corps de la requête.
+    payload["etablissement_id"] = etablissement_id
+    # Le code n'est unique QUE dans l'école : le doublon se vérifie donc ici,
+    # sinon l'index remonterait une erreur 500 illisible pour l'utilisateur.
+    if db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id,
+        TypeEvaluation.code == payload["code"],
+    ).first():
+        raise HTTPException(
+            409, f"Le code « {payload['code']} » est déjà utilisé par un autre type dans votre établissement."
+        )
+    type_ev = TypeEvaluation(**payload)
     db.add(type_ev)
     db.commit()
     db.refresh(type_ev)
     return type_ev
 
+
 @router.put("/types/{type_eval_id}", response_model=TypeEvaluationOut)
-def update_type_evaluation(type_eval_id: int, data: TypeEvaluationUpdate, db: Session = Depends(get_db)):
-    type_ev = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == type_eval_id).first()
-    if not type_ev:
-        raise HTTPException(status_code=404, detail="Type d'évaluation non trouvé")
-    for key, value in data.model_dump(exclude_unset=True).items():
+def update_type_evaluation(
+    type_eval_id: int,
+    data: TypeEvaluationUpdate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    type_ev = _type_evaluation_ou_404(db, type_eval_id, etablissement_id)
+    champs = data.model_dump(exclude_unset=True)
+    nouveau_code = champs.get("code")
+    if nouveau_code and nouveau_code != type_ev.code:
+        if db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id,
+            TypeEvaluation.code == nouveau_code,
+            TypeEvaluation.type_eval_id != type_eval_id,
+        ).first():
+            raise HTTPException(
+                409, f"Le code « {nouveau_code} » est déjà utilisé par un autre type dans votre établissement."
+            )
+    for key, value in champs.items():
         setattr(type_ev, key, value)
     db.commit()
     db.refresh(type_ev)
     return type_ev
 
+
 @router.delete("/types/{type_eval_id}")
-def delete_type_evaluation(type_eval_id: int, db: Session = Depends(get_db)):
-    type_ev = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == type_eval_id).first()
-    if not type_ev:
-        raise HTTPException(status_code=404, detail="Type d'évaluation non trouvé")
-    
+def delete_type_evaluation(
+    type_eval_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    type_ev = _type_evaluation_ou_404(db, type_eval_id, etablissement_id)
+
     # Vérifier s'il y a des évaluations liées
     linked_evals_count = db.query(Evaluation).filter(Evaluation.type_eval_id == type_eval_id).count()
     if linked_evals_count > 0:
         raise HTTPException(status_code=400, detail="Impossible de supprimer ce type d'évaluation car il est lié à des évaluations existantes.")
-        
+
     db.delete(type_ev)
     db.commit()
     return {"message": "Type d'évaluation supprimé avec succès"}

@@ -313,10 +313,77 @@ est réexportée par `evaluations.py` : cet import doit continuer de fonctionner
   jamais deviné : une valeur inconnue est refusée. Couvert par
   `tests/test_import_resultats_examen.py`.
 
+---
+
+## Fusion du chantier multi-écoles (11/08/2026)
+
+`origin/main` a apporté l'isolation multi-écoles complète (13 lots, ~330 tests,
+signée Johnny). Ce chantier et le nôtre étaient complémentaires : l'un pose la
+frontière entre écoles, l'autre remplace le moteur de calcul. Commit de fusion
+`d6eb1a5`, 7 conflits résolus.
+
+**Règle de résolution appliquée sans exception** : garder la structure du moteur
+de notation, y reporter SA méthode d'isolation. Jamais l'inverse.
+
+Les anciens helpers de calcul (`get_poids_evaluations`,
+`coefficient_pour_evaluation`, `moyenne_matiere_eleve`,
+`detail_categories_matiere`, `get_notation_seuils`…) n'ont **pas** été
+réintroduits dans `api/evaluations.py` : ils vivent dans `services/notation.py`.
+Les y redéfinir masquerait le moteur central et rouvrirait la divergence
+silencieuse déjà constatée avec `portail_enseignant.py`.
+
+### Conséquences à connaître
+
+- `get_notation_seuils`, `get_mention` et `get_bulletin_display_flags` n'ont
+  **plus de valeur par défaut** `etablissement_id = 1`. Plus aucun défaut
+  exécutable dans `backend/app`.
+- Les 3 tâches RQ de notation portent `etablissement_id` dans leur `meta` :
+  `GET /api/tasks/{id}` refuse par défaut une tâche sans ce champ, son résultat
+  deviendrait donc illisible.
+- `Message` et `DemandeEmploi` ont une colonne établissement **NOT NULL** :
+  toute création (relance de sujets, demande de dépôt) doit la renseigner.
+- Déposer un sujet d'examen exige désormais une **période réellement
+  configurée**. C'est le correctif : une école à deux semestres n'a pas de T3.
+
+### Types d'évaluation : propres à chaque école
+
+Migration `2026_08_notation_09_type_evaluation_etablissement.py` (miroir SQL
+`database/migrations/2026_08_11_type_evaluation_etablissement.sql`).
+
+`ss_types_evaluation` était partagée par toute la plateforme. Le **poids** des
+types était déjà réglable par école, mais pas leur **nom** ni leur
+**existence** : une école qui renommait « Composition » changeait l'intitulé des
+colonnes de bulletin de toutes les autres. Ce n'était pas une fuite de données,
+c'était une école qui décidait pour les autres.
+
+- `etablissement_id` ajouté, **NOT NULL** après rattachement.
+- L'unicité de `code` passe de **globale** à **par école** (index
+  `uq_types_evaluation_etablissement_code`) : deux écoles ont chacune leur
+  « COMPO ». Le doublon dans une même école répond **409**, pas une erreur 500.
+- **Aucun backfill automatique.** La migration s'arrête et liste les types
+  orphelins ; il faut désigner l'école explicitement :
+  `--rattacher-a <etablissement_id>`. Conforme à
+  `docs/MULTI_ECOLES_REGLES_DEV.md` §10.
+- `services/referentiel_evaluation.py` donne à toute nouvelle école sa liste de
+  départ (EVAL et COMPO actifs, six autres prêts à activer). Idempotent et **non
+  destructif** : ne recrée que ce qui manque, ne réécrit jamais un type qu'une
+  école a renommé. Branché sur `POST /api/parametrage/etablissements` et sur
+  `scripts/amorcer_plateforme.py`.
+- Couvert par `tests/test_types_evaluation_isolation.py` (12 tests), dont
+  « renommer chez A ne change rien chez B ».
+
+**Divergence assumée avec `.ai/MULTI_TENANT_PLAN.md`**, qui classait cette table
+GLOBAL. Décision du fondateur : les écoles doivent être indépendantes. À
+signaler à Johnny.
+
 ### Reste à faire
 
 - [ ] Recette fonctionnelle par l'établissement pilote sur une classe réelle
 - [ ] Purge éventuelle de `poids_pourcentage` (UI et colonne) une fois la refonte stabilisée
-- [ ] Uniformiser `etablissement_id` dans le reste de l'application (hors périmètre de cette refonte)
+- [x] ~~Uniformiser `etablissement_id` dans le reste de l'application~~ — fait par le
+      chantier multi-écoles (13 lots) puis étendu à nos 33 routes lors de la fusion
+- [ ] Trancher avec Johnny la divergence sur `TypeEvaluation` (GLOBAL vs par école)
+- [ ] Rôles personnalisés : créables mais non attribuables, donc sans effet
+- [ ] Page de connexion : affiche encore la marque de l'établissement 1 (choix produit)
 - [ ] Sélection fine des matières à la création d'une session (l'API l'accepte via
       `matiere_ids`, l'écran crée pour toutes les matières actives)

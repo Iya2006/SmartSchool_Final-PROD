@@ -229,7 +229,11 @@ def get_types_evaluation_coefficients(
     `notation.coef_type.{cycle}.{code}` (catégorie NOTATION) — c'est ce qui
     permet à la composition de peser 2 au collège et 1 au primaire.
     """
-    types = db.query(TypeEvaluation).all()
+    # Les types appartiennent à l'école : sans ce filtre, une école héritait
+    # des types (et donc des coefficients de référence) de ses voisines.
+    types = db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id
+    ).all()
     coefs = {t.type_eval_id: float(t.coefficient or 1) for t in types}
 
     if not cycle_key:
@@ -673,7 +677,11 @@ def detail_par_type_matiere(
     etablissement_id = get_etablissement_id(db, classe_id)
     cycle_key = get_cycle_key(classe_id, db)
     type_coefs = get_types_evaluation_coefficients(db, etablissement_id, cycle_key)
-    types = {t.type_eval_id: t for t in db.query(TypeEvaluation).all()}
+    types = {
+        t.type_eval_id: t for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
+        ).all()
+    }
     notes_lookup = precharger_notes(db, [ev.evaluation_id for ev in evals])
 
     par_type: Dict[int, List[float]] = {}
@@ -725,7 +733,11 @@ def detail_par_type_classe(
     etablissement_id = get_etablissement_id(db, classe_id)
     cycle_key = get_cycle_key(classe_id, db)
     type_coefs = get_types_evaluation_coefficients(db, etablissement_id, cycle_key)
-    types = {t.type_eval_id: t for t in db.query(TypeEvaluation).all()}
+    types = {
+        t.type_eval_id: t for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
+        ).all()
+    }
     notes_lookup = precharger_notes(db, [ev.evaluation_id for ev in evals])
 
     # {matiere_id: {type_eval_id: [notes normalisées]}}
@@ -1086,7 +1098,9 @@ def calculer_resultats_periode(
     # sache sur quoi porte un classement (« ordre de mérite de janvier »
     # n'a pas le même sens qu'un classement de fin de trimestre).
     types_libelles = {
-        t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).all()
+        t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
+        ).all()
     }
     epreuves = {}
     for ev in toutes_evals:
@@ -1201,7 +1215,11 @@ def epreuves_consultables(db: Session, classe_id: int, trimestre_id: int) -> Lis
         Evaluation.classe_id == classe_id,
         Evaluation.trimestre_id == trimestre_id,
     ).all()
-    types = {t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).all()}
+    types = {
+        t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == get_etablissement_id(db, classe_id)
+        ).all()
+    }
 
     groupes: Dict[str, dict] = {}
     for ev in evals:

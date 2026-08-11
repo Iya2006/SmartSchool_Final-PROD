@@ -457,9 +457,22 @@ class ResultatOfficielExamen(Base):
 # ============================================================================
 
 class TypeEvaluation(Base):
+    """Nature d'une épreuve (Composition, Interrogation, Oral…), PAR ÉCOLE.
+
+    Cette table était partagée par toute la plateforme : renommer un type dans
+    une école changeait l'intitulé des colonnes de bulletin de toutes les
+    autres. Chaque école a désormais sa propre liste, qu'elle nomme et étend
+    comme elle l'entend — cf. migration
+    2026_08_notation_09_type_evaluation_etablissement.py.
+
+    `code` n'est donc plus unique globalement mais PAR ÉTABLISSEMENT (index
+    uq_types_evaluation_etablissement_code) : deux écoles ont chacune leur
+    « COMPO ».
+    """
     __tablename__ = "ss_types_evaluation"
     type_eval_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    code = Column(String(20), unique=True, nullable=False)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    code = Column(String(20), nullable=False)
     libelle = Column(String(100), nullable=False)
     # Legacy : jamais lu par le moteur de notation, conservé pour compat (cf. MIGRATION_NOTES.md)
     poids_pourcentage = Column(Numeric(5, 2), nullable=True)

@@ -9,7 +9,7 @@ from typing import Optional
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.core.security import verify_password, hash_password
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import (
     Enseignant, Affectation, CreneauEmploi, Classe, Matiere, Niveau,
     Note, Evaluation, Inscription, Eleve, Presence, Trimestre, TypeEvaluation,
@@ -101,11 +101,22 @@ def get_trimestres(db: Session = Depends(get_db)):
 
 
 @router.get("/referentiels/types-evaluation")
-def get_types_evaluation(db: Session = Depends(get_db)):
-    """Liste des types d'évaluation actifs."""
-    types = db.query(TypeEvaluation).filter(TypeEvaluation.statut == "ACTIF").all()
+def get_types_evaluation(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Liste des types d'évaluation actifs DE SON ÉCOLE.
+
+    Chaque école nomme ses types comme elle l'entend : sans ce filtre,
+    l'enseignant se serait vu proposer ceux du voisin.
+    """
+    types = db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id,
+        TypeEvaluation.statut == "ACTIF",
+    ).order_by(TypeEvaluation.type_eval_id).all()
     return [{"type_eval_id": t.type_eval_id, "code": t.code, "libelle": t.libelle,
-             "poids_pourcentage": float(t.poids_pourcentage)} for t in types]
+             "poids_pourcentage": float(t.poids_pourcentage) if t.poids_pourcentage is not None else None}
+            for t in types]
 
 
 # ================================================================
@@ -563,7 +574,7 @@ def enregistrer_appel(enseignant_id: int, data: AppelRequest, _auth: dict = Depe
 # SAISIE DES NOTES (créer évaluation + sauvegarder notes)
 # ================================================================
 
-def _type_eval_par_defaut(db: Session) -> int:
+def _type_eval_par_defaut(db: Session, etablissement_id: int) -> int:
     """Type d'évaluation à utiliser quand l'enseignant n'en précise aucun.
 
     Cherche le type générique "EVAL" (Évaluation), sinon le premier type actif.
@@ -576,13 +587,13 @@ def _type_eval_par_defaut(db: Session) -> int:
     configurés par l'école et calculés par `app/services/notation.py`.
 
     """
-    t = db.query(TypeEvaluation).filter(
-        TypeEvaluation.code == "EVAL", TypeEvaluation.statut == "ACTIF"
-    ).first()
+    base = db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id,
+        TypeEvaluation.statut == "ACTIF",
+    )
+    t = base.filter(TypeEvaluation.code == "EVAL").first()
     if not t:
-        t = db.query(TypeEvaluation).filter(TypeEvaluation.statut == "ACTIF").order_by(
-            TypeEvaluation.type_eval_id
-        ).first()
+        t = base.order_by(TypeEvaluation.type_eval_id).first()
     if not t:
         raise HTTPException(400, "Aucun type d'évaluation actif n'est configuré pour l'établissement.")
     return t.type_eval_id
@@ -628,7 +639,7 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
 
     from datetime import date
 
-    type_eval_id = data.type_evaluation_id or _type_eval_par_defaut(db)
+    type_eval_id = data.type_evaluation_id or _type_eval_par_defaut(db, classe.etablissement_id)
     # `classe` est garanti non nul (404 plus haut) : pas de repli sur l'école 1,
     # qui appliquait à tous les enseignants les pondérations d'une autre école.
     etablissement_id = classe.etablissement_id
@@ -699,6 +710,10 @@ def get_detail_evaluation(enseignant_id: int, evaluation_id: int, _auth: dict = 
     mat = db.query(Matiere).filter(Matiere.matiere_id == ev.matiere_id).first()
     cls = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
     tri = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+    # Pas de filtre d'établissement ici, volontairement : `ev` est déjà borné à
+    # l'enseignant appelant, et son type appartient donc à la même école par
+    # construction. Ajouter un filtre ne fermerait rien et masquerait le libellé
+    # sur toute donnée héritée.
     type_ev = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == ev.type_eval_id).first()
 
     # Notes avec info élève

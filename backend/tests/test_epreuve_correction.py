@@ -44,7 +44,9 @@ def epreuve(db):
         annee_id=annee.annee_id, code="TE1", libelle="1er Trimestre", numero=1,
         date_debut=date(2025, 10, 1), date_fin=date(2025, 12, 20), statut="EN_COURS",
     )
-    type_eval = TypeEvaluation(code="EVE", libelle="Éval Épreuve",
+    # Les types appartiennent désormais à une école (migration
+    # 2026_08_notation_09) : sans etablissement_id, l'insertion est refusée.
+    type_eval = TypeEvaluation(etablissement_id=ETAB, code="EVE", libelle="Éval Épreuve",
                                coefficient=1, statut="ACTIF")
     db.add_all([niveau, trimestre, type_eval])
     db.flush()
