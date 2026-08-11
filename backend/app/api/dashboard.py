@@ -17,6 +17,17 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
 @router.get("", response_model=DashboardResponse)
 def get_dashboard(etablissement_id: int = 1, annee_id: int = 1, db: Session = Depends(get_db)):
+    from app.models.academique import AnneeScolaire as _AS, Etablissement as _ET
+    # Résolution dynamique des IDs si les defaults (1) ne correspondent à rien
+    if not db.query(_AS).filter(_AS.annee_id == annee_id).first():
+        real = db.query(_AS).filter(_AS.est_courante == "O").first() \
+               or db.query(_AS).order_by(_AS.annee_id.desc()).first()
+        if real:
+            annee_id = real.annee_id
+    if not db.query(_ET).filter(_ET.etablissement_id == etablissement_id).first():
+        first = db.query(_ET).first()
+        if first:
+            etablissement_id = first.etablissement_id
     # KPI 1: Élèves inscrits (actifs)
     nb_eleves = db.query(func.count(Inscription.inscription_id)).join(
         Classe, Inscription.classe_id == Classe.classe_id
@@ -52,10 +63,11 @@ def get_dashboard(etablissement_id: int = 1, annee_id: int = 1, db: Session = De
         Paiement.statut == "VALIDE"
     ).scalar() or 0
 
-    # KPI 4b: Total dépenses
+    # KPI 4b: Total dépenses (VALIDE + EN_ATTENTE, exclure REJETEE)
     total_depenses = db.query(func.coalesce(func.sum(Depense.montant), 0)).filter(
         Depense.etablissement_id == etablissement_id,
-        Depense.annee_id == annee_id
+        Depense.annee_id == annee_id,
+        Depense.statut != "REJETEE"
     ).scalar() or 0
 
     # KPI 5: Taux de présence (30 derniers jours)
@@ -368,6 +380,27 @@ def get_dashboard(etablissement_id: int = 1, annee_id: int = 1, db: Session = De
             "heure": "Aujourd'hui",
             "icone": "CreditCard",
             "couleur": "#3b82f6",
+            "est_manuel": False
+        })
+
+    depenses_jour = db.query(func.count(Depense.depense_id)).filter(
+        Depense.etablissement_id == etablissement_id,
+        func.date(Depense.date_depense) == func.current_date(),
+        Depense.statut != "REJETEE"
+    ).scalar() or 0
+    montant_depenses_jour = float(db.query(func.coalesce(func.sum(Depense.montant), 0)).filter(
+        Depense.etablissement_id == etablissement_id,
+        func.date(Depense.date_depense) == func.current_date(),
+        Depense.statut != "REJETEE"
+    ).scalar() or 0)
+    if depenses_jour > 0:
+        activites_du_jour.append({
+            "type": "DEPENSE",
+            "titre": f"{depenses_jour} décaissement(s) enregistré(s)",
+            "description": f"Total : {int(montant_depenses_jour):,} GNF décaissés aujourd'hui".replace(',', ' '),
+            "heure": "Aujourd'hui",
+            "icone": "ArrowDownRight",
+            "couleur": "#ef4444",
             "est_manuel": False
         })
 

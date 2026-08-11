@@ -17,11 +17,12 @@ const CATEGORIES = [
 const EMPTY = { nom: '', description: '', categorie: 'MATERIEL', quantite: 1, prix_unitaire: '', unite: 'unité', obligatoire: 'O', statut: 'ACTIF' };
 
 export default function FournituresPage() {
-  const { etablissementId } = useApp();
+  const { etablissementId, anneeId } = useApp();
   const [classes, setClasses] = useState<any[]>([]);
+  const [loadingClasses, setLoadingClasses] = useState(true);
   const [selectedClass, setSelectedClass] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   
   const [showModal, setShowModal] = useState(false);
@@ -31,28 +32,43 @@ export default function FournituresPage() {
   const [success, setSuccess] = useState('');
 
   const loadClasses = async () => {
+    setLoadingClasses(true);
     try {
-      const res = await api.get(`/api/classes?etablissement_id=${etablissementId}`);
-      setClasses(res.data);
-      if (res.data.length > 0 && !selectedClass) {
-        setSelectedClass(res.data[0]);
+      const url = etablissementId ? `/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}` : `/api/classes?annee_id=${anneeId}`;
+      const res = await api.get(url);
+      const list = Array.isArray(res.data) ? res.data : (res.data?.classes || []);
+      setClasses(list);
+      if (list.length > 0 && !selectedClass) {
+        setSelectedClass(list[0]);
       }
-    } catch {}
+    } catch (err) {
+      console.error("Erreur chargement des classes:", err);
+    } finally {
+      setLoadingClasses(false);
+    }
   };
 
   const loadFournitures = async (classId: number) => {
     setLoading(true);
     try {
-      const res = await api.get(`/api/fournitures/classe/${classId}`);
-      setItems(res.data);
-    } catch {}
-    setLoading(false);
+      const res = await api.get(`/api/fournitures?classe_id=${classId}&include_inactif=true`);
+      setItems(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error("Erreur chargement des fournitures:", err);
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { loadClasses(); }, [etablissementId]);
+  useEffect(() => { if (anneeId) loadClasses(); }, [etablissementId, anneeId]);
   useEffect(() => { if (selectedClass) loadFournitures(selectedClass.classe_id); }, [selectedClass]);
 
-  const openCreate = () => { setEditing(null); setForm({ ...EMPTY, classe_id: selectedClass?.classe_id }); setShowModal(true); };
+  const openCreate = () => { 
+    setEditing(null); 
+    setForm({ ...EMPTY, classe_id: selectedClass?.classe_id, niveau_id: selectedClass?.niveau_id }); 
+    setShowModal(true); 
+  };
   const openEdit = (item: any) => { setEditing(item); setForm({ ...item, prix_unitaire: item.prix_unitaire ?? '' }); setShowModal(true); };
   const closeModal = () => { setShowModal(false); setEditing(null); };
 
@@ -60,15 +76,23 @@ export default function FournituresPage() {
     if (!form.nom.trim() || !form.classe_id) return;
     setSaving(true);
     try {
-      const payload = { ...form, etablissement_id: etablissementId, prix_unitaire: form.prix_unitaire !== '' ? Number(form.prix_unitaire) : null };
+      const payload = { 
+        ...form, 
+        etablissement_id: etablissementId || 1, 
+        niveau_id: selectedClass?.niveau_id || form.niveau_id,
+        prix_unitaire: form.prix_unitaire !== '' ? Number(form.prix_unitaire) : null 
+      };
       if (editing) await api.put(`/api/fournitures/${editing.fourniture_id}`, payload);
       else await api.post('/api/fournitures', payload);
       setSuccess(editing ? 'Fourniture modifiée' : 'Fourniture ajoutée');
       setTimeout(() => setSuccess(''), 3000);
       closeModal();
       if (selectedClass) loadFournitures(selectedClass.classe_id);
-    } catch {}
-    setSaving(false);
+    } catch (err) {
+      console.error("Erreur enregistrement fourniture:", err);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -103,7 +127,11 @@ export default function FournituresPage() {
         </div>
         <div style={{ padding: '16px 20px', overflowY: 'auto', flex: 1 }}>
           <h3 style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '1px', margin: '0 0 12px 0' }}>Liste des classes</h3>
-          {classes.length === 0 ? <p style={{ fontSize: '13px', color: '#64748b' }}>Chargement...</p> : classes.map(c => {
+          {loadingClasses ? (
+            <p style={{ fontSize: '13px', color: '#64748b' }}>Chargement...</p>
+          ) : classes.length === 0 ? (
+            <p style={{ fontSize: '13px', color: '#64748b' }}>Aucune classe trouvée.</p>
+          ) : classes.map(c => {
             const isActive = selectedClass?.classe_id === c.classe_id;
             return (
               <button key={c.classe_id} onClick={() => setSelectedClass(c)}

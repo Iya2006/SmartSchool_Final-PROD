@@ -42,9 +42,58 @@ def _invalidate_dashboard_cache(etablissement_id: int = 1, annee_id: int = 1) ->
     toute mutation (encaissement, décaissement, salaire...), pour que le
     dashboard reflète immédiatement l'opération au lieu de servir des
     chiffres périmés jusqu'à expiration du TTL.
+    On efface toutes les variantes connues de la clé pour ne pas laisser
+    un cache périmé lié à annee_id/etablissement_id différents.
     """
     from app.core.cache import cache_del
+    # Effacer la clé exacte passée en paramètre
     cache_del(f"dashboard:{etablissement_id}:{annee_id}")
+    # Effacer aussi les combinaisons courantes pour être sûr
+    for eid in set([1, etablissement_id]):
+        for aid in set([1, annee_id]):
+            cache_del(f"dashboard:{eid}:{aid}")
+
+
+
+def _get_active_annee_id(db: Session, fallback: int = 1) -> int:
+    from app.models.academique import AnneeScolaire
+    # Cherche d'abord sur est_courante='O', puis sur statut='EN_COURS' par sécurité
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.est_courante == "O").first()
+    if not annee:
+        annee = db.query(AnneeScolaire).order_by(AnneeScolaire.annee_id.desc()).first()
+    return annee.annee_id if annee else fallback
+
+
+def _get_default_etablissement_id(db: Session, fallback: int = 1) -> int:
+    from app.models.academique import Etablissement
+    etab = db.query(Etablissement).first()
+    return etab.etablissement_id if etab else fallback
+
+
+def _get_solde_caisse(db: Session, etablissement_id: int, annee_id: int) -> float:
+    """Calcule le solde disponible (Total encaissé - Dépenses validées et en attente)"""
+    from sqlalchemy import func
+    from app.models.academique import Paiement, Facture, Inscription, Classe, Depense
+
+    total_encaisse = db.query(func.coalesce(func.sum(Paiement.montant), 0)).join(
+        Facture, Paiement.facture_id == Facture.facture_id
+    ).join(
+        Inscription, Facture.inscription_id == Inscription.inscription_id
+    ).join(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).filter(
+        Classe.etablissement_id == etablissement_id,
+        Inscription.annee_id == annee_id,
+        Paiement.statut == "VALIDE"
+    ).scalar() or 0
+
+    total_depense = db.query(func.coalesce(func.sum(Depense.montant), 0)).filter(
+        Depense.etablissement_id == etablissement_id,
+        Depense.annee_id == annee_id,
+        Depense.statut.in_(["VALIDE", "EN_ATTENTE"]) # On déduit aussi les dépenses en attente
+    ).scalar() or 0
+
+    return float(total_encaisse) - float(total_depense)
 
 
 # Relocalisé dans app/core/annee_lock.py (Phase 3) — le garde n'est plus
@@ -1338,23 +1387,34 @@ def tableau_solvabilite(
     inscription_ids = [insc.inscription_id for _, insc, _ in results]
     factures_par_inscription: Dict[int, List[Facture]] = {}
     if inscription_ids:
-        for f in db.query(Facture).filter(Facture.inscription_id.in_(inscription_ids)).all():
+        for f in db.query(Facture).filter(
+            Facture.inscription_id.in_(inscription_ids),
+            Facture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE", "EN_RETARD", "PAYEE"])
+        ).all():
             factures_par_inscription.setdefault(f.inscription_id, []).append(f)
 
     solvabilite = []
     for eleve, inscription, classe in results:
         factures = factures_par_inscription.get(inscription.inscription_id, [])
 
-        total_facture = sum(float(f.montant_net or 0) for f in factures)
-        total_paye = sum(float(f.montant_paye or 0) for f in factures)
-        total_restant = total_facture - total_paye
+        # Utiliser montant_net, ou montant_total si montant_net n'est pas renseigné (legacy)
+        total_facture = sum(float(f.montant_net) if float(f.montant_net or 0) > 0 else float(f.montant_total or 0) for f in factures)
+        
+        # Si la facture est marquée PAYEE, on considère le montant entièrement payé (sécurité legacy)
+        total_paye = sum(
+            float(f.montant_net) if f.statut == "PAYEE" and float(f.montant_net or 0) > 0 
+            else float(f.montant_total or 0) if f.statut == "PAYEE"
+            else float(f.montant_paye or 0) 
+            for f in factures
+        )
+        total_restant = max(0.0, total_facture - total_paye)
 
         if total_facture == 0:
             taux = 100
             indicateur = "AUCUNE_FACTURE"
         else:
             taux = round(total_paye / total_facture * 100, 1)
-            if taux >= 100:
+            if taux >= 99.9:
                 indicateur = "SOLVABLE"
             elif taux >= 50:
                 indicateur = "PARTIEL"
@@ -1470,6 +1530,8 @@ def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db))
 def dashboard_financier(
     etablissement_id: int = 1,
     annee_id: int = 1,
+    date_debut: Optional[str] = None,
+    date_fin: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """
@@ -1478,11 +1540,27 @@ def dashboard_financier(
     Mis en cache dans Redis (TTL 60s) pour limiter la charge sur la base de
     données et rester réactif même en cas de connexion instable.
     """
-    from datetime import date as today_type, timedelta
+    from datetime import date as today_type, timedelta, datetime
     from sqlalchemy import extract
     from app.core.cache import cache_get, cache_set
 
+    # Résoudre les IDs dynamiquement si les valeurs par défaut sont passées
+    # (annee_id=1 ou etablissement_id=1 peuvent ne pas exister en base)
+    from app.models.academique import AnneeScolaire as _AS, Etablissement as _ET
+    if not db.query(_AS).filter(_AS.annee_id == annee_id).first():
+        real_annee = db.query(_AS).filter(_AS.est_courante == "O").first() \
+                     or db.query(_AS).order_by(_AS.annee_id.desc()).first()
+        if real_annee:
+            annee_id = real_annee.annee_id
+    if not db.query(_ET).filter(_ET.etablissement_id == etablissement_id).first():
+        first_etab = db.query(_ET).first()
+        if first_etab:
+            etablissement_id = first_etab.etablissement_id
+
     cache_key = f"dashboard:{etablissement_id}:{annee_id}"
+    if date_debut or date_fin:
+        cache_key += f":{date_debut}:{date_fin}"
+        
     cached = cache_get(cache_key)
     if cached is not None:
         return cached
@@ -1514,7 +1592,7 @@ def dashboard_financier(
 
     taux_recouvrement = round(total_paye / total_facture * 100, 1) if total_facture > 0 else 0
 
-    total_depenses = float(
+    total_depenses_valide = float(
         db.query(func.coalesce(func.sum(Depense.montant), 0))
         .filter(
             Depense.etablissement_id == etablissement_id,
@@ -1522,47 +1600,75 @@ def dashboard_financier(
             Depense.statut == "VALIDE"
         ).scalar()
     )
-    solde_caisse = total_paye - total_depenses
+    total_depenses_attente = float(
+        db.query(func.coalesce(func.sum(Depense.montant), 0))
+        .filter(
+            Depense.etablissement_id == etablissement_id,
+            Depense.annee_id == annee_id,
+            Depense.statut == "EN_ATTENTE"
+        ).scalar()
+    )
+    # Le total des dépenses inclut VALIDE + EN_ATTENTE pour ne pas cacher
+    # les dépenses nouvellement créées avant leur validation manuelle.
+    total_depenses = total_depenses_valide + total_depenses_attente
+    solde_caisse = total_paye - total_depenses_valide  # Solde réel = seulement ce qui est validé
 
     # === Revenus du jour / semaine / mois ===
     debut_semaine = today - timedelta(days=today.weekday())
     debut_mois = today.replace(day=1)
     debut_annee = today.replace(month=1, day=1)
 
-    def sum_paiements_periode(date_debut: today_type):
-        result = (
+    def sum_paiements_periode(date_deb, date_f=None):
+        q = (
             db.query(func.coalesce(func.sum(Paiement.montant), 0))
             .join(Facture, Paiement.facture_id == Facture.facture_id)
             .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
             .join(Classe, Inscription.classe_id == Classe.classe_id)
             .filter(
                 Classe.etablissement_id == etablissement_id,
-                Paiement.date_paiement >= date_debut,
                 Paiement.statut == "VALIDE"
-            ).scalar()
+            )
         )
-        return float(result)
+        if date_deb:
+            q = q.filter(Paiement.date_paiement >= date_deb)
+        if date_f:
+            q = q.filter(Paiement.date_paiement <= date_f)
+        return float(q.scalar())
 
     revenus_jour = sum_paiements_periode(today)
     revenus_semaine = sum_paiements_periode(debut_semaine)
     revenus_mois = sum_paiements_periode(debut_mois)
     revenus_annee = sum_paiements_periode(debut_annee)
 
-    def sum_depenses_periode(date_debut: today_type):
-        result = (
+    def sum_depenses_periode(date_deb, date_f=None):
+        q = (
             db.query(func.coalesce(func.sum(Depense.montant), 0))
             .filter(
                 Depense.etablissement_id == etablissement_id,
-                Depense.date_depense >= date_debut,
                 Depense.statut == "VALIDE"
-            ).scalar()
+            )
         )
-        return float(result)
+        if date_deb:
+            q = q.filter(Depense.date_depense >= date_deb)
+        if date_f:
+            q = q.filter(Depense.date_depense <= date_f)
+        return float(q.scalar())
 
     debut_trimestre = today.replace(month=((today.month - 1) // 3) * 3 + 1, day=1)
     depenses_mois = sum_depenses_periode(debut_mois)
     revenus_trimestre = sum_paiements_periode(debut_trimestre)
     depenses_trimestre = sum_depenses_periode(debut_trimestre)
+    
+    # Custom periods
+    dt_debut = None
+    dt_fin = None
+    if date_debut:
+        dt_debut = datetime.strptime(date_debut, "%Y-%m-%d").date()
+    if date_fin:
+        dt_fin = datetime.strptime(date_fin, "%Y-%m-%d").date()
+        
+    revenus_personnalise = sum_paiements_periode(dt_debut, dt_fin) if (date_debut or date_fin) else 0
+    depenses_personnalise = sum_depenses_periode(dt_debut, dt_fin) if (date_debut or date_fin) else 0
 
     # === Évolution mensuelle (12 derniers mois) ===
     evolution = []
@@ -1666,9 +1772,13 @@ def dashboard_financier(
             "revenus_mois": revenus_mois,
             "revenus_annee": revenus_annee,
             "revenus_trimestre": revenus_trimestre,
+            "revenus_personnalise": revenus_personnalise,
             "total_depenses": total_depenses,
+            "total_depenses_valide": total_depenses_valide,
+            "total_depenses_attente": total_depenses_attente,
             "depenses_mois": depenses_mois,
             "depenses_trimestre": depenses_trimestre,
+            "depenses_personnalise": depenses_personnalise,
             "solde_caisse": solde_caisse,
             "nb_eleves_impayes": nb_eleves_impayes,
         },
@@ -2266,7 +2376,7 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
     largeur, hauteur = A4
 
     # === En-tête : informations de l'établissement ===
-    y = hauteur - 2 * cm
+    y = hauteur - 4.0 * cm
 
     # Logo de l'école — lit le même réglage que les bulletins
     # (documents.entete_logo) et le fichier réellement uploadé
@@ -2309,31 +2419,31 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
         y -= 0.4 * cm
 
     # Ligne de séparation
-    y -= 0.5 * cm
+    y -= 0.3 * cm
     pdf.setLineWidth(1.5)
     pdf.setStrokeColorRGB(0.2, 0.4, 0.8)
     pdf.line(2 * cm, y, largeur - 2 * cm, y)
 
     # === Titre du reçu ===
-    y -= 1.2 * cm
+    y -= 0.8 * cm
     pdf.setFont("Helvetica-Bold", 18)
     pdf.drawCentredString(largeur / 2, y, "REÇU DE PAIEMENT")
 
     # Numéro de reçu
-    y -= 0.8 * cm
+    y -= 0.5 * cm
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawCentredString(largeur / 2, y, f"N° {paiement.numero_recu}")
 
     # === Informations de l'élève ===
-    y -= 1.5 * cm
+    y -= 1.0 * cm
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawString(2 * cm, y, "INFORMATIONS DE L'ÉLÈVE")
-    y -= 0.2 * cm
+    y -= 0.15 * cm
     pdf.setLineWidth(0.5)
     pdf.setStrokeColorRGB(0.5, 0.5, 0.5)
     pdf.line(2 * cm, y, largeur - 2 * cm, y)
 
-    y -= 0.6 * cm
+    y -= 0.45 * cm
     pdf.setFont("Helvetica", 10)
     pdf.drawString(2.5 * cm, y, f"Nom complet :  {eleve.prenom} {eleve.nom}")
     y -= 0.5 * cm
@@ -2342,13 +2452,13 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
     pdf.drawString(2.5 * cm, y, f"Classe :  {classe.libelle}")
 
     # === Détails du paiement ===
-    y -= 1.2 * cm
+    y -= 0.8 * cm
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawString(2 * cm, y, "DÉTAILS DU PAIEMENT")
-    y -= 0.2 * cm
+    y -= 0.15 * cm
     pdf.line(2 * cm, y, largeur - 2 * cm, y)
 
-    y -= 0.6 * cm
+    y -= 0.45 * cm
     pdf.setFont("Helvetica", 10)
     pdf.drawString(2.5 * cm, y, f"Motif :  {libelle_type_frais}")
     y -= 0.5 * cm
@@ -2369,13 +2479,13 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
         pdf.drawString(2.5 * cm, y, f"Tranche :  {idx} sur {total} ({libelle_echeance}){suffixe}")
 
     # === Informations de la facture ===
-    y -= 1.2 * cm
+    y -= 0.8 * cm
     pdf.setFont("Helvetica-Bold", 11)
     pdf.drawString(2 * cm, y, "INFORMATIONS DE LA FACTURE")
-    y -= 0.2 * cm
+    y -= 0.15 * cm
     pdf.line(2 * cm, y, largeur - 2 * cm, y)
 
-    y -= 0.6 * cm
+    y -= 0.45 * cm
     pdf.setFont("Helvetica", 10)
     pdf.drawString(2.5 * cm, y, f"N° Facture :  {facture.numero_facture}")
     y -= 0.5 * cm
@@ -2393,13 +2503,13 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
     # toutes les tranches déjà réglées (dates + montants), pas seulement
     # celle-ci.
     if historique_anterieur:
-        y -= 1.2 * cm
+        y -= 0.8 * cm
         pdf.setFont("Helvetica-Bold", 11)
         pdf.drawString(2 * cm, y, "RÈGLEMENTS ANTÉRIEURS SUR CETTE FACTURE")
-        y -= 0.2 * cm
+        y -= 0.15 * cm
         pdf.line(2 * cm, y, largeur - 2 * cm, y)
 
-        y -= 0.55 * cm
+        y -= 0.45 * cm
         pdf.setFont("Helvetica", 9)
         # Limité aux 6 derniers pour rester sur une page (reçu simple, pas de pagination).
         entries = historique_anterieur[-6:]
@@ -2412,17 +2522,17 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
             y -= 0.45 * cm
 
     # === Pied de page : date et signature ===
-    y -= 2 * cm
+    y -= 1.2 * cm
     pdf.setLineWidth(1)
     pdf.setStrokeColorRGB(0.2, 0.4, 0.8)
     pdf.line(2 * cm, y, largeur - 2 * cm, y)
 
-    y -= 0.8 * cm
+    y -= 0.6 * cm
     pdf.setFont("Helvetica", 9)
     pdf.drawString(2 * cm, y, f"Date d'émission : {today_type.today().strftime('%d/%m/%Y')}")
     pdf.drawRightString(largeur - 2 * cm, y, "Signature et cachet")
 
-    y -= 1.5 * cm
+    y -= 1.0 * cm
     pdf.setFont("Helvetica-Oblique", 8)
     pdf.drawCentredString(largeur / 2, y, "Ce reçu est généré automatiquement par SmartSchool. Conservez-le pour vos archives.")
 
@@ -2513,8 +2623,15 @@ def creer_reglement_fournisseur(
     description = data.get("description", "")
     reference = data.get("reference", "")
     fournisseur = data.get("fournisseur") or data.get("beneficiaire") or ""
-    etablissement_id = data.get("etablissement_id", 1)
-    annee_id = data.get("annee_id", 1)
+    etablissement_id = data.get("etablissement_id") or _get_default_etablissement_id(db)
+    annee_id = data.get("annee_id") or _get_active_annee_id(db)
+
+    solde_disponible = _get_solde_caisse(db, etablissement_id, annee_id)
+    if float(montant) > solde_disponible:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Solde en caisse insuffisant. Disponible : {solde_disponible:,.0f} GNF".replace(',', ' ')
+        )
 
     libelle = description[:300] if description else f"Décaissement {categorie}"
 
@@ -3161,8 +3278,8 @@ def payer_salaire_employe(data: dict, db: Session = Depends(get_db)):
     employe_id_str = data.get("enseignant_id")
     mois = data.get("mois", "")
     mode_paiement = data.get("mode_paiement", "Cash")
-    etablissement_id = data.get("etablissement_id", 1)
-    annee_id = data.get("annee_id", 1)
+    etablissement_id = data.get("etablissement_id") or _get_default_etablissement_id(db)
+    annee_id = data.get("annee_id") or _get_active_annee_id(db)
 
     if not employe_id_str or not mois:
         raise HTTPException(status_code=400, detail="Identifiant employé et mois obligatoires")
@@ -3369,6 +3486,13 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
         raise HTTPException(status_code=400, detail=f"{calc['nom_complet']} est déjà payé(e) pour {mois_concerne}")
     if calc["net_a_payer"] <= 0:
         raise HTTPException(status_code=400, detail="Le net à payer calculé est nul ou négatif")
+        
+    solde_disponible = _get_solde_caisse(db, etablissement_id, annee_id)
+    if float(calc["net_a_payer"]) > solde_disponible:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Solde en caisse insuffisant pour payer ce salaire. Disponible : {solde_disponible:,.0f} GNF".replace(',', ' ')
+        )
 
     libelle = f"Salaire {calc['nom_complet']} — {mois_concerne}"
     dep = Depense(
@@ -3621,8 +3745,8 @@ def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db)):
     employe_id_str = data.get("enseignant_id") or data.get("employe_id")
     mois_list = data.get("mois_list") or []
     mode_paiement = data.get("mode_paiement", "Cash")
-    etablissement_id = data.get("etablissement_id", 1)
-    annee_id = data.get("annee_id", 1)
+    etablissement_id = data.get("etablissement_id") or _get_default_etablissement_id(db)
+    annee_id = data.get("annee_id") or _get_active_annee_id(db)
 
     if not employe_id_str or not mois_list:
         raise HTTPException(status_code=400, detail="employe_id et mois_list requis")

@@ -22,16 +22,21 @@ const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN') +
 
 export default function DashboardFinancierPage() {
     const { etablissementId, anneeId } = useApp();
-    const [period, setPeriod] = React.useState<'ANNEE' | 'TRIMESTRE' | 'MOIS'>('ANNEE');
+    const [period, setPeriod] = React.useState<'ANNEE' | 'TRIMESTRE' | 'MOIS' | 'PERSONNALISE'>('ANNEE');
+    const [dateDebut, setDateDebut] = React.useState('');
+    const [dateFin, setDateFin] = React.useState('');
 
     // React Query : les données sont mises en cache (localStorage) et servies
     // immédiatement même hors-ligne (networkMode: 'offlineFirst'), avec un
     // rafraîchissement en arrière-plan dès que la connexion le permet. Le
     // backend met lui-même en cache cette réponse côté Redis (TTL 60s).
     const { data, isLoading } = useQuery({
-        queryKey: ['finance-dashboard', etablissementId, anneeId],
+        queryKey: ['finance-dashboard', etablissementId, anneeId, dateDebut, dateFin],
         queryFn: async () => {
-            const res = await api.get(`/api/finance/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
+            let url = `/api/finance/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`;
+            if (dateDebut) url += `&date_debut=${dateDebut}`;
+            if (dateFin) url += `&date_fin=${dateFin}`;
+            const res = await api.get(url);
             return res.data;
         },
         // Le cache Redis backend a lui-même un TTL de 60s : on repolle au même
@@ -49,13 +54,15 @@ export default function DashboardFinancierPage() {
     if (!data) return <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Erreur de chargement</div>;
 
     const kpis = data.kpis;
+    const depAttente = kpis.total_depenses_attente ?? 0;
+    const depValide = kpis.total_depenses_valide ?? kpis.total_depenses ?? 0;
 
     // Les trois périodes sont désormais calculées côté backend à partir de
     // vraies requêtes datées (voir GET /api/finance/dashboard), plus de
     // multiplicateurs arbitraires côté client.
-    const displayRevenu = period === 'MOIS' ? kpis.revenus_mois : period === 'TRIMESTRE' ? kpis.revenus_trimestre : kpis.total_paye;
-    const displayDepense = period === 'MOIS' ? kpis.depenses_mois : period === 'TRIMESTRE' ? kpis.depenses_trimestre : kpis.total_depenses;
-    const displaySolde = displayRevenu - displayDepense;
+    const displayRevenu = period === 'PERSONNALISE' ? kpis.revenus_personnalise : period === 'MOIS' ? kpis.revenus_mois : period === 'TRIMESTRE' ? kpis.revenus_trimestre : kpis.total_paye;
+    const displayDepense = period === 'PERSONNALISE' ? kpis.depenses_personnalise : period === 'MOIS' ? kpis.depenses_mois : period === 'TRIMESTRE' ? kpis.depenses_trimestre : kpis.total_depenses;
+    const displaySolde = displayRevenu - (period === 'ANNEE' ? depValide : displayDepense);
 
     const mainKpis = [
         { 
@@ -64,23 +71,26 @@ export default function DashboardFinancierPage() {
             sub: 'Frais de scolarité reçus',
             icon: ArrowUpRight, 
             color: '#10b981', 
-            bg: '#e6fcf5' 
+            bg: '#e6fcf5',
+            badge: null,
         },
         { 
             label: 'Total Dépensé', 
             value: fmt(displayDepense), 
-            sub: 'Salaires et charges payés',
+            sub: depAttente > 0 ? `dont ${fmt(depAttente)} en attente de validation` : 'Salaires et charges',
             icon: ArrowDownRight, 
             color: '#ef4444', 
-            bg: '#fdf2f2' 
+            bg: '#fdf2f2',
+            badge: depAttente > 0 ? `⏳ ${fmt(depAttente)} non validé` : null,
         },
         { 
             label: 'Solde Disponible', 
             value: fmt(displaySolde), 
-            sub: 'Disponibilité en caisse',
+            sub: 'Après déduction des dépenses validées',
             icon: Coins, 
             color: '#3b82f6', 
-            bg: '#eff6ff' 
+            bg: '#eff6ff',
+            badge: null,
         },
     ];
 
@@ -107,7 +117,8 @@ export default function DashboardFinancierPage() {
                     {[
                         { value: 'ANNEE', label: 'Année Scolaire' },
                         { value: 'TRIMESTRE', label: 'Trimestre' },
-                        { value: 'MOIS', label: 'Ce mois' }
+                        { value: 'MOIS', label: 'Ce mois' },
+                        { value: 'PERSONNALISE', label: 'Personnalisé' }
                     ].map(t => (
                         <button key={t.value} onClick={() => setPeriod(t.value as any)}
                             style={{
@@ -125,6 +136,13 @@ export default function DashboardFinancierPage() {
                         </button>
                     ))}
                 </div>
+                {period === 'PERSONNALISE' && (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', background: '#f1f5f9', padding: 4, borderRadius: 10, border: '1px solid #e2e8f0' }}>
+                        <input type="date" value={dateDebut} onChange={e => setDateDebut(e.target.value)} style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 12, outline: 'none' }} title="Date début" />
+                        <span style={{ color: '#94a3b8' }}>-</span>
+                        <input type="date" value={dateFin} onChange={e => setDateFin(e.target.value)} style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #e2e8f0', fontSize: 12, outline: 'none' }} title="Date fin" />
+                    </div>
+                )}
             </div>
 
             {/* 3 Main KPIs from PDF spec (Encaissé / Dépensé / Solde) */}
@@ -137,6 +155,11 @@ export default function DashboardFinancierPage() {
                                 <p style={{ fontSize: 13, color: '#64748b', fontWeight: 600, marginBottom: 6 }}>{kpi.label}</p>
                                 <p style={{ fontSize: 24, fontWeight: 800, color: kpi.color }}>{kpi.value}</p>
                                 <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{kpi.sub}</p>
+                                {kpi.badge && (
+                                    <span style={{ display: 'inline-block', marginTop: 8, fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 99, background: '#fef3c7', color: '#92400e' }}>
+                                        {kpi.badge}
+                                    </span>
+                                )}
                             </div>
                             <div style={{ width: 56, height: 56, borderRadius: 14, background: kpi.bg, color: kpi.color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                 <kpi.icon size={28} />
@@ -145,6 +168,7 @@ export default function DashboardFinancierPage() {
                     </motion.div>
                 ))}
             </div>
+
 
             {/* Charts Row 1: Entrées vs Sorties monthly evolution */}
             <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, alignItems: 'stretch' }}>

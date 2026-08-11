@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   ArrowRight,
   ArrowUpRight,
+  ArrowDownRight,
   Banknote,
   BellRing,
   BookOpen,
@@ -187,6 +188,7 @@ export default function DashboardPage() {
   const [impayesSearch, setImpayesSearch] = useState('');
   const [impayesPage, setImpayesPage] = useState(1);
   const [selectedCycle, setSelectedCycle] = useState<string | null>(null);
+  const [expandedPaymentStudent, setExpandedPaymentStudent] = useState<string | null>(null);
 
   const IMPAYES_PER_PAGE = 8;
 
@@ -203,6 +205,9 @@ export default function DashboardPage() {
       return res.data as DashboardData;
     },
     enabled: !!etablissementId && !!anneeId,
+    // Rafraîchissement automatique toutes les 15 secondes pour les activités en temps réel
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
   });
 
   const filteredImpayes = useMemo(() => {
@@ -221,6 +226,25 @@ export default function DashboardPage() {
     const start = (impayesPage - 1) * IMPAYES_PER_PAGE;
     return filteredImpayes.slice(start, start + IMPAYES_PER_PAGE);
   }, [filteredImpayes, impayesPage]);
+
+  const groupedRecentPayments = useMemo(() => {
+    if (!data?.paiements_recents) return [];
+    
+    const groups = new Map<string, typeof data.paiements_recents>();
+    
+    data.paiements_recents.forEach(payment => {
+      if (!groups.has(payment.eleve)) {
+        groups.set(payment.eleve, []);
+      }
+      groups.get(payment.eleve)!.push(payment);
+    });
+    
+    return Array.from(groups.entries()).slice(0, 6).map(([eleve, payments]) => ({
+      eleve,
+      classe: payments[0].classe,
+      payments
+    }));
+  }, [data?.paiements_recents]);
 
   const financeSeries = useMemo(() => {
     if (!data) return [];
@@ -438,12 +462,33 @@ export default function DashboardPage() {
                 <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Voix du centre</h3>
                 <BellRing size={18} color="#cbd5e1" />
               </div>
-              <p style={{ margin: 0, color: 'rgba(255,255,255,0.78)', lineHeight: 1.7, fontSize: 14 }}>
-                {health.tone === 'critical' && 'Attention : plusieurs signaux exigent une action rapide, notamment sur les impayés ou la pression disciplinaire.'}
-                {health.tone === 'warning' && 'La situation reste maîtrisable, mais certains indicateurs exigent une surveillance rapprochée dans les prochaines heures.'}
-                {health.tone === 'success' && 'Les opérations sont globalement stables. Le centre recommande de maintenir le rythme actuel et d’anticiper les prochaines évaluations.'}
-                {health.tone === 'info' && 'Les opérations sont en observation. Le centre conseille de suivre les flux financiers et la mobilisation des familles.'}
-              </p>
+              <div style={{ margin: 0, color: 'rgba(255,255,255,0.78)', lineHeight: 1.7, fontSize: 14 }}>
+                <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {(() => {
+                    const msgs = [];
+                    if (data.finance_stats.total_impayes > 0) {
+                      if (data.finance_stats.taux_recouvrement < 60) {
+                        msgs.push(`Urgence financière : Le taux de recouvrement est critique (${data.finance_stats.taux_recouvrement}%). Relancez urgemment les impayés (${formatCompactMoney(data.finance_stats.total_impayes)}).`);
+                      } else {
+                        msgs.push(`Finance : Il reste ${formatCompactMoney(data.finance_stats.total_impayes)} d'impayés en attente. Une relance globale (SMS/Email) est conseillée.`);
+                      }
+                    }
+                    if (data.kpi.incidents_mois >= 5) {
+                      msgs.push(`Climat scolaire : Hausse de la pression disciplinaire (${data.kpi.incidents_mois} incidents ce mois).`);
+                    }
+                    if (data.kpi.taux_presence < 75) {
+                      msgs.push(`Assiduité : Taux de présence global faible (${data.kpi.taux_presence}%). Vérifiez les absences non justifiées.`);
+                    }
+                    if (data.pedagogie_stats.taux_reussite_global < 50 && data.pedagogie_stats.taux_reussite_global > 0) {
+                      msgs.push(`Pédagogie : Alerte sur le niveau global (réussite moyenne de ${data.pedagogie_stats.taux_reussite_global}%).`);
+                    }
+                    if (msgs.length === 0) {
+                      msgs.push(`Système stable. Recouvrement à ${data.finance_stats.taux_recouvrement}% et présence à ${data.kpi.taux_presence}%. Maintenez le cap !`);
+                    }
+                    return msgs.map((msg, i) => <li key={i}>{msg}</li>);
+                  })()}
+                </ul>
+              </div>
             </div>
 
             <div style={{ padding: 20, borderRadius: 24, background: '#fff', color: '#0f172a', boxShadow: '0 18px 38px rgba(15, 23, 42, 0.10)' }}>
@@ -768,17 +813,20 @@ export default function DashboardPage() {
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 24 }}>
           <div style={{ padding: '22px 24px 12px', borderBottom: '1px solid var(--border-light)' }}>
             <h5 style={{ margin: 0, fontSize: 18 }}>Activité temps réel</h5>
-            <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>Journal des événements et actions visibles aujourd’hui.</p>
+            <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>Journal des événements et actions visibles aujourd'hui.</p>
           </div>
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {data.activites_du_jour?.slice(0, 5).map((activity, index) => (
+            {data.activites_du_jour?.slice(0, 8).map((activity, index) => (
               <div key={`${activity.titre}-${index}`} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: 14, borderRadius: 18, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                <div style={{ width: 40, height: 40, borderRadius: 14, display: 'grid', placeItems: 'center', background: `${activity.couleur || '#2563eb'}15`, color: activity.couleur || '#2563eb' }}>
-                  <Radio size={17} />
+                <div style={{ width: 40, height: 40, borderRadius: 14, display: 'grid', placeItems: 'center', background: `${activity.couleur || '#2563eb'}15`, color: activity.couleur || '#2563eb', flexShrink: 0 }}>
+                  {activity.type === 'PAIEMENT' ? <CreditCard size={17} /> :
+                   activity.type === 'DEPENSE' ? <ArrowDownRight size={17} /> :
+                   activity.type === 'INSCRIPTION' ? <Users size={17} /> :
+                   <Radio size={17} />}
                 </div>
                 <div>
                   <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>{activity.titre}</div>
-                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>{activity.heure || 'Aujourd’hui'}</div>
+                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>{activity.heure || "Aujourd'hui"}</div>
                   <p style={{ margin: 0, color: '#475569', fontSize: 13, lineHeight: 1.55 }}>{activity.description || 'Aucun détail supplémentaire.'}</p>
                 </div>
               </div>
@@ -817,19 +865,61 @@ export default function DashboardPage() {
             <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>Derniers flux validés remontés dans le cockpit financier.</p>
           </div>
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {data.paiements_recents?.slice(0, 6).map((payment, index) => (
-              <div key={`${payment.recu}-${index}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: 14, borderRadius: 18, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                <div>
-                  <div style={{ fontWeight: 800, color: '#0f172a' }}>{payment.eleve}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{payment.classe} • {payment.mode} • {payment.recu}</div>
+            {groupedRecentPayments.map((group, index) => {
+              const isExpanded = expandedPaymentStudent === group.eleve;
+              const latestPayment = group.payments[0];
+              const hasMultiple = group.payments.length > 1;
+              
+              return (
+                <div 
+                  key={`${group.eleve}-${index}`} 
+                  onClick={() => hasMultiple && setExpandedPaymentStudent(isExpanded ? null : group.eleve)}
+                  style={{ display: 'flex', flexDirection: 'column', padding: 14, borderRadius: 18, background: '#f8fafc', border: '1px solid #e2e8f0', cursor: hasMultiple ? 'pointer' : 'default' }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ fontWeight: 800, color: '#0f172a' }}>{group.eleve}</div>
+                        {hasMultiple && (
+                          <div style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 99, background: '#e0e7ff', color: '#3730a3' }}>
+                            {group.payments.length} paiements
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748b' }}>{group.classe} • {latestPayment.mode} • {latestPayment.recu}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: 900, color: '#10b981' }}>{formatCompactMoney(latestPayment.montant)}</div>
+                      <div style={{ fontSize: 12, color: '#94a3b8' }}>{formatDate(latestPayment.date)}</div>
+                    </div>
+                  </div>
+                  
+                  <AnimatePresence>
+                    {isExpanded && hasMultiple && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0, marginTop: 0 }}
+                        animate={{ height: 'auto', opacity: 1, marginTop: 12 }}
+                        exit={{ height: 0, opacity: 0, marginTop: 0 }}
+                        style={{ overflow: 'hidden' }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, borderTop: '1px dashed #cbd5e1' }}>
+                          {group.payments.slice(1).map((payment, i) => (
+                            <div key={`${payment.recu}-${i}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ fontSize: 12, color: '#64748b' }}>{payment.mode} • {payment.recu}</div>
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontWeight: 800, color: '#10b981', fontSize: 13 }}>{formatCompactMoney(payment.montant)}</div>
+                                <div style={{ fontSize: 11, color: '#94a3b8' }}>{formatDate(payment.date)}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontWeight: 900, color: '#10b981' }}>{formatCompactMoney(payment.montant)}</div>
-                  <div style={{ fontSize: 12, color: '#94a3b8' }}>{formatDate(payment.date)}</div>
-                </div>
-              </div>
-            ))}
-            {(!data.paiements_recents || data.paiements_recents.length === 0) && (
+              );
+            })}
+            {groupedRecentPayments.length === 0 && (
               <div style={{ padding: 18, textAlign: 'center', color: '#94a3b8' }}>Aucun paiement récent disponible.</div>
             )}
           </div>

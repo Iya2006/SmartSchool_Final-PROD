@@ -385,39 +385,46 @@ export default function ProfilEnseignant() {
                                     <p style={{ fontWeight: 600 }}>Aucune affectation</p>
                                 </div>
                             ) : (
-                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                    <thead>
-                                        <tr>
-                                            {['Classe', 'Matière', 'Horaire', 'Salle', ''].map((h, i) => (
-                                                <th key={i} style={{
-                                                    padding: '10px 14px', fontSize: '12px', fontWeight: 700, color: 'white',
-                                                    background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                                                    textAlign: 'left', whiteSpace: 'nowrap',
-                                                    borderRadius: i === 0 ? '10px 0 0 10px' : i === 4 ? '0 10px 10px 0' : '0',
-                                                }}>{h}</th>
-                                            ))}
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {affectations.map((aff) => {
-                                            const slot = creneaux.find(c => c.classe_id === aff.classe_id && c.matiere_id === aff.matiere_id);
-                                            return (
-                                                <tr key={aff.affectation_id} style={{ borderBottom: '1px solid var(--border-light)' }}
-                                                    onMouseOver={e => e.currentTarget.style.background = '#f8fafc'}
-                                                    onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
-                                                    <td style={{ padding: '12px 14px', fontWeight: 600, fontSize: '13px' }}>{aff.classe}</td>
-                                                    <td style={{ padding: '12px 14px', fontSize: '13px' }}>{aff.matiere}</td>
-                                                    <td style={{ padding: '12px 14px', fontSize: '13px', color: 'var(--text-secondary)' }}>
-                                                        {slot ? `${slot.heure_debut} - ${slot.heure_fin}` : `${aff.heures}h / sem`}
-                                                    </td>
-                                                    <td style={{ padding: '12px 14px', fontSize: '13px', color: 'var(--text-muted)' }}>
-                                                        {slot?.salle || '—'}
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })}
-                                    </tbody>
-                                </table>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    {Array.from(new Map(affectations.map(a => [a.classe_id, a])).values()).map((uCls) => {
+                                        const classAffs = affectations.filter(a => a.classe_id === uCls.classe_id);
+                                        return (
+                                            <details open key={uCls.classe_id} style={{ background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                                                <summary style={{ padding: '14px 16px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', outline: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+                                                    <span>{uCls.classe} <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 600, marginLeft: '8px' }}>({classAffs.length} matière{classAffs.length > 1 ? 's' : ''})</span></span>
+                                                    <span style={{ fontSize: '12px', color: '#6366f1', fontWeight: 600 }}>Dérouler ↓</span>
+                                                </summary>
+                                                <div style={{ padding: '0 16px 16px' }}>
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', marginTop: '10px' }}>
+                                                        <thead>
+                                                            <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                                                <th style={{ padding: '8px', textAlign: 'left', color: '#64748b', fontWeight: 600 }}>Matière</th>
+                                                                <th style={{ padding: '8px', textAlign: 'left', color: '#64748b', fontWeight: 600 }}>Horaire / Volume</th>
+                                                                <th style={{ padding: '8px', textAlign: 'left', color: '#64748b', fontWeight: 600 }}>Salle</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {classAffs.map((aff, i) => {
+                                                                const slot = creneaux.find(c => c.classe_id === aff.classe_id && c.matiere_id === aff.matiere_id);
+                                                                return (
+                                                                    <tr key={aff.affectation_id} style={{ borderBottom: i === classAffs.length - 1 ? 'none' : '1px solid #f1f5f9' }}>
+                                                                        <td style={{ padding: '10px 8px', fontWeight: 600 }}>{aff.matiere}</td>
+                                                                        <td style={{ padding: '10px 8px', color: '#475569' }}>
+                                                                            {slot ? `${slot.jour} ${slot.heure_debut} - ${slot.heure_fin}` : `${aff.heures}h / sem`}
+                                                                        </td>
+                                                                        <td style={{ padding: '10px 8px', color: '#94a3b8' }}>
+                                                                            {slot?.salle || '—'}
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </details>
+                                        );
+                                    })}
+                                </div>
                             )}
                         </div>
                     </motion.div>

@@ -207,7 +207,7 @@ export default function ExportsPage() {
 
                             {tab === 'classe' && dataClasse && (
                                 <div>
-                                    <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: '#1e293b' }}>Situation Financière — Classe sélectionnée</h2>
+                                    <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: '#1e293b' }}>Situation Financière — {classes.find(c => c.classe_id.toString() === classeCible)?.libelle || 'Classe sélectionnée'}</h2>
                                     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                                         <thead><tr style={{ background: '#f1f5f9' }}><th style={{ padding: 10, textAlign: 'left' }}>Élève</th><th style={{ padding: 10, textAlign: 'left' }}>Facture</th><th style={{ padding: 10, textAlign: 'right' }}>Montant</th><th style={{ padding: 10, textAlign: 'right' }}>Payé</th><th style={{ padding: 10, textAlign: 'right' }}>Reste</th><th style={{ padding: 10, textAlign: 'center' }}>Statut</th></tr></thead>
                                         <tbody>

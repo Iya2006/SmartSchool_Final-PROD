@@ -98,7 +98,16 @@ def list_fournitures(
     if niveau_id:
         q = q.filter(FournitureScolaire.niveau_id == niveau_id)
     if classe_id:
-        q = q.filter(FournitureScolaire.classe_id == classe_id)
+        cls = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+        if cls and cls.niveau_id:
+            q = q.filter(
+                (FournitureScolaire.classe_id == classe_id) |
+                ((FournitureScolaire.niveau_id == cls.niveau_id) & (FournitureScolaire.classe_id.is_(None)))
+            )
+        else:
+            q = q.filter(FournitureScolaire.classe_id == classe_id)
+    elif niveau_id:
+        q = q.filter(FournitureScolaire.niveau_id == niveau_id)
     if statut:
         q = q.filter(FournitureScolaire.statut == statut)
     if annee_scolaire:
@@ -152,12 +161,22 @@ def stats_fournitures(etablissement_id: int = 1, db: Session = Depends(get_db)):
 
 
 @router.get("/classe/{classe_id}", response_model=List[FournitureOut])
-def fournitures_par_classe(classe_id: int, db: Session = Depends(get_db)):
+def fournitures_par_classe(classe_id: int, include_inactif: bool = False, db: Session = Depends(get_db)):
     """Fournitures d'une classe spécifique (utilisé par les portails aussi)."""
-    items = db.query(FournitureScolaire).filter(
-        FournitureScolaire.classe_id == classe_id,
-        FournitureScolaire.statut == "ACTIF"
-    ).order_by(FournitureScolaire.categorie, FournitureScolaire.nom).all()
+    cls = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    q = db.query(FournitureScolaire)
+    if not include_inactif:
+        q = q.filter(FournitureScolaire.statut == "ACTIF")
+
+    if cls and cls.niveau_id:
+        q = q.filter(
+            (FournitureScolaire.classe_id == classe_id) |
+            ((FournitureScolaire.niveau_id == cls.niveau_id) & (FournitureScolaire.classe_id.is_(None)))
+        )
+    else:
+        q = q.filter(FournitureScolaire.classe_id == classe_id)
+
+    items = q.order_by(FournitureScolaire.categorie, FournitureScolaire.nom).all()
     return [_enrich(i, db) for i in items]
 
 
