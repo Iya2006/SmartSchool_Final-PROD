@@ -1,5 +1,5 @@
 """
-AMORÇAGE DE LA PLATEFORME — première école + rattachement de l'administrateur.
+AMORÇAGE DE LA PLATEFORME — première école et son administrateur.
 
 À quoi ça sert
 --------------
@@ -12,19 +12,28 @@ Conséquence sur une plateforme NEUVE : le premier SUPER_ADMIN, créé par
 Il peut créer une école, mais pas y travailler ni lui créer un administrateur.
 Ce script règle cet amorçage.
 
+Deux rôles à ne pas confondre
+-----------------------------
+- **SUPER_ADMIN = l'éditeur de la plateforme** (vous). Il n'appartient à
+  AUCUNE école : il les crée, les supervise, et entre dans l'une d'elles
+  quand il en a besoin via `POST /api/auth/etablissement-actif`. Le
+  rattacher à une école le dégraderait en simple administrateur.
+- **ADMIN = le directeur / gestionnaire d'une école.** C'est lui qui vit
+  dans l'établissement au quotidien.
+
 Ce qu'il fait
 -------------
 1. Crée un établissement s'il n'en existe AUCUN (jamais s'il en existe déjà).
 2. Crée une année scolaire courante pour cet établissement s'il n'en a aucune
    (l'application en a besoin partout : classes, notes, factures).
-3. Rattache à cet établissement les comptes SUPER_ADMIN qui n'en ont pas.
+3. Crée le compte ADMIN de cette école, et affiche son mot de passe UNE FOIS.
 
 Ce qu'il ne fait PAS
 --------------------
-- Il ne touche à aucun compte déjà rattaché à une école.
-- Il ne crée rien si une école existe déjà : dans ce cas, passer par
-  l'interface (le SUPER_ADMIN choisit son école active, voir
-  `POST /api/auth/etablissement-actif`).
+- **Il ne rattache jamais un SUPER_ADMIN à une école** — il le détache même
+  s'il en trouve un rattaché par erreur.
+- Il ne touche à aucun compte ADMIN existant.
+- Il ne crée aucune école s'il en existe déjà une.
 - Aucune suppression, aucune fusion, aucun écrasement.
 
 Usage
@@ -34,12 +43,14 @@ Usage
     python scripts/amorcer_plateforme.py --appliquer      # applique
 """
 import os
+import secrets
 import sys
 from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.database import SessionLocal  # noqa: E402
+from app.core.security import hash_password  # noqa: E402
 from app.models.academique import AnneeScolaire, Etablissement, Utilisateur  # noqa: E402
 
 CODE_DEFAUT = "ETAB-001"
@@ -99,19 +110,51 @@ def main() -> int:
         else:
             print(f"[OK] Une annee scolaire existe deja : {annee.libelle}. Aucune creation.")
 
-        orphelins = db.query(Utilisateur).filter(
+        # Un SUPER_ADMIN rattache a une ecole est une erreur : il devient un
+        # simple administrateur de cette ecole et perd sa position d'editeur
+        # de la plateforme. On le detache.
+        rattaches_par_erreur = db.query(Utilisateur).filter(
             Utilisateur.role == "SUPER_ADMIN",
-            Utilisateur.etablissement_id.is_(None),
+            Utilisateur.etablissement_id.isnot(None),
         ).all()
 
-        for u in orphelins:
-            actions.append(f"RATTACHER le compte « {u.nom_utilisateur} » (SUPER_ADMIN) "
-                           f"a cet etablissement")
-            if appliquer and cible is not None:
-                u.etablissement_id = cible.etablissement_id
+        for u in rattaches_par_erreur:
+            actions.append(
+                f"DETACHER le compte plateforme « {u.nom_utilisateur} » (SUPER_ADMIN) "
+                f"de l'etablissement #{u.etablissement_id} — il supervise, il n'appartient "
+                f"a aucune ecole"
+            )
+            if appliquer:
+                u.etablissement_id = None
 
-        if not orphelins:
-            print("[OK] Aucun SUPER_ADMIN sans etablissement. Aucun rattachement.")
+        if not rattaches_par_erreur:
+            print("[OK] Aucun SUPER_ADMIN rattache a une ecole. Rien a detacher.")
+
+        # Administrateur de l'ecole : c'est LUI qui la gere au quotidien.
+        admin_ecole = None
+        if cible is not None and cible.etablissement_id is not None:
+            admin_ecole = db.query(Utilisateur).filter(
+                Utilisateur.role == "ADMIN",
+                Utilisateur.etablissement_id == cible.etablissement_id,
+            ).first()
+
+        mot_de_passe = None
+        if admin_ecole is None:
+            identifiant = "admin.ecole"
+            actions.append(f"CREER le compte ADMIN de l'ecole « {identifiant} » "
+                           f"(mot de passe affiche une seule fois)")
+            if appliquer and cible is not None:
+                mot_de_passe = secrets.token_urlsafe(9)
+                db.add(Utilisateur(
+                    nom="Administrateur", prenom="École",
+                    nom_utilisateur=identifiant,
+                    mot_de_passe=hash_password(mot_de_passe),
+                    role="ADMIN", statut="ACTIF",
+                    etablissement_id=cible.etablissement_id,
+                ))
+        else:
+            print(f"[OK] L'ecole a deja un administrateur : « {admin_ecole.nom_utilisateur} ». "
+                  f"Aucune creation.")
 
         if not actions:
             print("\n[DONE] Rien a faire : la plateforme est deja amorcee.")
@@ -123,8 +166,17 @@ def main() -> int:
 
         if appliquer:
             db.commit()
-            print(f"\n[DONE] Amorcage termine. Reconnectez-vous pour que votre jeton "
-                  f"porte le nouvel etablissement.")
+            print("\n[DONE] Amorcage termine.")
+            if mot_de_passe:
+                print("\n" + "=" * 64)
+                print("  IDENTIFIANTS DE L'ADMINISTRATEUR DE L'ECOLE")
+                print("  Login        : admin.ecole")
+                print(f"  Mot de passe : {mot_de_passe}")
+                print("  A changer des la premiere connexion. Non reaffichable.")
+                print("=" * 64)
+            print("\nVotre compte SUPER_ADMIN reste l'editeur de la plateforme :")
+            print("  il n'appartient a aucune ecole, et entre dans l'une d'elles")
+            print("  via l'ecran de selection d'etablissement.")
         else:
             db.rollback()
             print("\n[SIMULATION] Rien n'a ete ecrit. Relancez avec --appliquer pour appliquer.")
