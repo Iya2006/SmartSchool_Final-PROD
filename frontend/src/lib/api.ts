@@ -104,6 +104,21 @@ export const OFFLINE_QUEUEABLE_ROUTES: OfflineQueueableRoute[] = [
 // `api.post(...)`/`api.put(...)` comme s'il était en ligne. `syncEngine.ts`
 // (pas importé ici pour éviter un cycle api.ts <-> syncEngine.ts qui importe
 // déjà `api`) rejouera la file dès le retour de connexion.
+/** Établissement du compte connecté, tel que le serveur l'a dérivé au login.
+ * `undefined` s'il n'est pas connaissable (compte plateforme, parent
+ * multi-écoles, session antérieure à l'ajout du champ) — on ne retombe jamais
+ * sur l'établissement 1. Métadonnée locale : le rejeu s'appuie sur le JWT. */
+function etablissementDeLaSession(): number | undefined {
+    try {
+        const brut = localStorage.getItem('smartschool_user');
+        if (!brut) return undefined;
+        const id = JSON.parse(brut)?.etablissement_id;
+        return typeof id === 'number' ? id : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
     const config = error?.config;
     const isNetworkError = error?.code === 'ERR_NETWORK' && !error?.response;
@@ -128,7 +143,7 @@ async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
             endpoint: url,
             payload,
             utilisateur_id: route.utilisateurId(match),
-            etablissement_id: 1,
+            etablissement_id: etablissementDeLaSession(),
         });
         return {
             data: { queued: true, message: 'Enregistré localement — sera synchronisé dès le retour de connexion.' },

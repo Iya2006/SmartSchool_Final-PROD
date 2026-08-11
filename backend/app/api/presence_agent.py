@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import PresenceAgent, Enseignant, Utilisateur
 
 router = APIRouter(prefix="/api/presences-agents", tags=["Présences Agents (QR)"])
@@ -22,12 +23,16 @@ class ScanResponse(BaseModel):
     heure: str
 
 @router.post("/scan", response_model=ScanResponse)
-def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db)):
+def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Enregistre l'arrivée ou le départ d'un agent via son code QR (matricule).
+
+    L'agent est résolu DANS l'établissement appelant uniquement (Lot 9) :
+    avant, scanner le badge d'un enseignant/personnel d'une autre école
+    créait un pointage chez elle et renvoyait son identité.
     """
     qr_data = request.qr_data.strip()
-    
+
     # 1. Identifier l'agent
     agent = None
     type_agent = ""
@@ -35,9 +40,11 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db)):
     nom_complet = ""
     photo = ""
     role = ""
-    
+
     # Chercher d'abord dans Enseignant
-    enseignant = db.query(Enseignant).filter(Enseignant.matricule == qr_data).first()
+    enseignant = db.query(Enseignant).filter(
+        Enseignant.matricule == qr_data, Enseignant.etablissement_id == etablissement_id
+    ).first()
     if enseignant:
         agent = enseignant
         type_agent = "ENSEIGNANT"
@@ -47,7 +54,9 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db)):
         role = "Enseignant"
     else:
         # Sinon, chercher dans Personnel (Utilisateur)
-        personnel = db.query(Utilisateur).filter(Utilisateur.nom_utilisateur == qr_data).first()
+        personnel = db.query(Utilisateur).filter(
+            Utilisateur.nom_utilisateur == qr_data, Utilisateur.etablissement_id == etablissement_id
+        ).first()
         if personnel:
             agent = personnel
             type_agent = "PERSONNEL"
@@ -88,9 +97,12 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db)):
             )
             
         # 1er scan : Arrivée
+        # etablissement_id désormais peuplé (colonne existante mais jamais
+        # renseignée avant le Lot 9 — voir .ai/MULTI_TENANT_PLAN.md).
         nouvelle_presence = PresenceAgent(
             type_agent=type_agent,
             agent_id=agent_id,
+            etablissement_id=etablissement_id,
             date_presence=aujourd_hui,
             heure_arrivee=maintenant,
             statut="PRESENT"
@@ -136,18 +148,47 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db)):
             heure=presence.heure_depart.strftime("%H:%M:%S")
         )
 
+def _filtre_agents_etablissement(db: Session, etablissement_id: int):
+    """Restreint une requête PresenceAgent aux agents de cet établissement.
+
+    `agent_id` est polymorphique (Enseignant OU Utilisateur selon
+    `type_agent`) : on filtre par les identifiants réels plutôt que par
+    `PresenceAgent.etablissement_id`, colonne nullable qui n'était jamais
+    peuplée avant le Lot 9 (une ligne historique aurait donc disparu de
+    l'historique si on filtrait dessus).
+    """
+    from sqlalchemy import or_, and_
+
+    ens_ids = [e.enseignant_id for e in db.query(Enseignant.enseignant_id).filter(
+        Enseignant.etablissement_id == etablissement_id
+    ).all()]
+    pers_ids = [u.utilisateur_id for u in db.query(Utilisateur.utilisateur_id).filter(
+        Utilisateur.etablissement_id == etablissement_id
+    ).all()]
+
+    conditions = []
+    if ens_ids:
+        conditions.append(and_(PresenceAgent.type_agent == "ENSEIGNANT", PresenceAgent.agent_id.in_(ens_ids)))
+    if pers_ids:
+        conditions.append(and_(PresenceAgent.type_agent == "PERSONNEL", PresenceAgent.agent_id.in_(pers_ids)))
+    if not conditions:
+        return False  # aucun agent : ne remonter aucune ligne
+    return or_(*conditions)
+
+
 @router.get("/historique")
 def get_historique_presences(
     db: Session = Depends(get_db),
     date_debut: Optional[date] = None,
     date_fin: Optional[date] = None,
-    recherche: Optional[str] = None
+    recherche: Optional[str] = None,
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
-    Récupère l'historique des présences avec possibilité de filtrer.
+    Récupère l'historique des présences DE CET ÉTABLISSEMENT, avec filtres.
     """
-    query = db.query(PresenceAgent)
-    
+    query = db.query(PresenceAgent).filter(_filtre_agents_etablissement(db, etablissement_id))
+
     if date_debut:
         query = query.filter(PresenceAgent.date_presence >= date_debut)
     if date_fin:
@@ -207,21 +248,28 @@ def get_historique_presences(
 def get_presences_stats(
     db: Session = Depends(get_db),
     date_debut: Optional[date] = None,
-    date_fin: Optional[date] = None
+    date_fin: Optional[date] = None,
+    etablissement_id: int = Depends(require_etablissement),
 ):
+    """Statistiques de présence des agents DE CET ÉTABLISSEMENT."""
     if not date_debut:
         aujourd_hui = date.today()
         date_debut = date(aujourd_hui.year, aujourd_hui.month, 1)
     if not date_fin:
         date_fin = date.today()
 
-    # Total Agents Actifs (Enseignants + Personnel)
-    total_enseignants = db.query(func.count(Enseignant.enseignant_id)).filter(Enseignant.statut == 'ACTIF').scalar() or 0
-    total_personnel = db.query(func.count(Utilisateur.utilisateur_id)).filter(Utilisateur.statut == 'ACTIF').scalar() or 0
+    # Total Agents Actifs (Enseignants + Personnel) de cet établissement
+    total_enseignants = db.query(func.count(Enseignant.enseignant_id)).filter(
+        Enseignant.statut == 'ACTIF', Enseignant.etablissement_id == etablissement_id
+    ).scalar() or 0
+    total_personnel = db.query(func.count(Utilisateur.utilisateur_id)).filter(
+        Utilisateur.statut == 'ACTIF', Utilisateur.etablissement_id == etablissement_id
+    ).scalar() or 0
     total_agents = total_enseignants + total_personnel
 
     # Présences sur la période
     query = db.query(PresenceAgent).filter(
+        _filtre_agents_etablissement(db, etablissement_id),
         PresenceAgent.date_presence >= date_debut,
         PresenceAgent.date_presence <= date_fin
     )

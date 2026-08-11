@@ -2,6 +2,8 @@
 SMARTSCHOOL API — Authentification Unifiée
 Login unique pour tous les rôles : Admin, Enseignant, Parent, Eleve
 """
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -10,9 +12,31 @@ from app.core.database import get_db
 from app.core.security import verify_password
 from app.core.auth import create_access_token, get_current_user
 from app.core.rate_limit import limiter, _DEFAULT_LIMIT
-from app.models.academique import Utilisateur, Enseignant, Parent, Eleve
+from app.models.academique import Utilisateur, Enseignant, Parent, Eleve, EleveParent
 
 router = APIRouter(prefix="/api/auth", tags=["Authentification"])
+
+
+def _derive_parent_etablissement(db: Session, parent_id: int) -> Optional[int]:
+    """Détermine l'établissement unique d'un parent via ses enfants réels.
+
+    Ne choisit JAMAIS arbitrairement (pas de `.first()`) : retourne None si le
+    parent n'a aucun enfant rattaché, ou si ses enfants sont répartis dans
+    plusieurs établissements différents (cas multi-écoles — voir portail
+    parent, qui vérifie l'ownership via EleveParent sur chaque route plutôt
+    que de se fier à un seul etablissement_id scalaire dans ce cas).
+    """
+    lignes = (
+        db.query(Eleve.etablissement_id)
+        .join(EleveParent, EleveParent.eleve_id == Eleve.eleve_id)
+        .filter(EleveParent.parent_id == parent_id)
+        .distinct()
+        .all()
+    )
+    etablissements = {etab_id for (etab_id,) in lignes if etab_id is not None}
+    if len(etablissements) == 1:
+        return etablissements.pop()
+    return None
 
 # ── Schémas ──
 class LoginRequest(BaseModel):
@@ -58,6 +82,14 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             "prenom": user.prenom,
             "role": user.role,
             "type": "admin",
+            # None = SUPER_ADMIN plateforme (compte non rattaché à une école
+            # précise, capacité multi-écoles explicite) — jamais "sans filtre"
+            # par accident, voir get_current_establishment/require_etablissement.
+            "etablissement_id": user.etablissement_id,
+            # Cumul de responsabilités saisi dans l'assistant Personnel. Porté
+            # par le token pour éviter une requête à chaque appel ; un token
+            # émis avant ce champ vaut liste vide (ancien comportement).
+            "roles_secondaires": user.roles_secondaires or [],
         }
         return {
             "token": create_access_token(token_data),
@@ -69,6 +101,10 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
                 "email": user.email,
                 "telephone": user.telephone,
                 "role": user.role,
+                # Repris de token_data : la réponse et le JWT portent forcément
+                # la même valeur. Le frontend en a besoin pour afficher la bonne
+                # identité d'école (il était figé sur l'établissement 1).
+                "etablissement_id": token_data["etablissement_id"],
             }
         }
 
@@ -91,6 +127,7 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             "prenom": ens.prenom,
             "role": "ENSEIGNANT",
             "type": "enseignant",
+            "etablissement_id": ens.etablissement_id,
         }
         return {
             "token": create_access_token(token_data),
@@ -102,6 +139,7 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
                 "email": ens.email,
                 "telephone": ens.telephone,
                 "role": "ENSEIGNANT",
+                "etablissement_id": token_data["etablissement_id"],
             }
         }
 
@@ -123,6 +161,11 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             "prenom": parent.prenom,
             "role": "PARENT",
             "type": "parent",
+            # None = enfants dans 0 ou plusieurs établissements (jamais choisi
+            # arbitrairement) — voir _derive_parent_etablissement. Les routes
+            # du portail parent vérifient l'ownership via EleveParent, pas ce
+            # champ seul, donc None ici ne restreint ni n'élargit leur accès.
+            "etablissement_id": _derive_parent_etablissement(db, parent.parent_id),
         }
         return {
             "token": create_access_token(token_data),
@@ -134,6 +177,9 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
                 "email": parent.email,
                 "telephone": parent.telephone_1,
                 "role": "PARENT",
+                # Peut valoir None : parent sans enfant, ou enfants répartis
+                # dans plusieurs écoles (jamais choisi arbitrairement).
+                "etablissement_id": token_data["etablissement_id"],
             }
         }
 
@@ -154,6 +200,7 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             "prenom": eleve.prenom,
             "role": "ELEVE",
             "type": "eleve",
+            "etablissement_id": eleve.etablissement_id,
         }
         return {
             "token": create_access_token(token_data),
@@ -165,6 +212,7 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
                 "email": "",
                 "telephone": "",
                 "role": "ELEVE",
+                "etablissement_id": token_data["etablissement_id"],
             }
         }
 
@@ -182,4 +230,5 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
         "prenom": current_user.get("prenom"),
         "role": current_user.get("role", "admin"),
         "type": current_user.get("type", "admin"),
+        "etablissement_id": current_user.get("etablissement_id"),
     }

@@ -21,12 +21,46 @@ from typing import Optional, Dict, List
 from pydantic import BaseModel
 
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import (
     Classe, Niveau, Cycle, Inscription, Eleve, AnneeScolaire,
     Bulletin, BulletinLigne, ParametreEtablissement,
 )
 
 router = APIRouter(prefix="/api/promotion", tags=["Promotion & Clôture d'année"])
+
+
+# ── Helpers d'isolation (Lot 9) ───────────────────────────────────────────
+
+def _classe_ou_404(db: Session, classe_id: int, etablissement_id: int) -> Classe:
+    c = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not c:
+        raise HTTPException(404, "Classe non trouvée")
+    return c
+
+
+def _annee_ou_404(db: Session, annee_id: int, etablissement_id: int, libelle: str = "Année") -> AnneeScolaire:
+    a = db.query(AnneeScolaire).filter(
+        AnneeScolaire.annee_id == annee_id, AnneeScolaire.etablissement_id == etablissement_id
+    ).first()
+    if not a:
+        raise HTTPException(404, f"{libelle} non trouvée")
+    return a
+
+
+def _inscription_ou_404(db: Session, inscription_id: int, etablissement_id: int) -> Inscription:
+    """Inscription est OWNERSHIP via sa Classe."""
+    insc = (
+        db.query(Inscription)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Inscription.inscription_id == inscription_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not insc:
+        raise HTTPException(404, "Inscription non trouvée")
+    return insc
 
 CODE_CYCLE_KEY = {"PRM": "primaire", "CLG": "college", "LYC": "lycee"}
 DECISIONS_VALIDES = ("ADMIS", "REDOUBLANT", "EN_ATTENTE_FILIERE", "EXCLU", "DIPLOME")
@@ -164,16 +198,14 @@ def _resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int
 
 
 @router.get("/classe/{classe_id}/apercu")
-def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db)):
+def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Aperçu de la situation de fin d'année pour chaque élève de la classe. Si
     `calculer-resultats` a déjà tourné pour cette classe, lit l'état persisté
     (source de vérité une fois calculé) ; sinon calcule à la volée sans rien
     écrire (aperçu avant le tout premier calcul).
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     niveau, cycle, cycle_key = _cycle_key_pour_classe(db, classe)
     if not niveau:
         raise HTTPException(404, "Niveau introuvable pour cette classe")
@@ -336,14 +368,10 @@ class CalculerResultatsRequest(BaseModel):
 
 
 @router.post("/classe/{classe_id}/calculer-resultats")
-def calculer_resultats_classe(classe_id: int, data: CalculerResultatsRequest, db: Session = Depends(get_db)):
+def calculer_resultats_classe(classe_id: int, data: CalculerResultatsRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Calcule et persiste les résultats/proposition de promotion pour une classe (voir _calculer_resultats_classe_core)."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
-    annee_cible = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == data.annee_cible_id).first()
-    if not annee_cible:
-        raise HTTPException(404, "Année cible non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    _annee_ou_404(db, data.annee_cible_id, etablissement_id, "Année cible")
 
     resultat = _calculer_resultats_classe_core(db, classe, data.annee_cible_id, {})
     db.commit()
@@ -351,13 +379,16 @@ def calculer_resultats_classe(classe_id: int, data: CalculerResultatsRequest, db
 
 
 @router.post("/annee/{annee_source_id}/calculer-resultats-tout")
-def calculer_resultats_annee(annee_source_id: int, data: CalculerResultatsRequest, db: Session = Depends(get_db)):
-    """Calcule et persiste les résultats/proposition pour TOUTES les classes actives de l'année source en un seul appel."""
-    annee_cible = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == data.annee_cible_id).first()
-    if not annee_cible:
-        raise HTTPException(404, "Année cible non trouvée")
+def calculer_resultats_annee(annee_source_id: int, data: CalculerResultatsRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Calcule et persiste les résultats/proposition pour TOUTES les classes
+    actives de l'année source (DE CET ÉTABLISSEMENT) en un seul appel."""
+    annee_cible = _annee_ou_404(db, data.annee_cible_id, etablissement_id, "Année cible")
+    _annee_ou_404(db, annee_source_id, etablissement_id, "Année source")
 
-    classes = db.query(Classe).filter(Classe.annee_id == annee_source_id, Classe.statut == "ACTIVE").all()
+    classes = db.query(Classe).filter(
+        Classe.annee_id == annee_source_id, Classe.statut == "ACTIVE",
+        Classe.etablissement_id == etablissement_id,
+    ).all()
     classe_cache: Dict[tuple, Optional[Classe]] = {}
     resultats = []
     total = {"proposes": 0, "en_attente_filiere": 0, "exclus": 0, "diplomes": 0}
@@ -383,7 +414,7 @@ class DecisionOverrideRequest(BaseModel):
 
 
 @router.put("/eleve/{inscription_id}/decision")
-def override_decision(inscription_id: int, data: DecisionOverrideRequest, db: Session = Depends(get_db)):
+def override_decision(inscription_id: int, data: DecisionOverrideRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Override manuel par élève — notamment pour forcer EXCLU (jamais calculé
     automatiquement, décision Phase 1). Nécessite que calculer-resultats ait
@@ -392,9 +423,7 @@ def override_decision(inscription_id: int, data: DecisionOverrideRequest, db: Se
     """
     if data.decision not in DECISIONS_VALIDES:
         raise HTTPException(400, f"Décision invalide — attendu l'une de : {', '.join(DECISIONS_VALIDES)}")
-    insc = db.query(Inscription).filter(Inscription.inscription_id == inscription_id).first()
-    if not insc:
-        raise HTTPException(404, "Inscription non trouvée")
+    insc = _inscription_ou_404(db, inscription_id, etablissement_id)
     if insc.statut_promotion is None:
         raise HTTPException(400, "Calculez d'abord les résultats de la classe avant d'ajuster une décision")
     if insc.statut_promotion == "VALIDE":
@@ -405,9 +434,9 @@ def override_decision(inscription_id: int, data: DecisionOverrideRequest, db: Se
         insc.niveau_cible_id = None
         insc.classe_cible_id = None
     elif data.classe_cible_id:
-        cible = db.query(Classe).filter(Classe.classe_id == data.classe_cible_id).first()
-        if not cible:
-            raise HTTPException(404, "Classe cible non trouvée")
+        # La classe cible doit appartenir au même établissement — sinon un
+        # élève pouvait être promu vers la classe d'une autre école.
+        cible = _classe_ou_404(db, data.classe_cible_id, etablissement_id)
         insc.classe_cible_id = cible.classe_id
         insc.niveau_cible_id = cible.niveau_id
 
@@ -421,7 +450,7 @@ class ChoisirFiliereRequest(BaseModel):
 
 
 @router.put("/eleve/{inscription_id}/choisir-filiere")
-def choisir_filiere(inscription_id: int, data: ChoisirFiliereRequest, db: Session = Depends(get_db)):
+def choisir_filiere(inscription_id: int, data: ChoisirFiliereRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Résout la classe cible une fois la série Lycée choisie pour un élève
     EN_ATTENTE_FILIERE. Opération de RÉINSCRIPTION, pas de promotion — appelée
@@ -429,9 +458,8 @@ def choisir_filiere(inscription_id: int, data: ChoisirFiliereRequest, db: Sessio
     == VALIDE est l'état attendu ici, pas un blocage). Seul un élève déjà
     matérialisé (REINSCRIT) ne peut plus changer de filière.
     """
-    insc = db.query(Inscription).filter(Inscription.inscription_id == inscription_id).first()
-    if not insc:
-        raise HTTPException(404, "Inscription non trouvée")
+    insc = _inscription_ou_404(db, inscription_id, etablissement_id)
+    _annee_ou_404(db, data.annee_cible_id, etablissement_id, "Année cible")
     if insc.decision_fin_annee != "EN_ATTENTE_FILIERE":
         raise HTTPException(400, "Cet élève n'est pas en attente de choix de filière")
     if insc.statut_reinscription == "REINSCRIT":
@@ -496,10 +524,8 @@ def _valider_classe_core(db: Session, classe: Classe) -> dict:
 
 
 @router.post("/classe/{classe_id}/valider")
-def valider_promotion_classe(classe_id: int, db: Session = Depends(get_db)):
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+def valider_promotion_classe(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     resultat = _valider_classe_core(db, classe)
     if resultat["bloque"]:
         raise HTTPException(400, "Validation impossible — " + "; ".join(resultat["erreurs"]))
@@ -508,13 +534,21 @@ def valider_promotion_classe(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/annee/{annee_source_id}/valider-tout")
-def valider_promotion_annee(annee_source_id: int, db: Session = Depends(get_db)):
+def valider_promotion_annee(annee_source_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
-    Valide TOUTES les classes actives de l'année source en un seul appel. Les
-    classes bloquées (filière non choisie pour au moins un élève) sont
-    signalées mais n'empêchent pas la validation des autres classes.
+    Valide toutes les classes actives de l'année source DE CET ÉTABLISSEMENT
+    en un seul appel. Les classes bloquées (filière non choisie pour au moins
+    un élève) sont signalées mais n'empêchent pas la validation des autres.
+
+    Avant le Lot 9 : validait les classes de TOUTES les écoles partageant
+    cet annee_id — verrouillage définitif de promotions d'autres écoles et
+    passage de leurs élèves en INACTIF.
     """
-    classes = db.query(Classe).filter(Classe.annee_id == annee_source_id, Classe.statut == "ACTIVE").all()
+    _annee_ou_404(db, annee_source_id, etablissement_id, "Année source")
+    classes = db.query(Classe).filter(
+        Classe.annee_id == annee_source_id, Classe.statut == "ACTIVE",
+        Classe.etablissement_id == etablissement_id,
+    ).all()
     resultats = []
     total_valides = 0
     classes_bloquees = []
@@ -538,14 +572,18 @@ def valider_promotion_annee(annee_source_id: int, db: Session = Depends(get_db))
 
 
 @router.get("/annee/{annee_id}/etat")
-def etat_promotion_annee(annee_id: int, db: Session = Depends(get_db)):
+def etat_promotion_annee(annee_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Vue d'ensemble en lecture seule de l'avancement de la promotion pour
-    toutes les classes actives de l'année — alimente l'assistant de clôture
-    (Phase 4) sans qu'il ait à interroger chaque classe individuellement
-    (règle N+1 déjà établie sur ce projet).
+    toutes les classes actives de l'année DE CET ÉTABLISSEMENT — alimente
+    l'assistant de clôture (Phase 4) sans qu'il ait à interroger chaque
+    classe individuellement (règle N+1 déjà établie sur ce projet).
     """
-    classes = db.query(Classe).filter(Classe.annee_id == annee_id, Classe.statut == "ACTIVE").all()
+    _annee_ou_404(db, annee_id, etablissement_id)
+    classes = db.query(Classe).filter(
+        Classe.annee_id == annee_id, Classe.statut == "ACTIVE",
+        Classe.etablissement_id == etablissement_id,
+    ).all()
 
     detail = []
     total = {"eleves": 0, "calcules": 0, "valides": 0, "sans_classe_cible": 0, "en_attente_filiere": 0}
@@ -592,7 +630,7 @@ def etat_promotion_annee(annee_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/annee/{annee_cible_id}/preparer-classes")
-def preparer_classes_annee(annee_cible_id: int, annee_source_id: int, db: Session = Depends(get_db)):
+def preparer_classes_annee(annee_cible_id: int, annee_source_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Clone la structure des classes (niveau, code, libellé, capacité) d'une
     année source vers une année cible, sans copier salle ni professeur
@@ -601,22 +639,30 @@ def preparer_classes_annee(annee_cible_id: int, annee_source_id: int, db: Sessio
     classes de l'année cible doivent exister pour que la classe cible de
     chaque élève puisse être résolue. Idempotent : ignore les niveaux déjà
     présents dans l'année cible.
+
+    CONTAMINATION CROSS-TENANT CORRIGÉE AU LOT 9 (identifiée dès l'audit
+    initial) : ni l'année source ni l'année cible n'étaient vérifiées, et les
+    classes clonées reprenaient `etablissement_id=c.etablissement_id` — celui
+    de la SOURCE. Un admin de l'école A pouvait donc cloner la structure de
+    l'école B dans son année, en créant des classes appartenant à B : de la
+    donnée d'une école écrite dans le périmètre d'une autre, pas seulement
+    une fuite en lecture. Les deux années sont désormais vérifiées, les
+    classes source filtrées, et l'établissement de destination est celui de
+    l'appelant.
     """
-    annee_cible = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_cible_id).first()
-    if not annee_cible:
-        raise HTTPException(404, "Année cible non trouvée")
-    annee_source = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_source_id).first()
-    if not annee_source:
-        raise HTTPException(404, "Année source non trouvée")
+    annee_cible = _annee_ou_404(db, annee_cible_id, etablissement_id, "Année cible")
+    _annee_ou_404(db, annee_source_id, etablissement_id, "Année source")
 
     classes_source = db.query(Classe).filter(
         Classe.annee_id == annee_source_id,
         Classe.statut == "ACTIVE",
+        Classe.etablissement_id == etablissement_id,
     ).all()
 
     niveaux_existants = {
         c.niveau_id for c in db.query(Classe).filter(
-            Classe.annee_id == annee_cible_id, Classe.statut == "ACTIVE"
+            Classe.annee_id == annee_cible_id, Classe.statut == "ACTIVE",
+            Classe.etablissement_id == etablissement_id,
         ).all()
     }
 
@@ -625,7 +671,7 @@ def preparer_classes_annee(annee_cible_id: int, annee_source_id: int, db: Sessio
         if c.niveau_id in niveaux_existants:
             continue
         db.add(Classe(
-            etablissement_id=c.etablissement_id,
+            etablissement_id=etablissement_id,
             annee_id=annee_cible_id,
             niveau_id=c.niveau_id,
             salle_id=None,

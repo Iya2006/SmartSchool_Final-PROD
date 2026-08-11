@@ -7,9 +7,10 @@ et le résultat font foi depuis le `Job` RQ lui-même (Redis) : pas de table
 PostgreSQL dédiée pour l'instant (voir le plan Étape F, section F — pas de
 justification trouvée pour un historique permanent aujourd'hui).
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from rq.job import JobStatus
 
+from app.core.auth import require_etablissement
 from app.core.task_queue import fetch_job
 
 router = APIRouter(prefix="/api/tasks", tags=["Tâches asynchrones"])
@@ -30,11 +31,25 @@ _STATUS_MAP = {
 
 
 @router.get("/{task_id}")
-def get_task_status(task_id: str):
+def get_task_status(task_id: str, etablissement_id: int = Depends(require_etablissement)):
     """Statut d'une tâche asynchrone. 404 si l'id est invalide OU si le
-    résultat a expiré (result_ttl/failure_ttl — voir task_queue.py)."""
+    résultat a expiré (result_ttl/failure_ttl — voir task_queue.py).
+
+    Lot 11 — l'établissement de la tâche est comparé à celui du demandeur.
+    Avant, connaître l'identifiant d'une tâche suffisait pour en lire le
+    résultat, quelle que soit l'école : pour un bulletin, cela livrait l'URL de
+    téléchargement du PDF d'une autre école.
+
+    Contrôle **fermé par défaut** : une tâche sans `etablissement_id` dans son
+    `meta` est refusée plutôt que servie à tout le monde. Concrètement, cela ne
+    concerne que d'éventuelles tâches mises en file avant ce correctif (TTL de
+    24 h) ; tout nouveau type de tâche doit renseigner ce champ à l'enqueue.
+    """
     job = fetch_job(task_id)
     if job is None:
+        raise HTTPException(404, "Tâche introuvable (id invalide, ou résultat expiré)")
+
+    if (job.meta or {}).get("etablissement_id") != etablissement_id:
         raise HTTPException(404, "Tâche introuvable (id invalide, ou résultat expiré)")
 
     rq_status = job.get_status(refresh=True)

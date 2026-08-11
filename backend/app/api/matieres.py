@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import (
     Matiere, Cycle, Niveau, Classe, ClasseMatiere
 )
@@ -14,33 +15,80 @@ from app.schemas.schemas import MatiereCreate, MatiereOut
 router = APIRouter(prefix="/api/matieres", tags=["Matières & Programme"])
 
 
+# ── Helpers d'isolation (Lot 9) ───────────────────────────────────────────
+# Matiere n'a pas de colonne etablissement_id : elle est OWNERSHIP via son
+# Cycle (voir .ai/MULTI_TENANT_PLAN.md section E). ClasseMatiere est
+# OWNERSHIP via sa Classe.
+
+def _matiere_ou_404(db: Session, matiere_id: int, etablissement_id: int) -> Matiere:
+    m = (
+        db.query(Matiere)
+        .join(Cycle, Cycle.cycle_id == Matiere.cycle_id)
+        .filter(Matiere.matiere_id == matiere_id, Cycle.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not m:
+        raise HTTPException(404, "Matière non trouvée")
+    return m
+
+
+def _classe_ou_404(db: Session, classe_id: int, etablissement_id: int) -> Classe:
+    c = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not c:
+        raise HTTPException(404, "Classe non trouvée")
+    return c
+
+
+def _cycle_ou_404(db: Session, cycle_id: int, etablissement_id: int) -> Cycle:
+    c = db.query(Cycle).filter(
+        Cycle.cycle_id == cycle_id, Cycle.etablissement_id == etablissement_id
+    ).first()
+    if not c:
+        raise HTTPException(404, "Cycle non trouvé")
+    return c
+
+
 # ============================================================================
 # CRUD MATIÈRES
 # ============================================================================
 
 @router.get("", response_model=List[MatiereOut])
-def list_matieres(cycle_id: Optional[int] = None, db: Session = Depends(get_db)):
-    query = db.query(Matiere)
+def list_matieres(cycle_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    query = db.query(Matiere).join(Cycle, Cycle.cycle_id == Matiere.cycle_id).filter(
+        Cycle.etablissement_id == etablissement_id
+    )
     if cycle_id:
         query = query.filter(Matiere.cycle_id == cycle_id)
     return query.order_by(Matiere.categorie, Matiere.libelle).all()
 
 
 @router.get("/stats")
-def get_matieres_stats(db: Session = Depends(get_db)):
-    """Statistiques globales sur les matières et leur attribution."""
-    total_matieres = db.query(Matiere).count()
-    total_attributions = db.query(ClasseMatiere).filter(ClasseMatiere.est_active == "O").count()
-    classes_avec = db.query(ClasseMatiere.classe_id).distinct().count()
-    classes_total = db.query(Classe).filter(Classe.statut == "ACTIVE").count()
+def get_matieres_stats(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Statistiques sur les matières et leur attribution POUR CET ÉTABLISSEMENT."""
+    matieres = db.query(Matiere).join(Cycle, Cycle.cycle_id == Matiere.cycle_id).filter(
+        Cycle.etablissement_id == etablissement_id
+    ).all()
+    total_matieres = len(matieres)
 
-    matieres = db.query(Matiere).all()
+    attributions_etab = db.query(ClasseMatiere).join(
+        Classe, Classe.classe_id == ClasseMatiere.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id)
+    total_attributions = attributions_etab.filter(ClasseMatiere.est_active == "O").count()
+    classes_avec = db.query(ClasseMatiere.classe_id).join(
+        Classe, Classe.classe_id == ClasseMatiere.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id).distinct().count()
+    classes_total = db.query(Classe).filter(
+        Classe.statut == "ACTIVE", Classe.etablissement_id == etablissement_id
+    ).count()
+
     par_categorie = {}
     for m in matieres:
         cat = m.categorie or "Autres"
         par_categorie[cat] = par_categorie.get(cat, 0) + 1
 
-    cycles = db.query(Cycle).all()
+    cycles = db.query(Cycle).filter(Cycle.etablissement_id == etablissement_id).all()
     par_cycle = {}
     for c in cycles:
         count = db.query(Matiere).filter(Matiere.cycle_id == c.cycle_id).count()
@@ -57,11 +105,9 @@ def get_matieres_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/classe/{classe_id}")
-def get_matieres_par_classe(classe_id: int, db: Session = Depends(get_db)):
+def get_matieres_par_classe(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Retourne les matières attribuées à une classe donnée."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     associations = db.query(ClasseMatiere).filter(
         ClasseMatiere.classe_id == classe_id,
@@ -92,15 +138,15 @@ def get_matieres_par_classe(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{matiere_id}", response_model=MatiereOut)
-def get_matiere(matiere_id: int, db: Session = Depends(get_db)):
-    m = db.query(Matiere).filter(Matiere.matiere_id == matiere_id).first()
-    if not m:
-        raise HTTPException(404, "Matière non trouvée")
-    return m
+def get_matiere(matiere_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    return _matiere_ou_404(db, matiere_id, etablissement_id)
 
 
 @router.post("", response_model=MatiereOut, status_code=201)
-def create_matiere(data: MatiereCreate, db: Session = Depends(get_db)):
+def create_matiere(data: MatiereCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    # Le cycle cible doit appartenir à cet établissement — sinon une matière
+    # pouvait être créée dans le programme d'une autre école.
+    _cycle_ou_404(db, data.cycle_id, etablissement_id)
     exists = db.query(Matiere).filter(
         Matiere.code == data.code, Matiere.cycle_id == data.cycle_id
     ).first()
@@ -114,8 +160,12 @@ def create_matiere(data: MatiereCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/batch-create", status_code=201)
-def batch_create_matieres(data: List[MatiereCreate], db: Session = Depends(get_db)):
+def batch_create_matieres(data: List[MatiereCreate], db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Crée ou met à jour plusieurs matières en lot."""
+    # Tous les cycles référencés doivent appartenir à cet établissement.
+    for cycle_id in {item.cycle_id for item in data}:
+        _cycle_ou_404(db, cycle_id, etablissement_id)
+
     created_count = 0
     updated_count = 0
     for item in data:
@@ -138,11 +188,14 @@ def batch_create_matieres(data: List[MatiereCreate], db: Session = Depends(get_d
 
 
 @router.put("/{matiere_id}", response_model=MatiereOut)
-def update_matiere(matiere_id: int, data: MatiereCreate, db: Session = Depends(get_db)):
-    m = db.query(Matiere).filter(Matiere.matiere_id == matiere_id).first()
-    if not m:
-        raise HTTPException(404, "Matière non trouvée")
-    for k, v in data.model_dump(exclude_unset=True).items():
+def update_matiere(matiere_id: int, data: MatiereCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    m = _matiere_ou_404(db, matiere_id, etablissement_id)
+    update_data = data.model_dump(exclude_unset=True)
+    # Un changement de cycle ne doit pas permettre de déplacer la matière
+    # vers le programme d'une autre école.
+    if "cycle_id" in update_data and update_data["cycle_id"] != m.cycle_id:
+        _cycle_ou_404(db, update_data["cycle_id"], etablissement_id)
+    for k, v in update_data.items():
         setattr(m, k, v)
     db.commit()
     db.refresh(m)
@@ -150,10 +203,8 @@ def update_matiere(matiere_id: int, data: MatiereCreate, db: Session = Depends(g
 
 
 @router.delete("/{matiere_id}")
-def delete_matiere(matiere_id: int, db: Session = Depends(get_db)):
-    m = db.query(Matiere).filter(Matiere.matiere_id == matiere_id).first()
-    if not m:
-        raise HTTPException(404, "Matière non trouvée")
+def delete_matiere(matiere_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    m = _matiere_ou_404(db, matiere_id, etablissement_id)
     # Supprimer les associations classe-matière liées
     db.query(ClasseMatiere).filter(ClasseMatiere.matiere_id == matiere_id).delete()
     db.delete(m)
@@ -441,10 +492,17 @@ NIVEAU_TO_PROGRAMME = {
 
 
 @router.post("/auto-generation", status_code=201)
-def auto_generate_matieres_guinee(db: Session = Depends(get_db)):
-    """Génère automatiquement TOUTES les matières du programme guinéen sous 3 cycles."""
-    
-    # S'assurer que les cycles existent
+def auto_generate_matieres_guinee(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Génère automatiquement TOUTES les matières du programme guinéen sous
+    3 cycles, POUR CET ÉTABLISSEMENT.
+
+    Avant le Lot 9 : les cycles étaient recherchés par code sans aucun filtre
+    (le cycle « CLG » d'une autre école était donc réutilisé), et tout cycle
+    manquant était créé avec `etablissement_id=1` CODÉ EN DUR — le programme
+    de toute école non-1 atterrissait dans l'école 1.
+    """
+
+    # S'assurer que les cycles existent POUR CET ÉTABLISSEMENT
     cycles_def = [
         {"code": "PRM", "libelle": "Primaire", "ordre": 1},
         {"code": "CLG", "libelle": "Collège", "ordre": 2},
@@ -452,9 +510,11 @@ def auto_generate_matieres_guinee(db: Session = Depends(get_db)):
     ]
     cycle_map = {}
     for cd in cycles_def:
-        c = db.query(Cycle).filter(Cycle.code == cd["code"]).first()
+        c = db.query(Cycle).filter(
+            Cycle.code == cd["code"], Cycle.etablissement_id == etablissement_id
+        ).first()
         if not c:
-            c = Cycle(etablissement_id=1, code=cd["code"], libelle=cd["libelle"], ordre=cd["ordre"])
+            c = Cycle(etablissement_id=etablissement_id, code=cd["code"], libelle=cd["libelle"], ordre=cd["ordre"])
             db.add(c)
             db.commit()
             db.refresh(c)
@@ -510,7 +570,9 @@ def auto_generate_matieres_guinee(db: Session = Depends(get_db)):
             added += 1
 
     db.commit()
-    total = db.query(Matiere).count()
+    total = db.query(Matiere).join(Cycle, Cycle.cycle_id == Matiere.cycle_id).filter(
+        Cycle.etablissement_id == etablissement_id
+    ).count()
     return {
         "message": f"{added} nouvelles matières ajoutées. Total: {total} matières dans le système.",
         "added": added,
@@ -523,12 +585,19 @@ def auto_generate_matieres_guinee(db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.post("/attribuer-programme", status_code=201)
-def attribuer_programme_aux_classes(db: Session = Depends(get_db)):
+def attribuer_programme_aux_classes(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
-    Attribue intelligemment les matières aux classes existantes en se basant
-    sur le niveau (code) de la classe et le programme guinéen.
+    Attribue intelligemment les matières aux classes DE CET ÉTABLISSEMENT en
+    se basant sur le niveau (code) de la classe et le programme guinéen.
+
+    Avant le Lot 9, cette route parcourait TOUTES les classes actives de la
+    plateforme et leur créait des ClasseMatiere : écriture massive
+    cross-école déclenchable par un seul appel (même nature que le PUT
+    coefficients corrigé au Lot 7).
     """
-    classes = db.query(Classe).filter(Classe.statut == "ACTIVE").all()
+    classes = db.query(Classe).filter(
+        Classe.statut == "ACTIVE", Classe.etablissement_id == etablissement_id
+    ).all()
     if not classes:
         raise HTTPException(404, "Aucune classe active trouvée dans le système.")
 
@@ -598,11 +667,15 @@ def attribuer_programme_aux_classes(db: Session = Depends(get_db)):
 
 
 @router.post("/attribuer-programme-classe/{classe_id}")
-def attribuer_programme_classe(classe_id: int, db: Session = Depends(get_db)):
-    """Attribue automatiquement les matières du programme guinéen à UNE classe spécifique."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+def attribuer_programme_classe(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Attribue automatiquement les matières du programme guinéen à UNE classe spécifique.
+
+    Attention : cette route SUPPRIME d'abord toutes les attributions
+    existantes de la classe — sans la vérification d'établissement ajoutée
+    au Lot 9, elle permettait d'effacer le programme d'une classe d'une
+    autre école.
+    """
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     niveau = db.query(Niveau).filter(Niveau.niveau_id == classe.niveau_id).first()
     if not niveau:
@@ -652,19 +725,16 @@ def attribuer_programme_classe(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/classe/{classe_id}/matiere")
-def ajouter_matiere_classe(classe_id: int, data: dict, db: Session = Depends(get_db)):
-    """Ajoute manuellement une matière à une classe."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+def ajouter_matiere_classe(classe_id: int, data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Ajoute manuellement une matière à une classe (les deux vérifiées
+    appartenir à l'établissement appelant)."""
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     matiere_id = data.get("matiere_id")
     coefficient = data.get("coefficient", 2)
     nb_heures = data.get("nb_heures_semaine", 2)
 
-    matiere = db.query(Matiere).filter(Matiere.matiere_id == matiere_id).first()
-    if not matiere:
-        raise HTTPException(404, "Matière non trouvée")
+    matiere = _matiere_ou_404(db, matiere_id, etablissement_id)
 
     # Vérifier doublon
     exists = db.query(ClasseMatiere).filter(
@@ -687,8 +757,9 @@ def ajouter_matiere_classe(classe_id: int, data: dict, db: Session = Depends(get
 
 
 @router.delete("/classe/{classe_id}/matiere/{matiere_id}")
-def retirer_matiere_classe(classe_id: int, matiere_id: int, db: Session = Depends(get_db)):
-    """Retire une matière d'une classe."""
+def retirer_matiere_classe(classe_id: int, matiere_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Retire une matière d'une classe (OWNERSHIP via la classe)."""
+    _classe_ou_404(db, classe_id, etablissement_id)
     cm = db.query(ClasseMatiere).filter(
         ClasseMatiere.classe_id == classe_id,
         ClasseMatiere.matiere_id == matiere_id
@@ -702,10 +773,12 @@ def retirer_matiere_classe(classe_id: int, matiere_id: int, db: Session = Depend
 
 
 @router.get("/par-cycle/groupes")
-def get_matieres_par_cycle_groupes(db: Session = Depends(get_db)):
-    """Retourne TOUTES les matières regroupées par cycle (Primaire, Collège, Lycée)
-    Utilisé par le modal d'ajout manuel pour un affichage organisé."""
-    cycles = db.query(Cycle).order_by(Cycle.ordre).all()
+def get_matieres_par_cycle_groupes(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Retourne les matières de CET établissement regroupées par cycle
+    (Primaire, Collège, Lycée). Utilisé par le modal d'ajout manuel."""
+    cycles = db.query(Cycle).filter(
+        Cycle.etablissement_id == etablissement_id
+    ).order_by(Cycle.ordre).all()
     result = []
     for c in cycles:
         matieres = db.query(Matiere).filter(

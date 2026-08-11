@@ -2,7 +2,14 @@
 SMARTSCHOOL — API Gestion du Personnel
 Couvre tous les rôles : FONDATEUR, DG, DIRECTEUR_NIVEAU, ADMIN, COMPTABLE,
 BIBLIOTHECAIRE, INFORMATICIEN, SURVEILLANT, AGENT_ENTRETIEN, GARDIEN, OPERATEUR...
-Support du cumul de rôles via roles_secondaires (JSONB).
+`roles_secondaires` (JSONB) enregistre le cumul de responsabilités déclaré sur
+la fiche.
+
+⚠️ Ce champ est PUREMENT DESCRIPTIF aujourd'hui : `app/core/auth.py::require_roles`
+n'examine que le rôle PRINCIPAL du compte. Ajouter COMPTABLE en rôle secondaire
+à un surveillant ne lui ouvre donc pas la finance — il continue de recevoir un
+403. Le libellé du formulaire le précise à l'utilisateur ; le brancher
+réellement relève du chantier RBAC (§6.1 de `.ai/LOT12_RAPPORT.md`).
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -11,9 +18,11 @@ from typing import List, Optional
 import hashlib
 
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import Utilisateur
 from app.schemas.schemas import PersonnelCreate, PersonnelUpdate, PersonnelOut
 from app.core.security import hash_password
+from app.core.identifiants import exiger_identifiants_libres
 
 router = APIRouter(prefix="/api/personnel", tags=["Personnel"])
 
@@ -61,11 +70,11 @@ def _row_to_dict(p: Utilisateur) -> dict:
 # ─── LISTE du personnel ────────────────────────────────────────────────────────
 @router.get("", summary="Lister tout le personnel")
 def list_personnel(
-    etablissement_id: int = Query(...),
     role: Optional[str] = Query(None, description="Filtrer par rôle principal"),
     statut: Optional[str] = Query(None),
     q: Optional[str] = Query(None, description="Recherche par nom/prénom"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Retourne la liste du personnel non-enseignant avec filtres optionnels."""
     query = db.query(Utilisateur).filter(
@@ -90,7 +99,7 @@ def list_personnel(
 
 # ─── Récapitulatif par rôle ────────────────────────────────────────────────────
 @router.get("/stats", summary="Statistiques du personnel par rôle")
-def stats_personnel(etablissement_id: int = Query(...), db: Session = Depends(get_db)):
+def stats_personnel(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Compte le nombre de membres par rôle principal et le total des salaires."""
     rows = db.query(
         Utilisateur.role,
@@ -108,8 +117,10 @@ def stats_personnel(etablissement_id: int = Query(...), db: Session = Depends(ge
 
 # ─── DÉTAIL d'un membre du personnel ──────────────────────────────────────────
 @router.get("/{personnel_id}", summary="Détail d'un membre du personnel")
-def get_personnel(personnel_id: int, db: Session = Depends(get_db)):
-    p = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == personnel_id).first()
+def get_personnel(personnel_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    p = db.query(Utilisateur).filter(
+        Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
+    ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
     return _row_to_dict(p)
@@ -117,12 +128,17 @@ def get_personnel(personnel_id: int, db: Session = Depends(get_db)):
 
 # ─── CRÉER un nouveau membre du personnel ─────────────────────────────────────
 @router.post("", status_code=201, summary="Créer un membre du personnel")
-def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db)):
+def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Crée un nouveau membre du personnel.
     - Si mot_de_passe fourni → compte système créé, accès logiciel activé.
     - Si mot_de_passe absent → staff technique sans accès (nettoyeurs, gardiens…).
     - roles_secondaires → liste JSON permettant le cumul de rôles.
+
+    `data.etablissement_id` (champ obligatoire du schéma PersonnelBase) est
+    ignoré et remplacé par l'établissement authentifié — avant le Lot 3,
+    n'importe quel client pouvait choisir librement l'école propriétaire du
+    compte créé.
     """
     # Génération du login si non fourni mais rôle avec accès
     nom_utilisateur = data.nom_utilisateur
@@ -145,7 +161,13 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db)):
                 detail=f"Le nom d'utilisateur '{nom_utilisateur}' est déjà utilisé."
             )
 
+    # L'e-mail et le téléphone sont eux aussi des identifiants de connexion
+    # (voir auth.py) : un doublon, même dans une autre table ou une autre
+    # école, empêcherait définitivement l'un des deux comptes de se connecter.
+    exiger_identifiants_libres(db, [data.email, data.telephone])
+
     payload = data.model_dump(exclude={"nom_utilisateur", "mot_de_passe"})
+    payload["etablissement_id"] = etablissement_id
     mot_de_passe_hashed = hash_password(data.mot_de_passe) if data.mot_de_passe else None
 
     p = Utilisateur(
@@ -164,8 +186,10 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db)):
 
 # ─── METTRE À JOUR un membre du personnel ────────────────────────────────────
 @router.put("/{personnel_id}", summary="Modifier un membre du personnel")
-def update_personnel(personnel_id: int, data: PersonnelUpdate, db: Session = Depends(get_db)):
-    p = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == personnel_id).first()
+def update_personnel(personnel_id: int, data: PersonnelUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    p = db.query(Utilisateur).filter(
+        Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
+    ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
 
@@ -202,9 +226,12 @@ def update_personnel(personnel_id: int, data: PersonnelUpdate, db: Session = Dep
 def change_statut(
     personnel_id: int,
     statut: str = Query(..., description="ACTIF, INACTIF, SUSPENDU, CONGE"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    p = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == personnel_id).first()
+    p = db.query(Utilisateur).filter(
+        Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
+    ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
     p.statut = statut
@@ -214,8 +241,10 @@ def change_statut(
 
 # ─── SUPPRIMER un membre du personnel ─────────────────────────────────────────
 @router.delete("/{personnel_id}", summary="Supprimer un membre du personnel")
-def delete_personnel(personnel_id: int, db: Session = Depends(get_db)):
-    p = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == personnel_id).first()
+def delete_personnel(personnel_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    p = db.query(Utilisateur).filter(
+        Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
+    ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
     db.delete(p)
@@ -225,7 +254,7 @@ def delete_personnel(personnel_id: int, db: Session = Depends(get_db)):
 
 # ─── LISTE pour le paiement des salaires ──────────────────────────────────────
 @router.get("/salaires/liste", summary="Liste du personnel avec salaires pour la comptabilité")
-def liste_salaires(etablissement_id: int = Query(...), db: Session = Depends(get_db)):
+def liste_salaires(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Retourne uniquement les membres avec un salaire > 0, pour le Centre de Décaissement."""
     rows = db.query(Utilisateur).filter(
         Utilisateur.etablissement_id == etablissement_id,

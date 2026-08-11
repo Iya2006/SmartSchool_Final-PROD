@@ -10,6 +10,7 @@ from sqlalchemy import func
 from typing import Dict, List, Optional
 from datetime import date as date_type
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import (
     TypeFrais, TarifClasse, Facture, EcheanceFacture, Paiement, Depense,
     Inscription, Classe, Eleve, AnneeScolaire, Enseignant, Utilisateur,
@@ -36,7 +37,7 @@ from app.api.comptabilite import (
 router = APIRouter(prefix="/api/finance", tags=["Finance"])
 
 
-def _invalidate_dashboard_cache(etablissement_id: int = 1, annee_id: int = 1) -> None:
+def _invalidate_dashboard_cache(etablissement_id: int, annee_id: int = 1) -> None:
     """
     Invalide le cache Redis du tableau de bord financier (TTL 60s) après
     toute mutation (encaissement, décaissement, salaire...), pour que le
@@ -93,7 +94,7 @@ FINANCE_DEFAULTS = {
 }
 
 
-def get_finance_settings(db: Session, etablissement_id: int = 1) -> dict:
+def get_finance_settings(db: Session, etablissement_id: int) -> dict:
     """Lit les paramètres de la catégorie FINANCE (ss_parametres), avec valeurs par défaut."""
     from app.models.academique import ParametreEtablissement
     settings = dict(FINANCE_DEFAULTS)
@@ -256,7 +257,8 @@ def delete_type_frais(type_frais_id: int, db: Session = Depends(get_db)):
 def get_tarifs_classe(
     type_frais_id: Optional[int] = None,
     classe_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     if not type_frais_id and not classe_id:
         raise HTTPException(status_code=400, detail="type_frais_id ou classe_id requis")
@@ -265,7 +267,7 @@ def get_tarifs_classe(
         Classe, TarifClasse.classe_id == Classe.classe_id
     ).join(
         TypeFrais, TarifClasse.type_frais_id == TypeFrais.type_frais_id
-    )
+    ).filter(Classe.etablissement_id == etablissement_id)
     if type_frais_id:
         query = query.filter(TarifClasse.type_frais_id == type_frais_id)
     if classe_id:
@@ -361,9 +363,17 @@ def _repercuter_tarif_sur_factures(db: Session, type_frais_id: int, classe_id: i
 
 
 @router.put("/tarifs-classe")
-def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get_db)):
+def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Upsert en masse. Un montant <= 0 supprime le tarif existant pour ce
     couple (type_frais_id, classe_id) — permet de "décocher" une classe."""
+    classe_ids = {e.classe_id for e in entries}
+    if classe_ids:
+        trouvees = {c.classe_id for c in db.query(Classe.classe_id).filter(
+            Classe.classe_id.in_(classe_ids), Classe.etablissement_id == etablissement_id
+        ).all()}
+        if trouvees != classe_ids:
+            raise HTTPException(status_code=403, detail="Classe(s) invalide(s) pour cet établissement")
+
     upserted, deleted, factures_maj = 0, 0, 0
     for entry in entries:
         existing = db.query(TarifClasse).filter(
@@ -383,12 +393,12 @@ def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get
         factures_maj += _repercuter_tarif_sur_factures(db, entry.type_frais_id, entry.classe_id, float(entry.montant))
 
     db.commit()
-    _invalidate_dashboard_cache()
+    _invalidate_dashboard_cache(etablissement_id)
     return {"message": f"{upserted} tarif(s) enregistré(s), {deleted} supprimé(s), {factures_maj} facture(s) impayée(s) mise(s) à jour"}
 
 
 @router.post("/tarifs/copier")
-def copier_tarifs(data: dict, db: Session = Depends(get_db)):
+def copier_tarifs(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Copie les tarifs (TarifClasse) d'une année vers une autre, classe par
     classe appariée sur le même niveau_id (même logique d'appariement que la
@@ -412,8 +422,13 @@ def copier_tarifs(data: dict, db: Session = Depends(get_db)):
     if annee_source_id == annee_cible_id:
         raise HTTPException(status_code=400, detail="L'année source et l'année cible doivent être différentes")
 
+    # Les deux années doivent appartenir à l'établissement appelant — avant
+    # le Lot 2, rien n'empêchait de copier la grille tarifaire d'une AUTRE
+    # école (annee_source_id) vers la sienne, ou l'inverse.
     for aid in (annee_source_id, annee_cible_id):
-        if not db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == aid).first():
+        if not db.query(AnneeScolaire).filter(
+            AnneeScolaire.annee_id == aid, AnneeScolaire.etablissement_id == etablissement_id
+        ).first():
             raise HTTPException(status_code=404, detail=f"Année scolaire {aid} non trouvée")
 
     classes_source = db.query(Classe).filter(Classe.annee_id == annee_source_id).all()
@@ -463,13 +478,13 @@ def copier_tarifs(data: dict, db: Session = Depends(get_db)):
 @router.get("/factures")
 def list_factures(
     response: Response,
-    etablissement_id: int = 1,
     annee_id: int = 1,
     statut: Optional[str] = None,
     classe_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Retourne toutes les factures avec infos élève, classe et type de frais."""
     query = (
@@ -528,12 +543,12 @@ def list_factures(
 
 @router.get("/factures/stats")
 def stats_factures(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
     type_frais_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query_base = (
         db.query(Facture)
@@ -576,10 +591,17 @@ def stats_factures(
 
 
 @router.post("/factures", status_code=201)
-def create_facture(data: FactureCreate, db: Session = Depends(get_db)):
+def create_facture(data: FactureCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Crée une facture pour une inscription avec possibilité d'échéancier."""
-    # Vérifier l'inscription
-    inscription = db.query(Inscription).filter(Inscription.inscription_id == data.inscription_id).first()
+    # Vérifier l'inscription — et qu'elle appartient bien à l'établissement
+    # appelant (avant le Lot 2, n'importe quel inscription_id d'une AUTRE
+    # école pouvait être facturé depuis ce compte).
+    inscription = (
+        db.query(Inscription)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(Inscription.inscription_id == data.inscription_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
     if not inscription:
         raise HTTPException(status_code=404, detail="Inscription non trouvée")
     _verifier_annee_modifiable(db, inscription.annee_id)
@@ -647,11 +669,12 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db)):
             {"compte": COMPTE_PRODUITS_SCOLARITE, "debit": 0, "credit": float(facture.montant_net),
              "classe_id": inscription.classe_id, "description": numero_facture},
         ],
+        etablissement_id=etablissement_id,
     )
 
     db.commit()
     db.refresh(facture)
-    _invalidate_dashboard_cache()
+    _invalidate_dashboard_cache(etablissement_id, inscription.annee_id)
 
     return {
         "facture_id": facture.facture_id,
@@ -667,10 +690,19 @@ from app.schemas.schemas import GenererFacturesClasseRequest
 @router.post("/factures/generer-classe", status_code=201)
 def generer_factures_classe(
     data: GenererFacturesClasseRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Génère les factures pour tous les élèves d'une classe en un clic."""
     _verifier_annee_modifiable(db, data.annee_id)
+
+    # La classe doit appartenir à l'établissement appelant — avant le Lot 2,
+    # rien n'empêchait de facturer en masse toute une classe d'une AUTRE école.
+    classe = db.query(Classe).filter(
+        Classe.classe_id == data.classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
 
     # Récupérer toutes les inscriptions de la classe
     inscriptions = db.query(Inscription).filter(
@@ -737,7 +769,7 @@ def generer_factures_classe(
     else:
         max_num = 0
 
-    finance_settings = get_finance_settings(db) if data.appliquer_reductions else None
+    finance_settings = get_finance_settings(db, etablissement_id) if data.appliquer_reductions else None
 
     for inscription in inscriptions:
         # Vérifier si une facture de ce type existe déjà pour cette inscription
@@ -815,6 +847,7 @@ def generer_factures_classe(
                 {"compte": COMPTE_PRODUITS_SCOLARITE, "debit": 0, "credit": float(montant_net),
                  "classe_id": inscription.classe_id, "description": numero_facture},
             ],
+            etablissement_id=etablissement_id,
         )
 
         created_count += 1
@@ -834,11 +867,11 @@ def generer_factures_classe(
 @router.get("/paiements")
 def list_paiements(
     response: Response,
-    etablissement_id: int = 1,
     annee_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query = (
         db.query(Paiement, Facture, Eleve)
@@ -880,9 +913,19 @@ def list_paiements(
 
 
 @router.post("/paiements", status_code=201)
-def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
+def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Enregistre un paiement avec mise à jour facture et échéance si applicable."""
-    facture = db.query(Facture).filter(Facture.facture_id == data.facture_id).first()
+    # La facture doit appartenir à l'établissement appelant — avant le Lot 2,
+    # n'importe quel facture_id d'une AUTRE école pouvait recevoir un paiement
+    # depuis ce compte (enregistrement d'un règlement fictif ou détournement
+    # de la comptabilité d'une autre école).
+    facture = (
+        db.query(Facture)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(Facture.facture_id == data.facture_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
 
@@ -923,7 +966,7 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
             echeance.statut = "PARTIELLEMENT_PAYEE"
 
     # Générer numéro de reçu (préfixe configurable via /parametres/finance)
-    settings = get_finance_settings(db)
+    settings = get_finance_settings(db, etablissement_id)
     prefixe_recu = settings.get("recu_prefixe") or "REC"
     count = db.query(func.count(Paiement.paiement_id)).scalar() or 0
     numero_recu = f"{prefixe_recu}-{count + 1:06d}"
@@ -975,11 +1018,12 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
              "eleve_id": insc.eleve_id if insc else None, "classe_id": insc.classe_id if insc else None,
              "description": numero_recu},
         ],
+        etablissement_id=etablissement_id,
     )
 
     db.commit()
     db.refresh(paiement)
-    _invalidate_dashboard_cache()
+    _invalidate_dashboard_cache(etablissement_id, facture.annee_id)
 
     return {
         "paiement_id": paiement.paiement_id,
@@ -999,7 +1043,6 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db)):
 @router.get("/depenses", response_model=List[DepenseOut])
 def list_depenses(
     response: Response,
-    etablissement_id: int = 1,
     annee_id: int = 1,
     categorie: Optional[str] = None,
     classe_id: Optional[int] = None,
@@ -1007,7 +1050,8 @@ def list_depenses(
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
@@ -1032,21 +1076,29 @@ def list_depenses(
 
 
 @router.post("/depenses", response_model=DepenseOut, status_code=201)
-def create_depense(data: DepenseCreate, db: Session = Depends(get_db)):
+def create_depense(data: DepenseCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     _verifier_annee_modifiable(db, data.annee_id)
     if data.montant <= 0:
         raise HTTPException(status_code=400, detail="Le montant doit être supérieur à 0")
-    dep = Depense(**data.model_dump())
+    # data.etablissement_id vient du corps de la requête (schéma DepenseBase) —
+    # ignoré ici et remplacé par l'établissement authentifié : avant le Lot 2,
+    # n'importe quel client pouvait choisir librement l'école propriétaire de
+    # la dépense créée simplement en changeant ce champ dans le body.
+    payload = data.model_dump()
+    payload["etablissement_id"] = etablissement_id
+    dep = Depense(**payload)
     db.add(dep)
     db.commit()
     db.refresh(dep)
-    _invalidate_dashboard_cache()
+    _invalidate_dashboard_cache(etablissement_id, data.annee_id)
     return dep
 
 
 @router.put("/depenses/{depense_id}/approuver")
-def approuver_depense(depense_id: int, db: Session = Depends(get_db)):
-    dep = db.query(Depense).filter(Depense.depense_id == depense_id).first()
+def approuver_depense(depense_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    dep = db.query(Depense).filter(
+        Depense.depense_id == depense_id, Depense.etablissement_id == etablissement_id
+    ).first()
     if not dep:
         raise HTTPException(status_code=404, detail="Dépense non trouvée")
     _verifier_annee_modifiable(db, dep.annee_id)
@@ -1057,8 +1109,10 @@ def approuver_depense(depense_id: int, db: Session = Depends(get_db)):
     return {"message": "Dépense approuvée"}
 
 @router.put("/depenses/{depense_id}/statut")
-def changer_statut_depense(depense_id: int, statut: str, db: Session = Depends(get_db)):
-    dep = db.query(Depense).filter(Depense.depense_id == depense_id).first()
+def changer_statut_depense(depense_id: int, statut: str, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    dep = db.query(Depense).filter(
+        Depense.depense_id == depense_id, Depense.etablissement_id == etablissement_id
+    ).first()
     if not dep:
         raise HTTPException(status_code=404, detail="Dépense non trouvée")
     _verifier_annee_modifiable(db, dep.annee_id)
@@ -1071,12 +1125,12 @@ def changer_statut_depense(depense_id: int, statut: str, db: Session = Depends(g
         raise HTTPException(status_code=400, detail="Statut invalide")
     dep.statut = statut
     db.commit()
-    _invalidate_dashboard_cache()
+    _invalidate_dashboard_cache(etablissement_id, dep.annee_id)
     return {"message": f"Statut mis à jour en {statut}"}
 
 
 @router.get("/depenses/stats")
-def stats_depenses(etablissement_id: int = 1, annee_id: int = 1, db: Session = Depends(get_db)):
+def stats_depenses(annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     query_base = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
         Depense.annee_id == annee_id,
@@ -1111,7 +1165,6 @@ def stats_depenses(etablissement_id: int = 1, annee_id: int = 1, db: Session = D
 @router.get("/impayes")
 def list_impayes(
     response: Response,
-    etablissement_id: int = 1,
     annee_id: int = 1,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
@@ -1119,7 +1172,8 @@ def list_impayes(
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 200,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Tableau complet des impayés avec informations élève, classe et parent.
@@ -1230,14 +1284,14 @@ def list_impayes(
 
 @router.get("/retards")
 def list_retards(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     classe_id: Optional[int] = None,
     niveau_id: Optional[int] = None,
     jours_min: int = 0,
     skip: int = 0,
     limit: int = 200,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Liste des élèves en retard de paiement, classés par ancienneté du retard.
@@ -1305,10 +1359,10 @@ def list_retards(
 
 @router.get("/solvabilite")
 def tableau_solvabilite(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     classe_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Tableau de solvabilité : évalue la situation financière de chaque élève.
@@ -1382,11 +1436,15 @@ def tableau_solvabilite(
 
 
 @router.get("/solde-eleve/{eleve_id}")
-def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db)):
+def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Solde financier en temps réel d'un élève avec historique complet des paiements.
+    Vérifie que l'élève appartient à l'établissement appelant — avant le
+    Lot 2, n'importe quel eleve_id deviné exposait ce solde financier complet.
     """
-    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
     if not eleve:
         raise HTTPException(status_code=404, detail="Élève non trouvé")
 
@@ -1468,9 +1526,9 @@ def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db))
 
 @router.get("/dashboard")
 def dashboard_financier(
-    etablissement_id: int = 1,
     annee_id: int = 1,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Tableau de bord financier complet avec KPIs, évolution mensuelle et répartition.
@@ -1689,10 +1747,10 @@ def dashboard_financier(
 
 @router.get("/rapports/journalier")
 def rapport_journalier(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     date_rapport: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Rapport financier journalier avec détail des paiements du jour."""
     from datetime import date as today_type
@@ -1735,11 +1793,11 @@ def rapport_journalier(
 
 @router.get("/rapports/mensuel")
 def rapport_mensuel(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     mois: Optional[int] = None,
     annee: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Rapport financier mensuel avec KPIs et détail par classe."""
     from datetime import date as today_type
@@ -1827,10 +1885,10 @@ def rapport_mensuel(
 
 @router.get("/rapports/annuel")
 def rapport_annuel(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     annee: Optional[int] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Rapport financier annuel : recettes, dépenses, masse salariale et résultat net."""
     from datetime import date as today_type
@@ -1875,7 +1933,7 @@ def rapport_annuel(
 
 
 @router.get("/avis-paiement/{facture_id}")
-def avis_paiement(facture_id: int, db: Session = Depends(get_db)):
+def avis_paiement(facture_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Données structurées pour générer un avis de paiement / reçu PDF.
     Contient toutes les informations nécessaires à l'impression.
@@ -1895,6 +1953,8 @@ def avis_paiement(facture_id: int, db: Session = Depends(get_db)):
     classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
     if not eleve or not classe:
         raise HTTPException(status_code=404, detail="Élève ou classe associé(e) à cette facture introuvable")
+    if classe.etablissement_id != etablissement_id:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
     etablissement = db.query(Etablissement).filter(
         Etablissement.etablissement_id == classe.etablissement_id
     ).first()
@@ -2007,9 +2067,9 @@ def configurer_rappels(config: dict, db: Session = Depends(get_db)):
 
 @router.post("/communication/notifier-impayes")
 def notifier_impayes(
-    etablissement_id: int = 1,
     annee_id: int = 1,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Déclenche l'envoi de notifications groupées aux parents des élèves en retard.
@@ -2070,6 +2130,7 @@ def notifier_impayes(
             # implémenté pour l'instant ; SMS/Email nécessiteraient une intégration
             # opérateur dédiée, hors périmètre de cette correction)
             message = Message(
+                etablissement_id=etablissement_id,
                 expediteur_type="ADMIN",
                 destinataire_type="PARENT",
                 destinataire_id=parent.parent_id,
@@ -2095,7 +2156,7 @@ def notifier_impayes(
 # ============================================================================
 
 @router.get("/recu/{paiement_id}")
-def get_recu(paiement_id: int, db: Session = Depends(get_db)):
+def get_recu(paiement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Détail complet d'un reçu de paiement pour affichage/impression écran."""
     from app.models.academique import Etablissement, Parent, EleveParent
 
@@ -2105,7 +2166,7 @@ def get_recu(paiement_id: int, db: Session = Depends(get_db)):
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
-        .filter(Paiement.paiement_id == paiement_id)
+        .filter(Paiement.paiement_id == paiement_id, Classe.etablissement_id == etablissement_id)
         .first()
     )
     if not result:
@@ -2186,7 +2247,7 @@ def get_recu(paiement_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.get("/paiements/{paiement_id}/recu-pdf")
-def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
+def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Génère un reçu de paiement au format PDF et le retourne en téléchargement."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
@@ -2203,7 +2264,7 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
-        .filter(Paiement.paiement_id == paiement_id)
+        .filter(Paiement.paiement_id == paiement_id, Classe.etablissement_id == etablissement_id)
         .first()
     )
 
@@ -2450,9 +2511,9 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db)):
 
 @router.get("/fournisseurs")
 def list_fournisseurs(
-    etablissement_id: int = 1,
     annee_id: int = 1,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Retourne la liste des fournisseurs uniques avec le total des dépenses et le nombre de transactions."""
     results = (
@@ -2489,13 +2550,17 @@ def list_fournisseurs(
 @router.post("/reglements-fournisseurs", status_code=201)
 def creer_reglement_fournisseur(
     data: dict,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Crée un décaissement (dépense) de n'importe quelle catégorie.
     Champs attendus : categorie, fournisseur (optionnel), montant, description,
-                       reference, mode_paiement, beneficiaire,
-                       etablissement_id (optionnel, défaut 1), annee_id (optionnel, défaut 1).
+                       reference, mode_paiement, beneficiaire, annee_id (optionnel, défaut 1).
+    L'établissement est toujours dérivé du compte authentifié, jamais du body
+    (avant le Lot 2, un champ `etablissement_id` optionnel dans le body,
+    défaulté à 1, permettait à n'importe quel client de choisir librement
+    l'école propriétaire du décaissement créé).
     """
     CATEGORIES_VALIDES = [
         'FOURNISSEUR', 'SALAIRES', 'FOURNITURES', 'MAINTENANCE',
@@ -2513,8 +2578,20 @@ def creer_reglement_fournisseur(
     description = data.get("description", "")
     reference = data.get("reference", "")
     fournisseur = data.get("fournisseur") or data.get("beneficiaire") or ""
-    etablissement_id = data.get("etablissement_id", 1)
     annee_id = data.get("annee_id", 1)
+    classe_id = data.get("classe_id") or None
+    eleve_id = data.get("eleve_id") or None
+
+    # Un axe analytique (classe/élève) référencé doit appartenir à CET
+    # établissement — jamais accepté aveuglément depuis le body.
+    if classe_id and not db.query(Classe.classe_id).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first():
+        raise HTTPException(status_code=403, detail="Classe invalide pour cet établissement")
+    if eleve_id and not db.query(Eleve.eleve_id).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first():
+        raise HTTPException(status_code=403, detail="Élève invalide pour cet établissement")
 
     libelle = description[:300] if description else f"Décaissement {categorie}"
 
@@ -2530,14 +2607,14 @@ def creer_reglement_fournisseur(
         mode_paiement=data.get("mode_paiement") or None,
         facture_url=data.get("facture_url") or None,
         source_fonds=data.get("source_fonds") or None,
-        classe_id=data.get("classe_id") or None,
-        eleve_id=data.get("eleve_id") or None,
+        classe_id=classe_id,
+        eleve_id=eleve_id,
         departement=data.get("departement") or None,
     )
     db.add(dep)
     db.commit()
     db.refresh(dep)
-    _invalidate_dashboard_cache()
+    _invalidate_dashboard_cache(etablissement_id, annee_id)
 
     return {
         "depense_id": dep.depense_id,
@@ -2551,11 +2628,13 @@ def creer_reglement_fournisseur(
 
 
 @router.put("/depenses/{depense_id}/valider")
-def valider_depense(depense_id: int, db: Session = Depends(get_db)):
+def valider_depense(depense_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Valide une dépense (décaissement) qui était EN_ATTENTE.
     """
-    dep = db.query(Depense).filter(Depense.depense_id == depense_id).first()
+    dep = db.query(Depense).filter(
+        Depense.depense_id == depense_id, Depense.etablissement_id == etablissement_id
+    ).first()
     if not dep:
         raise HTTPException(status_code=404, detail="Dépense non trouvée")
 
@@ -2576,11 +2655,12 @@ def valider_depense(depense_id: int, db: Session = Depends(get_db)):
             {"compte": compte_charge, "debit": float(dep.montant), "credit": 0, "description": dep.libelle},
             {"compte": COMPTE_BANQUE, "debit": 0, "credit": float(dep.montant), "description": dep.libelle},
         ],
+        etablissement_id=dep.etablissement_id,
     )
 
     db.commit()
     db.refresh(dep)
-    _invalidate_dashboard_cache()
+    _invalidate_dashboard_cache(etablissement_id, dep.annee_id)
 
     return {"message": "Dépense validée avec succès", "depense_id": dep.depense_id, "statut": dep.statut}
 
@@ -2592,14 +2672,14 @@ def valider_depense(depense_id: int, db: Session = Depends(get_db)):
 @router.get("/decaissements")
 def list_decaissements(
     response: Response,
-    etablissement_id: int = 1,
     annee_id: int = 1,
     date_debut: Optional[str] = None,
     date_fin: Optional[str] = None,
     categorie: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Vue consolidée de toutes les sorties de fonds (dépenses).
@@ -2677,7 +2757,8 @@ def list_decaissements(
 def annuler_paiement(
     paiement_id: int,
     data: dict,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Annule un paiement et reverse les montants sur la facture et l'échéance associée.
@@ -2690,6 +2771,19 @@ def annuler_paiement(
     # Récupérer le paiement
     paiement = db.query(Paiement).filter(Paiement.paiement_id == paiement_id).first()
     if not paiement:
+        raise HTTPException(status_code=404, detail="Paiement non trouvé")
+
+    # Vérifie que ce paiement appartient bien à l'établissement appelant —
+    # avant le Lot 2, n'importe quel paiement_id deviné pouvait être annulé
+    # (avec reversement des montants) depuis n'importe quelle école.
+    proprietaire = (
+        db.query(Classe.etablissement_id)
+        .join(Inscription, Inscription.classe_id == Classe.classe_id)
+        .join(Facture, Facture.inscription_id == Inscription.inscription_id)
+        .filter(Facture.facture_id == paiement.facture_id)
+        .scalar()
+    )
+    if proprietaire != etablissement_id:
         raise HTTPException(status_code=404, detail="Paiement non trouvé")
 
     if paiement.statut == "ANNULE":
@@ -2747,6 +2841,7 @@ def annuler_paiement(
             {"compte": compte_tresorerie, "debit": 0, "credit": montant_paiement,
              "classe_id": insc.classe_id if insc else None},
         ],
+        etablissement_id=etablissement_id,
     )
 
     db.commit()
@@ -2768,11 +2863,11 @@ def annuler_paiement(
 @router.get("/acomptes")
 def list_acomptes(
     response: Response,
-    etablissement_id: int = 1,
     annee_id: int = 1,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Liste les paiements qui constituent des acomptes (avances).
@@ -2838,7 +2933,7 @@ def list_acomptes(
 # ============================================================================
 
 @router.get("/factures/{facture_id}/pdf")
-def generer_facture_pdf(facture_id: int, db: Session = Depends(get_db)):
+def generer_facture_pdf(facture_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Génère une facture au format PDF et la retourne en téléchargement."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
@@ -2854,7 +2949,7 @@ def generer_facture_pdf(facture_id: int, db: Session = Depends(get_db)):
         .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
         .outerjoin(TypeFrais, Facture.type_frais_id == TypeFrais.type_frais_id)
-        .filter(Facture.facture_id == facture_id)
+        .filter(Facture.facture_id == facture_id, Classe.etablissement_id == etablissement_id)
         .first()
     )
 
@@ -3004,10 +3099,10 @@ def generer_facture_pdf(facture_id: int, db: Session = Depends(get_db)):
 
 @router.get("/salaires/employes")
 def list_employes_salaires(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     mois: Optional[str] = None,   # format: "2026-06"
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Liste tous les enseignants et le personnel administratif actifs avec leur historique de paiements.
@@ -3154,14 +3249,13 @@ def list_employes_salaires(
 
 
 @router.post("/salaires/payer", status_code=201)
-def payer_salaire_employe(data: dict, db: Session = Depends(get_db)):
+def payer_salaire_employe(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Enregistre le paiement de salaire d'un employé (Enseignant ou Personnel).
     """
     employe_id_str = data.get("enseignant_id")
     mois = data.get("mois", "")
     mode_paiement = data.get("mode_paiement", "Cash")
-    etablissement_id = data.get("etablissement_id", 1)
     annee_id = data.get("annee_id", 1)
 
     if not employe_id_str or not mois:
@@ -3193,8 +3287,15 @@ def _bornes_mois(mois_concerne: str):
     return date_type(annee, mois, 1), date_type(annee, mois, dernier_jour)
 
 
-def _identifier_employe(employe_id_str: str, db: Session) -> dict:
-    """Retrouve l'enseignant/personnel réel derrière une référence 'ENS_x'/'PERS_x'."""
+def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int) -> dict:
+    """Retrouve l'enseignant/personnel réel derrière une référence 'ENS_x'/'PERS_x'.
+
+    Vérifie que cet employé appartient bien à l'établissement appelant — avant
+    le Lot 2 du chantier multi-écoles, cette fonction ne filtrait par aucun
+    établissement : n'importe quel compte FINANCE_ROLES pouvait consulter ou
+    payer le salaire d'un enseignant/personnel d'une AUTRE école en devinant
+    son ID ('ENS_42', 'PERS_17'...). Utilisée par toutes les routes de paie
+    individuelle (salaires, primes, avances, absences)."""
     if not employe_id_str or "_" not in employe_id_str:
         raise HTTPException(status_code=400, detail="Identifiant employé invalide")
     prefix, emp_id_raw = employe_id_str.split("_", 1)
@@ -3204,7 +3305,9 @@ def _identifier_employe(employe_id_str: str, db: Session) -> dict:
         raise HTTPException(status_code=400, detail="Identifiant employé invalide")
 
     if prefix == "ENS":
-        ens = db.query(Enseignant).filter(Enseignant.enseignant_id == emp_id).first()
+        ens = db.query(Enseignant).filter(
+            Enseignant.enseignant_id == emp_id, Enseignant.etablissement_id == etablissement_id
+        ).first()
         if not ens:
             raise HTTPException(status_code=404, detail="Enseignant introuvable")
         return {
@@ -3215,7 +3318,9 @@ def _identifier_employe(employe_id_str: str, db: Session) -> dict:
             "type_agent": "ENSEIGNANT", "agent_id": emp_id,
         }
     elif prefix == "PERS":
-        pers = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == emp_id).first()
+        pers = db.query(Utilisateur).filter(
+            Utilisateur.utilisateur_id == emp_id, Utilisateur.etablissement_id == etablissement_id
+        ).first()
         if not pers:
             raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
         return {
@@ -3228,18 +3333,21 @@ def _identifier_employe(employe_id_str: str, db: Session) -> dict:
     raise HTTPException(status_code=400, detail="Type d'employé inconnu")
 
 
-def _get_or_sync_employe_paie(db: Session, employe_id_str: str, infos: dict) -> Employe:
+def _get_or_sync_employe_paie(db: Session, employe_id_str: str, infos: dict, etablissement_id: int) -> Employe:
     """
     Retrouve (ou crée) la ligne SS_EMPLOYES miroir correspondant à un
     enseignant/personnel réel, indispensable pour y rattacher primes/avances/
     absences (clé étrangère SS_EMPLOYES obligatoire côté base). Les infos
     (nom/prénom/poste/salaire) sont resynchronisées à chaque appel pour ne
     jamais désynchroniser ce miroir de la vraie fiche RH (Enseignant/Utilisateur).
+
+    `etablissement_id` provient de l'appelant (déjà vérifié par
+    _identifier_employe), jamais d'une valeur par défaut codée en dur.
     """
     employe = db.query(Employe).filter(Employe.source_ref == employe_id_str).first()
     if not employe:
         employe = Employe(
-            etablissement_id=1,
+            etablissement_id=etablissement_id,
             nom=infos["nom"], prenom=infos["prenom"], poste=infos["poste"],
             salaire_base=infos["salaire_base"], type_contrat=infos["type_contrat"],
             mobile_money=infos["mobile_money"], statut="ACTIF",
@@ -3255,12 +3363,12 @@ def _get_or_sync_employe_paie(db: Session, employe_id_str: str, infos: dict) -> 
     return employe
 
 
-def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str) -> dict:
+def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etablissement_id: int) -> dict:
     """Calcule le net à payer réel d'un employé pour un mois donné, à partir
     des vraies données (salaire de base, primes fixes + ponctuelles, absences
     non justifiées pointées, avances en attente)."""
-    infos = _identifier_employe(employe_id_str, db)
-    employe = _get_or_sync_employe_paie(db, employe_id_str, infos)
+    infos = _identifier_employe(employe_id_str, db, etablissement_id)
+    employe = _get_or_sync_employe_paie(db, employe_id_str, infos, etablissement_id)
     debut_mois, fin_mois = _bornes_mois(mois_concerne)
 
     bulletin_existant = (
@@ -3362,9 +3470,13 @@ def _lister_employes_actifs(db: Session, etablissement_id: int):
     return refs
 
 
-def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: str, mode_paiement: str, etablissement_id: int = 1, annee_id: int = 1) -> dict:
-    """Exécute réellement le paiement calculé (Dépense + Bulletin + écriture comptable + avances soldées)."""
-    calc = _calculer_salaire(db, employe_id_str, mois_concerne)
+def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: str, mode_paiement: str, etablissement_id: int, annee_id: int) -> dict:
+    """Exécute réellement le paiement calculé (Dépense + Bulletin + écriture comptable + avances soldées).
+
+    `etablissement_id` provient toujours de l'établissement authentifié de
+    l'appelant (Depends(require_etablissement)), jamais d'une valeur par
+    défaut ni d'un champ fourni par le client."""
+    calc = _calculer_salaire(db, employe_id_str, mois_concerne, etablissement_id)
     if calc["statut"] == "PAYE":
         raise HTTPException(status_code=400, detail=f"{calc['nom_complet']} est déjà payé(e) pour {mois_concerne}")
     if calc["net_a_payer"] <= 0:
@@ -3387,6 +3499,7 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
             {"compte": compte_charge, "debit": float(dep.montant), "credit": 0, "description": libelle},
             {"compte": COMPTE_BANQUE, "debit": 0, "credit": float(dep.montant), "description": libelle},
         ],
+        etablissement_id=dep.etablissement_id,
     )
 
     bulletin = BulletinPaie(
@@ -3417,22 +3530,22 @@ from app.models.academique import ParametreEtablissement
 
 @router.get("/salaires/calculer")
 def calculer_salaires_endpoint(
-    etablissement_id: int = 1,
     mois_concerne: str = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Calcule les salaires pour le mois concerné.
     """
     if not mois_concerne:
         mois_concerne = date_type.today().strftime("%Y-%m")
-        
+
     refs = _lister_employes_actifs(db, etablissement_id)
     result = []
-    
+
     for ref in refs:
         try:
-            calc = _calculer_salaire(db, ref, mois_concerne)
+            calc = _calculer_salaire(db, ref, mois_concerne, etablissement_id)
             result.append({
                 "employe_id": ref,
                 "nom": calc["nom"],
@@ -3453,7 +3566,7 @@ def calculer_salaires_endpoint(
     return result
 
 @router.get("/salaires/date-paie")
-def get_date_paie_endpoint(etablissement_id: int = 1, mois_concerne: str = None, db: Session = Depends(get_db)):
+def get_date_paie_endpoint(mois_concerne: str = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     if not mois_concerne:
         return {"date_paie": None, "mois": mois_concerne}
     cle = f"finance.date_paie_{mois_concerne}"
@@ -3467,8 +3580,7 @@ def get_date_paie_endpoint(etablissement_id: int = 1, mois_concerne: str = None,
     return {"date_paie": f"{mois_concerne}-25", "mois": mois_concerne}
 
 @router.put("/salaires/date-paie")
-def put_date_paie_endpoint(data: dict, db: Session = Depends(get_db)):
-    etablissement_id = data.get("etablissement_id", 1)
+def put_date_paie_endpoint(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     mois = data.get("mois")
     date_paie = data.get("date_paie")
     if not mois or not date_paie:
@@ -3496,20 +3608,20 @@ def put_date_paie_endpoint(data: dict, db: Session = Depends(get_db)):
 
 @router.post("/salaires/payer-group")
 def payer_group_endpoint(
-    etablissement_id: int = 1,
     mois_concerne: str = None,
     mode_paiement: str = "Cash",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     if not mois_concerne:
         mois_concerne = date_type.today().strftime("%Y-%m")
-        
+
     refs = _lister_employes_actifs(db, etablissement_id)
     count = 0
-    
+
     for ref in refs:
         try:
-            calc = _calculer_salaire(db, ref, mois_concerne)
+            calc = _calculer_salaire(db, ref, mois_concerne, etablissement_id)
             if calc["statut"] != "PAYE" and calc["net_a_payer"] > 0:
                 _executer_paiement_salaire(
                     db=db,
@@ -3579,9 +3691,9 @@ def _mois_periode_paie(db: Session, etablissement_id: int, nb_mois_fallback: int
 @router.get("/salaires/arrieres/{employe_id_str}")
 def arrieres_salaire_endpoint(
     employe_id_str: str,
-    etablissement_id: int = 1,
     nb_mois: int = 12,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Liste, pour un employé, tous les mois de la période de paie configurée (Paramètres
@@ -3594,7 +3706,7 @@ def arrieres_salaire_endpoint(
     total_du = 0.0
     for mois in _mois_periode_paie(db, etablissement_id, nb_mois):
         try:
-            calc = _calculer_salaire(db, employe_id_str, mois)
+            calc = _calculer_salaire(db, employe_id_str, mois, etablissement_id)
         except HTTPException:
             continue
         if calc["statut"] != "PAYE" and calc["net_a_payer"] > 0:
@@ -3611,7 +3723,7 @@ def arrieres_salaire_endpoint(
 
 
 @router.post("/salaires/payer-plusieurs-mois")
-def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db)):
+def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Règle en une seule action une sélection de mois en retard pour un même employé
     (paiement manuel mois par mois, ou totalité des arriérés cochés en un clic) —
@@ -3621,7 +3733,6 @@ def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db)):
     employe_id_str = data.get("enseignant_id") or data.get("employe_id")
     mois_list = data.get("mois_list") or []
     mode_paiement = data.get("mode_paiement", "Cash")
-    etablissement_id = data.get("etablissement_id", 1)
     annee_id = data.get("annee_id", 1)
 
     if not employe_id_str or not mois_list:
@@ -3649,17 +3760,17 @@ def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/primes")
-def primes_endpoint(data: dict, db: Session = Depends(get_db)):
+def primes_endpoint(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     employe_id_str = data.get("employe_id")
     montant = data.get("montant")
     motif = data.get("motif") or "Prime exceptionnelle"
     mois = data.get("mois_concerne")
     if not employe_id_str or not montant or not mois:
         raise HTTPException(status_code=400, detail="Données incomplètes (employe_id, montant, mois_concerne)")
-        
-    infos = _identifier_employe(employe_id_str, db)
-    employe = _get_or_sync_employe_paie(db, employe_id_str, infos)
-    
+
+    infos = _identifier_employe(employe_id_str, db, etablissement_id)
+    employe = _get_or_sync_employe_paie(db, employe_id_str, infos, etablissement_id)
+
     prime = Prime(
         employe_id=employe.employe_id,
         montant=float(montant),
@@ -3675,17 +3786,16 @@ def primes_endpoint(data: dict, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Prime ajoutée avec succès"}
 @router.post("/avances")
-def avances_endpoint(data: dict, db: Session = Depends(get_db)):
+def avances_endpoint(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     employe_id_str = data.get("employe_id")
     montant = data.get("montant")
     motif = data.get("motif") or "Avance sur salaire"
     mois = data.get("mois_concerne") or date_type.today().strftime("%Y-%m")
-    etablissement_id = data.get("etablissement_id", 1)
     if not employe_id_str or not montant:
         raise HTTPException(status_code=400, detail="Données incomplètes")
-        
-    infos = _identifier_employe(employe_id_str, db)
-    employe = _get_or_sync_employe_paie(db, employe_id_str, infos)
+
+    infos = _identifier_employe(employe_id_str, db, etablissement_id)
+    employe = _get_or_sync_employe_paie(db, employe_id_str, infos, etablissement_id)
     
     avance = Avance(
         employe_id=employe.employe_id,
@@ -3717,22 +3827,23 @@ def avances_endpoint(data: dict, db: Session = Depends(get_db)):
             {"compte": compte_charge, "debit": float(dep.montant), "credit": 0, "description": dep.libelle},
             {"compte": COMPTE_BANQUE, "debit": 0, "credit": float(dep.montant), "description": dep.libelle},
         ],
+        etablissement_id=dep.etablissement_id,
     )
     
     db.commit()
     return {"message": "Avance enregistrée avec succès"}
 @router.post("/absences")
-def absences_endpoint(data: dict, db: Session = Depends(get_db)):
+def absences_endpoint(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     employe_id_str = data.get("employe_id")
     date_absence = data.get("date_absence")
     motif = data.get("motif")
     est_justifie = "Y" if data.get("est_justifie") else "N"
-    
+
     if not employe_id_str or not date_absence:
         raise HTTPException(status_code=400, detail="Données incomplètes")
-        
-    infos = _identifier_employe(employe_id_str, db)
-    employe = _get_or_sync_employe_paie(db, employe_id_str, infos)
+
+    infos = _identifier_employe(employe_id_str, db, etablissement_id)
+    employe = _get_or_sync_employe_paie(db, employe_id_str, infos, etablissement_id)
     
     absence = AbsencePersonnel(
         employe_id=employe.employe_id,
@@ -3744,11 +3855,12 @@ def absences_endpoint(data: dict, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Absence enregistrée avec succès"}
 @router.get("/salaires/historique/{employe_id}")
-def historique_salaire_endpoint(employe_id: str, db: Session = Depends(get_db)):
+def historique_salaire_endpoint(employe_id: str, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     historique = db.query(Depense).filter(
         Depense.fournisseur == employe_id,
         Depense.categorie == "SALAIRES",
-        Depense.statut == "VALIDE"
+        Depense.statut == "VALIDE",
+        Depense.etablissement_id == etablissement_id,
     ).order_by(Depense.date_depense.desc()).all()
     
     return [
@@ -3763,16 +3875,18 @@ def historique_salaire_endpoint(employe_id: str, db: Session = Depends(get_db)):
     ]
 
 @router.get("/salaires/bulletin-detail/{depense_id}")
-def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db)):
-    dep = db.query(Depense).filter(Depense.depense_id == depense_id).first()
+def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    dep = db.query(Depense).filter(
+        Depense.depense_id == depense_id, Depense.etablissement_id == etablissement_id
+    ).first()
     if not dep:
         raise HTTPException(status_code=404, detail="Paiement introuvable")
-        
+
     bulletin = None
     if dep.reference and dep.reference.isdigit():
         bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == int(dep.reference)).first()
-        
-    infos = _identifier_employe(dep.fournisseur, db)
+
+    infos = _identifier_employe(dep.fournisseur, db, etablissement_id)
     
     if bulletin:
         employe_id = bulletin.employe_id
@@ -3832,10 +3946,10 @@ def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db)):
 
 @router.get("/salaires/absences-source")
 def absences_source_endpoint(
-    etablissement_id: int = 1,
     mois_concerne: str = None,
     employe_id: str = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Détaille, pour le mois donné, chaque absence retenue sur salaire (pointage
@@ -3854,10 +3968,10 @@ def absences_source_endpoint(
     total_retenue = 0.0
     for ref in refs:
         try:
-            infos = _identifier_employe(ref, db)
+            infos = _identifier_employe(ref, db, etablissement_id)
         except HTTPException:
             continue
-        employe = _get_or_sync_employe_paie(db, ref, infos)
+        employe = _get_or_sync_employe_paie(db, ref, infos, etablissement_id)
         taux_journalier = infos["salaire_base"] / JOURS_OUVRABLES_MOIS if infos["salaire_base"] else 0
 
         pointages = db.query(PresenceAgent).filter(
@@ -3899,10 +4013,16 @@ def absences_source_endpoint(
     return {"absences": absences, "total_retenue_estimee": round(total_retenue, 2)}
 
 @router.get("/salaires/alertes/historique")
-def alertes_historique_endpoint(etablissement_id: int = 1, mois_concerne: str = None, db: Session = Depends(get_db)):
+def alertes_historique_endpoint(mois_concerne: str = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Historique réel des envois d'alertes de paie (persistés via Message, même
-    mécanisme que les rappels d'impayés — voir notifier_impayes)."""
-    query = db.query(Message).filter(Message.objet_type == "PAIEMENT", Message.sujet.like("Alerte paie%"))
+    mécanisme que les rappels d'impayés — voir notifier_impayes).
+
+    Gap comblé au Lot 5 (Communication) : Message porte désormais
+    etablissement_id (voir migrations/lot5_communication_etablissement.py)."""
+    query = db.query(Message).filter(
+        Message.objet_type == "PAIEMENT", Message.sujet.like("Alerte paie%"),
+        Message.etablissement_id == etablissement_id,
+    )
     if mois_concerne:
         query = query.filter(Message.sujet == f"Alerte paie {mois_concerne}")
     rows = query.order_by(Message.date_envoi.desc()).limit(50).all()
@@ -3919,10 +4039,9 @@ def alertes_historique_endpoint(etablissement_id: int = 1, mois_concerne: str = 
     ]
 
 @router.post("/salaires/alertes")
-def alertes_endpoint(data: dict, db: Session = Depends(get_db)):
+def alertes_endpoint(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Envoie une alerte de paie (rappel interne) et persiste la trace de l'envoi,
     avec la liste des employés encore non payés pour le mois concerné."""
-    etablissement_id = data.get("etablissement_id", 1)
     mois_concerne = data.get("mois_concerne")
     type_alerte = data.get("type", "J7")
     if not mois_concerne:
@@ -3932,13 +4051,14 @@ def alertes_endpoint(data: dict, db: Session = Depends(get_db)):
     non_payes = []
     for ref in refs:
         try:
-            calc = _calculer_salaire(db, ref, mois_concerne)
+            calc = _calculer_salaire(db, ref, mois_concerne, etablissement_id)
         except HTTPException:
             continue
         if calc["statut"] != "PAYE":
             non_payes.append(calc["nom_complet"])
 
     message = Message(
+        etablissement_id=etablissement_id,
         expediteur_type="ADMIN",
         destinataire_type="TOUS_ENSEIGNANTS",
         objet_type="PAIEMENT",
@@ -3953,11 +4073,12 @@ def alertes_endpoint(data: dict, db: Session = Depends(get_db)):
 
 
 @router.delete("/salaires/{depense_id}")
-def annuler_salaire(depense_id: int, db: Session = Depends(get_db)):
+def annuler_salaire(depense_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Annule un paiement de salaire (et le bulletin de paie associé, pour permettre un nouveau paiement)."""
     dep = db.query(Depense).filter(
         Depense.depense_id == depense_id,
-        Depense.categorie == "SALAIRES"
+        Depense.categorie == "SALAIRES",
+        Depense.etablissement_id == etablissement_id,
     ).first()
     if not dep:
         raise HTTPException(status_code=404, detail="Paiement introuvable")

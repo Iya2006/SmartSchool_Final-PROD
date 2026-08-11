@@ -20,12 +20,37 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import Inscription, Eleve, Classe, Facture, EcheanceFacture, TypeFrais, TarifClasse
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
 
 router = APIRouter(prefix="/api/reinscription", tags=["Réinscription V2"])
 
 STATUTS_TERMINAUX = ("NON_REINSCRIT", "TRANSFERE", "ABANDON")
+
+
+# ── Helpers d'isolation (Lot 9) ───────────────────────────────────────────
+
+def _classe_ou_404(db: Session, classe_id: int, etablissement_id: int) -> Classe:
+    c = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not c:
+        raise HTTPException(404, "Classe non trouvée")
+    return c
+
+
+def _inscription_ou_404(db: Session, inscription_id: int, etablissement_id: int) -> Inscription:
+    """Inscription est OWNERSHIP via sa Classe."""
+    insc = (
+        db.query(Inscription)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Inscription.inscription_id == inscription_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not insc:
+        raise HTTPException(404, "Inscription non trouvée")
+    return insc
 
 
 def _generer_frais_reinscription(db: Session, inscription: Inscription, classe: Classe) -> int:
@@ -99,7 +124,7 @@ def _generer_frais_reinscription(db: Session, inscription: Inscription, classe: 
 
 
 @router.get("/classe-cible/{classe_id}")
-def liste_campagne_classe(classe_id: int, db: Session = Depends(get_db)):
+def liste_campagne_classe(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Élèves en campagne de réinscription vers cette classe (classe_cible_id,
     proposé/validé par la promotion). Une fois REINSCRIT, affiche le statut de
@@ -107,9 +132,7 @@ def liste_campagne_classe(classe_id: int, db: Session = Depends(get_db)):
     réinscription elle-même n'est jamais bloquée par le paiement (changement
     assumé par rapport à l'ancien système, voir confirmer_reinscription).
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     rows = db.query(Inscription, Eleve).join(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
@@ -157,7 +180,7 @@ def liste_campagne_classe(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/en-attente-filiere/{annee_source_id}")
-def liste_en_attente_filiere(annee_source_id: int, db: Session = Depends(get_db)):
+def liste_en_attente_filiere(annee_source_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Élèves de 10e année admis (décision EN_ATTENTE_FILIERE) dont la promotion
     est déjà validée mais qui n'ont pas encore de classe cible — ils sont donc
@@ -175,6 +198,7 @@ def liste_en_attente_filiere(annee_source_id: int, db: Session = Depends(get_db)
         Inscription.decision_fin_annee == "EN_ATTENTE_FILIERE",
         Inscription.classe_cible_id.is_(None),
         Inscription.statut_reinscription.isnot(None),
+        Classe.etablissement_id == etablissement_id,
     ).order_by(Eleve.nom, Eleve.prenom).all()
 
     return [
@@ -193,13 +217,15 @@ def liste_en_attente_filiere(annee_source_id: int, db: Session = Depends(get_db)
 
 
 @router.get("/etat/{annee_cible_id}")
-def etat_reinscription_annee(annee_cible_id: int, db: Session = Depends(get_db)):
+def etat_reinscription_annee(annee_cible_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Comptage des réinscriptions par statut pour une année cible, toutes
-    classes confondues — vue d'ensemble pour l'assistant de clôture (Phase 4),
-    sans avoir à interroger classe par classe.
+    classes DE CET ÉTABLISSEMENT confondues — vue d'ensemble pour l'assistant
+    de clôture (Phase 4), sans avoir à interroger classe par classe.
     """
-    classes_cible_ids = [c.classe_id for c in db.query(Classe).filter(Classe.annee_id == annee_cible_id).all()]
+    classes_cible_ids = [c.classe_id for c in db.query(Classe).filter(
+        Classe.annee_id == annee_cible_id, Classe.etablissement_id == etablissement_id
+    ).all()]
     if not classes_cible_ids:
         return {"total": 0, "par_statut": {}}
 
@@ -216,16 +242,14 @@ def etat_reinscription_annee(annee_cible_id: int, db: Session = Depends(get_db))
 
 
 @router.post("/{inscription_id}/confirmer")
-def confirmer_reinscription(inscription_id: int, db: Session = Depends(get_db)):
+def confirmer_reinscription(inscription_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Matérialise la réinscription : crée la nouvelle Inscription (année/classe
     cible), réactive l'élève, incrémente l'effectif, génère les frais
     obligatoires de la nouvelle année. Tout en une seule transaction. Aucune
     dette/facture de l'année précédente n'est recopiée.
     """
-    insc = db.query(Inscription).filter(Inscription.inscription_id == inscription_id).first()
-    if not insc:
-        raise HTTPException(404, "Inscription non trouvée")
+    insc = _inscription_ou_404(db, inscription_id, etablissement_id)
     if insc.statut_promotion != "VALIDE":
         raise HTTPException(400, "La promotion de cet élève n'a pas encore été validée")
     if insc.statut_reinscription == "REINSCRIT":
@@ -235,7 +259,9 @@ def confirmer_reinscription(inscription_id: int, db: Session = Depends(get_db)):
     if not insc.classe_cible_id:
         raise HTTPException(400, "Aucune classe cible résolue pour cet élève")
 
-    classe_cible = db.query(Classe).filter(Classe.classe_id == insc.classe_cible_id).first()
+    classe_cible = db.query(Classe).filter(
+        Classe.classe_id == insc.classe_cible_id, Classe.etablissement_id == etablissement_id
+    ).first()
     if not classe_cible:
         raise HTTPException(404, "Classe cible introuvable")
 
@@ -274,13 +300,11 @@ class StatutReinscriptionRequest(BaseModel):
 
 
 @router.put("/{inscription_id}/statut")
-def changer_statut_reinscription(inscription_id: int, data: StatutReinscriptionRequest, db: Session = Depends(get_db)):
+def changer_statut_reinscription(inscription_id: int, data: StatutReinscriptionRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Statuts terminaux (pas de réinscription) — simple traçabilité, aucun effet de bord sur Inscription/Facture."""
     if data.statut not in STATUTS_TERMINAUX:
         raise HTTPException(400, f"Statut invalide — attendu l'un de : {', '.join(STATUTS_TERMINAUX)}")
-    insc = db.query(Inscription).filter(Inscription.inscription_id == inscription_id).first()
-    if not insc:
-        raise HTTPException(404, "Inscription non trouvée")
+    insc = _inscription_ou_404(db, inscription_id, etablissement_id)
     if insc.statut_reinscription == "REINSCRIT":
         raise HTTPException(400, "Cet élève est déjà réinscrit — non modifiable")
     insc.statut_reinscription = data.statut

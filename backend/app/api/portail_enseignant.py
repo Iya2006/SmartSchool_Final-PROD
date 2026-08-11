@@ -565,7 +565,7 @@ def _categorie_evaluation(type_eval_code):
     return "ecrite"
 
 
-def _coefficient_pour_evaluation(db: Session, type_eval_id: int, matiere_id: int, classe_id: int, etablissement_id: int = 1) -> float:
+def _coefficient_pour_evaluation(db: Session, type_eval_id: int, matiere_id: int, classe_id: int, etablissement_id: int) -> float:
     """Système guinéen à 3 notes, pondérations Écrit/Oral/Composition
     configurables par l'administrateur (Paramètres > Notation, défaut 1/1/2 —
     la composition compte double). Le coefficient de la matière n'intervient
@@ -622,7 +622,9 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
     if not aff:
         raise HTTPException(403, "Vous n'êtes pas affecté à cette classe/matière")
     classe = db.query(Classe).filter(Classe.classe_id == data.classe_id).first()
-    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+    if not classe:
+        raise HTTPException(404, "Classe introuvable")
+    verifier_annee_modifiable(db, classe.annee_id)
 
     if data.trimestre_id:
         trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == data.trimestre_id).first()
@@ -632,7 +634,12 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
     from datetime import date
 
     type_eval_id = data.type_evaluation_id or 1
-    coefficient = _coefficient_pour_evaluation(db, type_eval_id, data.matiere_id, data.classe_id)
+    # Pondérations de l'établissement de la classe : le paramètre valait 1 par
+    # défaut et n'était pas passé, donc tous les enseignants héritaient des
+    # pondérations Écrit/Oral/Composition de l'école 1.
+    coefficient = _coefficient_pour_evaluation(
+        db, type_eval_id, data.matiere_id, data.classe_id, classe.etablissement_id
+    )
 
     # 1. Créer l'évaluation
     evaluation = Evaluation(
@@ -973,6 +980,7 @@ def signaler_enfant_enseignant(
     )
 
     msg = Message(
+        etablissement_id=ens.etablissement_id,
         expediteur_type="ENSEIGNANT",
         expediteur_id=enseignant_id,
         destinataire_type="ADMIN",

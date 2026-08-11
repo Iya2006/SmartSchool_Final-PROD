@@ -43,6 +43,25 @@ async def _parent_auth(
     )
 
 
+def _etablissement_du_parent(db: Session, parent_id: int) -> Optional[int]:
+    """Établissement unique du parent (Cas A), dérivé de ses enfants réels —
+    None si le parent n'a aucun enfant rattaché ou des enfants dans
+    plusieurs écoles (Cas B), jamais choisi arbitrairement. Même logique que
+    _derive_parent_etablissement (app/api/auth.py), dupliquée ici pour
+    éviter d'importer une fonction privée d'un autre module."""
+    lignes = (
+        db.query(Eleve.etablissement_id)
+        .join(EleveParent, EleveParent.eleve_id == Eleve.eleve_id)
+        .filter(EleveParent.parent_id == parent_id)
+        .distinct()
+        .all()
+    )
+    etablissements = {etab_id for (etab_id,) in lignes if etab_id is not None}
+    if len(etablissements) == 1:
+        return etablissements.pop()
+    return None
+
+
 # ── Schéma login ──
 class LoginParentRequest(BaseModel):
     telephone: str
@@ -426,7 +445,11 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
     # Info classe
     cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
     from app.api.evaluations import get_bulletin_display_flags
-    flags = get_bulletin_display_flags(db, cl.etablissement_id if cl else 1)
+    if not cl:
+        # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
+        # appliquait les réglages d'affichage d'une autre école au bulletin.
+        raise HTTPException(404, "Classe introuvable pour cette inscription")
+    flags = get_bulletin_display_flags(db, cl.etablissement_id)
 
     matieres = []
     total_coef = 0
@@ -630,7 +653,19 @@ def envoyer_message_parent(parent_id: int, data: ParentMessageSend, _auth: dict 
     if not parent:
         raise HTTPException(404, "Parent non trouvé")
 
+    etablissement_id = _etablissement_du_parent(db, parent_id)
+    if not etablissement_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Impossible de déterminer l'établissement destinataire (aucun enfant "
+                "rattaché à ce compte, ou enfants inscrits dans plusieurs écoles). "
+                "Contactez chaque école séparément."
+            ),
+        )
+
     msg = Message(
+        etablissement_id=etablissement_id,
         expediteur_type="PARENT",
         expediteur_id=parent_id,
         destinataire_type="ADMIN",

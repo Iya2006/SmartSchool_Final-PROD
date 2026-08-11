@@ -13,6 +13,19 @@ export interface UserInfo {
     email: string;
     telephone: string;
     role: string;
+    /**
+     * Établissement du compte, dérivé côté serveur au moment du login — jamais
+     * fourni ni modifiable par le client. Sert uniquement à afficher la bonne
+     * identité d'école ; l'isolation réelle des données reste imposée par le
+     * JWT côté backend.
+     *
+     * `null`      : SUPER_ADMIN plateforme, ou parent dont les enfants sont
+     *               répartis dans zéro ou plusieurs écoles (aucun établissement
+     *               unique déterminable — on n'en choisit jamais un au hasard).
+     * `undefined` : session ouverte avant l'ajout de ce champ ; l'utilisateur
+     *               doit se reconnecter pour que son école soit connue.
+     */
+    etablissement_id?: number | null;
 }
 
 export interface AuthContextType {

@@ -10,15 +10,60 @@ from datetime import datetime
 import os, uuid, shutil
 
 from app.core.database import get_db
+from app.core.auth import get_current_user, require_etablissement, ADMIN_TIER_ROLES
 from app.models.academique import (
     Devoir, Enseignant, Classe, Matiere, Affectation,
-    EleveParent, Inscription
+    EleveParent, Inscription, Cycle, Eleve
 )
 
 router = APIRouter(prefix="/api/devoirs", tags=["Devoirs"])
 
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "devoirs")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# ── Helpers d'isolation / ownership (Lot 9) ───────────────────────────────
+# Devoir est OWNERSHIP via son Enseignant (colonne non-nullable).
+
+def _est_admin_tier(current_user: dict) -> bool:
+    return current_user.get("role") in ADMIN_TIER_ROLES
+
+
+def _enseignant_ou_404(db: Session, enseignant_id: int, etablissement_id: int) -> Enseignant:
+    ens = db.query(Enseignant).filter(
+        Enseignant.enseignant_id == enseignant_id,
+        Enseignant.etablissement_id == etablissement_id,
+    ).first()
+    if not ens:
+        raise HTTPException(404, "Enseignant non trouvé")
+    return ens
+
+
+def _verifier_identite_enseignant(current_user: dict, enseignant_id: int) -> None:
+    """Un compte enseignant ne peut agir que sous sa propre identité ; un
+    admin de l'établissement peut agir pour n'importe lequel de ses
+    enseignants."""
+    if _est_admin_tier(current_user):
+        return
+    if current_user.get("type") == "enseignant" and str(current_user.get("sub", "")) == str(enseignant_id):
+        return
+    raise HTTPException(403, "Accès refusé : vous ne pouvez agir que sous votre propre identité")
+
+
+def _verifier_identite_parent(current_user: dict, parent_id: int) -> None:
+    if _est_admin_tier(current_user):
+        return
+    if current_user.get("type") == "parent" and str(current_user.get("sub", "")) == str(parent_id):
+        return
+    raise HTTPException(403, "Accès refusé : vous ne pouvez consulter que vos propres données")
+
+
+def _verifier_identite_eleve(current_user: dict, eleve_id: int) -> None:
+    if _est_admin_tier(current_user):
+        return
+    if current_user.get("type") == "eleve" and str(current_user.get("sub", "")) == str(eleve_id):
+        return
+    raise HTTPException(403, "Accès refusé : vous ne pouvez consulter que vos propres données")
 
 
 # ============================================================================
@@ -36,11 +81,26 @@ async def creer_devoir(
     date_limite: Optional[str] = Form(None),
     fichier: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Créer un nouveau devoir (texte et/ou fichier)."""
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        raise HTTPException(404, "Enseignant non trouvé")
+    """Créer un nouveau devoir (texte et/ou fichier).
+
+    Enseignant, classe et matière sont vérifiés appartenir à l'établissement
+    appelant, et un enseignant ne peut pas publier sous l'identité d'un
+    collègue (Lot 9).
+    """
+    ens = _enseignant_ou_404(db, enseignant_id, etablissement_id)
+    _verifier_identite_enseignant(current_user, enseignant_id)
+
+    if not db.query(Classe.classe_id).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first():
+        raise HTTPException(404, "Classe non trouvée")
+    if not db.query(Matiere.matiere_id).join(
+        Cycle, Cycle.cycle_id == Matiere.cycle_id
+    ).filter(Matiere.matiere_id == matiere_id, Cycle.etablissement_id == etablissement_id).first():
+        raise HTTPException(404, "Matière non trouvée")
 
     fichier_nom = None
     fichier_path = None
@@ -86,8 +146,15 @@ async def creer_devoir(
 # ============================================================================
 
 @router.get("/enseignant/{enseignant_id}")
-def list_devoirs_enseignant(enseignant_id: int, db: Session = Depends(get_db)):
+def list_devoirs_enseignant(
+    enseignant_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Liste les devoirs créés par un enseignant."""
+    _enseignant_ou_404(db, enseignant_id, etablissement_id)
+    _verifier_identite_enseignant(current_user, enseignant_id)
     devoirs = db.query(Devoir).filter(
         Devoir.enseignant_id == enseignant_id
     ).order_by(desc(Devoir.date_creation)).all()
@@ -120,11 +187,22 @@ def list_devoirs_enseignant(enseignant_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.delete("/{devoir_id}")
-def supprimer_devoir(devoir_id: int, db: Session = Depends(get_db)):
-    """Supprimer un devoir."""
-    d = db.query(Devoir).filter(Devoir.devoir_id == devoir_id).first()
+def supprimer_devoir(
+    devoir_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Supprimer un devoir (établissement + auteur)."""
+    d = (
+        db.query(Devoir)
+        .join(Enseignant, Enseignant.enseignant_id == Devoir.enseignant_id)
+        .filter(Devoir.devoir_id == devoir_id, Enseignant.etablissement_id == etablissement_id)
+        .first()
+    )
     if not d:
         raise HTTPException(404, "Devoir non trouvé")
+    _verifier_identite_enseignant(current_user, d.enseignant_id)
     # Supprimer le fichier physique
     if d.fichier_path:
         full_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), d.fichier_path.lstrip("/"))
@@ -140,8 +218,20 @@ def supprimer_devoir(devoir_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.get("/parent/{parent_id}")
-def list_devoirs_parent(parent_id: int, db: Session = Depends(get_db)):
-    """Liste les devoirs des enfants d'un parent."""
+def list_devoirs_parent(
+    parent_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Liste les devoirs des enfants d'un parent.
+
+    Ownership vérifié (Lot 9) : avant, n'importe quel compte authentifié
+    pouvait lister les devoirs des enfants de n'importe quel parent.
+    Pas de filtre d'établissement ici : le périmètre est déjà défini par les
+    enfants réels du parent (Cas B — un parent multi-écoles voit légitimement
+    les devoirs de chacun de ses enfants).
+    """
+    _verifier_identite_parent(current_user, parent_id)
     liens = db.query(EleveParent).filter(EleveParent.parent_id == parent_id).all()
     if not liens:
         return []
@@ -156,7 +246,6 @@ def list_devoirs_parent(parent_id: int, db: Session = Depends(get_db)):
         if not insc:
             continue
 
-        from app.models.academique import Eleve
         eleve = db.query(Eleve).filter(Eleve.eleve_id == lien.eleve_id).first()
         if not eleve:
             continue
@@ -196,8 +285,16 @@ def list_devoirs_parent(parent_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.get("/eleve/{eleve_id}")
-def list_devoirs_eleve(eleve_id: int, db: Session = Depends(get_db)):
-    """Liste les devoirs publiés pour la classe active de l'élève."""
+def list_devoirs_eleve(
+    eleve_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Liste les devoirs publiés pour la classe active de l'élève.
+
+    Ownership vérifié (Lot 9) : un élève ne consulte que ses propres devoirs.
+    """
+    _verifier_identite_eleve(current_user, eleve_id)
     # Trouver la classe active
     insc = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id,
