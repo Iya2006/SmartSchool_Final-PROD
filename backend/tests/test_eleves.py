@@ -47,6 +47,9 @@ def get_auth_headers(db: Session) -> dict:
         "prenom": user.prenom,
         "role": user.role,
         "type": "admin",
+        # Requis depuis le Lot 6 sur /api/eleves — un token sans ce champ
+        # (ancien format) est désormais refusé (403), conformément au Lot 0.
+        "etablissement_id": user.etablissement_id,
     })
     return {"Authorization": f"Bearer {token}"}
 

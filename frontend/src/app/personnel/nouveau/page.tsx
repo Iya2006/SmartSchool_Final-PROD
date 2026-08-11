@@ -481,7 +481,16 @@ export default function NouveauPersonnel() {
 
                                         {form.role && (
                                             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ marginTop: '20px', padding: '18px', background: '#f8fafc', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
-                                                <p style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 800, color: '#334155' }}>Rôles secondaires et cumul de responsabilités</p>
+                                                <p style={{ margin: '0 0 4px', fontSize: '13px', fontWeight: 800, color: '#334155' }}>Rôles secondaires et cumul de responsabilités</p>
+                                                {/* Les rôles secondaires sont désormais réellement appliqués
+                                                    (`require_roles` les lit depuis le JWT). Il faut le dire clairement :
+                                                    ce ne sont pas de simples étiquettes, chacun ouvre de vrais accès. */}
+                                                <p style={{ margin: '0 0 12px', fontSize: '12px', lineHeight: 1.5, color: '#475569' }}>
+                                                    Chaque rôle secondaire <strong>ouvre réellement les accès de ce
+                                                    rôle</strong>, en plus de ceux du rôle principal. À n&apos;attribuer
+                                                    que si la personne exerce effectivement cette responsabilité — la
+                                                    prise en compte est immédiate à sa prochaine connexion.
+                                                </p>
                                                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                                     {ROLES_CONFIG.filter((r) => r.value !== form.role).map((r) => {
                                                         const isChosen = form.roles_secondaires.includes(r.value);

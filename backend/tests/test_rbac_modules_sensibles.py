@@ -65,8 +65,11 @@ class TestRbacRolesAutorises:
     @pytest.mark.parametrize("method,url", ROUTES_SENSIBLES)
     @pytest.mark.parametrize("role", ["ADMIN", "SUPER_ADMIN", "FONDATEUR", "DG", "COMPTABLE"])
     def test_role_autorise_pas_401_403(self, client: TestClient, method: str, url: str, role: str):
+        # etablissement_id requis depuis le Lot 2 (chantier multi-écoles) sur
+        # les routes tenant comme /api/finance/factures — un token sans ce
+        # champ (ancien format) est désormais refusé (403), volontairement.
         with patch("app.core.auth.decode_token", return_value={
-            "sub": "1", "role": role, "type": "admin",
+            "sub": "1", "role": role, "type": "admin", "etablissement_id": 1,
         }):
             response = client.request(
                 method, url, headers={"Authorization": "Bearer fake_admin_token"}
@@ -98,8 +101,10 @@ class TestRbacExamensElevesParentsRefuses:
     @pytest.mark.parametrize("method,url", ROUTES_EXAMENS)
     @pytest.mark.parametrize("role", ["ADMIN", "ENSEIGNANT"])
     def test_examens_admin_enseignant_pas_401_403(self, client: TestClient, method: str, url: str, role: str):
+        # etablissement_id requis depuis le Lot 4 sur /api/examens/sujets —
+        # un token sans ce champ (ancien format) est désormais refusé (403).
         with patch("app.core.auth.decode_token", return_value={
-            "sub": "1", "role": role, "type": "admin" if role == "ADMIN" else "enseignant",
+            "sub": "1", "role": role, "type": "admin" if role == "ADMIN" else "enseignant", "etablissement_id": 1,
         }):
             response = client.request(
                 method, url, headers={"Authorization": "Bearer fake_token"}

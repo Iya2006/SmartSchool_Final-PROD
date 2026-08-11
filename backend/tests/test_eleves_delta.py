@@ -47,6 +47,8 @@ def get_auth_headers(db: Session) -> dict:
     token = create_access_token({
         "sub": str(user.utilisateur_id), "nom": user.nom, "prenom": user.prenom,
         "role": user.role, "type": "admin",
+        # Requis depuis le Lot 6 sur /api/eleves (voir Lot 0).
+        "etablissement_id": user.etablissement_id,
     })
     return {"Authorization": f"Bearer {token}"}
 

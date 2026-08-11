@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import Evenement
 from pydantic import BaseModel
 from typing import Optional
@@ -16,7 +17,6 @@ router = APIRouter(prefix="/api/evenements", tags=["Événements"])
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
 class EvenementCreate(BaseModel):
-    etablissement_id: int = 1
     titre: str
     description: Optional[str] = None
     type_evenement: str = "AUTRE"
@@ -66,12 +66,22 @@ def _evt_to_dict(e: Evenement) -> dict:
 
 
 # ── GET tous les événements ───────────────────────────────────────────────────
+def _evenement_ou_404(db: Session, evenement_id: int, etablissement_id: int) -> Evenement:
+    """Evenement a une colonne etablissement_id directe (Lot 9)."""
+    e = db.query(Evenement).filter(
+        Evenement.evenement_id == evenement_id, Evenement.etablissement_id == etablissement_id
+    ).first()
+    if not e:
+        raise HTTPException(404, "Événement introuvable")
+    return e
+
+
 @router.get("")
 def list_evenements(
-    etablissement_id: int = 1,
     a_venir: bool = False,
     type_evenement: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     q = db.query(Evenement).filter(Evenement.etablissement_id == etablissement_id)
     if a_venir:
@@ -84,17 +94,16 @@ def list_evenements(
 
 # ── GET un événement ──────────────────────────────────────────────────────────
 @router.get("/{evenement_id}")
-def get_evenement(evenement_id: int, db: Session = Depends(get_db)):
-    e = db.query(Evenement).filter(Evenement.evenement_id == evenement_id).first()
-    if not e:
-        raise HTTPException(404, "Événement introuvable")
-    return _evt_to_dict(e)
+def get_evenement(evenement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    return _evt_to_dict(_evenement_ou_404(db, evenement_id, etablissement_id))
 
 
 # ── POST créer un événement ──────────────────────────────────────────────────
 @router.post("", status_code=201)
-def create_evenement(data: EvenementCreate, db: Session = Depends(get_db)):
-    evt = Evenement(**data.model_dump())
+def create_evenement(data: EvenementCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    payload = data.model_dump()
+    payload["etablissement_id"] = etablissement_id
+    evt = Evenement(**payload)
     db.add(evt)
     db.commit()
     db.refresh(evt)
@@ -103,11 +112,11 @@ def create_evenement(data: EvenementCreate, db: Session = Depends(get_db)):
 
 # ── PUT modifier un événement ─────────────────────────────────────────────────
 @router.put("/{evenement_id}")
-def update_evenement(evenement_id: int, data: EvenementUpdate, db: Session = Depends(get_db)):
-    e = db.query(Evenement).filter(Evenement.evenement_id == evenement_id).first()
-    if not e:
-        raise HTTPException(404, "Événement introuvable")
-    for field, val in data.model_dump(exclude_none=True).items():
+def update_evenement(evenement_id: int, data: EvenementUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    e = _evenement_ou_404(db, evenement_id, etablissement_id)
+    update_data = data.model_dump(exclude_none=True)
+    update_data.pop("etablissement_id", None)
+    for field, val in update_data.items():
         setattr(e, field, val)
     db.commit()
     db.refresh(e)
@@ -116,10 +125,8 @@ def update_evenement(evenement_id: int, data: EvenementUpdate, db: Session = Dep
 
 # ── POST publier un événement et notifier ─────────────────────────────────────
 @router.post("/{evenement_id}/publier")
-def publier_evenement(evenement_id: int, db: Session = Depends(get_db)):
-    e = db.query(Evenement).filter(Evenement.evenement_id == evenement_id).first()
-    if not e:
-        raise HTTPException(404, "Événement introuvable")
+def publier_evenement(evenement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    e = _evenement_ou_404(db, evenement_id, etablissement_id)
     e.statut = "PUBLIE"
     db.commit()
     db.refresh(e)
@@ -145,10 +152,8 @@ def publier_evenement(evenement_id: int, db: Session = Depends(get_db)):
 
 # ── DELETE supprimer un événement ─────────────────────────────────────────────
 @router.delete("/{evenement_id}")
-def delete_evenement(evenement_id: int, db: Session = Depends(get_db)):
-    e = db.query(Evenement).filter(Evenement.evenement_id == evenement_id).first()
-    if not e:
-        raise HTTPException(404, "Événement introuvable")
+def delete_evenement(evenement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    e = _evenement_ou_404(db, evenement_id, etablissement_id)
     db.delete(e)
     db.commit()
     return {"message": "Événement supprimé avec succès"}

@@ -2,12 +2,13 @@
 SMARTSCHOOL API — Routes Dashboard
 GET /api/dashboard → KPIs + stats réelles (taux de réussite par cycle & détail par classe, événements, activités)
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import (
-    Eleve, Enseignant, Classe, Inscription, Facture, Paiement, Presence,
+    AnneeScolaire, Eleve, Enseignant, Classe, Inscription, Facture, Paiement, Presence,
     Depense, Incident, Evaluation, Bulletin, Cycle, Niveau, Evenement, Note, ActiviteJour
 )
 from app.schemas.schemas import DashboardResponse, DashboardKPI
@@ -16,7 +17,25 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
 
 @router.get("", response_model=DashboardResponse)
-def get_dashboard(etablissement_id: int = 1, annee_id: int = 1, db: Session = Depends(get_db)):
+def get_dashboard(
+    annee_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Lot 11 — `etablissement_id` et `annee_id` étaient des paramètres de
+    requête fournis par le client, avec 1 pour valeur par défaut : il suffisait
+    d'incrémenter l'identifiant pour obtenir le tableau de bord complet d'une
+    autre école (effectifs, chiffre d'affaires, impayés, dépenses, incidents).
+
+    `etablissement_id` vient désormais du compte authentifié, et `annee_id`,
+    devenu obligatoire, doit appartenir à cette école.
+    """
+    if not db.query(AnneeScolaire.annee_id).filter(
+        AnneeScolaire.annee_id == annee_id,
+        AnneeScolaire.etablissement_id == etablissement_id,
+    ).first():
+        raise HTTPException(404, "Année scolaire non trouvée")
+
     # KPI 1: Élèves inscrits (actifs)
     nb_eleves = db.query(func.count(Inscription.inscription_id)).join(
         Classe, Inscription.classe_id == Classe.classe_id

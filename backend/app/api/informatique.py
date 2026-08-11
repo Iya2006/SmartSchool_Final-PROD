@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, require_etablissement
 from app.core.database import get_db
 from app.models.academique import EquipementInformatique, TicketInformatique, Salle
 
@@ -21,7 +21,9 @@ IT_READ_ROLES = IT_WRITE_ROLES | {"ENSEIGNANT", "OPERATEUR", "SURVEILLANT"}
 
 
 class EquipementCreate(BaseModel):
-    etablissement_id: int = 1
+    # Plus de champ `etablissement_id` : il valait 1 par défaut et était accepté
+    # depuis le corps de la requête. Il provient désormais du compte
+    # authentifié (Lot 11).
     salle_id: Optional[int] = None
     code: str
     nom: str
@@ -36,7 +38,6 @@ class EquipementCreate(BaseModel):
 
 
 class TicketCreate(BaseModel):
-    etablissement_id: int = 1
     equipement_id: Optional[int] = None
     titre: str
     description: str
@@ -94,7 +95,7 @@ def _ticket_to_dict(item: TicketInformatique) -> dict:
 
 @router.get("/stats")
 def stats_informatique(
-    etablissement_id: int = Query(1),
+    etablissement_id: int = Depends(require_etablissement),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -115,7 +116,7 @@ def stats_informatique(
 
 @router.get("/equipements")
 def list_equipements(
-    etablissement_id: int = Query(1),
+    etablissement_id: int = Depends(require_etablissement),
     etat: Optional[str] = None,
     limit: int = Query(100, le=500),
     db: Session = Depends(get_db),
@@ -133,15 +134,24 @@ def create_equipement(
     data: EquipementCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     _require_write(current_user)
     existing = db.query(EquipementInformatique).filter(
-        EquipementInformatique.etablissement_id == data.etablissement_id,
+        EquipementInformatique.etablissement_id == etablissement_id,
         EquipementInformatique.code == data.code,
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Ce code équipement existe déjà")
-    item = EquipementInformatique(**data.model_dump(), created_by=current_user.get("nom", current_user.get("sub", "SYSTEM")))
+    # La salle rattachée, si elle est fournie, doit être une salle de cette
+    # école (Lot 11) — sinon l'équipement pointerait vers un local d'autrui.
+    if data.salle_id and not db.query(Salle.salle_id).filter(
+        Salle.salle_id == data.salle_id, Salle.etablissement_id == etablissement_id
+    ).first():
+        raise HTTPException(status_code=404, detail="Salle introuvable")
+    payload = data.model_dump()
+    payload["etablissement_id"] = etablissement_id
+    item = EquipementInformatique(**payload, created_by=current_user.get("nom", current_user.get("sub", "SYSTEM")))
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -150,7 +160,7 @@ def create_equipement(
 
 @router.get("/tickets")
 def list_tickets(
-    etablissement_id: int = Query(1),
+    etablissement_id: int = Depends(require_etablissement),
     statut: Optional[str] = None,
     limit: int = Query(100, le=500),
     db: Session = Depends(get_db),
@@ -168,12 +178,24 @@ def create_ticket(
     data: TicketCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     _require_write(current_user)
-    item = TicketInformatique(
-        **data.model_dump(),
-        signale_par=data.signale_par or current_user.get("nom", current_user.get("sub", "SYSTEM")),
-    )
+    # L'équipement visé, s'il est fourni, doit appartenir à cette école (Lot 11).
+    if data.equipement_id and not db.query(EquipementInformatique.equipement_id).filter(
+        EquipementInformatique.equipement_id == data.equipement_id,
+        EquipementInformatique.etablissement_id == etablissement_id,
+    ).first():
+        raise HTTPException(status_code=404, detail="Équipement introuvable")
+
+    # `signale_par` était passé DEUX FOIS (via `**data.model_dump()` et en
+    # argument nommé) : cette route levait donc systématiquement un TypeError.
+    # Bug préexistant, corrigé ici puisque la construction du payload est de
+    # toute façon reprise pour imposer l'établissement.
+    payload = data.model_dump()
+    payload["etablissement_id"] = etablissement_id
+    payload["signale_par"] = data.signale_par or current_user.get("nom", current_user.get("sub", "SYSTEM"))
+    item = TicketInformatique(**payload)
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -186,9 +208,13 @@ def resolve_ticket(
     resolution: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     _require_write(current_user)
-    item = db.query(TicketInformatique).filter(TicketInformatique.ticket_id == ticket_id).first()
+    item = db.query(TicketInformatique).filter(
+        TicketInformatique.ticket_id == ticket_id,
+        TicketInformatique.etablissement_id == etablissement_id,
+    ).first()
     if not item:
         raise HTTPException(status_code=404, detail="Ticket introuvable")
     setattr(item, "statut", "RESOLU")

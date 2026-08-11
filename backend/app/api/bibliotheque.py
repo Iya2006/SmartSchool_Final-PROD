@@ -10,8 +10,8 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.auth import get_current_user
-from app.models.academique import Ouvrage, Exemplaire, Emprunt
+from app.core.auth import get_current_user, require_etablissement
+from app.models.academique import Ouvrage, Exemplaire, Emprunt, Eleve, Enseignant
 from app.schemas.schemas import (
     OuvrageCreate,
     OuvrageUpdate,
@@ -69,9 +69,35 @@ def _ouvrage_to_dict(o: Ouvrage) -> dict:
     }
 
 
+def _ouvrage_ou_404(db: Session, ouvrage_id: int, etablissement_id: int) -> Ouvrage:
+    """Ouvrage porte une colonne etablissement_id directe (Lot 11)."""
+    o = db.query(Ouvrage).filter(
+        Ouvrage.ouvrage_id == ouvrage_id, Ouvrage.etablissement_id == etablissement_id
+    ).first()
+    if not o:
+        raise HTTPException(status_code=404, detail="Ouvrage introuvable")
+    return o
+
+
+def _exemplaire_ou_404(db: Session, exemplaire_id: int, etablissement_id: int) -> Exemplaire:
+    """Exemplaire est OWNERSHIP via son Ouvrage (Lot 11)."""
+    ex = (
+        db.query(Exemplaire)
+        .join(Ouvrage, Ouvrage.ouvrage_id == Exemplaire.ouvrage_id)
+        .filter(
+            Exemplaire.exemplaire_id == exemplaire_id,
+            Ouvrage.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not ex:
+        raise HTTPException(status_code=404, detail="Exemplaire introuvable")
+    return ex
+
+
 @router.get("/ouvrages", response_model=list[OuvrageOut])
 def list_ouvrages(
-    etablissement_id: int = Query(1),
+    etablissement_id: int = Depends(require_etablissement),
     q: Optional[str] = None,
     categorie: Optional[str] = None,
     statut: Optional[str] = None,
@@ -93,7 +119,7 @@ def list_ouvrages(
 
 @router.get("/stats")
 def stats_bibliotheque(
-    etablissement_id: int = Query(1),
+    etablissement_id: int = Depends(require_etablissement),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -120,17 +146,22 @@ def create_ouvrage(
     data: OuvrageCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     _require_write(current_user)
     existing = db.query(Ouvrage).filter(
-        Ouvrage.etablissement_id == data.etablissement_id,
+        Ouvrage.etablissement_id == etablissement_id,
         Ouvrage.code_interne == data.code_interne,
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Ce code interne existe déjà pour cet établissement")
 
     nb_initial = max(0, data.nb_exemplaires_initial or 0)
+    # etablissement_id imposé par le compte authentifié : il venait du corps de
+    # la requête (`OuvrageBase`, qui valait 1 par défaut), donc un ouvrage
+    # pouvait être créé dans le catalogue d'une autre école (Lot 11).
     payload = data.model_dump(exclude={"nb_exemplaires_initial"})
+    payload["etablissement_id"] = etablissement_id
     ouvrage = Ouvrage(
         **payload,
         nb_exemplaires=nb_initial,
@@ -162,12 +193,13 @@ def update_ouvrage(
     data: OuvrageUpdate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     _require_write(current_user)
-    ouvrage = db.query(Ouvrage).filter(Ouvrage.ouvrage_id == ouvrage_id).first()
-    if not ouvrage:
-        raise HTTPException(status_code=404, detail="Ouvrage introuvable")
-    for key, value in data.model_dump(exclude_unset=True).items():
+    ouvrage = _ouvrage_ou_404(db, ouvrage_id, etablissement_id)
+    modifications = data.model_dump(exclude_unset=True)
+    modifications.pop("etablissement_id", None)
+    for key, value in modifications.items():
         setattr(ouvrage, key, value)
     ouvrage.modified_by = current_user.get("nom", current_user.get("sub", "SYSTEM"))
     db.commit()
@@ -180,11 +212,10 @@ def create_exemplaire(
     data: ExemplaireCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     _require_write(current_user)
-    ouvrage = db.query(Ouvrage).filter(Ouvrage.ouvrage_id == data.ouvrage_id).first()
-    if not ouvrage:
-        raise HTTPException(status_code=404, detail="Ouvrage introuvable")
+    ouvrage = _ouvrage_ou_404(db, data.ouvrage_id, etablissement_id)
     code = data.code_exemplaire or f"{ouvrage.code_interne}-{(ouvrage.nb_exemplaires or 0) + 1:03d}"
     if db.query(Exemplaire).filter(Exemplaire.code_exemplaire == code).first():
         raise HTTPException(status_code=400, detail="Ce code exemplaire existe déjà")
@@ -205,13 +236,27 @@ def create_emprunt(
     data: EmpruntCreate,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     _require_write(current_user)
     if not data.eleve_id and not data.enseignant_id:
         raise HTTPException(status_code=400, detail="Un emprunteur élève ou enseignant est requis")
-    ex = db.query(Exemplaire).filter(Exemplaire.exemplaire_id == data.exemplaire_id).first()
-    if not ex:
-        raise HTTPException(status_code=404, detail="Exemplaire introuvable")
+
+    # Lot 11 — l'exemplaire ET l'emprunteur doivent relever de cette école.
+    # Sans ces contrôles on pouvait prêter un exemplaire d'une autre école, ou
+    # inscrire au nom d'un élève/enseignant d'une autre école un emprunt qu'il
+    # devrait ensuite rendre.
+    ex = _exemplaire_ou_404(db, data.exemplaire_id, etablissement_id)
+    if data.eleve_id and not db.query(Eleve.eleve_id).filter(
+        Eleve.eleve_id == data.eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first():
+        raise HTTPException(status_code=404, detail="Élève introuvable")
+    if data.enseignant_id and not db.query(Enseignant.enseignant_id).filter(
+        Enseignant.enseignant_id == data.enseignant_id,
+        Enseignant.etablissement_id == etablissement_id,
+    ).first():
+        raise HTTPException(status_code=404, detail="Enseignant introuvable")
+
     if getattr(ex, "statut", None) != "DISPONIBLE":
         raise HTTPException(status_code=400, detail="Cet exemplaire n'est pas disponible")
     emprunt = Emprunt(**data.model_dump(), created_by=current_user.get("nom", current_user.get("sub", "SYSTEM")))

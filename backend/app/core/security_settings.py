@@ -15,7 +15,7 @@ SECURITE_DEFAULTS = {
     "securite.audit_log_active": "true",
 }
 
-def get_security_settings(db: Session, etablissement_id: int = 1) -> dict:
+def get_security_settings(db: Session, etablissement_id: int) -> dict:
     """Charge les paramètres SECURITE depuis ss_parametres, fusionnés avec les défauts."""
     settings = dict(SECURITE_DEFAULTS)
     try:
