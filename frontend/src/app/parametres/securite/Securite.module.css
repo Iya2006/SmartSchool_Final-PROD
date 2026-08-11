@@ -408,3 +408,37 @@ input:checked + .slider:before {
 .toastError {
   background: #ef4444;
 }
+
+/* Avertissement : réglages enregistrés mais pas encore appliqués.
+   Ambre plutôt que rouge — ce n'est pas une erreur, c'est une limite
+   fonctionnelle assumée qu'un administrateur doit connaître avant de
+   croire avoir restreint un collaborateur. */
+.avertissement {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid #fcd34d;
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.avertissement svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #b45309;
+}
+
+.avertissement strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.avertissement p {
+  margin: 4px 0 0 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}

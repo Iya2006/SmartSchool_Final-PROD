@@ -6,23 +6,39 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
 from typing import List, Optional
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.core.security import hash_password
+from app.core.matricules import PREFIXE_ENSEIGNANT, generer_matricule
+from app.core.identifiants import exiger_identifiants_libres
 from app.models.academique import (
-    Enseignant, Affectation, Matiere, Classe, ClasseMatiere, CreneauEmploi
+    Enseignant, Affectation, Matiere, Classe, ClasseMatiere, CreneauEmploi, Cycle
 )
 from app.schemas.schemas import EnseignantCreate, EnseignantUpdate, EnseignantOut
 
 router = APIRouter(prefix="/api/enseignants", tags=["Enseignants"])
 
 
+def _enseignant_ou_404(db: Session, enseignant_id: int, etablissement_id: int) -> Enseignant:
+    """Charge un enseignant en vérifiant qu'il appartient à l'établissement
+    appelant. 404 (pas 403) pour ne pas confirmer l'existence d'un enseignant
+    d'une autre école."""
+    ens = db.query(Enseignant).filter(
+        Enseignant.enseignant_id == enseignant_id,
+        Enseignant.etablissement_id == etablissement_id,
+    ).first()
+    if not ens:
+        raise HTTPException(status_code=404, detail="Enseignant non trouvé")
+    return ens
+
+
 @router.get("", response_model=List[EnseignantOut])
 def list_enseignants(
-    etablissement_id: int = 1,
     statut: Optional[str] = None,
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query = db.query(Enseignant).filter(
         Enseignant.etablissement_id == etablissement_id
@@ -39,7 +55,7 @@ def list_enseignants(
 
 
 @router.get("/count")
-def count_enseignants(etablissement_id: int = 1, db: Session = Depends(get_db)):
+def count_enseignants(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     total = db.query(func.count(Enseignant.enseignant_id)).filter(
         Enseignant.etablissement_id == etablissement_id
     ).scalar()
@@ -55,15 +71,15 @@ def count_enseignants(etablissement_id: int = 1, db: Session = Depends(get_db)):
 
 
 @router.get("/{enseignant_id}", response_model=EnseignantOut)
-def get_enseignant(enseignant_id: int, db: Session = Depends(get_db)):
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        raise HTTPException(status_code=404, detail="Enseignant non trouvé")
-    return ens
+def get_enseignant(enseignant_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Fiche RH complète (salaire, RIB, CNI, adresse) — restreinte à
+    l'établissement appelant depuis le Lot 8."""
+    return _enseignant_ou_404(db, enseignant_id, etablissement_id)
 
 
 @router.get("/{enseignant_id}/affectations")
-def get_affectations(enseignant_id: int, annee_id: int = 1, db: Session = Depends(get_db)):
+def get_affectations(enseignant_id: int, annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    _enseignant_ou_404(db, enseignant_id, etablissement_id)
     results = db.query(
         Affectation.affectation_id,
         Classe.classe_id,
@@ -105,11 +121,9 @@ def get_affectations(enseignant_id: int, annee_id: int = 1, db: Session = Depend
 # ================================================================
 
 @router.get("/{enseignant_id}/emploi-du-temps")
-def get_emploi_enseignant(enseignant_id: int, annee_id: int = 1, db: Session = Depends(get_db)):
+def get_emploi_enseignant(enseignant_id: int, annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Retourne l'emploi du temps personnel d'un enseignant (grille semaine)."""
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        raise HTTPException(404, "Enseignant non trouvé")
+    _enseignant_ou_404(db, enseignant_id, etablissement_id)
 
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.enseignant_id == enseignant_id,
@@ -143,8 +157,10 @@ def get_emploi_enseignant(enseignant_id: int, annee_id: int = 1, db: Session = D
 # ================================================================
 
 @router.get("/{enseignant_id}/dashboard-stats")
-def get_enseignant_stats(enseignant_id: int, annee_id: int = 1, db: Session = Depends(get_db)):
+def get_enseignant_stats(enseignant_id: int, annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Statistiques agrégées de l'enseignant pour son profil/dashboard."""
+    _enseignant_ou_404(db, enseignant_id, etablissement_id)
+
     # Nombre de classes
     nb_classes = db.query(distinct(Affectation.classe_id)).filter(
         Affectation.enseignant_id == enseignant_id,
@@ -196,11 +212,14 @@ def get_enseignant_stats(enseignant_id: int, annee_id: int = 1, db: Session = De
 # ================================================================
 
 @router.post("/{enseignant_id}/affectations", status_code=201)
-def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_db)):
-    """Affecter un enseignant à une classe/matière."""
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        raise HTTPException(404, "Enseignant non trouvé")
+def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Affecter un enseignant à une classe/matière.
+
+    Les TROIS entités (enseignant, classe, matière) sont vérifiées appartenir
+    au même établissement — avant le Lot 8, aucune ne l'était : un enseignant
+    d'une école pouvait être affecté à la classe d'une autre école.
+    """
+    ens = _enseignant_ou_404(db, enseignant_id, etablissement_id)
 
     classe_id = data.get("classe_id")
     matiere_id = data.get("matiere_id")
@@ -209,11 +228,19 @@ def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_
     if not classe_id or not matiere_id:
         raise HTTPException(400, "classe_id et matiere_id requis")
 
-    # Verify class and subject exist
-    cls = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    # Verify class and subject exist — et appartiennent à cet établissement
+    # (Matiere est OWNERSHIP via Cycle, voir .ai/MULTI_TENANT_PLAN.md section E)
+    cls = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
     if not cls:
         raise HTTPException(404, "Classe non trouvée")
-    mat = db.query(Matiere).filter(Matiere.matiere_id == matiere_id).first()
+    mat = (
+        db.query(Matiere)
+        .join(Cycle, Cycle.cycle_id == Matiere.cycle_id)
+        .filter(Matiere.matiere_id == matiere_id, Cycle.etablissement_id == etablissement_id)
+        .first()
+    )
     if not mat:
         raise HTTPException(404, "Matière non trouvée")
 
@@ -255,9 +282,17 @@ def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_
 
 
 @router.delete("/affectations/{affectation_id}")
-def supprimer_affectation(affectation_id: int, db: Session = Depends(get_db)):
-    """Supprimer une affectation."""
-    aff = db.query(Affectation).filter(Affectation.affectation_id == affectation_id).first()
+def supprimer_affectation(affectation_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Supprimer une affectation (OWNERSHIP via l'enseignant affecté)."""
+    aff = (
+        db.query(Affectation)
+        .join(Enseignant, Enseignant.enseignant_id == Affectation.enseignant_id)
+        .filter(
+            Affectation.affectation_id == affectation_id,
+            Enseignant.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
     if not aff:
         raise HTTPException(404, "Affectation non trouvée")
     db.delete(aff)
@@ -266,10 +301,18 @@ def supprimer_affectation(affectation_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=EnseignantOut, status_code=201)
-def create_enseignant(data: EnseignantCreate, db: Session = Depends(get_db)):
-    count = db.query(func.count(Enseignant.enseignant_id)).scalar() or 0
-    matricule = f"ENS-{count + 1:05d}"
+def create_enseignant(data: EnseignantCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    # Le téléphone et l'e-mail d'un enseignant servent à se connecter (auth.py) :
+    # un doublon, même dans une autre table ou une autre école, rendrait l'un
+    # des deux comptes définitivement inaccessible.
+    exiger_identifiants_libres(db, [data.telephone, data.email])
+
+    # Matricule propre à l'établissement (voir app/core/matricules.py).
+    matricule = generer_matricule(db, Enseignant, PREFIXE_ENSEIGNANT, etablissement_id)
     payload = data.model_dump()
+    # `data.etablissement_id` (obligatoire dans EnseignantBase) est ignoré et
+    # remplacé par l'établissement authentifié.
+    payload["etablissement_id"] = etablissement_id
     # Hasher le mot de passe avant stockage
     if payload.get("mot_de_passe"):
         payload["mot_de_passe"] = hash_password(payload["mot_de_passe"])
@@ -281,10 +324,8 @@ def create_enseignant(data: EnseignantCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{enseignant_id}", response_model=EnseignantOut)
-def update_enseignant(enseignant_id: int, data: EnseignantUpdate, db: Session = Depends(get_db)):
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        raise HTTPException(status_code=404, detail="Enseignant non trouvé")
+def update_enseignant(enseignant_id: int, data: EnseignantUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    ens = _enseignant_ou_404(db, enseignant_id, etablissement_id)
     for key, value in data.model_dump(exclude_unset=True).items():
         # Hasher le mot de passe si modifié
         if key == "mot_de_passe" and value:
@@ -296,10 +337,8 @@ def update_enseignant(enseignant_id: int, data: EnseignantUpdate, db: Session = 
 
 
 @router.delete("/{enseignant_id}")
-def delete_enseignant(enseignant_id: int, db: Session = Depends(get_db)):
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        raise HTTPException(status_code=404, detail="Enseignant non trouvé")
+def delete_enseignant(enseignant_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    ens = _enseignant_ou_404(db, enseignant_id, etablissement_id)
     db.delete(ens)
     db.commit()
     return {"message": "Enseignant supprimé"}
@@ -310,9 +349,14 @@ def delete_enseignant(enseignant_id: int, db: Session = Depends(get_db)):
 # ================================================================
 
 @router.get("/salle-des-profs/affectations-globales")
-def get_affectations_globales(annee_id: int = 1, db: Session = Depends(get_db)):
-    """Retourne TOUTES les affectations de l'année — format tableau avec enseignant, classe, matière."""
-    from app.models.academique import Niveau, Cycle
+def get_affectations_globales(annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Retourne toutes les affectations de l'année POUR CET ÉTABLISSEMENT —
+    format tableau avec enseignant, classe, matière.
+
+    Avant le Lot 8, « globales » signifiait littéralement toute la plateforme :
+    l'écran Salle des Profs affichait les affectations de toutes les écoles.
+    """
+    from app.models.academique import Niveau
 
     results = db.query(
         Affectation.affectation_id,
@@ -338,7 +382,9 @@ def get_affectations_globales(annee_id: int = 1, db: Session = Depends(get_db)):
     ).join(
         Matiere, Affectation.matiere_id == Matiere.matiere_id
     ).filter(
-        Affectation.annee_id == annee_id
+        Affectation.annee_id == annee_id,
+        Enseignant.etablissement_id == etablissement_id,
+        Classe.etablissement_id == etablissement_id,
     ).order_by(
         Classe.libelle, Matiere.libelle
     ).all()
@@ -367,12 +413,20 @@ def get_affectations_globales(annee_id: int = 1, db: Session = Depends(get_db)):
 
 
 @router.get("/salle-des-profs/classes-matieres")
-def get_classes_avec_matieres(etablissement_id: int = 1, db: Session = Depends(get_db)):
-    """Retourne toutes les classes avec leurs matières attribuées — pour le formulaire de la Salle des Profs."""
-    from app.models.academique import Niveau, Cycle
+def get_classes_avec_matieres(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Retourne les classes de CET établissement avec leurs matières
+    attribuées — pour le formulaire de la Salle des Profs.
+
+    Avant le Lot 8, cette route déclarait bien un paramètre
+    `etablissement_id` … mais ne l'utilisait NULLE PART dans la requête :
+    toutes les classes de la plateforme étaient retournées, quelle que soit
+    la valeur envoyée (faux sentiment de filtrage).
+    """
+    from app.models.academique import Niveau
 
     classes = db.query(Classe).filter(
-        Classe.statut == "ACTIVE"
+        Classe.statut == "ACTIVE",
+        Classe.etablissement_id == etablissement_id,
     ).order_by(Classe.libelle).all()
 
     result = []
@@ -433,30 +487,51 @@ def get_classes_avec_matieres(etablissement_id: int = 1, db: Session = Depends(g
 
 
 @router.get("/salle-des-profs/stats")
-def get_salle_des_profs_stats(annee_id: int = 1, db: Session = Depends(get_db)):
-    """Statistiques globales pour la Salle des Profs."""
+def get_salle_des_profs_stats(annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Statistiques de la Salle des Profs POUR CET ÉTABLISSEMENT.
+
+    Avant le Lot 8, tous ces agrégats (nombre d'enseignants, affectations,
+    heures, taux de couverture des postes) étaient calculés sur l'ensemble
+    de la plateforme.
+    """
     total_enseignants = db.query(func.count(Enseignant.enseignant_id)).filter(
-        Enseignant.statut == "ACTIF"
+        Enseignant.statut == "ACTIF",
+        Enseignant.etablissement_id == etablissement_id,
     ).scalar() or 0
 
-    total_affectations = db.query(func.count(Affectation.affectation_id)).filter(
+    # Les affectations sont rattachées à l'établissement via leur enseignant.
+    affectations_etab = db.query(Affectation).join(
+        Enseignant, Enseignant.enseignant_id == Affectation.enseignant_id
+    ).filter(
         Affectation.annee_id == annee_id,
-        Affectation.statut == "ACTIVE"
+        Affectation.statut == "ACTIVE",
+        Enseignant.etablissement_id == etablissement_id,
+    )
+
+    total_affectations = affectations_etab.count()
+
+    enseignants_affectes = db.query(func.count(distinct(Affectation.enseignant_id))).join(
+        Enseignant, Enseignant.enseignant_id == Affectation.enseignant_id
+    ).filter(
+        Affectation.annee_id == annee_id,
+        Affectation.statut == "ACTIVE",
+        Enseignant.etablissement_id == etablissement_id,
     ).scalar() or 0
 
-    enseignants_affectes = db.query(func.count(distinct(Affectation.enseignant_id))).filter(
+    total_heures = db.query(func.coalesce(func.sum(Affectation.nb_heures_semaine), 0)).join(
+        Enseignant, Enseignant.enseignant_id == Affectation.enseignant_id
+    ).filter(
         Affectation.annee_id == annee_id,
-        Affectation.statut == "ACTIVE"
-    ).scalar() or 0
-
-    total_heures = db.query(func.coalesce(func.sum(Affectation.nb_heures_semaine), 0)).filter(
-        Affectation.annee_id == annee_id,
-        Affectation.statut == "ACTIVE"
+        Affectation.statut == "ACTIVE",
+        Enseignant.etablissement_id == etablissement_id,
     ).scalar() or 0
 
     # Classes qui ont au moins une matière sans enseignant
-    classes_with_matieres = db.query(ClasseMatiere.classe_id, ClasseMatiere.matiere_id).filter(
-        ClasseMatiere.est_active == "O"
+    classes_with_matieres = db.query(ClasseMatiere.classe_id, ClasseMatiere.matiere_id).join(
+        Classe, Classe.classe_id == ClasseMatiere.classe_id
+    ).filter(
+        ClasseMatiere.est_active == "O",
+        Classe.etablissement_id == etablissement_id,
     ).all()
 
     total_postes = len(classes_with_matieres)

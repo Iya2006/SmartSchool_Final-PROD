@@ -7,11 +7,56 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
+from app.core.auth import require_etablissement
 from app.models.academique import (
-    CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Affectation
+    CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Affectation, Cycle
 )
 
 router = APIRouter(prefix="/api/emploi-du-temps", tags=["Emploi du Temps"])
+
+
+# ── Helpers d'isolation (Lot 9) ───────────────────────────────────────────
+# CreneauEmploi est OWNERSHIP via sa Classe.
+
+def _classe_ou_404(db: Session, classe_id: int, etablissement_id: int) -> Classe:
+    c = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not c:
+        raise HTTPException(404, "Classe non trouvée")
+    return c
+
+
+def _creneau_ou_404(db: Session, creneau_id: int, etablissement_id: int) -> CreneauEmploi:
+    c = (
+        db.query(CreneauEmploi)
+        .join(Classe, Classe.classe_id == CreneauEmploi.classe_id)
+        .filter(CreneauEmploi.creneau_id == creneau_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not c:
+        raise HTTPException(404, "Créneau non trouvé")
+    return c
+
+
+def _verifier_matiere_et_enseignant(db: Session, matiere_id, enseignant_id, etablissement_id: int) -> None:
+    """Matiere est OWNERSHIP via Cycle ; Enseignant a une colonne directe."""
+    if matiere_id:
+        ok = (
+            db.query(Matiere.matiere_id)
+            .join(Cycle, Cycle.cycle_id == Matiere.cycle_id)
+            .filter(Matiere.matiere_id == matiere_id, Cycle.etablissement_id == etablissement_id)
+            .first()
+        )
+        if not ok:
+            raise HTTPException(404, "Matière non trouvée")
+    if enseignant_id:
+        ok = db.query(Enseignant.enseignant_id).filter(
+            Enseignant.enseignant_id == enseignant_id,
+            Enseignant.etablissement_id == etablissement_id,
+        ).first()
+        if not ok:
+            raise HTTPException(404, "Enseignant non trouvé")
 
 JOURS = ["LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI"]
 HEURES_SLOTS = [
@@ -25,11 +70,9 @@ HEURES_SLOTS = [
 # ============================================================================
 
 @router.get("/classe/{classe_id}")
-def get_emploi_du_temps(classe_id: int, db: Session = Depends(get_db)):
+def get_emploi_du_temps(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Retourne l'emploi du temps complet d'une classe sous forme de grille."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.classe_id == classe_id,
@@ -73,8 +116,14 @@ def get_emploi_du_temps(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("", status_code=201)
-def create_creneau(data: dict, db: Session = Depends(get_db)):
-    """Créer un créneau horaire."""
+def create_creneau(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Créer un créneau horaire.
+
+    Classe, matière et enseignant référencés sont vérifiés appartenir à
+    l'établissement appelant (Lot 9) — avant, un créneau pouvait être posé
+    dans l'emploi du temps d'une autre école, avec la matière et
+    l'enseignant de n'importe quelle école.
+    """
     required = ["classe_id", "matiere_id", "jour", "heure_debut", "heure_fin"]
     for f in required:
         if f not in data:
@@ -84,8 +133,9 @@ def create_creneau(data: dict, db: Session = Depends(get_db)):
     if jour not in JOURS:
         raise HTTPException(400, f"Jour invalide. Choix: {', '.join(JOURS)}")
 
-    classe = db.query(Classe).filter(Classe.classe_id == data["classe_id"]).first()
-    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+    classe = _classe_ou_404(db, data["classe_id"], etablissement_id)
+    _verifier_matiere_et_enseignant(db, data.get("matiere_id"), data.get("enseignant_id"), etablissement_id)
+    verifier_annee_modifiable(db, classe.annee_id)
 
     # Vérifier conflit horaire
     conflict = db.query(CreneauEmploi).filter(
@@ -108,7 +158,7 @@ def create_creneau(data: dict, db: Session = Depends(get_db)):
         heure_debut=data["heure_debut"],
         heure_fin=data["heure_fin"],
         salle=data.get("salle", ""),
-        annee_id=classe.annee_id if classe else data.get("annee_id", 1),
+        annee_id=classe.annee_id,
     )
     db.add(creneau)
     db.commit()
@@ -118,11 +168,10 @@ def create_creneau(data: dict, db: Session = Depends(get_db)):
 
 
 @router.put("/{creneau_id}")
-def update_creneau(creneau_id: int, data: dict, db: Session = Depends(get_db)):
+def update_creneau(creneau_id: int, data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Modifier un créneau."""
-    c = db.query(CreneauEmploi).filter(CreneauEmploi.creneau_id == creneau_id).first()
-    if not c:
-        raise HTTPException(404, "Créneau non trouvé")
+    c = _creneau_ou_404(db, creneau_id, etablissement_id)
+    _verifier_matiere_et_enseignant(db, data.get("matiere_id"), data.get("enseignant_id"), etablissement_id)
     verifier_annee_modifiable(db, c.annee_id)
 
     if "jour" in data:
@@ -158,11 +207,9 @@ def update_creneau(creneau_id: int, data: dict, db: Session = Depends(get_db)):
 
 
 @router.delete("/{creneau_id}")
-def delete_creneau(creneau_id: int, db: Session = Depends(get_db)):
+def delete_creneau(creneau_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Supprimer un créneau."""
-    c = db.query(CreneauEmploi).filter(CreneauEmploi.creneau_id == creneau_id).first()
-    if not c:
-        raise HTTPException(404, "Créneau non trouvé")
+    c = _creneau_ou_404(db, creneau_id, etablissement_id)
     verifier_annee_modifiable(db, c.annee_id)
     db.delete(c)
     db.commit()
@@ -174,14 +221,16 @@ def delete_creneau(creneau_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.post("/auto-generation/{classe_id}", status_code=201)
-def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db)):
+def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Génère automatiquement un emploi du temps pour une classe
     en répartissant ses matières sur les créneaux de la semaine.
+
+    Attention : cette route SUPPRIME l'emploi du temps existant de la classe
+    avant de régénérer — sans la vérification d'établissement ajoutée au
+    Lot 9, elle permettait d'effacer l'emploi du temps d'une autre école.
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
     # Récupérer les matières de la classe
@@ -261,11 +310,18 @@ def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/stats")
-def get_emploi_stats(db: Session = Depends(get_db)):
-    """Statistiques globales sur les emplois du temps."""
-    total_creneaux = db.query(CreneauEmploi).filter(CreneauEmploi.statut == "ACTIVE").count()
-    classes_avec = db.query(CreneauEmploi.classe_id).distinct().count()
-    classes_total = db.query(Classe).filter(Classe.statut == "ACTIVE").count()
+def get_emploi_stats(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Statistiques sur les emplois du temps POUR CET ÉTABLISSEMENT."""
+    creneaux_etab = db.query(CreneauEmploi).join(
+        Classe, Classe.classe_id == CreneauEmploi.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id)
+    total_creneaux = creneaux_etab.filter(CreneauEmploi.statut == "ACTIVE").count()
+    classes_avec = db.query(CreneauEmploi.classe_id).join(
+        Classe, Classe.classe_id == CreneauEmploi.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id).distinct().count()
+    classes_total = db.query(Classe).filter(
+        Classe.statut == "ACTIVE", Classe.etablissement_id == etablissement_id
+    ).count()
 
     return {
         "total_creneaux": total_creneaux,

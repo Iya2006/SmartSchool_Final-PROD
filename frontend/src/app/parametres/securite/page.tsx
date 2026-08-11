@@ -5,7 +5,8 @@ import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Shield, Key, Clock, FileText, Save, Loader2, Plus, Trash2, CheckCircle, Lock, Users
+  Shield, Key, Clock, FileText, Save, Loader2, Plus, Trash2, CheckCircle, Lock, Users,
+  AlertTriangle
 } from 'lucide-react';
 import styles from './Securite.module.css';
 
@@ -222,6 +223,25 @@ export default function SecuritePage() {
         {/* Tab 1: Roles & Permissions Matrix */}
         {activeTab === 'roles' && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+            {/* La matrice est désormais appliquée, mais en RETRAIT seulement.
+                Il faut le dire : décocher agit, cocher n'agit pas — sans cette
+                explication, un directeur croirait pouvoir ouvrir la finance à
+                un surveillant en cochant une case. */}
+            <div className={styles.avertissement} role="status">
+              <AlertTriangle size={18} aria-hidden="true" />
+              <div>
+                <strong>Ces permissions peuvent retirer un accès, jamais en accorder un.</strong>
+                <p>
+                  <strong>Décocher</strong> une case ferme immédiatement l&apos;accès
+                  correspondant au rôle concerné. <strong>Cocher</strong> une case, en revanche,
+                  n&apos;ouvre rien de plus que ce que le rôle permet déjà : les droits de base
+                  restent définis par le <strong>rôle principal</strong> du compte, et par ses
+                  éventuels rôles secondaires (fiche Personnel). Pour élargir les accès de
+                  quelqu&apos;un, modifiez son rôle plutôt que cette matrice.
+                </p>
+              </div>
+            </div>
+
             <section className={styles.section}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                 <div className={styles.sectionHeader} style={{ marginBottom: 0 }}>

@@ -60,27 +60,74 @@ function normaliserDetailErreur(error: unknown) {
     (error as any).response.data.detail = message || 'Requête invalide.';
 }
 
-// Endpoints éligibles à la mise en file hors-ligne — périmètre Phase 1
-// volontairement restreint aux notes/présences enseignants (voir
-// backend/app/api/sync.py ; le reste, notamment la comptabilité, reste
-// "connexion requise", cohérent avec le plan approuvé).
-const OFFLINE_QUEUEABLE = /^\/api\/sync\/(\d+)\/(notes|presences)$/;
+// Endpoints éligibles à la mise en file hors-ligne — périmètre volontairement
+// restreint (voir backend/app/api/sync.py pour notes/présences ; le reste,
+// notamment la comptabilité/finance/utilisateurs, reste "connexion requise").
+// Chaque route sait dériver `utilisateur_id` soit depuis l'URL (notes/
+// présences, scoping par enseignant), soit depuis la session courante
+// (notifications — action globale "pour l'utilisateur connecté", pas
+// d'id dans l'URL).
+interface OfflineQueueableRoute {
+    method: 'post' | 'put';
+    pattern: RegExp;
+    type: 'note' | 'presence' | 'notification_read_all';
+    utilisateurId: (match: RegExpMatchArray) => number | string;
+}
 
-// Sur un POST vers un endpoint de sync qui échoue par ABSENCE RÉSEAU (pas un
+function currentUserId(): number | string {
+    try {
+        const raw = localStorage.getItem('smartschool_user');
+        const u = raw ? JSON.parse(raw) : null;
+        return u?.id ?? 'inconnu';
+    } catch {
+        return 'inconnu';
+    }
+}
+
+// Exporté pour src/tests/offlinePolicy.test.ts — vérifie qu'aucune route
+// ci-dessous ne pointe vers un préfixe classé ONLINE_ONLY (lib/offlinePolicy.ts).
+export const OFFLINE_QUEUEABLE_ROUTES: OfflineQueueableRoute[] = [
+    { method: 'post', pattern: /^\/api\/sync\/(\d+)\/notes$/, type: 'note', utilisateurId: (m) => m[1] },
+    { method: 'post', pattern: /^\/api\/sync\/(\d+)\/presences$/, type: 'presence', utilisateurId: (m) => m[1] },
+    {
+        method: 'put',
+        pattern: /^\/api\/communication\/messages\/marquer-tous-lus$/,
+        type: 'notification_read_all',
+        utilisateurId: () => currentUserId(),
+    },
+];
+
+// Sur un appel vers une route ci-dessus qui échoue par ABSENCE RÉSEAU (pas un
 // vrai refus serveur), on met la requête en file locale au lieu de la
-// rejeter — l'appelant (portail enseignant) voit un succès optimiste et n'a
-// besoin d'aucune logique offline spécifique : il continue à faire un simple
-// `api.post('/api/sync/{id}/notes', payload)` comme s'il était en ligne.
-// `syncEngine.ts` (pas importé ici pour éviter un cycle api.ts <-> syncEngine.ts
-// qui importe déjà `api`) rejouera la file dès le retour de connexion.
+// rejeter — l'appelant voit un succès optimiste et n'a besoin d'aucune
+// logique offline spécifique : il continue à faire un simple
+// `api.post(...)`/`api.put(...)` comme s'il était en ligne. `syncEngine.ts`
+// (pas importé ici pour éviter un cycle api.ts <-> syncEngine.ts qui importe
+// déjà `api`) rejouera la file dès le retour de connexion.
+/** Établissement du compte connecté, tel que le serveur l'a dérivé au login.
+ * `undefined` s'il n'est pas connaissable (compte plateforme, parent
+ * multi-écoles, session antérieure à l'ajout du champ) — on ne retombe jamais
+ * sur l'établissement 1. Métadonnée locale : le rejeu s'appuie sur le JWT. */
+function etablissementDeLaSession(): number | undefined {
+    try {
+        const brut = localStorage.getItem('smartschool_user');
+        if (!brut) return undefined;
+        const id = JSON.parse(brut)?.etablissement_id;
+        return typeof id === 'number' ? id : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
     const config = error?.config;
     const isNetworkError = error?.code === 'ERR_NETWORK' && !error?.response;
     const url: string = config?.url || '';
     const method: string = (config?.method || '').toLowerCase();
-    const match = method === 'post' ? url.match(OFFLINE_QUEUEABLE) : null;
+    const route = OFFLINE_QUEUEABLE_ROUTES.find((r) => r.method === method && r.pattern.test(url));
+    const match = route ? url.match(route.pattern) : null;
 
-    if (!isNetworkError || !match || typeof window === 'undefined') {
+    if (!isNetworkError || !route || !match || typeof window === 'undefined') {
         return null;
     }
 
@@ -91,11 +138,12 @@ async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
             try { payload = JSON.parse(payload); } catch { /* corps non-JSON, on le garde tel quel */ }
         }
         await enqueue({
-            type: match[2] === 'notes' ? 'note' : 'presence',
+            type: route.type,
+            method: route.method,
             endpoint: url,
             payload,
-            utilisateur_id: match[1],
-            etablissement_id: 1,
+            utilisateur_id: route.utilisateurId(match),
+            etablissement_id: etablissementDeLaSession(),
         });
         return {
             data: { queued: true, message: 'Enregistré localement — sera synchronisé dès le retour de connexion.' },
@@ -130,6 +178,13 @@ api.interceptors.response.use(
                 if (currentPath !== '/login') {
                     localStorage.clear();
                     sessionStorage.clear();
+                    // Étape C : ce chemin (session expirée) ne purgeait avant
+                    // ni Cache Storage ni la file offline/le cache delta,
+                    // contrairement au logout manuel (AuthContext.logout) —
+                    // incohérence trouvée par l'audit, corrigée en partageant
+                    // la même purge (lib/sessionCleanup.ts).
+                    const { purgeLocalSessionData } = await import('./sessionCleanup');
+                    await purgeLocalSessionData();
                     window.location.href = '/login';
                 }
             } else if (status === 403) {

@@ -2,12 +2,13 @@
 SMARTSCHOOL API — Routes Dashboard
 GET /api/dashboard → KPIs + stats réelles (taux de réussite par cycle & détail par classe, événements, activités)
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import (
-    Eleve, Enseignant, Classe, Inscription, Facture, Paiement, Presence,
+    AnneeScolaire, Eleve, Enseignant, Classe, Inscription, Facture, Paiement, Presence,
     Depense, Incident, Evaluation, Bulletin, Cycle, Niveau, Evenement, Note, ActiviteJour
 )
 from app.schemas.schemas import DashboardResponse, DashboardKPI
@@ -16,18 +17,35 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
 
 @router.get("", response_model=DashboardResponse)
-def get_dashboard(etablissement_id: int = 1, annee_id: int = 1, db: Session = Depends(get_db)):
-    from app.models.academique import AnneeScolaire as _AS, Etablissement as _ET
-    # Résolution dynamique des IDs si les defaults (1) ne correspondent à rien
-    if not db.query(_AS).filter(_AS.annee_id == annee_id).first():
-        real = db.query(_AS).filter(_AS.est_courante == "O").first() \
-               or db.query(_AS).order_by(_AS.annee_id.desc()).first()
-        if real:
-            annee_id = real.annee_id
-    if not db.query(_ET).filter(_ET.etablissement_id == etablissement_id).first():
-        first = db.query(_ET).first()
-        if first:
-            etablissement_id = first.etablissement_id
+def get_dashboard(
+    annee_id: int = 1,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Lot 11 — `etablissement_id` vient désormais du compte authentifié.
+    `annee_id` doit appartenir à cette école. Si non fourni ou introuvable,
+    on bascule sur l'année courante de l'établissement.
+    """
+    # Résolution dynamique : si l'année fournie n'appartient pas à cet établissement,
+    # on cherche l'année courante ou la plus récente de l'établissement.
+    annee_valide = db.query(AnneeScolaire.annee_id).filter(
+        AnneeScolaire.annee_id == annee_id,
+        AnneeScolaire.etablissement_id == etablissement_id,
+    ).first()
+    if not annee_valide:
+        fallback = (
+            db.query(AnneeScolaire)
+            .filter(AnneeScolaire.etablissement_id == etablissement_id, AnneeScolaire.est_courante == "O")
+            .first()
+            or db.query(AnneeScolaire)
+            .filter(AnneeScolaire.etablissement_id == etablissement_id)
+            .order_by(AnneeScolaire.annee_id.desc())
+            .first()
+        )
+        if not fallback:
+            raise HTTPException(404, "Année scolaire non trouvée pour cet établissement")
+        annee_id = fallback.annee_id
+
     # KPI 1: Élèves inscrits (actifs)
     nb_eleves = db.query(func.count(Inscription.inscription_id)).join(
         Classe, Inscription.classe_id == Classe.classe_id

@@ -1,11 +1,30 @@
 """
 SMARTSCHOOL API — Security & Access Control Endpoints
+
+La matrice module × action gérée ici est **appliquée** par
+`app/core/auth.py::require_module`, câblé dans `main.py` sur les routeurs
+correspondant aux modules de `SYSTEM_MODULES`.
+
+Deux règles à connaître avant de faire évoluer ce module :
+
+  * **Retrait seulement.** Une permission peut fermer un accès que le rôle
+    accorde, jamais en ouvrir un qu'il refuse. Sans cette règle, une ligne
+    dans `ss_permissions` suffirait à donner la finance à un ENSEIGNANT,
+    c'est-à-dire à contourner par la base tout le durcissement fait dans le
+    code.
+  * **Un rôle personnalisé n'obtient donc aucun accès** : n'étant dans aucun
+    ensemble statique, il n'a rien à restreindre. Il reste par ailleurs non
+    attribuable, le formulaire du personnel proposant une liste figée.
+
+Pour élargir les droits de quelqu'un, on change son rôle principal ou on lui
+ajoute un rôle secondaire (fiche Personnel) — pas cette matrice.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import Role, Permission, AuditLog, Utilisateur
 
 router = APIRouter(prefix="/api/securite", tags=["Sécurité & Accès"])
@@ -29,7 +48,6 @@ class RoleCreate(BaseModel):
     code: str
     libelle: str
     description: Optional[str] = None
-    etablissement_id: int = 1
 
 class RoleUpdate(BaseModel):
     libelle: str
@@ -44,19 +62,35 @@ class PermissionUpdate(BaseModel):
     permissions: List[PermissionItem]
 
 class AuditLogCreate(BaseModel):
-    etablissement_id: int = 1
     utilisateur_id: Optional[int] = None
     nom_utilisateur: Optional[str] = "Système"
     module: str
     action: str
     details: Optional[str] = None
 
+def _role_ou_404(db: Session, role_id: int, etablissement_id: int) -> Role:
+    """Role porte une colonne etablissement_id directe (Lot 10).
+
+    404 et non 403 pour un role d'une autre ecole : ne jamais confirmer son
+    existence a un appelant qui n'a pas a le connaitre.
+    """
+    role = db.query(Role).filter(
+        Role.role_id == role_id, Role.etablissement_id == etablissement_id
+    ).first()
+    if not role:
+        raise HTTPException(404, "Rôle non trouvé")
+    return role
+
+
 @router.get("/modules")
 def list_modules():
     return {"modules": SYSTEM_MODULES, "actions": STANDARD_ACTIONS}
 
 @router.get("/roles")
-def list_roles(etablissement_id: int = 1, db: Session = Depends(get_db)):
+def list_roles(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     roles = db.query(Role).filter(Role.etablissement_id == etablissement_id).all()
     res = []
     for r in roles:
@@ -76,13 +110,17 @@ def list_roles(etablissement_id: int = 1, db: Session = Depends(get_db)):
     return res
 
 @router.post("/roles", status_code=201)
-def create_role(data: RoleCreate, db: Session = Depends(get_db)):
-    existing = db.query(Role).filter(Role.etablissement_id == data.etablissement_id, Role.code == data.code.upper()).first()
+def create_role(
+    data: RoleCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    existing = db.query(Role).filter(Role.etablissement_id == etablissement_id, Role.code == data.code.upper()).first()
     if existing:
         raise HTTPException(400, "Un rôle avec ce code existe déjà")
-    
+
     role = Role(
-        etablissement_id=data.etablissement_id,
+        etablissement_id=etablissement_id,
         code=data.code.upper(),
         libelle=data.libelle,
         description=data.description,
@@ -103,23 +141,35 @@ def create_role(data: RoleCreate, db: Session = Depends(get_db)):
             )
             db.add(perm)
     db.commit()
-    return {"message": "Rôle créé avec succès", "role_id": role.role_id}
+    # Un rôle personnalisé reste non attribuable : le formulaire du personnel
+    # propose une liste figée, et la matrice ne pouvant que RETIRER des accès,
+    # un rôle hors des ensembles statiques n'obtiendrait de toute façon rien.
+    return {
+        "message": "Rôle créé. Il n'est pas attribuable à un compte : seuls les rôles "
+                   "standards ouvrent des accès, la matrice ne pouvant que les restreindre.",
+        "role_id": role.role_id,
+        "attribuable": False,
+    }
 
 @router.put("/roles/{role_id}")
-def update_role(role_id: int, data: RoleUpdate, db: Session = Depends(get_db)):
-    role = db.query(Role).filter(Role.role_id == role_id).first()
-    if not role:
-        raise HTTPException(404, "Rôle non trouvé")
+def update_role(
+    role_id: int, data: RoleUpdate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    role = _role_ou_404(db, role_id, etablissement_id)
     role.libelle = data.libelle
     role.description = data.description
     db.commit()
     return {"message": "Rôle mis à jour"}
 
 @router.delete("/roles/{role_id}")
-def delete_role(role_id: int, db: Session = Depends(get_db)):
-    role = db.query(Role).filter(Role.role_id == role_id).first()
-    if not role:
-        raise HTTPException(404, "Rôle non trouvé")
+def delete_role(
+    role_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    role = _role_ou_404(db, role_id, etablissement_id)
     if role.est_systeme == "O":
         raise HTTPException(400, "Impossible de supprimer un rôle système")
     
@@ -129,10 +179,12 @@ def delete_role(role_id: int, db: Session = Depends(get_db)):
     return {"message": "Rôle supprimé avec succès"}
 
 @router.put("/roles/{role_id}/permissions")
-def update_permissions(role_id: int, data: PermissionUpdate, db: Session = Depends(get_db)):
-    role = db.query(Role).filter(Role.role_id == role_id).first()
-    if not role:
-        raise HTTPException(404, "Rôle non trouvé")
+def update_permissions(
+    role_id: int, data: PermissionUpdate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    _role_ou_404(db, role_id, etablissement_id)
 
     for item in data.permissions:
         perm = db.query(Permission).filter(
@@ -148,16 +200,26 @@ def update_permissions(role_id: int, data: PermissionUpdate, db: Session = Depen
             db.add(new_perm)
 
     db.commit()
-    return {"message": "Permissions mises à jour avec succès"}
+    # La matrice est appliquée (`app/core/auth.py::require_module`), mais en
+    # RETRAIT uniquement : décocher ferme un accès, cocher n'en ouvre jamais un
+    # que le rôle refuse. La réponse le dit, pour qu'un client qui n'affiche que
+    # le message reste exact.
+    return {
+        "message": "Permissions enregistrées et appliquées immédiatement. "
+                   "Une case décochée retire l'accès ; une case cochée n'accorde "
+                   "rien de plus que ce que le rôle permet déjà.",
+        "appliquees": True,
+        "peut_elargir": False,
+    }
 
 @router.get("/audit-log")
 def list_audit_log(
-    etablissement_id: int = 1,
     module: Optional[str] = None,
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query = db.query(AuditLog).filter(AuditLog.etablissement_id == etablissement_id)
     if module:
@@ -174,10 +236,17 @@ def list_audit_log(
     return {"total": total, "items": items}
 
 @router.post("/audit-log", status_code=201)
-def create_audit_entry(data: AuditLogCreate, request: Request, db: Session = Depends(get_db)):
+def create_audit_entry(
+    data: AuditLogCreate, request: Request,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     client_ip = request.client.host if request.client else "127.0.0.1"
+    # etablissement_id vient du compte authentifié : il etait fourni dans le
+    # corps de la requete, ce qui permettait d'ecrire de fausses entrees dans
+    # le journal d'audit de n'importe quelle autre ecole (Lot 10).
     log = AuditLog(
-        etablissement_id=data.etablissement_id,
+        etablissement_id=etablissement_id,
         utilisateur_id=data.utilisateur_id,
         nom_utilisateur=data.nom_utilisateur,
         module=data.module,

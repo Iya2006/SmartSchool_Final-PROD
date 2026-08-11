@@ -17,8 +17,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import (
-    AnneeScolaire, Trimestre, Inscription, Bulletin, Facture, BulletinPaie,
+    AnneeScolaire, Trimestre, Inscription, Bulletin, Facture, BulletinPaie, Employe,
 )
 
 router = APIRouter(prefix="/api/annee-scolaire", tags=["Année Scolaire — Cycle de vie"])
@@ -28,16 +29,24 @@ def _controle(code: str, label: str, severite: str, ok: bool, detail: str) -> di
     return {"code": code, "label": label, "severite": severite, "ok": ok, "detail": detail}
 
 
+def _annee_ou_404(db: Session, annee_id: int, etablissement_id: int) -> AnneeScolaire:
+    """AnneeScolaire a une colonne etablissement_id directe (Lot 9)."""
+    a = db.query(AnneeScolaire).filter(
+        AnneeScolaire.annee_id == annee_id, AnneeScolaire.etablissement_id == etablissement_id
+    ).first()
+    if not a:
+        raise HTTPException(404, "Année scolaire non trouvée")
+    return a
+
+
 @router.get("/{annee_id}/verification-cloture")
-def verification_cloture(annee_id: int, db: Session = Depends(get_db)):
+def verification_cloture(annee_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Contrôles avant clôture comptable — chaque contrôle est BLOQUANT (empêche
     la clôture) ou AVERTISSEMENT (affiché mais n'empêche pas). `peut_cloturer`
     est vrai seulement si tous les contrôles BLOQUANT passent.
     """
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_id).first()
-    if not annee:
-        raise HTTPException(404, "Année scolaire non trouvée")
+    annee = _annee_ou_404(db, annee_id, etablissement_id)
 
     controles = []
 
@@ -91,9 +100,14 @@ def verification_cloture(annee_id: int, db: Session = Depends(get_db)):
     ))
 
     # ── AVERTISSEMENT : salaires du mois courant ──
+    # BulletinPaie est OWNERSHIP via Employe — sans cette jointure, le
+    # compteur agrégeait les bulletins de paie de TOUTES les écoles (Lot 9).
     mois_courant = date.today().strftime("%Y-%m")
-    non_payes = db.query(func.count(BulletinPaie.bulletin_id)).filter(
-        BulletinPaie.mois_concerne == mois_courant, BulletinPaie.statut != "PAYE"
+    non_payes = db.query(func.count(BulletinPaie.bulletin_id)).join(
+        Employe, Employe.employe_id == BulletinPaie.employe_id
+    ).filter(
+        BulletinPaie.mois_concerne == mois_courant, BulletinPaie.statut != "PAYE",
+        Employe.etablissement_id == etablissement_id,
     ).scalar() or 0
     controles.append(_controle(
         "salaires_finalises", f"Salaires du mois en cours ({mois_courant}) finalisés", "AVERTISSEMENT",
@@ -111,21 +125,22 @@ def verification_cloture(annee_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{annee_id}/cloturer-comptabilite")
-def cloturer_comptabilite(annee_id: int, db: Session = Depends(get_db)):
+def cloturer_comptabilite(annee_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Verrouille définitivement la comptabilité de l'année : plus aucune
     création/modification de Facture/Paiement/Depense n'est possible (voir
     _verifier_annee_modifiable, app/api/finance.py). Toutes les données
     restent consultables. Refuse si un contrôle BLOQUANT de la vérification
     échoue.
+
+    Isolation ajoutée au Lot 9 : sans elle, un admin pouvait verrouiller
+    définitivement la comptabilité d'une autre école.
     """
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_id).first()
-    if not annee:
-        raise HTTPException(404, "Année scolaire non trouvée")
+    annee = _annee_ou_404(db, annee_id, etablissement_id)
     if annee.statut in ("CLOTURE_COMPTABLE", "ARCHIVEE"):
         return {"message": f"{annee.libelle} est déjà clôturée.", "statut": annee.statut}
 
-    verif = verification_cloture(annee_id, db)
+    verif = verification_cloture(annee_id, db, etablissement_id)
     if not verif["peut_cloturer"]:
         bloquants = [c["label"] for c in verif["controles"] if c["severite"] == "BLOQUANT" and not c["ok"]]
         raise HTTPException(400, f"Clôture impossible — {', '.join(bloquants)}.")
@@ -141,7 +156,7 @@ def cloturer_comptabilite(annee_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{annee_id}/archiver")
-def archiver_annee(annee_id: int, db: Session = Depends(get_db)):
+def archiver_annee(annee_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Dernière étape du cycle de vie : classe définitivement l'année (statut
     ARCHIVEE). Nécessite que la comptabilité soit déjà clôturée — le
@@ -150,9 +165,7 @@ def archiver_annee(annee_id: int, db: Session = Depends(get_db)):
     est donc sémantique ("année définitivement classée, consultable comme
     archive") plutôt qu'un niveau de verrouillage supplémentaire.
     """
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_id).first()
-    if not annee:
-        raise HTTPException(404, "Année scolaire non trouvée")
+    annee = _annee_ou_404(db, annee_id, etablissement_id)
     if annee.statut == "ARCHIVEE":
         return {"message": f"{annee.libelle} est déjà archivée.", "statut": annee.statut}
     if annee.statut != "CLOTURE_COMPTABLE":

@@ -57,19 +57,27 @@
     "connexion requise" (décision actée avec l'utilisateur).
   </div>
 
-  <div class="callout warn">
-    <strong>⚠️ Limite connue à ce stade :</strong> le chargement de
-    l'application elle-même (HTML/JS) sans AUCUNE connexion ("app shell"
-    hors-ligne, installation PWA complète) ne fonctionne pas encore — le
-    générateur de Service Worker utilisé (<code>next-pwa</code>) s'est révélé
-    incompatible avec Turbopack (le moteur de build de ce projet, confirmé
-    lors des tests de cette phase). La file de saisie hors-ligne décrite
-    ci-dessous n'en dépend PAS et fonctionne normalement — seul le
-    chargement initial de la page nécessite encore une connexion la première
-    fois. Une correction séparée (remplacer next-pwa par une génération de
-    Service Worker compatible Turbopack) sera nécessaire pour lever cette
-    limite.
+  <div class="callout info">
+    <strong>✅ Mis à jour :</strong> le Service Worker est désormais généré
+    via <code>@serwist/next</code> (successeur maintenu de <code>next-pwa</code>,
+    qui s'était révélé incompatible avec Turbopack). L'app shell hors-ligne
+    (chargement de la page sans AUCUNE connexion, y compris au tout premier
+    accès une fois le Service Worker installé) fonctionne maintenant. Le
+    Service Worker n'est généré qu'au <code>build</code> de production
+    (<code>next build --webpack</code> — Turbopack reste le bundler par
+    défaut de <code>next dev</code>, aucun changement du poste de
+    développement quotidien) et reste désactivé en dev par défaut, comme
+    avant (<code>NEXT_PUBLIC_PWA_DEV=1</code> pour le forcer en local).
   </div>
+
+  <div class="callout warn">
+    <strong>⚠️ Ce qui n'est volontairement PAS mis en cache :</strong> les
+    réponses des routes <code>/api/finance</code>, <code>/api/comptabilite</code>,
+    <code>/api/auth</code> et <code>/api/securite</code> ne passent jamais par
+    le Service Worker (ni lecture ni écriture) — cohérent avec la décision
+    "comptabilité = connexion requise". Si le premier accès hors-ligne tombe
+    sur une page qui n'a encore jamais été visitée en ligne, une page de
+    repli <code>/hors-ligne</code> s'affiche à la place d'un écran blanc.</div>
 
   <div class="card">
     <p class="step-title"><span class="step-num">1</span> Se connecter normalement</p>
@@ -140,6 +148,27 @@
   </div>
 
   <div class="card">
+    <p class="step-title"><span class="step-num">8</span> Nouveau — App shell 100% hors-ligne</p>
+    <p>Nécessite un <code>npm run build</code> puis <code>npm run start</code>
+    (le Service Worker est désactivé sous <code>npm run dev</code>).</p>
+    <ul>
+      <li>Charge n'importe quelle page une première fois, en ligne (le
+      Service Worker s'installe et précache l'app shell).</li>
+      <li>Coupe le réseau (DevTools → Offline) puis recharge la page (F5) :
+      elle doit s'afficher depuis le cache au lieu d'un écran blanc.</li>
+      <li>Ouvre une URL jamais visitée hors-ligne : la page
+      <code>/hors-ligne</code> doit s'afficher (au lieu d'une erreur de
+      navigateur), avec un bouton "Réessayer".</li>
+      <li>Onglet Application → Cache Storage : vérifie la présence des
+      caches <code>smartschool-*</code> et l'ABSENCE de toute entrée
+      <code>/api/finance</code>, <code>/api/comptabilite</code>,
+      <code>/api/auth</code>, <code>/api/securite</code>.</li>
+      <li>Déconnecte-toi (bouton logout) : les caches <code>smartschool-*</code>
+      doivent disparaître de Cache Storage.</li>
+    </ul>
+  </div>
+
+  <div class="card">
     <p class="step-title">📋 Récapitulatif de ce qui a été vérifié automatiquement</p>
     <table>
       <tr><th>Élément</th><th>Statut</th></tr>
@@ -147,8 +176,11 @@
       <tr><td>Moteur de synchronisation (rejeu, conflits, arrêt propre hors-ligne, erreurs serveur) — 7 tests unitaires</td><td><span class="badge ok">OK</span></td></tr>
       <tr><td>Backend : détection de conflit (LWW), upsert présences, refus propre — 13 vérifications end-to-end</td><td><span class="badge ok">OK</span></td></tr>
       <tr><td>Lecture avec cache persisté (Classes, Élèves, Tableau de bord)</td><td><span class="badge ok">OK</span></td></tr>
-      <tr><td>Purge de la file/cache à la déconnexion</td><td><span class="badge ok">OK</span></td></tr>
-      <tr><td>Service Worker / app shell hors-ligne complet</td><td><span class="badge gap">À refaire (Turbopack)</span></td></tr>
+      <tr><td>Purge du cache React Query et du Cache Storage à la déconnexion</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>File offline (notes/présences) NON perdue si déconnexion avant resynchronisation</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>Service Worker / app shell hors-ligne complet (@serwist/next)</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>Exclusion des routes sensibles (finance/comptabilité/auth/sécurité) du cache SW</td><td><span class="badge ok">OK</span></td></tr>
+      <tr><td>Test réel en navigateur (DevTools Offline, Cache Storage) — voir note ci-dessous</td><td><span class="badge gap">À faire par vous</span></td></tr>
     </table>
   </div>
 </div>

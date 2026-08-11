@@ -43,6 +43,12 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 
+# Service Worker généré (@serwist/next — voir frontend/next.config.ts)
+frontend/public/sw.js
+frontend/public/sw.js.map
+frontend/public/swe-worker-*.js
+frontend/public/swe-worker-*.js.map
+
 # Build
 dist/
 build/

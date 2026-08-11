@@ -6,11 +6,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.core.security import hash_password
-from datetime import date as date_type
+from app.core.matricules import PREFIXE_ELEVE, generer_matricule
+from app.core.identifiants import exiger_identifiants_libres
+from datetime import date as date_type, datetime
 from app.models.academique import (
     Eleve, Inscription, Classe, Niveau, Parent, EleveParent, Facture, EcheanceFacture, TypeFrais, TarifClasse,
-    AnneeScolaire, Bulletin, Trimestre, Presence, Incident,
+    AnneeScolaire, Bulletin, Trimestre, Presence, Incident, SyncTombstone,
 )
 from app.schemas.schemas import EleveCreate, EleveUpdate, EleveOut, EleveListOut
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
@@ -21,14 +24,14 @@ router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
 
 @router.get("", response_model=List[EleveListOut])
 def list_eleves(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     statut: Optional[str] = None,
     search: Optional[str] = None,
     classe_code: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Liste des élèves avec classe et niveau"""
     query = db.query(
@@ -76,8 +79,87 @@ def list_eleves(
     ) for r in results]
 
 
+class EleveDeltaOut(BaseModel):
+    items: List[EleveListOut]
+    deleted_ids: List[int]
+    sync_at: datetime
+
+
+@router.get("/delta", response_model=EleveDeltaOut)
+def delta_eleves(
+    since: Optional[datetime] = None,
+    annee_id: int = 1,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Synchronisation delta (Étape C) — voir le plan approuvé.
+
+    Ne renvoie que les élèves créés/modifiés depuis `since` (absent =
+    première synchro, renvoie tout l'établissement), plus les ids supprimés
+    depuis `since` (SyncTombstone, alimenté par DELETE /{eleve_id}
+    ci-dessous). `sync_at` est l'horloge de la BASE (pas du serveur
+    applicatif ni du client — évite tout décalage d'horloge), capturée
+    AVANT les requêtes de lecture : une écriture concurrente entre ce
+    calcul et la fin de cette requête ne sera peut-être pas incluse cette
+    fois, mais elle a une garantie de l'être au prochain appel (son
+    modified_date sera nécessairement >= ce sync_at). Même principe que
+    `base_updated_at` déjà utilisé dans app/api/sync.py.
+
+    Limite assumée (voir le plan) : détecte les modifications du dossier
+    élève lui-même (Eleve.modified_date), PAS un changement de classe seul
+    — Inscription n'a pas encore de suivi de modification dans ce pilote.
+    """
+    sync_at = db.query(func.now()).scalar()
+
+    query = db.query(
+        Eleve.eleve_id,
+        Eleve.matricule,
+        Eleve.nom,
+        Eleve.prenom,
+        Eleve.sexe,
+        Eleve.date_naissance,
+        Eleve.statut,
+        Eleve.photo_url,
+        Eleve.adresse,
+        Eleve.groupe_sanguin,
+        Classe.code.label("classe_code"),
+        Niveau.libelle.label("niveau")
+    ).outerjoin(
+        Inscription, (Eleve.eleve_id == Inscription.eleve_id) &
+                      (Inscription.statut == "ACTIVE") &
+                      (Inscription.annee_id == annee_id)
+    ).outerjoin(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).outerjoin(
+        Niveau, Classe.niveau_id == Niveau.niveau_id
+    ).filter(
+        Eleve.etablissement_id == etablissement_id
+    )
+
+    if since is not None:
+        query = query.filter(Eleve.modified_date > since)
+
+    results = query.order_by(Eleve.nom, Eleve.prenom).all()
+    items = [EleveListOut(
+        eleve_id=r.eleve_id, matricule=r.matricule, nom=r.nom,
+        prenom=r.prenom, sexe=r.sexe, date_naissance=r.date_naissance,
+        statut=r.statut, classe_code=r.classe_code, niveau=r.niveau,
+        photo_url=r.photo_url, adresse=r.adresse, groupe_sanguin=r.groupe_sanguin
+    ) for r in results]
+
+    tombstones = db.query(SyncTombstone.entity_id).filter(
+        SyncTombstone.entity_type == "eleve",
+        SyncTombstone.etablissement_id == etablissement_id,
+    )
+    if since is not None:
+        tombstones = tombstones.filter(SyncTombstone.deleted_at > since)
+    deleted_ids = [row[0] for row in tombstones.all()]
+
+    return EleveDeltaOut(items=items, deleted_ids=deleted_ids, sync_at=sync_at)
+
+
 @router.get("/count")
-def count_eleves(etablissement_id: int = 1, annee_id: Optional[int] = None, db: Session = Depends(get_db)):
+def count_eleves(annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     total = db.query(func.count(Eleve.eleve_id)).filter(
         Eleve.etablissement_id == etablissement_id
     ).scalar()
@@ -107,8 +189,10 @@ def count_eleves(etablissement_id: int = 1, annee_id: Optional[int] = None, db: 
 
 
 @router.get("/{eleve_id}", response_model=EleveOut)
-def get_eleve(eleve_id: int, db: Session = Depends(get_db)):
-    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+def get_eleve(eleve_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
     if not eleve:
         raise HTTPException(status_code=404, detail="Élève non trouvé")
         
@@ -124,13 +208,20 @@ def get_eleve(eleve_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=EleveOut, status_code=201)
-def create_eleve(data: EleveCreate, db: Session = Depends(get_db)):
-    # Génération matricule
-    count = db.query(func.count(Eleve.eleve_id)).scalar() or 0
-    matricule = f"ELV-{count + 1:05d}"
+def create_eleve(data: EleveCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    # Matricule propre à l'établissement (voir app/core/matricules.py) : le
+    # compteur global d'avant exposait le volume de toute la plateforme et
+    # régressait après suppression, régénérant un matricule déjà pris.
+    matricule = generer_matricule(db, Eleve, PREFIXE_ELEVE, etablissement_id)
+
+    # data.etablissement_id (champ obligatoire du schéma EleveBase) est ignoré
+    # et remplacé par l'établissement authentifié — avant le Lot 6, n'importe
+    # quel client pouvait créer un élève dans l'école de son choix.
+    payload = data.model_dump()
+    payload["etablissement_id"] = etablissement_id
 
     eleve = Eleve(
-        **data.model_dump(),
+        **payload,
         matricule=matricule
     )
     db.add(eleve)
@@ -140,17 +231,29 @@ def create_eleve(data: EleveCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{eleve_id}", response_model=EleveOut)
-def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db)):
-    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
     if not eleve:
         raise HTTPException(status_code=404, detail="Élève non trouvé")
 
     update_data = data.model_dump(exclude_unset=True)
     classe_id = update_data.pop("classe_id", None)
 
+    # La classe cible doit appartenir au même établissement — sans cette
+    # vérification, un élève pouvait être déplacé dans la classe d'une autre
+    # école (et son effectif incrémenté au passage).
+    if classe_id is not None:
+        classe_valide = db.query(Classe.classe_id).filter(
+            Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+        ).first()
+        if not classe_valide:
+            raise HTTPException(status_code=404, detail="Classe non trouvée")
+
     for key, value in update_data.items():
         setattr(eleve, key, value)
-        
+
     if classe_id is not None:
         current_insc = db.query(Inscription).filter(
             Inscription.eleve_id == eleve_id,
@@ -228,7 +331,6 @@ class InscriptionCompleteData(BaseModel):
     telephone: Optional[str] = None
     email: Optional[str] = None
     statut: str = "ACTIF"
-    etablissement_id: int = 1
     annee_id: int = 1
     classe_id: Optional[int] = None
     eleve_mot_de_passe: Optional[str] = None  # MDP portail élève (optionnel, défaut: smartschool)
@@ -239,24 +341,50 @@ class InscriptionCompleteData(BaseModel):
 
 
 @router.post("/inscription-complete", status_code=201)
-def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(get_db)):
-    """Inscription complète : crée l'élève, l'inscription et le parent en une seule opération."""
+def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Inscription complète : crée l'élève, l'inscription et le parent en une seule opération.
+
+    `data.etablissement_id` est ignoré et remplacé par l'établissement
+    authentifié ; la classe cible est vérifiée appartenir à cet
+    établissement (sinon un élève pouvait être inscrit dans la classe d'une
+    autre école, en incrémentant son effectif au passage)."""
     _verifier_annee_modifiable(db, data.annee_id)
+
+    if data.classe_id:
+        classe_valide = db.query(Classe.classe_id).filter(
+            Classe.classe_id == data.classe_id, Classe.etablissement_id == etablissement_id
+        ).first()
+        if not classe_valide:
+            raise HTTPException(404, "Classe non trouvée")
+
+    # `date_naissance` est typé `str` dans InscriptionCompleteData (contrairement
+    # à EleveBase qui utilise `date`) et était passé tel quel à une colonne Date.
+    # PostgreSQL/pg8000 accepte une chaîne ISO (vérifié réellement — la route
+    # fonctionne donc en production), mais pas SQLite : bug de portabilité
+    # préexistant, sans rapport avec l'isolation, corrigé ici de façon minimale
+    # car il empêchait d'écrire le test de sécurité de cette route. Aucun
+    # changement de comportement en production (même valeur stockée).
+    date_naissance = data.date_naissance
+    if isinstance(date_naissance, str) and date_naissance:
+        try:
+            date_naissance = date_type.fromisoformat(date_naissance)
+        except ValueError:
+            raise HTTPException(400, "date_naissance invalide (format attendu : AAAA-MM-JJ)")
+
     try:
         # 1. Créer l'élève
-        count = db.query(func.count(Eleve.eleve_id)).scalar() or 0
-        matricule = f"ELV-{count + 1:05d}"
+        matricule = generer_matricule(db, Eleve, PREFIXE_ELEVE, etablissement_id)
 
         eleve = Eleve(
             nom=data.nom,
             prenom=data.prenom,
-            date_naissance=data.date_naissance,
+            date_naissance=date_naissance,
             sexe=data.sexe,
             lieu_naissance=data.lieu_naissance,
             telephone=data.telephone,
             email=data.email,
             statut=data.statut,
-            etablissement_id=data.etablissement_id,
+            etablissement_id=etablissement_id,
             matricule=matricule,
             mot_de_passe=hash_password(data.eleve_mot_de_passe) if data.eleve_mot_de_passe else None,
         )
@@ -281,22 +409,46 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
         # 3. Traiter le parent si fourni
         parent_info = None
         if data.parent and data.parent.telephone_1:
-            # Vérifier si un parent avec ce téléphone existe déjà
+            # Un parent peut légitimement avoir des enfants dans plusieurs
+            # écoles : on réutilise donc bien la fiche existante. En revanche,
+            # on ne la MODIFIE que si ce parent relève déjà de CET
+            # établissement. Sans cette distinction, il suffisait à un
+            # administrateur de saisir le numéro d'un parent d'une autre école
+            # pour lui réécrire son mot de passe — donc prendre le contrôle de
+            # son compte et, à travers lui, accéder aux données de ses enfants
+            # dans l'autre école. La réponse renvoyait en prime son nom réel.
             existing_parent = db.query(Parent).filter(
                 (Parent.telephone_1 == data.parent.telephone_1)
             ).first()
 
+            parent_de_cet_etablissement = False
+            if existing_parent:
+                parent_de_cet_etablissement = bool(
+                    db.query(EleveParent.eleve_parent_id)
+                    .join(Eleve, Eleve.eleve_id == EleveParent.eleve_id)
+                    .filter(
+                        EleveParent.parent_id == existing_parent.parent_id,
+                        Eleve.etablissement_id == etablissement_id,
+                    )
+                    .first()
+                )
+
             if existing_parent:
                 parent = existing_parent
-                # Mettre à jour le mot de passe si fourni
-                if data.parent.mot_de_passe:
-                    parent.mot_de_passe = hash_password(data.parent.mot_de_passe)
-                # Mettre à jour les infos si elles étaient vides
-                if data.parent.email and not parent.email:
-                    parent.email = data.parent.email
-                if data.parent.profession and not parent.profession:
-                    parent.profession = data.parent.profession
+                if parent_de_cet_etablissement:
+                    # Mettre à jour le mot de passe si fourni
+                    if data.parent.mot_de_passe:
+                        parent.mot_de_passe = hash_password(data.parent.mot_de_passe)
+                    # Mettre à jour les infos si elles étaient vides
+                    if data.parent.email and not parent.email:
+                        parent.email = data.parent.email
+                    if data.parent.profession and not parent.profession:
+                        parent.profession = data.parent.profession
             else:
+                # Aucun parent ne porte ce téléphone : on en crée un. Son
+                # e-mail sert lui aussi à se connecter, il doit donc être libre
+                # (le téléphone, lui, vient d'être vérifié juste au-dessus).
+                exiger_identifiants_libres(db, [data.parent.email])
                 parent = Parent(
                     nom=data.parent.nom,
                     prenom=data.parent.prenom,
@@ -328,11 +480,16 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
                 )
                 db.add(link)
 
+            # Pour un parent venu d'une autre école, on renvoie ce que
+            # l'appelant a lui-même saisi, jamais l'identité stockée : sinon un
+            # simple numéro de téléphone permettait de découvrir le nom réel
+            # d'un parent d'un autre établissement.
+            expose_identite_stockee = parent_de_cet_etablissement or not existing_parent
             parent_info = {
                 "parent_id": parent.parent_id,
-                "nom": parent.nom,
-                "prenom": parent.prenom,
-                "telephone": parent.telephone_1,
+                "nom": parent.nom if expose_identite_stockee else data.parent.nom,
+                "prenom": parent.prenom if expose_identite_stockee else data.parent.prenom,
+                "telephone": data.parent.telephone_1,
                 "is_new": not bool(existing_parent),
             }
 
@@ -414,10 +571,17 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
 
 
 @router.delete("/{eleve_id}")
-def delete_eleve(eleve_id: int, db: Session = Depends(get_db)):
-    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+def delete_eleve(eleve_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
     if not eleve:
         raise HTTPException(status_code=404, detail="Élève non trouvé")
+    # Tombstone (Étape C, synchro delta) : la suppression est physique
+    # (db.delete), donc c'est le SEUL moyen pour un client ayant un delta
+    # obsolète de savoir que cet élève a disparu — voir GET /delta et
+    # SyncTombstone. Même transaction que le DELETE, avant le commit.
+    db.add(SyncTombstone(entity_type="eleve", entity_id=eleve_id, etablissement_id=eleve.etablissement_id))
     db.delete(eleve)
     db.commit()
     return {"message": "Élève supprimé"}
@@ -428,13 +592,15 @@ def delete_eleve(eleve_id: int, db: Session = Depends(get_db)):
 # ════════════════════════════════════════════════════════════
 
 @router.get("/{eleve_id}/inscriptions")
-def get_historique_inscriptions(eleve_id: int, db: Session = Depends(get_db)):
+def get_historique_inscriptions(eleve_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Historique complet des inscriptions d'un élève, toutes années confondues
     — alimente le centre d'historique (page /archive/eleve/{id}). Remplace
     les données précédemment simulées côté frontend.
     """
-    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
     if not eleve:
         raise HTTPException(status_code=404, detail="Élève non trouvé")
 
@@ -467,12 +633,18 @@ def get_historique_inscriptions(eleve_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{eleve_id}/dossier/{inscription_id}")
-def get_dossier_annee(eleve_id: int, inscription_id: int, db: Session = Depends(get_db)):
+def get_dossier_annee(eleve_id: int, inscription_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Dossier complet d'UNE année pour cet élève : bulletins de tous les
     trimestres, résumé de présence, incidents disciplinaires — alimente les
     onglets Bulletins/Discipline du centre d'historique (lecture seule).
     """
+    eleve_valide = db.query(Eleve.eleve_id).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
+    if not eleve_valide:
+        raise HTTPException(status_code=404, detail="Élève non trouvé")
+
     insc = db.query(Inscription).filter(
         Inscription.inscription_id == inscription_id, Inscription.eleve_id == eleve_id
     ).first()
@@ -537,7 +709,8 @@ def get_dossier_annee(eleve_id: int, inscription_id: int, db: Session = Depends(
 def generer_certificat_scolarite_pdf(
     eleve_id: int,
     annee_id: int = 1,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Génère un certificat de scolarité officiel au format PDF."""
     from reportlab.lib.pagesizes import A4
@@ -550,7 +723,9 @@ def generer_certificat_scolarite_pdf(
     from datetime import date
 
     # ── Charger les données ──
-    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
     if not eleve:
         raise HTTPException(404, "Élève non trouvé")
 

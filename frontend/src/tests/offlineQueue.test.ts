@@ -27,11 +27,15 @@ vi.mock('idb-keyval', () => ({
 import {
     enqueue,
     listPending,
+    listBlocked,
     countPending,
+    countBlocked,
     markInProgress,
     markSynced,
     markFailed,
+    retry,
     clearAll,
+    MAX_TENTATIVES,
 } from '@/lib/offlineQueue';
 
 const baseItem = {
@@ -121,5 +125,73 @@ describe('offlineQueue', () => {
     it("markSynced/markFailed sur un id inconnu n'échoue pas (no-op silencieux)", async () => {
         await expect(markSynced('id-inexistant')).resolves.not.toThrow();
         await expect(markFailed('id-inexistant', 'x')).resolves.not.toThrow();
+    });
+
+    // §21 : plafond de retry / échec définitif ─────────────────────────────
+
+    it('markFailed({definitif: true}) bascule immédiatement en ECHEC_DEFINITIF, dès la première erreur', async () => {
+        const item = await enqueue(baseItem);
+        await markFailed(item.id, 'Vous n\'êtes pas affecté à cette classe', { definitif: true });
+
+        expect(await listPending()).toHaveLength(0); // n'est plus rejouable automatiquement
+        const blocked = await listBlocked();
+        expect(blocked).toHaveLength(1);
+        expect(blocked[0].statut).toBe('ECHEC_DEFINITIF');
+        expect(blocked[0].tentatives).toBe(1);
+    });
+
+    it(`markFailed sans definitif reste ERREUR (rejouable) sous le plafond, bascule en ECHEC_DEFINITIF au ${MAX_TENTATIVES}e échec`, async () => {
+        const item = await enqueue(baseItem);
+        for (let i = 0; i < MAX_TENTATIVES - 1; i++) {
+            await markFailed(item.id, `Erreur serveur temporaire #${i + 1}`);
+        }
+        let pending = await listPending();
+        expect(pending).toHaveLength(1);
+        expect(pending[0].statut).toBe('ERREUR');
+        expect(pending[0].tentatives).toBe(MAX_TENTATIVES - 1);
+        expect(await countBlocked()).toBe(0);
+
+        // Dernier échec autorisé : plafond atteint.
+        await markFailed(item.id, 'Erreur serveur temporaire finale');
+        pending = await listPending();
+        expect(pending).toHaveLength(0);
+        const blocked = await listBlocked();
+        expect(blocked).toHaveLength(1);
+        expect(blocked[0].statut).toBe('ECHEC_DEFINITIF');
+        expect(blocked[0].tentatives).toBe(MAX_TENTATIVES);
+    });
+
+    it("listPending/countPending excluent les éléments ECHEC_DEFINITIF ; listBlocked/countBlocked ne renvoient qu'eux", async () => {
+        const a = await enqueue(baseItem);
+        const b = await enqueue({ ...baseItem, type: 'presence' as const });
+        await markFailed(b.id, 'refus', { definitif: true });
+
+        expect((await listPending()).map((i) => i.id)).toEqual([a.id]);
+        expect(await countPending()).toBe(1);
+        expect((await listBlocked()).map((i) => i.id)).toEqual([b.id]);
+        expect(await countBlocked()).toBe(1);
+    });
+
+    it("retry() remet un élément bloqué à EN_ATTENTE avec tentatives à 0, sans perdre l'historique de derniere_erreur", async () => {
+        const item = await enqueue(baseItem);
+        await markFailed(item.id, 'Refusé', { definitif: true });
+        expect((await listBlocked())).toHaveLength(1);
+
+        await retry(item.id);
+
+        const pending = await listPending();
+        expect(pending).toHaveLength(1);
+        expect(pending[0].statut).toBe('EN_ATTENTE');
+        expect(pending[0].tentatives).toBe(0);
+        expect(await countBlocked()).toBe(0);
+    });
+
+    it('un élément ECHEC_DEFINITIF ne disparaît jamais silencieusement : seul clearAll (déconnexion, file vide) ou retry() le fait sortir du statut bloqué', async () => {
+        const item = await enqueue(baseItem);
+        await markFailed(item.id, 'Refusé définitivement', { definitif: true });
+
+        // Un simple passage du temps / nouveaux appels ne le fait pas disparaître.
+        expect(await countBlocked()).toBe(1);
+        expect(await countBlocked()).toBe(1);
     });
 });

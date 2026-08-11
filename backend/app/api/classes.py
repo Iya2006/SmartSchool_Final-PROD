@@ -7,8 +7,8 @@ from sqlalchemy import func
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from app.core.database import get_db
-from app.core.auth import get_current_user
-from app.models.academique import Classe, Inscription, Eleve, Niveau, Enseignant, ClasseMatiere, Matiere
+from app.core.auth import get_current_user, require_etablissement
+from app.models.academique import Classe, Inscription, Eleve, Niveau, Enseignant, ClasseMatiere, Matiere, Cycle
 from app.schemas.schemas import ClasseCreate, ClasseOut, InscriptionCreate, InscriptionOut
 
 router = APIRouter(prefix="/api/classes", tags=["Classes"])
@@ -37,11 +37,16 @@ def check_admin_access(current_user: dict):
 @router.get("/lycee-series-coefficients")
 def get_lycee_series_coefficients(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Retourne les coefficients par matière pour chaque série lycée (SM, SE, SS).
     Calcule la moyenne des coefficients de ClasseMatiere pour les classes de chaque série.
+
+    Restreint à l'établissement appelant : avant le Lot 7, la classe de
+    référence (`classe_ids[0]`) pouvait appartenir à une AUTRE école, dont
+    les coefficients étaient alors affichés comme étant ceux de la série.
     """
     check_admin_access(current_user)
     result = {}
@@ -50,7 +55,8 @@ def get_lycee_series_coefficients(
         niveaux = db.query(Niveau).filter(Niveau.code.in_(niveau_codes)).all()
         niveau_ids = [n.niveau_id for n in niveaux]
         classes = db.query(Classe).filter(
-            Classe.niveau_id.in_(niveau_ids), Classe.statut == "ACTIVE"
+            Classe.niveau_id.in_(niveau_ids), Classe.statut == "ACTIVE",
+            Classe.etablissement_id == etablissement_id,
         ).all()
         classe_ids = [c.classe_id for c in classes]
 
@@ -88,11 +94,18 @@ def update_lycee_series_coefficients(
     serie: str,
     updates: List[MatiereCoefficientUpdate] = Body(...),
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
-    Met à jour les coefficients des ClasseMatiere pour toutes les classes d'une série lycée.
-    updates: list of MatiereCoefficientUpdate
+    Met à jour les coefficients des ClasseMatiere pour toutes les classes
+    d'une série lycée DE CET ÉTABLISSEMENT.
+
+    AVANT LE LOT 7 : cette route écrivait sur TOUTES les classes de série
+    lycée de TOUTE la plateforme — la vulnérabilité en écriture la plus
+    massive du chantier (un admin d'une école pouvait modifier d'un seul
+    appel les coefficients de toutes les autres écoles). `Matiere.note_sur`
+    était également modifiée sans aucune vérification d'appartenance.
     """
     check_admin_access(current_user)
     serie_upper = serie.upper()
@@ -103,8 +116,25 @@ def update_lycee_series_coefficients(
     niveaux = db.query(Niveau).filter(Niveau.code.in_(niveau_codes)).all()
     niveau_ids = [n.niveau_id for n in niveaux]
     classes = db.query(Classe).filter(
-        Classe.niveau_id.in_(niveau_ids), Classe.statut == "ACTIVE"
+        Classe.niveau_id.in_(niveau_ids), Classe.statut == "ACTIVE",
+        Classe.etablissement_id == etablissement_id,
     ).all()
+
+    # Les matières référencées doivent appartenir à cet établissement
+    # (OWNERSHIP via Cycle) — `note_sur` est une colonne de Matiere, partagée
+    # par toutes les classes qui l'utilisent : sans cette vérification, une
+    # écriture pouvait toucher la matière d'une autre école.
+    matiere_ids = {u.matiere_id for u in updates}
+    matieres_valides = set()
+    if matiere_ids:
+        matieres_valides = {
+            m.matiere_id for m in db.query(Matiere.matiere_id)
+            .join(Cycle, Cycle.cycle_id == Matiere.cycle_id)
+            .filter(Matiere.matiere_id.in_(matiere_ids), Cycle.etablissement_id == etablissement_id)
+            .all()
+        }
+        if matieres_valides != matiere_ids:
+            raise HTTPException(403, "Matière(s) invalide(s) pour cet établissement")
 
     updated = 0
     for cls in classes:
@@ -134,12 +164,12 @@ def update_lycee_series_coefficients(
 
 @router.get("", response_model=List[ClasseOut])
 def list_classes(
-    etablissement_id: int = 1,
     annee_id: int = 1,
     statut: Optional[str] = "ACTIVE",
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query = db.query(Classe).filter(
         Classe.etablissement_id == etablissement_id,
@@ -159,8 +189,10 @@ def list_classes(
 
 
 @router.get("/{classe_id}", response_model=ClasseOut)
-def get_classe(classe_id: int, db: Session = Depends(get_db)):
-    cl = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+def get_classe(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    cl = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
     if not cl:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
     cl.nb_matieres = db.query(ClasseMatiere).filter(
@@ -173,7 +205,13 @@ def get_classe(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{classe_id}/eleves")
-def get_classe_eleves(classe_id: int, db: Session = Depends(get_db)):
+def get_classe_eleves(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    classe_valide = db.query(Classe.classe_id).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe_valide:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+
     results = db.query(
         Eleve.eleve_id,
         Eleve.matricule,
@@ -200,21 +238,25 @@ def get_classe_eleves(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=ClasseOut, status_code=201)
-def create_classe(data: ClasseCreate, db: Session = Depends(get_db)):
-    # Vérifier l'existence d'une classe avec le même nom (libelle) ou code
+def create_classe(data: ClasseCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    # `data.etablissement_id` (obligatoire dans ClasseBase) est ignoré et
+    # remplacé par l'établissement authentifié — avant le Lot 7, une classe
+    # pouvait être créée dans l'école de son choix.
     existing = db.query(Classe).filter(
-        Classe.etablissement_id == data.etablissement_id,
+        Classe.etablissement_id == etablissement_id,
         Classe.annee_id == data.annee_id,
         ((Classe.libelle == data.libelle) | (Classe.code == data.code))
     ).first()
-    
+
     if existing:
         raise HTTPException(
-            status_code=409, 
+            status_code=409,
             detail=f"Une classe avec le libellé '{data.libelle}' ou le code '{data.code}' existe déjà."
         )
 
-    cl = Classe(**data.model_dump())
+    payload = data.model_dump()
+    payload["etablissement_id"] = etablissement_id
+    cl = Classe(**payload)
     db.add(cl)
     db.commit()
     db.refresh(cl)
@@ -222,11 +264,17 @@ def create_classe(data: ClasseCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{classe_id}", response_model=ClasseOut)
-def update_classe(classe_id: int, data: ClasseCreate, db: Session = Depends(get_db)):
-    cl = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+def update_classe(classe_id: int, data: ClasseCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    cl = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
     if not cl:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
-    for key, value in data.model_dump(exclude_unset=True).items():
+    # `etablissement_id` retiré du payload : une classe ne peut pas être
+    # déplacée vers une autre école via cette route.
+    update_data = data.model_dump(exclude_unset=True)
+    update_data.pop("etablissement_id", None)
+    for key, value in update_data.items():
         setattr(cl, key, value)
     db.commit()
     db.refresh(cl)
@@ -234,11 +282,13 @@ def update_classe(classe_id: int, data: ClasseCreate, db: Session = Depends(get_
 
 
 @router.get("/{classe_id}/profil")
-def get_classe_profil(classe_id: int, db: Session = Depends(get_db)):
+def get_classe_profil(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Profil complet d'une classe: infos, enseignant principal, élèves, matières"""
     from app.models.academique import ClasseMatiere, Matiere
-    
-    cl = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+
+    cl = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
     if not cl:
         raise HTTPException(404, "Classe non trouvée")
     
@@ -337,17 +387,26 @@ def get_classe_profil(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{classe_id}/configurer")
-def configurer_classe(classe_id: int, config: dict, db: Session = Depends(get_db)):
-    """Configure une classe: prof principal + chefs de classe"""
-    cl = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+def configurer_classe(classe_id: int, config: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Configure une classe: prof principal + chefs de classe.
+
+    L'enseignant et les élèves désignés sont vérifiés appartenir au même
+    établissement — avant le Lot 7, un enseignant d'une autre école pouvait
+    être nommé professeur principal.
+    """
+    cl = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
     if not cl:
         raise HTTPException(404, "Classe non trouvée")
-    
+
     # Prof principal
     if "professeur_principal_id" in config:
         prof_id = config["professeur_principal_id"]
         if prof_id:
-            ens = db.query(Enseignant).filter(Enseignant.enseignant_id == prof_id).first()
+            ens = db.query(Enseignant).filter(
+                Enseignant.enseignant_id == prof_id, Enseignant.etablissement_id == etablissement_id
+            ).first()
             if not ens:
                 raise HTTPException(404, "Enseignant non trouvé")
             cl.professeur_principal = prof_id
@@ -361,8 +420,12 @@ def configurer_classe(classe_id: int, config: dict, db: Session = Depends(get_db
             raise HTTPException(400, "Vous devez désigner exactement 3 chefs de classe.")
         
         if len(chef_ids) == 3:
-            # Validation: au moins 1 fille
-            chefs = db.query(Eleve).filter(Eleve.eleve_id.in_(chef_ids)).all()
+            # Validation: au moins 1 fille — élèves restreints à cet établissement
+            chefs = db.query(Eleve).filter(
+                Eleve.eleve_id.in_(chef_ids), Eleve.etablissement_id == etablissement_id
+            ).all()
+            if len(chefs) != len(set(chef_ids)):
+                raise HTTPException(404, "Élève(s) désigné(s) introuvable(s) pour cet établissement")
             nb_filles = sum(1 for c in chefs if c.sexe == 'F')
             if nb_filles < 1:
                 raise HTTPException(400, "Au moins une fille doit figurer parmi les 3 chefs de classe.")
@@ -397,8 +460,40 @@ def configurer_classe(classe_id: int, config: dict, db: Session = Depends(get_db
 inscriptions_router = APIRouter(prefix="/api/inscriptions", tags=["Inscriptions"])
 
 
+def _inscription_de_letablissement(db: Session, inscription_id: int, etablissement_id: int) -> Inscription:
+    """Charge une inscription en vérifiant qu'elle appartient à l'établissement
+    appelant. Inscription n'a pas de colonne etablissement_id (OWNERSHIP —
+    voir .ai/MULTI_TENANT_PLAN.md section E) : on passe par sa classe.
+    404 (pas 403) pour ne pas confirmer l'existence d'une inscription d'une
+    autre école."""
+    insc = (
+        db.query(Inscription)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Inscription.inscription_id == inscription_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not insc:
+        raise HTTPException(status_code=404, detail="Inscription non trouvée")
+    return insc
+
+
 @inscriptions_router.post("", response_model=InscriptionOut, status_code=201)
-def create_inscription(data: InscriptionCreate, db: Session = Depends(get_db)):
+def create_inscription(data: InscriptionCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    # L'élève ET la classe doivent appartenir à l'établissement appelant —
+    # avant le Lot 7, aucun des deux n'était vérifié : un élève d'une autre
+    # école pouvait être inscrit dans une classe d'une troisième école.
+    eleve_valide = db.query(Eleve.eleve_id).filter(
+        Eleve.eleve_id == data.eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
+    if not eleve_valide:
+        raise HTTPException(status_code=404, detail="Élève non trouvé")
+
+    classe = db.query(Classe).filter(
+        Classe.classe_id == data.classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+
     # Vérifier doublon
     existing = db.query(Inscription).filter(
         Inscription.eleve_id == data.eleve_id,
@@ -412,9 +507,7 @@ def create_inscription(data: InscriptionCreate, db: Session = Depends(get_db)):
     db.add(insc)
 
     # Mettre à jour l'effectif de la classe
-    classe = db.query(Classe).filter(Classe.classe_id == data.classe_id).first()
-    if classe:
-        classe.effectif_actuel = (classe.effectif_actuel or 0) + 1
+    classe.effectif_actuel = (classe.effectif_actuel or 0) + 1
 
     db.commit()
     db.refresh(insc)
@@ -422,18 +515,13 @@ def create_inscription(data: InscriptionCreate, db: Session = Depends(get_db)):
 
 
 @inscriptions_router.get("/{inscription_id}", response_model=InscriptionOut)
-def get_inscription(inscription_id: int, db: Session = Depends(get_db)):
-    insc = db.query(Inscription).filter(Inscription.inscription_id == inscription_id).first()
-    if not insc:
-        raise HTTPException(status_code=404, detail="Inscription non trouvée")
-    return insc
+def get_inscription(inscription_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    return _inscription_de_letablissement(db, inscription_id, etablissement_id)
 
 
 @inscriptions_router.delete("/{inscription_id}")
-def annuler_inscription(inscription_id: int, db: Session = Depends(get_db)):
-    insc = db.query(Inscription).filter(Inscription.inscription_id == inscription_id).first()
-    if not insc:
-        raise HTTPException(status_code=404, detail="Inscription non trouvée")
+def annuler_inscription(inscription_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    insc = _inscription_de_letablissement(db, inscription_id, etablissement_id)
     insc.statut = "ANNULEE"
     classe = db.query(Classe).filter(Classe.classe_id == insc.classe_id).first()
     if classe and classe.effectif_actuel and classe.effectif_actuel > 0:
