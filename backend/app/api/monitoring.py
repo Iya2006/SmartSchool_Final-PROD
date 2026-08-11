@@ -7,10 +7,15 @@ registres), Redis (PING), PostgreSQL (SELECT 1 chronométré). Aucune
 nouvelle table, aucune nouvelle structure Redis créée pour ce chantier.
 
 Portée volontairement globale (infrastructure partagée), pas par
-établissement — cohérent avec le déploiement mono-tenant actuel
-(etablissement_id=1 partout, absent du JWT). Une ventilation par école des
-opérations métier (ex. synchronisation offline) sortirait du périmètre
-"réutiliser l'existant" et n'est pas construite ici.
+établissement : Redis, RQ et PostgreSQL sont mutualisés entre toutes les
+écoles, il n'y a donc rien à ventiler par tenant ici. Aucune donnée métier
+n'est exposée — uniquement des compteurs d'infrastructure et des identifiants
+techniques de workers. L'accès reste restreint aux rôles d'administration.
+
+(Note : cet en-tête décrivait auparavant un déploiement mono-établissement
+« etablissement_id=1 partout, absent du JWT ». Ce n'est plus vrai — le JWT
+porte l'établissement depuis le Lot 0 du chantier multi-écoles. Le choix d'une
+portée globale, lui, reste volontaire et inchangé.)
 """
 import time
 

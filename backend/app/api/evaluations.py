@@ -25,6 +25,7 @@ from app.schemas.schemas import (
     EvaluationUpdate
 )
 from app.core.annee_lock import verifier_annee_modifiable
+from app.core.auth import require_etablissement
 from app.services.notation import (
     calendrier_mois,
     epreuves_retenues_periode,
@@ -57,6 +58,77 @@ from app.services.notation import (
 router = APIRouter(prefix="/api/evaluations", tags=["Évaluations"])
 
 
+# ── Helpers d'isolation (Lot 9) ───────────────────────────────────────────
+# Evaluation, Note, Bulletin et Trimestre n'ont pas de colonne
+# etablissement_id : ils sont OWNERSHIP via Classe (ou AnneeScolaire pour
+# Trimestre) — voir .ai/MULTI_TENANT_PLAN.md section E. Les helpers
+# renvoient 404 (pas 403) pour ne pas confirmer l'existence d'une ressource
+# d'une autre école.
+
+def _classe_ou_404(db: Session, classe_id: int, etablissement_id: int) -> Classe:
+    c = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+    return c
+
+
+def _evaluation_ou_404(db: Session, evaluation_id: int, etablissement_id: int) -> Evaluation:
+    ev = (
+        db.query(Evaluation)
+        .join(Classe, Classe.classe_id == Evaluation.classe_id)
+        .filter(Evaluation.evaluation_id == evaluation_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not ev:
+        raise HTTPException(status_code=404, detail="Évaluation non trouvée")
+    return ev
+
+
+def _bulletin_ou_404(db: Session, bulletin_id: int, etablissement_id: int) -> Bulletin:
+    b = (
+        db.query(Bulletin)
+        .join(Inscription, Inscription.inscription_id == Bulletin.inscription_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Bulletin.bulletin_id == bulletin_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not b:
+        raise HTTPException(status_code=404, detail="Bulletin non trouvé")
+    return b
+
+
+def _session_ou_404(db: Session, session_id: int, etablissement_id: int) -> EvaluationSession:
+    """EvaluationSession porte etablissement_id, mais on ne s'y fie pas seul :
+    la classe reste la source de vérité (la colonne est dénormalisée). 404 pour
+    ne pas confirmer l'existence de la session d'une autre école."""
+    s = (
+        db.query(EvaluationSession)
+        .join(Classe, Classe.classe_id == EvaluationSession.classe_id)
+        .filter(
+            EvaluationSession.session_id == session_id,
+            Classe.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not s:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    return s
+
+
+# ── Note d'architecture (fusion multi-écoles) ──────────────────────────
+# Les helpers de calcul que ce fichier portait (get_appreciation,
+# get_cycle_key, get_notation_seuils, get_mention, get_poids_evaluations,
+# coefficient_pour_evaluation, moyenne_matiere_eleve,
+# detail_categories_matiere, get_bulletin_display_flags, _precharger_notes)
+# ne sont PAS réintroduits ici : ils vivent désormais dans
+# app/services/notation.py et sont importés en haut de ce module. Les y
+# redéfinir masquerait le moteur central et rouvrirait la divergence
+# silencieuse déjà constatée entre ce fichier et portail_enseignant.py.
+# Leur durcissement multi-écoles (etablissement_id obligatoire) est reporté
+# dans le moteur.
+
 
 # ════════════════════════════════════════════════════════════
 # CRUD Évaluations de base
@@ -69,9 +141,12 @@ def list_evaluations(
     trimestre_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    query = db.query(Evaluation)
+    query = db.query(Evaluation).join(Classe, Classe.classe_id == Evaluation.classe_id).filter(
+        Classe.etablissement_id == etablissement_id
+    )
     if classe_id:
         query = query.filter(Evaluation.classe_id == classe_id)
     if matiere_id:
@@ -82,12 +157,12 @@ def list_evaluations(
 
 
 @router.post("", response_model=EvaluationOut, status_code=201)
-def create_evaluation(data: EvaluationCreate, db: Session = Depends(get_db)):
+def create_evaluation(data: EvaluationCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Crée une évaluation mono-matière (le chemin groupé multi-matières est
     `POST /sessions`)."""
-    classe = db.query(Classe).filter(Classe.classe_id == data.classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    # La classe cible doit appartenir à cet établissement — sinon une
+    # évaluation (et donc des notes) pouvait être créée dans une autre école.
+    classe = _classe_ou_404(db, data.classe_id, etablissement_id)
     # Ce garde-fou manquait ici alors qu'il est appliqué partout ailleurs dans
     # ce module : une année archivée laissait créer des évaluations.
     verifier_annee_modifiable(db, classe.annee_id)
@@ -104,7 +179,6 @@ def create_evaluation(data: EvaluationCreate, db: Session = Depends(get_db)):
         raise HTTPException(400, str(e))
 
     payload = data.model_dump()
-    etablissement_id = classe.etablissement_id
     cycle_key = get_cycle_key(data.classe_id, db)
 
     # Barème : résolu depuis la configuration de l'école si l'appelant n'impose rien
@@ -124,7 +198,8 @@ def create_evaluation(data: EvaluationCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{evaluation_id}/notes")
-def get_notes_evaluation(evaluation_id: int, db: Session = Depends(get_db)):
+def get_notes_evaluation(evaluation_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    _evaluation_ou_404(db, evaluation_id, etablissement_id)
     results = db.query(
         Note.note_id, Note.valeur, Note.est_absent, Note.observation,
         Eleve.matricule, Eleve.nom, Eleve.prenom
@@ -147,11 +222,9 @@ def get_notes_evaluation(evaluation_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{evaluation_id}/initialiser")
-def initialiser_notes(evaluation_id: int, db: Session = Depends(get_db)):
+def initialiser_notes(evaluation_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Crée une ligne de note pour chaque élève inscrit dans la classe de l'évaluation."""
-    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
-    if not ev:
-        raise HTTPException(status_code=404, detail="Évaluation non trouvée")
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
     classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
     verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
@@ -214,7 +287,8 @@ def get_evaluations_centralisees(
     q: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Liste les évaluations d'une classe/période, paginée.
 
@@ -230,7 +304,12 @@ def get_evaluations_centralisees(
     Centralisation dès que le volume d'évaluations a dépassé quelques dizaines) :
     tout est résolu par des requêtes groupées/en lot, plus jamais une par ligne.
     """
-    query = db.query(Evaluation)
+    # La jointure sur Classe porte l'isolation : une évaluation appartient à
+    # l'école de sa classe. Le statut, lui, reste un filtre libre — l'écran
+    # Centralisation affiche aussi les épreuves annulées ou publiées.
+    query = db.query(Evaluation).join(Classe, Classe.classe_id == Evaluation.classe_id).filter(
+        Classe.etablissement_id == etablissement_id
+    )
     if statut:
         query = query.filter(Evaluation.statut == statut)
     if classe_id:
@@ -245,7 +324,8 @@ def get_evaluations_centralisees(
         terme = q.strip()
         query = (
             query.outerjoin(Matiere, Matiere.matiere_id == Evaluation.matiere_id)
-            .outerjoin(Classe, Classe.classe_id == Evaluation.classe_id)
+            # Classe est déjà jointe plus haut (isolation) : la rejoindre ici
+            # dupliquerait la table et fausserait le compte.
             .outerjoin(Enseignant, Enseignant.enseignant_id == Evaluation.enseignant_id)
             .filter(or_(*[
                 _sans_accents(colonne, db).ilike(f"%{_dépouiller(terme)}%")
@@ -321,9 +401,11 @@ def get_evaluations_centralisees(
 
 
 @router.get("/centralisation/stats")
-def get_centralisation_stats(trimestre_id: Optional[int] = None, db: Session = Depends(get_db)):
-    """Statistiques globales de centralisation."""
-    query = db.query(Evaluation)
+def get_centralisation_stats(trimestre_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Statistiques de centralisation POUR CET ÉTABLISSEMENT."""
+    query = db.query(Evaluation).join(Classe, Classe.classe_id == Evaluation.classe_id).filter(
+        Classe.etablissement_id == etablissement_id
+    )
     if trimestre_id:
         query = query.filter(Evaluation.trimestre_id == trimestre_id)
 
@@ -343,12 +425,11 @@ def get_centralisation_stats(trimestre_id: Optional[int] = None, db: Session = D
 def get_notes_centralisees_classe(
     classe_id: int,
     trimestre_id: int = 1,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Vue complète des notes d'une classe : tableau élèves × matières avec moyennes."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     cycle_key = get_cycle_key(classe_id, db)
 
     # Matières de cette classe
@@ -476,16 +557,19 @@ def get_notes_centralisees_classe(
 # ════════════════════════════════════════════════════════════
 
 @router.post("/classe/{classe_id}/calculer-moyennes")
-def calculer_moyennes(classe_id: int, trimestre_id: int = 1, db: Session = Depends(get_db)):
+def calculer_moyennes(
+    classe_id: int,
+    trimestre_id: int = 1,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Calcule les moyennes de la période et alimente les bulletins de la classe.
 
     Le calcul lui-même vit dans services/notation.py — partagé avec l'aperçu
     intermédiaire (`/resultats-intermediaires`) pour qu'un chiffre affiché avant
     publication soit exactement celui qui finira sur le bulletin.
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvee")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
     trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
@@ -505,7 +589,7 @@ def calculer_moyennes(classe_id: int, trimestre_id: int = 1, db: Session = Depen
     }
 
 
-def _enqueue(fonction, *args, timeout: int):
+def _enqueue(fonction, *args, timeout: int, etablissement_id: int):
     """Met une tâche en file, ou échoue franchement si Redis est indisponible.
 
     Une tâche perdue silencieusement n'est jamais acceptable : contrairement au
@@ -516,18 +600,29 @@ def _enqueue(fonction, *args, timeout: int):
     écrivent en base et leurs seuls échecs plausibles (période clôturée entre
     temps, classe déplacée d'établissement) sont définitifs — les rejouer
     retarderait le passage en FAILED sans aucune chance de succès.
+
+    `meta["etablissement_id"]` est OBLIGATOIRE : `GET /api/tasks/{id}` compare
+    ce champ à l'établissement du demandeur et refuse par défaut une tâche qui
+    ne le porte pas. Sans lui, la tâche part bien mais son résultat devient
+    illisible — y compris pour celui qui l'a lancée.
     """
     from app.core.task_queue import get_queue
     try:
         return get_queue().enqueue(
             fonction, *args, job_timeout=timeout, result_ttl=86400, failure_ttl=86400,
+            meta={"etablissement_id": etablissement_id},
         )
     except Exception as exc:
         raise HTTPException(503, f"File de tâches indisponible : {exc}")
 
 
 @router.post("/classe/{classe_id}/calculer-moyennes-async")
-def calculer_moyennes_async(classe_id: int, trimestre_id: int = 1, db: Session = Depends(get_db)):
+def calculer_moyennes_async(
+    classe_id: int,
+    trimestre_id: int = 1,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Version asynchrone du calcul de période — suivre via GET /api/tasks/{id}.
 
     C'est le seul calcul du module qui grossit avec l'effectif : sur une classe
@@ -539,9 +634,7 @@ def calculer_moyennes_async(classe_id: int, trimestre_id: int = 1, db: Session =
     mettre en file un calcul voué à échouer ; le worker les refait de son côté,
     car l'état peut changer entre la mise en file et l'exécution.
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
     trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
@@ -555,8 +648,8 @@ def calculer_moyennes_async(classe_id: int, trimestre_id: int = 1, db: Session =
 
     from app.tasks.notation_tasks import calculer_periode_task
     job = _enqueue(
-        calculer_periode_task, classe_id, trimestre_id, classe.etablissement_id,
-        timeout=600,
+        calculer_periode_task, classe_id, trimestre_id, etablissement_id,
+        timeout=600, etablissement_id=etablissement_id,
     )
     return {
         "task_id": job.id,
@@ -566,15 +659,18 @@ def calculer_moyennes_async(classe_id: int, trimestre_id: int = 1, db: Session =
 
 
 @router.post("/classe/{classe_id}/calculer-moyennes-annuelles-async")
-def calculer_moyennes_annuelles_async(classe_id: int, db: Session = Depends(get_db)):
+def calculer_moyennes_annuelles_async(
+    classe_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Version asynchrone du calcul annuel — suivre via GET /api/tasks/{id}."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
     from app.tasks.notation_tasks import calculer_annuel_task
-    job = _enqueue(calculer_annuel_task, classe_id, classe.etablissement_id, timeout=600)
+    job = _enqueue(calculer_annuel_task, classe_id, etablissement_id,
+                   timeout=600, etablissement_id=etablissement_id)
     return {
         "task_id": job.id,
         "status": "PENDING",
@@ -588,6 +684,7 @@ def generer_bulletins_classe_async(
     trimestre_id: Optional[int] = None,
     type_bulletin: str = "TRIMESTRIEL",
     db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Génère en une fois les PDF de tous les bulletins d'une classe.
 
@@ -599,9 +696,7 @@ def generer_bulletins_classe_async(
     Suivre l'avancement via GET /api/tasks/{id} : le résultat liste les
     fichiers produits et, séparément, les élèves en échec.
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     # On vérifie ici qu'il y a quelque chose à imprimer : mettre en file un lot
     # vide ne renverrait l'erreur qu'après un aller-retour sur la file.
@@ -622,8 +717,8 @@ def generer_bulletins_classe_async(
     from app.tasks.notation_tasks import generer_bulletins_classe_task
     job = _enqueue(
         generer_bulletins_classe_task,
-        classe_id, classe.etablissement_id, trimestre_id, type_bulletin,
-        timeout=1800,
+        classe_id, etablissement_id, trimestre_id, type_bulletin,
+        timeout=1800, etablissement_id=etablissement_id,
     )
     return {
         "task_id": job.id,
@@ -640,6 +735,7 @@ def resultats_intermediaires(
     evaluation_ids: Optional[str] = None,
     session_ids: Optional[str] = None,
     db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Classement de suivi, à la demande, sans rien écrire en base.
 
@@ -655,8 +751,7 @@ def resultats_intermediaires(
         except ValueError:
             raise HTTPException(400, "Liste d'identifiants invalide")
 
-    if not db.query(Classe).filter(Classe.classe_id == classe_id).first():
-        raise HTTPException(404, "Classe non trouvée")
+    _classe_ou_404(db, classe_id, etablissement_id)
 
     return calculer_resultats_periode(
         db, classe_id, trimestre_id,
@@ -671,7 +766,7 @@ def resultats_intermediaires(
 # ════════════════════════════════════════════════════════════
 
 @router.get("/calendrier/mois")
-def get_calendrier_mois(annee_id: Optional[int] = None, db: Session = Depends(get_db)):
+def get_calendrier_mois(annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Mois de l'année scolaire et période à laquelle chacun appartient.
 
     Sert à ce que l'école choisisse « Janvier » plutôt qu'une date brute : le
@@ -692,7 +787,7 @@ def get_calendrier_mois(annee_id: Optional[int] = None, db: Session = Depends(ge
 # ════════════════════════════════════════════════════════════
 
 @router.get("/classe/{classe_id}/periode/{trimestre_id}/epreuves")
-def lister_epreuves_periode(classe_id: int, trimestre_id: int, db: Session = Depends(get_db)):
+def lister_epreuves_periode(classe_id: int, trimestre_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Épreuves disponibles sur la période, et lesquelles comptent pour le résultat.
 
     `retenue` indique si l'épreuve entre dans le calcul officiel. Tant que
@@ -700,8 +795,7 @@ def lister_epreuves_periode(classe_id: int, trimestre_id: int, db: Session = Dep
     personnalisee` à false) : c'est le comportement par défaut, pas un choix
     implicite qu'on lui prêterait.
     """
-    if not db.query(Classe).filter(Classe.classe_id == classe_id).first():
-        raise HTTPException(404, "Classe non trouvée")
+    _classe_ou_404(db, classe_id, etablissement_id)
 
     evals = db.query(Evaluation).filter(
         Evaluation.classe_id == classe_id,
@@ -759,6 +853,7 @@ class SelectionEpreuves(BaseModel):
 def definir_epreuves_periode(
     classe_id: int, trimestre_id: int,
     data: SelectionEpreuves, db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Enregistre les épreuves qui comptent pour le résultat officiel de la période.
 
@@ -768,9 +863,7 @@ def definir_epreuves_periode(
 
     Liste vide = retour au comportement par défaut (tout ce qui est centralisé).
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
     trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
@@ -816,15 +909,13 @@ def definir_epreuves_periode(
 
 
 @router.post("/classe/{classe_id}/calculer-moyennes-annuelles")
-def calculer_moyennes_annuelles(classe_id: int, db: Session = Depends(get_db)):
+def calculer_moyennes_annuelles(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Calcule les résultats annuels et génère les bulletins annuels de la classe.
 
     Agrège les bulletins de période déjà calculés — à lancer une fois toutes
     les périodes de l'année calculées.
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
     res = calculer_resultats_annuels(db, classe_id, persist=True)
@@ -838,11 +929,9 @@ def calculer_moyennes_annuelles(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/classe/{classe_id}/resultats-annuels")
-def apercu_resultats_annuels(classe_id: int, db: Session = Depends(get_db)):
+def apercu_resultats_annuels(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Aperçu des résultats annuels sans générer les bulletins."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     res = calculer_resultats_annuels(db, classe_id, persist=False)
 
     # Une classe d'examen doit s'annoncer comme telle dès cet aperçu : sans ça,
@@ -855,7 +944,7 @@ def apercu_resultats_annuels(classe_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/classe/{classe_id}/fiche-annuelle/pdf")
-def fiche_resultats_annuels_pdf(classe_id: int, db: Session = Depends(get_db)):
+def fiche_resultats_annuels_pdf(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Fiche de résultats de fin d'année d'une classe, prête à imprimer.
 
     Une seule feuille qui répond aux questions qu'on pose réellement en fin
@@ -874,9 +963,7 @@ def fiche_resultats_annuels_pdf(classe_id: int, db: Session = Depends(get_db)):
     from app.services.notation import ORDRE_MENTIONS
     import io as _io, os
 
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     res = calculer_resultats_annuels(db, classe_id, persist=False)
     lignes = [r for r in res["resultats"] if r["moyenne_generale"] is not None]
@@ -1116,7 +1203,7 @@ def fiche_resultats_annuels_pdf(classe_id: int, db: Session = Depends(get_db)):
 # ════════════════════════════════════════════════════════════
 
 @router.post("/sessions", status_code=201)
-def creer_session_evaluation(data: EvaluationSessionCreate, db: Session = Depends(get_db)):
+def creer_session_evaluation(data: EvaluationSessionCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Crée une composition (ou toute évaluation) pour toutes les matières d'un coup.
 
     Une composition couvre normalement toutes les matières de la classe le même
@@ -1237,8 +1324,13 @@ def lister_sessions(
     classe_id: Optional[int] = None,
     trimestre_id: Optional[int] = None,
     db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    query = db.query(EvaluationSession)
+    # Isolation portée par la classe, pas par la colonne dénormalisée : une
+    # session ne peut apparaître ici que si sa classe est bien de cette école.
+    query = db.query(EvaluationSession).join(
+        Classe, Classe.classe_id == EvaluationSession.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id)
     if classe_id:
         query = query.filter(EvaluationSession.classe_id == classe_id)
     if trimestre_id:
@@ -1273,12 +1365,8 @@ def lister_sessions(
 
 
 @router.get("/sessions/{session_id}")
-def detail_session(session_id: int, db: Session = Depends(get_db)):
-    session = db.query(EvaluationSession).filter(
-        EvaluationSession.session_id == session_id
-    ).first()
-    if not session:
-        raise HTTPException(404, "Session non trouvée")
+def detail_session(session_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    session = _session_ou_404(db, session_id, etablissement_id)
 
     evals = db.query(Evaluation).filter(Evaluation.session_id == session_id).all()
     matieres = {
@@ -1318,12 +1406,8 @@ def detail_session(session_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/sessions/{session_id}")
-def modifier_session(session_id: int, data: EvaluationSessionUpdate, db: Session = Depends(get_db)):
-    session = db.query(EvaluationSession).filter(
-        EvaluationSession.session_id == session_id
-    ).first()
-    if not session:
-        raise HTTPException(404, "Session non trouvée")
+def modifier_session(session_id: int, data: EvaluationSessionUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    session = _session_ou_404(db, session_id, etablissement_id)
     classe = db.query(Classe).filter(Classe.classe_id == session.classe_id).first()
     verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
@@ -1385,12 +1469,8 @@ def modifier_session(session_id: int, data: EvaluationSessionUpdate, db: Session
 
 
 @router.delete("/sessions/{session_id}")
-def supprimer_session(session_id: int, db: Session = Depends(get_db)):
-    session = db.query(EvaluationSession).filter(
-        EvaluationSession.session_id == session_id
-    ).first()
-    if not session:
-        raise HTTPException(404, "Session non trouvée")
+def supprimer_session(session_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    session = _session_ou_404(db, session_id, etablissement_id)
     classe = db.query(Classe).filter(Classe.classe_id == session.classe_id).first()
     verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
@@ -1450,16 +1530,14 @@ def _verifier_bareme_compatible(db: Session, evaluation_ids: List[int], note_sur
 
 
 @router.put("/{evaluation_id}", response_model=EvaluationOut)
-def modifier_evaluation(evaluation_id: int, data: EvaluationUpdate, db: Session = Depends(get_db)):
+def modifier_evaluation(evaluation_id: int, data: EvaluationUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Corrige une épreuve : libellé, date, barème, type, enseignant, coefficient.
 
     La date reste contrôlée contre les bornes de sa période — corriger une
     épreuve ne doit pas permettre de la déplacer hors du trimestre auquel elle
     compte, ce que la création interdit déjà.
     """
-    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
-    if not ev:
-        raise HTTPException(404, "Évaluation non trouvée")
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
     _epreuve_modifiable(db, ev)
 
     if data.date_evaluation is not None:
@@ -1501,7 +1579,7 @@ def modifier_evaluation(evaluation_id: int, data: EvaluationUpdate, db: Session 
 
 
 @router.delete("/{evaluation_id}")
-def supprimer_evaluation(evaluation_id: int, db: Session = Depends(get_db)):
+def supprimer_evaluation(evaluation_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Supprime une épreuve et ses notes.
 
     Refusée quand l'épreuve est centralisée : ses notes sont entrées dans des
@@ -1509,9 +1587,7 @@ def supprimer_evaluation(evaluation_id: int, db: Session = Depends(get_db)):
     rien ne justifie. Le bon geste dans ce cas est de passer l'épreuve en
     ANNULEE (`PUT /{id}/statut`), qui la sort du calcul sans détruire la saisie.
     """
-    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
-    if not ev:
-        raise HTTPException(404, "Évaluation non trouvée")
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
     _epreuve_modifiable(db, ev)
 
     if ev.statut == "CENTRALISEE":
@@ -1558,15 +1634,14 @@ def supprimer_evaluation(evaluation_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{evaluation_id}/coefficient")
 def modifier_coefficient_evaluation(
-    evaluation_id: int, data: dict, db: Session = Depends(get_db)
+    evaluation_id: int, data: dict, db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Surcharge ponctuelle du coefficient d'une évaluation.
 
     `coefficient_override = null` rétablit le coefficient de son type.
     """
-    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
-    if not ev:
-        raise HTTPException(404, "Évaluation non trouvée")
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
     classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
     verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
@@ -1608,7 +1683,8 @@ def get_bulletins_classe(
     type_bulletin: str = "TRIMESTRIEL",
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Récupère les bulletins générés pour une classe, paginés.
 
@@ -1620,9 +1696,7 @@ def get_bulletins_classe(
     1 BulletinLigne (+ 1 Matiere PAR ligne) PAR INSCRIPTION, soit ~2000+
     requêtes pour une classe de 160 élèves.
     """
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     inscriptions = db.query(Inscription).filter(
         Inscription.classe_id == classe_id,
@@ -1739,11 +1813,9 @@ class BulletinDecisionUpdate(BaseModel):
     decision: Optional[str] = None
 
 @router.put("/bulletins/{bulletin_id}/decision")
-def update_bulletin_decision(bulletin_id: int, data: BulletinDecisionUpdate, db: Session = Depends(get_db)):
+def update_bulletin_decision(bulletin_id: int, data: BulletinDecisionUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Met à jour la décision du conseil de classe pour un bulletin."""
-    bulletin = db.query(Bulletin).filter(Bulletin.bulletin_id == bulletin_id).first()
-    if not bulletin:
-        raise HTTPException(404, "Bulletin non trouvé")
+    bulletin = _bulletin_ou_404(db, bulletin_id, etablissement_id)
     insc = db.query(Inscription).filter(Inscription.inscription_id == bulletin.inscription_id).first()
     verifier_annee_modifiable(db, insc.annee_id if insc else None)
     bulletin.decision = data.decision
@@ -1756,11 +1828,9 @@ def update_bulletin_decision(bulletin_id: int, data: BulletinDecisionUpdate, db:
 # ════════════════════════════════════════════════════════════
 
 @router.put("/bulletins/{bulletin_id}/publier")
-def publier_bulletin(bulletin_id: int, db: Session = Depends(get_db)):
+def publier_bulletin(bulletin_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Publie un bulletin individuel (le rend visible sur le portail parent)."""
-    bulletin = db.query(Bulletin).filter(Bulletin.bulletin_id == bulletin_id).first()
-    if not bulletin:
-        raise HTTPException(404, "Bulletin non trouvé")
+    bulletin = _bulletin_ou_404(db, bulletin_id, etablissement_id)
     insc = db.query(Inscription).filter(Inscription.inscription_id == bulletin.inscription_id).first()
     verifier_annee_modifiable(db, insc.annee_id if insc else None)
     bulletin.statut = "PUBLIE"
@@ -1769,11 +1839,9 @@ def publier_bulletin(bulletin_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/bulletins/{bulletin_id}/depublier")
-def depublier_bulletin(bulletin_id: int, db: Session = Depends(get_db)):
+def depublier_bulletin(bulletin_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Dépublie un bulletin (le masque du portail parent)."""
-    bulletin = db.query(Bulletin).filter(Bulletin.bulletin_id == bulletin_id).first()
-    if not bulletin:
-        raise HTTPException(404, "Bulletin non trouvé")
+    bulletin = _bulletin_ou_404(db, bulletin_id, etablissement_id)
     insc = db.query(Inscription).filter(Inscription.inscription_id == bulletin.inscription_id).first()
     verifier_annee_modifiable(db, insc.annee_id if insc else None)
     bulletin.statut = "BROUILLON"
@@ -1786,11 +1854,9 @@ def depublier_bulletin(bulletin_id: int, db: Session = Depends(get_db)):
 # ════════════════════════════════════════════════════════════
 
 @router.put("/classe/{classe_id}/bulletins/publier-tout")
-def publier_bulletins_classe(classe_id: int, trimestre_id: int = 1, db: Session = Depends(get_db)):
+def publier_bulletins_classe(classe_id: int, trimestre_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Publie tous les bulletins d'une classe pour un trimestre donné."""
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
     inscriptions = db.query(Inscription).filter(
@@ -1825,7 +1891,7 @@ class AdminBatchNotesUpdate(BaseModel):
 
 
 @router.put("/{evaluation_id}/statut")
-def changer_statut_evaluation(evaluation_id: int, data: dict, db: Session = Depends(get_db)):
+def changer_statut_evaluation(evaluation_id: int, data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Change le statut d'une évaluation (PLANIFIEE / PUBLIEE / CENTRALISEE).
 
     Pendant : seules les évaluations CENTRALISEE entrent dans le calcul des
@@ -1837,9 +1903,7 @@ def changer_statut_evaluation(evaluation_id: int, data: dict, db: Session = Depe
     if statut not in STATUTS:
         raise HTTPException(400, f"Statut invalide. Valeurs acceptées : {', '.join(sorted(STATUTS))}")
 
-    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
-    if not ev:
-        raise HTTPException(404, "Évaluation non trouvée")
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
     classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
     verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
@@ -1860,11 +1924,9 @@ def changer_statut_evaluation(evaluation_id: int, data: dict, db: Session = Depe
 
 
 @router.put("/{evaluation_id}/notes/batch-update")
-def admin_update_notes_batch(evaluation_id: int, data: AdminBatchNotesUpdate, db: Session = Depends(get_db)):
+def admin_update_notes_batch(evaluation_id: int, data: AdminBatchNotesUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Admin: modifier des notes en batch sur une évaluation."""
-    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
-    if not ev:
-        raise HTTPException(404, "Évaluation non trouvée")
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
     classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
     verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
@@ -1900,27 +1962,56 @@ def admin_update_notes_batch(evaluation_id: int, data: AdminBatchNotesUpdate, db
 notes_router = APIRouter(prefix="/api/notes", tags=["Notes"])
 
 
-def _verifier_valeur_note(db: Session, evaluation_id: Optional[int], valeur) -> None:
+def _verifier_valeur_note(
+    db: Session, evaluation_id: Optional[int], valeur, etablissement_id: int
+) -> None:
     """Refuse une note hors barème sur ce sous-router aussi.
 
     Ces routes CRUD sont le chemin le moins utilisé (l'interface passe par les
     lots), mais elles écrivent dans la même table : les laisser sans contrôle
     rouvrirait la porte que `valider_note` ferme ailleurs.
+
+    L'évaluation de référence est cherchée dans l'école appelante : sans ce
+    filtre, un identifiant d'une autre école aurait imposé SON barème au
+    contrôle (une note refusée ici, acceptée là).
     """
     if valeur is None or evaluation_id is None:
         return
-    ev = db.query(Evaluation).filter(Evaluation.evaluation_id == evaluation_id).first()
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
     try:
         valider_note(valeur, ev.note_sur if ev else None)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
+def _note_ou_404(db: Session, note_id: int, etablissement_id: int) -> Note:
+    """Note est OWNERSHIP via Inscription -> Classe."""
+    note = (
+        db.query(Note)
+        .join(Inscription, Inscription.inscription_id == Note.inscription_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Note.note_id == note_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not note:
+        raise HTTPException(status_code=404, detail="Note non trouvée")
+    return note
+
+
 @notes_router.post("", response_model=NoteOut, status_code=201)
-def create_note(data: NoteCreate, db: Session = Depends(get_db)):
-    insc = db.query(Inscription).filter(Inscription.inscription_id == data.inscription_id).first()
-    verifier_annee_modifiable(db, insc.annee_id if insc else None)
-    _verifier_valeur_note(db, data.evaluation_id, getattr(data, "valeur", None))
+def create_note(data: NoteCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    # L'inscription cible doit appartenir à cet établissement — sinon une
+    # note pouvait être posée sur l'élève d'une autre école.
+    insc = (
+        db.query(Inscription)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Inscription.inscription_id == data.inscription_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not insc:
+        raise HTTPException(status_code=404, detail="Inscription non trouvée")
+    verifier_annee_modifiable(db, insc.annee_id)
+    _verifier_valeur_note(db, data.evaluation_id, getattr(data, "valeur", None), etablissement_id)
     note = Note(**data.model_dump())
     db.add(note)
     db.commit()
@@ -1929,15 +2020,13 @@ def create_note(data: NoteCreate, db: Session = Depends(get_db)):
 
 
 @notes_router.put("/{note_id}", response_model=NoteOut)
-def update_note(note_id: int, data: NoteUpdate, db: Session = Depends(get_db)):
-    note = db.query(Note).filter(Note.note_id == note_id).first()
-    if not note:
-        raise HTTPException(status_code=404, detail="Note non trouvée")
+def update_note(note_id: int, data: NoteUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    note = _note_ou_404(db, note_id, etablissement_id)
     insc = db.query(Inscription).filter(Inscription.inscription_id == note.inscription_id).first()
     verifier_annee_modifiable(db, insc.annee_id if insc else None)
     champs = data.model_dump(exclude_unset=True)
     if "valeur" in champs:
-        _verifier_valeur_note(db, note.evaluation_id, champs["valeur"])
+        _verifier_valeur_note(db, note.evaluation_id, champs["valeur"], etablissement_id)
     for key, value in champs.items():
         setattr(note, key, value)
     db.commit()
@@ -1946,24 +2035,29 @@ def update_note(note_id: int, data: NoteUpdate, db: Session = Depends(get_db)):
 
 
 @notes_router.put("/batch")
-def update_notes_batch(notes: List[NoteUpdate], note_ids: List[int], db: Session = Depends(get_db)):
-    """Mise à jour en lot des notes (saisie de notes)."""
+def update_notes_batch(notes: List[NoteUpdate], note_ids: List[int], db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Mise à jour en lot des notes (saisie de notes).
+
+    Chaque note est vérifiée individuellement : avant le Lot 9, un seul
+    note_id d'une autre école glissé dans la liste était modifié sans
+    contrôle (et seule la PREMIÈRE note servait au verrou d'année).
+    """
     if note_ids:
-        premiere_note = db.query(Note).filter(Note.note_id == note_ids[0]).first()
-        if premiere_note:
-            insc = db.query(Inscription).filter(Inscription.inscription_id == premiere_note.inscription_id).first()
-            verifier_annee_modifiable(db, insc.annee_id if insc else None)
+        premiere_note = _note_ou_404(db, note_ids[0], etablissement_id)
+        insc = db.query(Inscription).filter(Inscription.inscription_id == premiere_note.inscription_id).first()
+        verifier_annee_modifiable(db, insc.annee_id if insc else None)
 
     updated = 0
     for note_id, data in zip(note_ids, notes):
-        note = db.query(Note).filter(Note.note_id == note_id).first()
-        if note:
-            champs = data.model_dump(exclude_unset=True)
-            if "valeur" in champs:
-                _verifier_valeur_note(db, note.evaluation_id, champs["valeur"])
-            for key, value in champs.items():
-                setattr(note, key, value)
-            updated += 1
+        # Chaque note du lot est vérifiée, pas seulement la première : un
+        # identifiant d'une autre école glissé en 2ᵉ position doit être refusé.
+        note = _note_ou_404(db, note_id, etablissement_id)
+        champs = data.model_dump(exclude_unset=True)
+        if "valeur" in champs:
+            _verifier_valeur_note(db, note.evaluation_id, champs["valeur"], etablissement_id)
+        for key, value in champs.items():
+            setattr(note, key, value)
+        updated += 1
     db.commit()
     return {"message": f"{updated} notes mises à jour"}
 
@@ -1971,6 +2065,18 @@ def update_notes_batch(notes: List[NoteUpdate], note_ids: List[int], db: Session
 # ════════════════════════════════════════════════════════════
 # TYPE EVALUATION CRUD
 # ════════════════════════════════════════════════════════════
+# VOLONTAIREMENT SANS `require_etablissement` : `TypeEvaluation` est classée
+# GLOBAL (.ai/MULTI_TENANT_PLAN.md) — c'est un catalogue partagé, au même titre
+# que le plan comptable. Ce que chaque école règle pour elle-même, c'est le
+# POIDS de ces types, via `notation.coef_type.{cycle}.{code}` dans
+# ss_parametres, qui est bien filtré par établissement (voir
+# services/notation.py::get_types_evaluation_coefficients).
+#
+# À SURVEILLER : une écriture ici (création, renommage, suppression d'un type)
+# est donc visible par toutes les écoles. L'accès reste borné au tiers admin au
+# niveau du routeur, mais aucune école ne devrait pouvoir renommer le catalogue
+# des autres. Point à trancher avec le chantier multi-écoles avant d'ouvrir ces
+# routes plus largement.
 @router.get("/types", response_model=List[TypeEvaluationOut])
 def get_types_evaluation(db: Session = Depends(get_db)):
     return db.query(TypeEvaluation).all()
@@ -2021,6 +2127,7 @@ def generer_fiche_classement_pdf(
     evaluation_ids: Optional[str] = None,
     session_ids: Optional[str] = None,
     db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Fiche de classement de la classe, prête à imprimer.
 
@@ -2040,9 +2147,7 @@ def generer_fiche_classement_pdf(
     from app.core.documents_settings import get_documents_settings, dessiner_filigrane
     import io as _io, os
 
-    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
-    if not classe:
-        raise HTTPException(404, "Classe non trouvée")
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
 
     def _ids(v):
         if not v:
@@ -2979,17 +3084,18 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
 
 
 @router.get("/bulletins/{bulletin_id}/pdf")
-def generer_bulletin_pdf(bulletin_id: int, db: Session = Depends(get_db)):
+def generer_bulletin_pdf(bulletin_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Génère le bulletin scolaire au format PDF.
 
-    Comportement observable INCHANGÉ (Étape F : simple extraction
-    mécanique) — la logique réelle vit maintenant dans
-    _build_bulletin_pdf_bytes ci-dessus, réutilisée aussi par la
-    génération asynchrone (POST .../pdf-async, app/tasks/bulletin_tasks.py).
+    Comportement observable inchangé, hormis l'isolation ajoutée au Lot 9 :
+    le bulletin doit appartenir à l'établissement appelant (avant, tout
+    bulletin_id deviné produisait le PDF complet — notes, moyennes, rang —
+    d'un élève de n'importe quelle école).
     """
     import io
     from fastapi.responses import StreamingResponse
 
+    _bulletin_ou_404(db, bulletin_id, etablissement_id)
     pdf_bytes, nom_fichier = _build_bulletin_pdf_bytes(bulletin_id, db)
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
@@ -2999,24 +3105,24 @@ def generer_bulletin_pdf(bulletin_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/bulletins/{bulletin_id}/pdf-async")
-def generer_bulletin_pdf_async(bulletin_id: int, db: Session = Depends(get_db)):
+def generer_bulletin_pdf_async(bulletin_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Version asynchrone (Étape F) — met la génération en file au lieu de
     bloquer la requête HTTP. Ne remplace PAS l'endpoint synchrone
     ci-dessus (toujours utile pour un seul bulletin ponctuel) ; utile
     surtout en préparation d'une génération en masse future.
 
-    Validation minimale ici (le bulletin existe, appartient à l'école
-    demandée) — la génération réelle et sa propre re-vérification
-    d'établissement ont lieu dans le worker (jamais confiance aveugle au
-    payload de la tâche, voir app/tasks/bulletin_tasks.py).
+    ISOLATION (Lot 9) : le bulletin doit appartenir à l'établissement
+    appelant. Ce contrôle est indispensable et ne peut PAS être délégué au
+    worker : celui-ci reçoit l'`etablissement_id` réel de la classe du
+    bulletin, donc sa propre vérification passait toujours — un bulletin_id
+    d'une autre école aurait bien été généré. Le contrôle du worker reste
+    une défense en profondeur contre un payload forgé, pas ce contrôle-ci.
     """
     from app.core.task_queue import get_queue
     from app.tasks.bulletin_tasks import generate_bulletin_pdf_task
     from rq.job import Retry
 
-    bulletin = db.query(Bulletin).filter(Bulletin.bulletin_id == bulletin_id).first()
-    if not bulletin:
-        raise HTTPException(404, "Bulletin non trouvé")
+    bulletin = _bulletin_ou_404(db, bulletin_id, etablissement_id)
     inscription = db.query(Inscription).filter(
         Inscription.inscription_id == bulletin.inscription_id
     ).first()
@@ -3046,6 +3152,9 @@ def generer_bulletin_pdf_async(bulletin_id: int, db: Session = Depends(get_db)):
             job_timeout=120,
             result_ttl=86400,
             failure_ttl=86400,
+            # Permet à GET /api/tasks/{id} de vérifier que le demandeur du
+            # statut relève bien de l'établissement de la tâche (Lot 11).
+            meta={"etablissement_id": classe.etablissement_id},
         )
     except Exception as exc:
         # Redis indisponible au moment de la mise en file : ne JAMAIS faire

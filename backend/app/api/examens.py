@@ -14,9 +14,10 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.database import get_db
+from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import (
     SujetExamen, EmploiExamen, CreneauExamen, DemandeEmploi,
-    Message, Enseignant, Matiere, Classe, ClasseMatiere, Affectation,
+    Message, Enseignant, Matiere, Classe, Cycle, ClasseMatiere, Affectation,
     Trimestre, AnneeScolaire
 )
 
@@ -25,6 +26,40 @@ router = APIRouter(prefix="/api/examens", tags=["Examens"])
 # Upload directory
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "sujets")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+ADMIN_TIER_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "DIRECTEUR_NIVEAU"}
+
+
+def _charger_sujet_ou_404(db: Session, sujet_id: int, etablissement_id: int) -> SujetExamen:
+    """Charge un sujet en vérifiant qu'il appartient à l'établissement
+    appelant (via son auteur, seule relation fiable — voir SujetExamen).
+    404 (pas 403) pour ne jamais confirmer l'existence d'un sujet d'une
+    autre école."""
+    sujet = (
+        db.query(SujetExamen)
+        .join(Enseignant, Enseignant.enseignant_id == SujetExamen.enseignant_id)
+        .filter(SujetExamen.sujet_id == sujet_id, Enseignant.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not sujet:
+        raise HTTPException(404, "Sujet non trouvé")
+    return sujet
+
+
+def _verifier_auteur_sujet(sujet: SujetExamen, current_user: dict) -> None:
+    """En plus de l'établissement, un enseignant ne doit gérer que SES
+    PROPRES sujets (le scénario de fuite avant-examen explicitement visé :
+    un enseignant ne doit jamais pouvoir consulter/télécharger/modifier le
+    sujet d'un collègue). Les comptes admin-tier de l'établissement
+    contournent cette restriction (rôle déjà vérifié en amont par
+    EXAMENS_ROLES au niveau du routeur)."""
+    role = current_user.get("role", "")
+    if role in ADMIN_TIER_ROLES:
+        return
+    if current_user.get("type") == "enseignant" and str(current_user.get("sub", "")) == str(sujet.enseignant_id):
+        return
+    raise HTTPException(403, "Accès refusé : ce sujet appartient à un autre enseignant")
 
 
 # ================================================================
@@ -36,14 +71,21 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # aucun écran n'affichait le nom réel de la période.
 
 
-def _annee_courante(db: Session) -> Optional[AnneeScolaire]:
-    return (db.query(AnneeScolaire).filter(AnneeScolaire.est_courante == "O").first()
-            or db.query(AnneeScolaire).order_by(AnneeScolaire.date_debut.desc()).first())
+def _annee_courante(db: Session, etablissement_id: int) -> Optional[AnneeScolaire]:
+    """Année en cours DE CETTE ÉCOLE.
+
+    Sans le filtre, `est_courante == "O"` renvoyait l'année de la première école
+    venue : toutes les autres se voyaient proposer des périodes qui n'étaient
+    pas les leurs.
+    """
+    base = db.query(AnneeScolaire).filter(AnneeScolaire.etablissement_id == etablissement_id)
+    return (base.filter(AnneeScolaire.est_courante == "O").first()
+            or base.order_by(AnneeScolaire.date_debut.desc()).first())
 
 
-def _periodes_annee(db: Session) -> List[Trimestre]:
-    """Périodes réellement configurées, dans l'ordre."""
-    annee = _annee_courante(db)
+def _periodes_annee(db: Session, etablissement_id: int) -> List[Trimestre]:
+    """Périodes réellement configurées pour cette école, dans l'ordre."""
+    annee = _annee_courante(db, etablissement_id)
     if not annee:
         return []
     return db.query(Trimestre).filter(
@@ -52,21 +94,33 @@ def _periodes_annee(db: Session) -> List[Trimestre]:
 
 
 def _resoudre_periode(
-    db: Session, trimestre_id: Optional[int], numero: Optional[int]
+    db: Session, trimestre_id: Optional[int], numero: Optional[int], etablissement_id: int
 ) -> Trimestre:
     """Résout la période d'un sujet, par identifiant ou par ancien numéro.
 
     Accepter encore le numéro évite de casser un portail enseignant qui n'aurait
     pas été mis à jour, sans pour autant laisser entrer un numéro qui ne
     correspond à aucune période réelle de l'établissement.
+
+    `Trimestre` est OWNERSHIP : son école se lit via `AnneeScolaire`. Un
+    identifiant appartenant à une autre école répond 404, jamais 403 — on ne
+    confirme pas l'existence de la période d'à côté.
     """
     if trimestre_id:
-        periode = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+        periode = (
+            db.query(Trimestre)
+            .join(AnneeScolaire, Trimestre.annee_id == AnneeScolaire.annee_id)
+            .filter(
+                Trimestre.trimestre_id == trimestre_id,
+                AnneeScolaire.etablissement_id == etablissement_id,
+            )
+            .first()
+        )
         if not periode:
             raise HTTPException(404, "Période non trouvée")
         return periode
 
-    periodes = _periodes_annee(db)
+    periodes = _periodes_annee(db, etablissement_id)
     if not periodes:
         raise HTTPException(
             400,
@@ -86,13 +140,16 @@ def _resoudre_periode(
 
 
 @router.get("/periodes")
-def lister_periodes(db: Session = Depends(get_db)):
+def lister_periodes(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Périodes de l'année, pour les sélecteurs des deux écrans d'examens.
 
     Évite que le portail enseignant et le Centre des Examens réinventent
     chacun une liste « T1 T2 T3 » figée dans leur code.
     """
-    periodes = _periodes_annee(db)
+    periodes = _periodes_annee(db, etablissement_id)
     return [
         {
             "trimestre_id": p.trimestre_id,
@@ -122,25 +179,48 @@ async def upload_sujet(
     duree_minutes: int = Form(...),
     classe_id: Optional[int] = Form(None),
     demande_id: Optional[int] = Form(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Upload d'un sujet d'examen par un enseignant.
     Le sujet est immédiatement envoyé à l'administration (statut ENVOYE)
     et un message de notification est créé pour l'admin.
     """
-    # Validate
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    # Validate — l'enseignant doit appartenir à l'établissement appelant, et
+    # un compte enseignant ne peut déposer un sujet que sous sa propre
+    # identité (jamais au nom d'un collègue) ; un admin peut déposer pour
+    # n'importe quel enseignant de SON établissement.
+    ens = db.query(Enseignant).filter(
+        Enseignant.enseignant_id == enseignant_id, Enseignant.etablissement_id == etablissement_id
+    ).first()
     if not ens:
         raise HTTPException(404, "Enseignant non trouvé")
+    if current_user.get("role") not in ADMIN_TIER_ROLES:
+        if current_user.get("type") != "enseignant" or str(current_user.get("sub", "")) != str(enseignant_id):
+            raise HTTPException(403, "Vous ne pouvez déposer un sujet que sous votre propre identité")
 
-    mat = db.query(Matiere).filter(Matiere.matiere_id == matiere_id).first()
+    mat = (
+        db.query(Matiere)
+        .join(Cycle, Cycle.cycle_id == Matiere.cycle_id)
+        .filter(Matiere.matiere_id == matiere_id, Cycle.etablissement_id == etablissement_id)
+        .first()
+    )
     if not mat:
         raise HTTPException(404, "Matière non trouvée")
 
+    if classe_id is not None:
+        classe_valide = db.query(Classe.classe_id).filter(
+            Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+        ).first()
+        if not classe_valide:
+            raise HTTPException(404, "Classe non trouvée")
+
     # Période : c'est celle de l'établissement qui fait foi. L'ancien numéro
     # 1/2/3 reste accepté (clients non encore mis à jour) mais il est résolu
-    # vers une vraie période — une école à deux semestres n'a pas de « T3 ».
-    periode = _resoudre_periode(db, trimestre_id, trimestre)
+    # vers une vraie période DE CETTE ÉCOLE — une école à deux semestres n'a
+    # pas de « T3 », et un trimestre_id d'une autre école est refusé.
+    periode = _resoudre_periode(db, trimestre_id, trimestre, etablissement_id)
 
     # Check file type
     allowed_types = [
@@ -185,6 +265,7 @@ async def upload_sujet(
 
     # Create notification message to admin
     msg = Message(
+        etablissement_id=etablissement_id,
         demande_id=demande_id,
         expediteur_type="ENSEIGNANT",
         expediteur_id=enseignant_id,
@@ -215,15 +296,26 @@ def get_sujets(
     trimestre_id: Optional[int] = None,
     trimestre: Optional[int] = None,
     statut: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Liste des sujets - filtrable par enseignant, période, statut.
+
+    Toujours restreinte à l'établissement appelant. Un compte enseignant ne
+    voit que ses propres sujets (le paramètre enseignant_id, s'il tente de
+    désigner un collègue, est ignoré) ; un admin peut filtrer par n'importe
+    quel enseignant de son établissement.
 
     `trimestre_id` filtre sur la période réelle ; `trimestre` (numéro) reste
     accepté pour les appelants non mis à jour.
     """
-    query = db.query(SujetExamen)
-    if enseignant_id:
+    query = db.query(SujetExamen).join(Enseignant, Enseignant.enseignant_id == SujetExamen.enseignant_id).filter(
+        Enseignant.etablissement_id == etablissement_id
+    )
+    if current_user.get("role") not in ADMIN_TIER_ROLES and current_user.get("type") == "enseignant":
+        query = query.filter(SujetExamen.enseignant_id == current_user.get("sub"))
+    elif enseignant_id:
         query = query.filter(SujetExamen.enseignant_id == enseignant_id)
     if trimestre_id:
         query = query.filter(SujetExamen.trimestre_id == trimestre_id)
@@ -234,8 +326,16 @@ def get_sujets(
 
     sujets = query.order_by(SujetExamen.date_depot.desc()).all()
     # Libellés des périodes en une requête : la boucle ci-dessous en émettait
-    # déjà trois par sujet, inutile d'en ajouter une quatrième.
-    periodes = {p.trimestre_id: p for p in db.query(Trimestre).all()}
+    # déjà trois par sujet, inutile d'en ajouter une quatrième. Restreinte à
+    # l'école appelante : `Trimestre` sans filtre chargeait le calendrier de
+    # toute la plateforme.
+    periodes = {
+        p.trimestre_id: p
+        for p in db.query(Trimestre)
+        .join(AnneeScolaire, Trimestre.annee_id == AnneeScolaire.annee_id)
+        .filter(AnneeScolaire.etablissement_id == etablissement_id)
+        .all()
+    }
     result = []
     for s in sujets:
         ens = db.query(Enseignant).filter(Enseignant.enseignant_id == s.enseignant_id).first()
@@ -273,11 +373,15 @@ def get_sujets(
 
 
 @router.put("/sujets/{sujet_id}/envoyer")
-def envoyer_sujet(sujet_id: int, db: Session = Depends(get_db)):
+def envoyer_sujet(
+    sujet_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """L'enseignant envoie son sujet à l'admin."""
-    sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
-    if not sujet:
-        raise HTTPException(404, "Sujet non trouvé")
+    sujet = _charger_sujet_ou_404(db, sujet_id, etablissement_id)
+    _verifier_auteur_sujet(sujet, current_user)
     if sujet.statut not in ["BROUILLON", "REJETE"]:
         raise HTTPException(400, f"Le sujet est déjà '{sujet.statut}', impossible de l'envoyer.")
 
@@ -288,6 +392,7 @@ def envoyer_sujet(sujet_id: int, db: Session = Depends(get_db)):
     ens = db.query(Enseignant).filter(Enseignant.enseignant_id == sujet.enseignant_id).first()
     mat = db.query(Matiere).filter(Matiere.matiere_id == sujet.matiere_id).first()
     msg = Message(
+        etablissement_id=etablissement_id,
         demande_id=sujet.demande_id,
         expediteur_type="ENSEIGNANT",
         expediteur_id=sujet.enseignant_id,
@@ -303,16 +408,14 @@ def envoyer_sujet(sujet_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/sujets/{sujet_id}/valider")
-def valider_sujet(sujet_id: int, db: Session = Depends(get_db)):
+def valider_sujet(sujet_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """L'admin valide un sujet reçu. Met à jour le statut de la demande si tout est validé.
 
     L'enseignant est prévenu, au même titre qu'en cas de rejet : jusqu'ici seule
     la mauvaise nouvelle circulait, si bien qu'un professeur ayant déposé son
     sujet ne savait jamais s'il avait été accepté — et relançait.
     """
-    sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
-    if not sujet:
-        raise HTTPException(404, "Sujet non trouvé")
+    sujet = _charger_sujet_ou_404(db, sujet_id, etablissement_id)
     sujet.statut = "VALIDE"
 
     mat = db.query(Matiere).filter(Matiere.matiere_id == sujet.matiere_id).first()
@@ -325,6 +428,7 @@ def valider_sujet(sujet_id: int, db: Session = Depends(get_db)):
         destinataire_type="ENSEIGNANT",
         destinataire_id=sujet.enseignant_id,
         objet_type="EXAMENS",
+        etablissement_id=etablissement_id,
         sujet=f"Sujet validé — {mat.libelle if mat else '?'} ({libelle_periode})",
         contenu=(
             f"Votre sujet « {sujet.titre} » a été validé par l'administration. "
@@ -351,11 +455,9 @@ def valider_sujet(sujet_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/sujets/{sujet_id}/rejeter")
-def rejeter_sujet(sujet_id: int, raison: str = "", db: Session = Depends(get_db)):
+def rejeter_sujet(sujet_id: int, raison: str = "", db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """L'admin rejette un sujet avec commentaire."""
-    sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
-    if not sujet:
-        raise HTTPException(404, "Sujet non trouvé")
+    sujet = _charger_sujet_ou_404(db, sujet_id, etablissement_id)
     sujet.statut = "REJETE"
     sujet.commentaire = raison
 
@@ -367,6 +469,7 @@ def rejeter_sujet(sujet_id: int, raison: str = "", db: Session = Depends(get_db)
     ).first() if sujet.trimestre_id else None
     _libelle_periode = _periode.libelle if _periode else f"Période {sujet.trimestre}"
     msg = Message(
+        etablissement_id=etablissement_id,
         expediteur_type="ADMIN",
         destinataire_type="ENSEIGNANT",
         destinataire_id=sujet.enseignant_id,
@@ -380,11 +483,15 @@ def rejeter_sujet(sujet_id: int, raison: str = "", db: Session = Depends(get_db)
 
 
 @router.delete("/sujets/{sujet_id}")
-def supprimer_sujet(sujet_id: int, db: Session = Depends(get_db)):
+def supprimer_sujet(
+    sujet_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Supprimer un sujet (brouillon ou envoyé uniquement)."""
-    sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
-    if not sujet:
-        raise HTTPException(404, "Sujet non trouvé")
+    sujet = _charger_sujet_ou_404(db, sujet_id, etablissement_id)
+    _verifier_auteur_sujet(sujet, current_user)
     if sujet.statut not in ["BROUILLON", "ENVOYE"]:
         raise HTTPException(400, "Seuls les sujets non validés peuvent être supprimés.")
 
@@ -406,13 +513,18 @@ class SujetModifier(BaseModel):
 
 
 @router.put("/sujets/{sujet_id}/modifier")
-def modifier_sujet(sujet_id: int, data: SujetModifier, db: Session = Depends(get_db)):
+def modifier_sujet(
+    sujet_id: int,
+    data: SujetModifier,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """L'enseignant modifie les métadonnées d'un sujet non encore validé.
     La modification est immédiatement visible côté admin (pas de re-notification).
     """
-    sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
-    if not sujet:
-        raise HTTPException(404, "Sujet non trouvé")
+    sujet = _charger_sujet_ou_404(db, sujet_id, etablissement_id)
+    _verifier_auteur_sujet(sujet, current_user)
     if sujet.statut == "VALIDE":
         raise HTTPException(400, "Un sujet validé ne peut plus être modifié.")
     sujet.titre = data.titre
@@ -420,7 +532,7 @@ def modifier_sujet(sujet_id: int, data: SujetModifier, db: Session = Depends(get
     # Même résolution qu'au dépôt : la période réelle fait foi, l'ancien numéro
     # reste accepté pour un client non mis à jour.
     if data.trimestre_id or data.trimestre:
-        periode = _resoudre_periode(db, data.trimestre_id, data.trimestre)
+        periode = _resoudre_periode(db, data.trimestre_id, data.trimestre, etablissement_id)
         sujet.trimestre_id = periode.trimestre_id
         sujet.trimestre = periode.numero
     db.commit()
@@ -431,11 +543,22 @@ def modifier_sujet(sujet_id: int, data: SujetModifier, db: Session = Depends(get
 from fastapi.responses import FileResponse
 
 @router.get("/sujets/{sujet_id}/fichier")
-def telecharger_sujet(sujet_id: int, db: Session = Depends(get_db)):
-    """Télécharger le fichier d'un sujet."""
-    sujet = db.query(SujetExamen).filter(SujetExamen.sujet_id == sujet_id).first()
-    if not sujet:
-        raise HTTPException(404, "Sujet non trouvé")
+def telecharger_sujet(
+    sujet_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Télécharger le fichier d'un sujet.
+
+    Scénario de fuite explicitement visé par ce lot : avant, n'importe quel
+    compte EXAMENS_ROLES (y compris un simple enseignant) pouvait télécharger
+    le sujet d'un collègue — voire d'une autre école — avant l'examen, sans
+    aucune vérification. Désormais : établissement + auteur du sujet
+    (ou admin de cet établissement) uniquement.
+    """
+    sujet = _charger_sujet_ou_404(db, sujet_id, etablissement_id)
+    _verifier_auteur_sujet(sujet, current_user)
     file_path = os.path.join(UPLOAD_DIR, sujet.fichier_path)
     if not os.path.exists(file_path):
         raise HTTPException(404, "Fichier non trouvé sur le serveur")
@@ -451,9 +574,12 @@ def get_exam_stats(
     trimestre_id: Optional[int] = None,
     trimestre: Optional[int] = None,
     db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Statistiques pour le Centre des Examens."""
-    q = db.query(SujetExamen)
+    """Statistiques pour le Centre des Examens, restreintes à cette école."""
+    q = db.query(SujetExamen).join(Enseignant, Enseignant.enseignant_id == SujetExamen.enseignant_id).filter(
+        Enseignant.etablissement_id == etablissement_id
+    )
     if trimestre_id:
         q = q.filter(SujetExamen.trimestre_id == trimestre_id)
     elif trimestre:
@@ -468,7 +594,9 @@ def get_exam_stats(
 
     # Enseignants uniques ayant soumis
     ens_ids = set(s.enseignant_id for s in all_sujets if s.statut in ["ENVOYE", "VALIDE"])
-    total_enseignants = db.query(Enseignant).filter(Enseignant.statut == "ACTIF").count()
+    total_enseignants = db.query(Enseignant).filter(
+        Enseignant.statut == "ACTIF", Enseignant.etablissement_id == etablissement_id
+    ).count()
 
     return {
         "total_sujets": total,
@@ -492,14 +620,18 @@ def get_exam_stats(
 # quel enseignant assure quelle matière dans quelle classe.
 
 
-def _attendus_par_affectation(db: Session) -> List[dict]:
+def _attendus_par_affectation(db: Session, etablissement_id: int) -> List[dict]:
     """Un sujet attendu par affectation active de l'année en cours.
 
     Préchargement en lot : une école de 40 classes × 12 matières produit ~500
     lignes, et interroger enseignant/matière/classe pour chacune remettrait le
     N+1 que ce projet a déjà payé cher ailleurs.
+
+    `Affectation` n'a pas de colonne établissement : elle est isolée par son
+    `annee_id`, qui appartient déjà à une seule école. Partir de l'année de
+    l'appelant suffit donc à ne compter que ses propres affectations.
     """
-    annee = _annee_courante(db)
+    annee = _annee_courante(db, etablissement_id)
     if not annee:
         return []
 
@@ -545,7 +677,11 @@ def _attendus_par_affectation(db: Session) -> List[dict]:
 
 
 @router.get("/sujets/suivi")
-def suivi_sujets(trimestre_id: Optional[int] = None, db: Session = Depends(get_db)):
+def suivi_sujets(
+    trimestre_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Sujets attendus, reçus et manquants pour une période, nommément.
 
     Remplace un pourcentage qu'on subit par une liste sur laquelle on agit :
@@ -555,18 +691,24 @@ def suivi_sujets(trimestre_id: Optional[int] = None, db: Session = Depends(get_d
     (enseignant, matière) — la classe n'est pas exigée, beaucoup d'écoles
     déposant un sujet commun à toutes les classes d'un même niveau.
     """
-    periodes = _periodes_annee(db)
+    periodes = _periodes_annee(db, etablissement_id)
     if not periodes:
         return {
             "periode": None, "attendus": 0, "recus": 0, "manquants": [],
             "message": "Aucune période configurée pour l'année en cours.",
         }
+    # `trimestre_id` est cherché dans les périodes DE CETTE ÉCOLE : un
+    # identifiant appartenant à une autre ne correspond à rien et retombe
+    # simplement sur la période en cours, sans jamais rien en révéler.
     periode = next((p for p in periodes if p.trimestre_id == trimestre_id), None) if trimestre_id else None
     if periode is None:
         periode = next((p for p in periodes if p.statut == "EN_COURS"), periodes[0])
 
-    attendus = _attendus_par_affectation(db)
-    recus = db.query(SujetExamen).filter(
+    attendus = _attendus_par_affectation(db, etablissement_id)
+    recus = db.query(SujetExamen).join(
+        Enseignant, Enseignant.enseignant_id == SujetExamen.enseignant_id
+    ).filter(
+        Enseignant.etablissement_id == etablissement_id,
         SujetExamen.trimestre_id == periode.trimestre_id,
         SujetExamen.statut.in_(["ENVOYE", "RECU", "VALIDE"]),
     ).all()
@@ -621,14 +763,22 @@ class RelanceSujets(BaseModel):
 
 
 @router.post("/sujets/relancer")
-def relancer_sujets(data: RelanceSujets, db: Session = Depends(get_db)):
+def relancer_sujets(
+    data: RelanceSujets,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Relance nommément les enseignants dont le sujet manque.
 
     Relancer tout le monde use la crédibilité du message : un enseignant à jour
     qui reçoit un rappel cesse de les lire. On n'écrit qu'à ceux qui manquent,
     et on leur rappelle laquelle de leurs matières est concernée.
+
+    Les destinataires sortent du suivi de l'école appelante : des identifiants
+    d'enseignants d'une autre école glissés dans `enseignant_ids` ne trouvent
+    aucune correspondance et ne reçoivent donc rien.
     """
-    suivi = suivi_sujets(data.trimestre_id, db)
+    suivi = suivi_sujets(data.trimestre_id, db, etablissement_id)
     manquants = suivi["manquants"]
     if data.enseignant_ids:
         cibles = set(data.enseignant_ids)
@@ -643,6 +793,7 @@ def relancer_sujets(data: RelanceSujets, db: Session = Depends(get_db)):
 
     for enseignant_id, matieres in par_enseignant.items():
         db.add(Message(
+            etablissement_id=etablissement_id,
             expediteur_type="ADMIN",
             destinataire_type="ENSEIGNANT",
             destinataire_id=enseignant_id,
@@ -669,18 +820,22 @@ class DemandeSujets(BaseModel):
 
 
 @router.post("/sujets/demander", status_code=201)
-def demander_sujets(data: DemandeSujets, db: Session = Depends(get_db)):
+def demander_sujets(
+    data: DemandeSujets,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Ouvre une campagne de collecte des sujets et prévient les enseignants.
 
     Ce geste n'existait que dans l'écran Communication, sous la forme d'une
     « demande » de type EXAMENS : le Centre des Examens, seul endroit où l'on
     constate l'absence de sujets, n'offrait aucun moyen de les réclamer.
+
+    « TOUS_ENSEIGNANTS » s'entend au sein de l'établissement appelant : la
+    demande et le message portent son identifiant, jamais un envoi à l'échelle
+    de la plateforme.
     """
-    periode = db.query(Trimestre).filter(
-        Trimestre.trimestre_id == data.trimestre_id
-    ).first()
-    if not periode:
-        raise HTTPException(404, "Période non trouvée")
+    periode = _resoudre_periode(db, data.trimestre_id, None, etablissement_id)
 
     titre = data.titre or f"Dépôt des sujets d'examen — {periode.libelle}"
     description = data.description or (
@@ -689,6 +844,7 @@ def demander_sujets(data: DemandeSujets, db: Session = Depends(get_db)):
     )
 
     demande = DemandeEmploi(
+        etablissement_id=etablissement_id,
         titre=titre,
         description=description,
         objet_type="EXAMENS",
@@ -699,6 +855,7 @@ def demander_sujets(data: DemandeSujets, db: Session = Depends(get_db)):
     db.flush()
 
     db.add(Message(
+        etablissement_id=etablissement_id,
         demande_id=demande.demande_id,
         expediteur_type="ADMIN",
         destinataire_type="TOUS_ENSEIGNANTS",
@@ -738,10 +895,11 @@ class CreneauExamenCreate(BaseModel):
 
 
 @router.post("/emploi", status_code=201)
-def creer_emploi_examen(data: EmploiExamenCreate, db: Session = Depends(get_db)):
+def creer_emploi_examen(data: EmploiExamenCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Créer un emploi du temps d'examen."""
     from datetime import date as date_type
     emploi = EmploiExamen(
+        etablissement_id=etablissement_id,
         demande_id=data.demande_id,
         trimestre=data.trimestre,
         titre=data.titre,
@@ -755,9 +913,9 @@ def creer_emploi_examen(data: EmploiExamenCreate, db: Session = Depends(get_db))
 
 
 @router.get("/emploi")
-def lister_emplois_examen(trimestre: Optional[int] = None, db: Session = Depends(get_db)):
+def lister_emplois_examen(trimestre: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Liste des emplois d'examen."""
-    q = db.query(EmploiExamen)
+    q = db.query(EmploiExamen).filter(EmploiExamen.etablissement_id == etablissement_id)
     if trimestre:
         q = q.filter(EmploiExamen.trimestre == trimestre)
     emplois = q.order_by(EmploiExamen.date_creation.desc()).all()
@@ -778,9 +936,11 @@ def lister_emplois_examen(trimestre: Optional[int] = None, db: Session = Depends
 
 
 @router.get("/emploi/{emploi_id}")
-def get_emploi_examen(emploi_id: int, db: Session = Depends(get_db)):
+def get_emploi_examen(emploi_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Détail d'un emploi d'examen avec tous ses créneaux."""
-    emploi = db.query(EmploiExamen).filter(EmploiExamen.emploi_examen_id == emploi_id).first()
+    emploi = db.query(EmploiExamen).filter(
+        EmploiExamen.emploi_examen_id == emploi_id, EmploiExamen.etablissement_id == etablissement_id
+    ).first()
     if not emploi:
         raise HTTPException(404, "Emploi d'examen non trouvé")
 
@@ -825,11 +985,21 @@ def get_emploi_examen(emploi_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/emploi/{emploi_id}/creneaux")
-def ajouter_creneau_examen(emploi_id: int, data: CreneauExamenCreate, db: Session = Depends(get_db)):
+def ajouter_creneau_examen(emploi_id: int, data: CreneauExamenCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Ajouter un créneau à l'emploi d'examen."""
-    emploi = db.query(EmploiExamen).filter(EmploiExamen.emploi_examen_id == emploi_id).first()
+    emploi = db.query(EmploiExamen).filter(
+        EmploiExamen.emploi_examen_id == emploi_id, EmploiExamen.etablissement_id == etablissement_id
+    ).first()
     if not emploi:
         raise HTTPException(404, "Emploi d'examen non trouvé")
+
+    # La classe référencée doit appartenir à cet établissement — jamais
+    # acceptée aveuglément depuis le body.
+    classe_valide = db.query(Classe.classe_id).filter(
+        Classe.classe_id == data.classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe_valide:
+        raise HTTPException(404, "Classe non trouvée")
 
     creneau = CreneauExamen(
         emploi_examen_id=emploi_id,
@@ -850,8 +1020,13 @@ def ajouter_creneau_examen(emploi_id: int, data: CreneauExamenCreate, db: Sessio
 
 
 @router.delete("/emploi/{emploi_id}/creneaux/{creneau_id}")
-def supprimer_creneau_examen(emploi_id: int, creneau_id: int, db: Session = Depends(get_db)):
+def supprimer_creneau_examen(emploi_id: int, creneau_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Supprimer un créneau d'examen."""
+    emploi = db.query(EmploiExamen).filter(
+        EmploiExamen.emploi_examen_id == emploi_id, EmploiExamen.etablissement_id == etablissement_id
+    ).first()
+    if not emploi:
+        raise HTTPException(404, "Emploi d'examen non trouvé")
     c = db.query(CreneauExamen).filter(
         CreneauExamen.creneau_examen_id == creneau_id,
         CreneauExamen.emploi_examen_id == emploi_id
@@ -864,9 +1039,11 @@ def supprimer_creneau_examen(emploi_id: int, creneau_id: int, db: Session = Depe
 
 
 @router.put("/emploi/{emploi_id}/publier")
-def publier_emploi_examen(emploi_id: int, db: Session = Depends(get_db)):
+def publier_emploi_examen(emploi_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Publier l'emploi d'examen et notifier enseignants + élèves."""
-    emploi = db.query(EmploiExamen).filter(EmploiExamen.emploi_examen_id == emploi_id).first()
+    emploi = db.query(EmploiExamen).filter(
+        EmploiExamen.emploi_examen_id == emploi_id, EmploiExamen.etablissement_id == etablissement_id
+    ).first()
     if not emploi:
         raise HTTPException(404, "Emploi d'examen non trouvé")
 
@@ -878,6 +1055,7 @@ def publier_emploi_examen(emploi_id: int, db: Session = Depends(get_db)):
 
     # Send notification to all teachers
     msg = Message(
+        etablissement_id=etablissement_id,
         demande_id=emploi.demande_id,
         expediteur_type="ADMIN",
         destinataire_type="TOUS_ENSEIGNANTS",

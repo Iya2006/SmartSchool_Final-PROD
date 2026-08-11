@@ -4,7 +4,8 @@ Couvre TOUTES les tables du système : Structure, Académique, Évaluations, Fin
 Vérifiés contre le DDL Oracle original.
 """
 from sqlalchemy import (
-    Column, Integer, String, Date, Float, ForeignKey, DateTime, Text, Numeric, CheckConstraint, Time, JSON, Index
+    Column, Integer, String, Date, Float, ForeignKey, DateTime, Text, Numeric, CheckConstraint, Time, JSON, Index,
+    UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -719,9 +720,15 @@ class Incident(Base):
 # ============================================================================
 
 class DemandeEmploi(Base):
-    """Demande de l'admin aux enseignants pour collecter les disponibilités."""
+    """Demande de l'admin aux enseignants pour collecter les disponibilités.
+
+    `etablissement_id` ajouté au Lot 5 du chantier multi-écoles — avant,
+    cette table n'avait aucune colonne établissement (classée "À DÉCIDER").
+    NOT NULL car ajoutée sur une table vide (vérifié réellement sur
+    Supabase avant migration, voir migrations/lot5_communication_etablissement.py)."""
     __tablename__ = "ss_demandes_emploi"
     demande_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     titre = Column(String(200), nullable=False)
     description = Column(Text)
     objet_type = Column(String(30), default="EMPLOI")  # EMPLOI, REUNION, GENERAL...
@@ -733,9 +740,16 @@ class DemandeEmploi(Base):
 
 
 class Message(Base):
-    """Messages de communication entre Admin, Enseignants et Parents."""
+    """Messages de communication entre Admin, Enseignants et Parents.
+
+    `etablissement_id` ajouté au Lot 5 du chantier multi-écoles — avant,
+    cette table n'avait aucune colonne établissement (classée "À DÉCIDER") :
+    un message "TOUS_ENSEIGNANTS"/"TOUS_PARENTS" partait vers TOUTE la
+    plateforme, pas seulement l'école concernée. NOT NULL car ajoutée sur
+    une table vide (vérifié réellement sur Supabase avant migration)."""
     __tablename__ = "ss_messages"
     message_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
     expediteur_type = Column(String(20), nullable=False)  # ADMIN, ENSEIGNANT, PARENT
     expediteur_id = Column(Integer, nullable=True)  # enseignant_id or parent_id
@@ -795,9 +809,17 @@ class SujetExamen(Base):
 
 
 class EmploiExamen(Base):
-    """Emploi du temps d'une session d'examens."""
+    """Emploi du temps d'une session d'examens.
+
+    `etablissement_id` ajouté au Lot 4 du chantier multi-écoles — avant,
+    cette table n'avait aucune colonne ni relation fiable permettant de
+    déterminer son établissement (`demande_id` nullable et lui-même sans
+    étab ; `annee_id` avec un défaut codé en dur, jamais fiable). NOT NULL
+    car ajoutée sur une table vide (vérifié réellement sur Supabase avant
+    migration, voir migrations/lot4_examens_etablissement.py)."""
     __tablename__ = "ss_emplois_examen"
     emploi_examen_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
     trimestre = Column(Integer, nullable=False)
     titre = Column(String(255), nullable=False)
@@ -855,7 +877,10 @@ class FournitureScolaire(Base):
     """Liste des fournitures scolaires requises par classe/niveau."""
     __tablename__ = "ss_fournitures_scolaires"
     fourniture_id  = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), default=1)
+    # `default=1` retiré (chantier multi-écoles) : une création sans valeur
+    # explicite rattachait la fourniture à l'établissement 1. La valeur provient
+    # désormais toujours du compte authentifié, et la colonne est obligatoire.
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     nom            = Column(String(200), nullable=False)
     description    = Column(Text, nullable=True)
     categorie      = Column(String(50), default="MATERIEL")   # CAHIER, LIVRE, STYLO, UNIFORME, MATERIEL, AUTRE
@@ -909,7 +934,10 @@ class Ouvrage(Base):
     __tablename__ = "ss_ouvrages"
 
     ouvrage_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False, default=1)
+    # `default=1` retiré (chantier multi-écoles) : une création sans valeur
+    # explicite rattachait l'ouvrage au catalogue de l'établissement 1. La
+    # valeur provient désormais toujours du compte authentifié.
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     isbn = Column(String(20), nullable=True)
     code_interne = Column(String(30), nullable=False, index=True)
     titre = Column(String(300), nullable=False, index=True)
@@ -999,15 +1027,33 @@ class Comptable(Base):
     etablissement = relationship("Etablissement")
 
 class ParametreComptabilite(Base):
+    """Paramètres comptables (dont le PIN d'accès). TENANT — un même paramètre
+    (ex: 'PIN_ACCESS') est désormais indépendant par établissement (voir Lot 1
+    du chantier multi-écoles) : avant cette colonne, un seul PIN existait pour
+    toute la plateforme. `etablissement_id` NOT NULL car ajouté sur une table
+    vide (vérifié réellement sur Supabase avant migration, aucun backfill)."""
     __tablename__ = "ss_parametres_comptabilite"
+    __table_args__ = (
+        UniqueConstraint("etablissement_id", "cle", name="uq_parametre_etablissement_cle"),
+    )
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    cle = Column(String(50), unique=True, nullable=False) # ex: 'PIN_ACCESS'
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    cle = Column(String(50), nullable=False) # ex: 'PIN_ACCESS'
     valeur = Column(String(255), nullable=False)
 
 class ExerciceComptable(Base):
+    """TENANT — `annee` était unique sur toute la plateforme avant le Lot 1 du
+    chantier multi-écoles (impossible pour 2 écoles d'avoir chacune un exercice
+    '2026'). Désormais unique par établissement. `etablissement_id` NOT NULL
+    car ajouté sur une table vide (vérifié réellement sur Supabase, aucun
+    backfill nécessaire)."""
     __tablename__ = "ss_exercices_comptables"
+    __table_args__ = (
+        UniqueConstraint("etablissement_id", "annee", name="uq_exercice_etablissement_annee"),
+    )
     exercice_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    annee = Column(String(10), nullable=False, unique=True) # ex: '2026'
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    annee = Column(String(10), nullable=False) # ex: '2026'
     date_debut = Column(Date, nullable=False)
     date_fin = Column(Date, nullable=False)
     statut = Column(String(20), default="OUVERT") # OUVERT, FERME
@@ -1027,9 +1073,13 @@ class CompteComptable(Base):
     type_compte = Column(String(30), nullable=False) # ACTIF, PASSIF, CHARGE, PRODUIT
 
 class EcritureComptable(Base):
+    """TENANT — `etablissement_id` existait déjà mais n'était jamais peuplé ni
+    filtré nulle part avant le Lot 1 du chantier multi-écoles (colonne morte).
+    Passé en NOT NULL (table vérifiée vide sur Supabase avant migration) pour
+    empêcher structurellement toute future écriture sans établissement."""
     __tablename__ = "ss_ecritures_comptables"
     ecriture_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     date_ecriture = Column(Date, nullable=False)
     journal_id = Column(Integer, ForeignKey("ss_journaux_comptables.journal_id"), nullable=False)
     reference = Column(String(50))
@@ -1221,6 +1271,28 @@ class SyncTombstone(Base):
     entity_id = Column(Integer, nullable=False)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     deleted_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class SequenceMatricule(Base):
+    """Compteur de matricules, un par (établissement, type d'entité).
+
+    Chantier multi-écoles. Les matricules étaient calculés par
+    `COUNT(*) + 1` sur TOUTE la table, ce qui posait trois problèmes :
+      * le compteur était partagé entre les écoles (une école déduisait le
+        volume de la plateforme depuis ses propres numéros) ;
+      * il régressait dès qu'une fiche était supprimée, réattribuant un
+        matricule déjà imprimé sur des cartes et cité dans les archives ;
+      * deux créations simultanées obtenaient le même numéro (course).
+
+    Un compteur persistant, verrouillé le temps de l'incrément, règle les
+    trois. Il ne décroît JAMAIS : un matricule libéré n'est pas réattribué.
+    """
+    __tablename__ = "ss_sequences_matricule"
+    etablissement_id = Column(
+        Integer, ForeignKey("ss_etablissements.etablissement_id"), primary_key=True
+    )
+    type_entite = Column(String(20), primary_key=True)  # ELV, ENS
+    dernier_numero = Column(Integer, nullable=False, default=0)
 
 
 # ============================================================================

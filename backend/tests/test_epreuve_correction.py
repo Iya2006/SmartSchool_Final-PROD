@@ -105,9 +105,7 @@ class TestCorrection:
         db, ev = epreuve["db"], epreuve["ev"]
         modifier_evaluation(
             ev.evaluation_id,
-            EvaluationUpdate(libelle="Évaluation d'Octobre (corrigée)", note_sur=40),
-            db,
-        )
+            EvaluationUpdate(libelle="Évaluation d'Octobre (corrigée)", note_sur=40), db, ETAB)
         db.refresh(ev)
         assert ev.libelle == "Évaluation d'Octobre (corrigée)"
         assert float(ev.note_sur) == 40
@@ -118,8 +116,7 @@ class TestCorrection:
         db, ev = epreuve["db"], epreuve["ev"]
         with pytest.raises(HTTPException) as exc:
             modifier_evaluation(
-                ev.evaluation_id, EvaluationUpdate(date_evaluation=date(2026, 3, 1)), db,
-            )
+                ev.evaluation_id, EvaluationUpdate(date_evaluation=date(2026, 3, 1)), db, ETAB)
         assert exc.value.status_code == 400
 
     def test_bareme_sous_une_note_existante_refuse(self, epreuve):
@@ -127,7 +124,7 @@ class TestCorrection:
         # supérieure au maximum et gonflerait la moyenne après normalisation.
         db, ev = epreuve["db"], epreuve["ev"]
         with pytest.raises(HTTPException) as exc:
-            modifier_evaluation(ev.evaluation_id, EvaluationUpdate(note_sur=10), db)
+            modifier_evaluation(ev.evaluation_id, EvaluationUpdate(note_sur=10), db, ETAB)
         assert exc.value.status_code == 400
         assert "18" in exc.value.detail
         db.refresh(ev)
@@ -136,17 +133,17 @@ class TestCorrection:
     def test_bareme_nul_refuse(self, epreuve):
         db, ev = epreuve["db"], epreuve["ev"]
         with pytest.raises(HTTPException):
-            modifier_evaluation(ev.evaluation_id, EvaluationUpdate(note_sur=0), db)
+            modifier_evaluation(ev.evaluation_id, EvaluationUpdate(note_sur=0), db, ETAB)
 
     def test_type_inexistant_refuse(self, epreuve):
         db, ev = epreuve["db"], epreuve["ev"]
         with pytest.raises(HTTPException) as exc:
-            modifier_evaluation(ev.evaluation_id, EvaluationUpdate(type_eval_id=999999), db)
+            modifier_evaluation(ev.evaluation_id, EvaluationUpdate(type_eval_id=999999), db, ETAB)
         assert exc.value.status_code == 404
 
     def test_surcharge_de_coefficient_puis_retrait(self, epreuve):
         db, ev = epreuve["db"], epreuve["ev"]
-        modifier_evaluation(ev.evaluation_id, EvaluationUpdate(coefficient_override=3), db)
+        modifier_evaluation(ev.evaluation_id, EvaluationUpdate(coefficient_override=3), db, ETAB)
         db.refresh(ev)
         assert float(ev.coefficient_override) == 3
 
@@ -154,7 +151,7 @@ class TestCorrection:
         # distinction, une surcharge posée par erreur restait à vie.
         modifier_evaluation(
             ev.evaluation_id,
-            EvaluationUpdate.model_validate({"coefficient_override": None}), db,
+            EvaluationUpdate.model_validate({"coefficient_override": None}), db, ETAB,
         )
         db.refresh(ev)
         assert ev.coefficient_override is None
@@ -162,7 +159,7 @@ class TestCorrection:
     def test_coefficient_negatif_refuse(self, epreuve):
         db, ev = epreuve["db"], epreuve["ev"]
         with pytest.raises(HTTPException):
-            modifier_evaluation(ev.evaluation_id, EvaluationUpdate(coefficient_override=-1), db)
+            modifier_evaluation(ev.evaluation_id, EvaluationUpdate(coefficient_override=-1), db, ETAB)
 
 
 class TestVerificationBareme:
@@ -177,7 +174,7 @@ class TestSuppression:
     def test_supprimer_efface_l_epreuve_et_ses_notes(self, epreuve):
         db, ev = epreuve["db"], epreuve["ev"]
         eval_id = ev.evaluation_id
-        res = supprimer_evaluation(eval_id, db)
+        res = supprimer_evaluation(eval_id, db, ETAB)
 
         assert res["notes_supprimees"] == 2
         assert db.query(Evaluation).filter(Evaluation.evaluation_id == eval_id).first() is None
@@ -190,12 +187,12 @@ class TestSuppression:
         ev.statut = "CENTRALISEE"
         db.commit()
         with pytest.raises(HTTPException) as exc:
-            supprimer_evaluation(ev.evaluation_id, db)
+            supprimer_evaluation(ev.evaluation_id, db, ETAB)
         assert exc.value.status_code == 400
         assert "Annulée" in exc.value.detail
         assert db.query(Note).filter(Note.evaluation_id == ev.evaluation_id).count() == 2
 
     def test_epreuve_inexistante(self, epreuve):
         with pytest.raises(HTTPException) as exc:
-            supprimer_evaluation(999999, epreuve["db"])
+            supprimer_evaluation(999999, epreuve["db"], ETAB)
         assert exc.value.status_code == 404

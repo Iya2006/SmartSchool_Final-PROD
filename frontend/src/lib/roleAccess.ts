@@ -20,10 +20,12 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         role: 'SUPER_ADMIN',
         label: 'Super Administrateur',
         redirectPath: '/dashboard',
-        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring'],
+        // `/selection-etablissement` : réservé au SUPER_ADMIN, seul compte non
+        // rattaché à une école et donc seul à devoir en désigner une.
+        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring', '/selection-etablissement'],
         tier: 'full-admin',
         hasSystemAccess: true,
-        description: 'Pilotage global de l\'établissement et accès complet aux modules stratégiques.',
+        description: 'Pilotage global de la plateforme : crée les écoles, les supervise, et entre dans l\'une d\'elles au besoin.',
         interfaceLabel: 'Dashboard de contrôle total',
     },
     FONDATEUR: {

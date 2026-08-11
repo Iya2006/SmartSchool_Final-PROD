@@ -213,7 +213,13 @@ const AppContext = createContext<AppContextType>({
 });
 
 export function AppProvider({ children }: { children: ReactNode }) {
-    const { isAuthenticated } = useAuth();
+    const { isAuthenticated, user } = useAuth();
+    // Établissement affiché. Vaut 1 UNIQUEMENT tant qu'aucun compte n'est
+    // connecté (page de login : un visiteur anonyme n'a pas encore d'école).
+    // Dès la connexion, l'effet ci-dessous le remplace par l'établissement
+    // dérivé côté serveur — auparavant cette valeur restait figée à 1 pour
+    // tout le monde, donc chaque école voyait le nom, le logo, le cachet, la
+    // signature et les couleurs de l'établissement 1.
     const [etablissementId, setEtablissementId] = useState<number>(1);
     const [etablissementNom, setEtablissementNom] = useState<string>('SmartSchool');
     const [etablissementLogo, setEtablissementLogo] = useState<string | null>(null);
@@ -249,7 +255,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         } catch { return DEFAULT_CARTE_CONFIG; }
     });
 
-    const fetchEtablissement = () => {
+    // Synchronise l'établissement affiché avec le compte connecté. La valeur
+    // vient du serveur (dérivée du JWT au login) : le client ne la choisit
+    // jamais. `null`/`undefined` = SUPER_ADMIN plateforme, parent multi-écoles,
+    // ou session ouverte avant l'ajout du champ — on conserve alors la valeur
+    // courante plutôt que d'en inventer une.
+    useEffect(() => {
+        if (isAuthenticated && typeof user?.etablissement_id === 'number') {
+            setEtablissementId(user.etablissement_id);
+        }
+    }, [isAuthenticated, user?.etablissement_id]);
+
+    const fetchEtablissement = useCallback(() => {
         // Route publique — pas besoin de token
         api.get(`/api/parametrage/etablissements/${etablissementId}?_t=${Date.now()}`)
             .then(res => {
@@ -271,11 +288,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 }
             })
             .catch(() => {});
-    };
+    }, [etablissementId]);
 
     const fetchTheme = useCallback(() => {
-        // Route publique — pas besoin de token
-        api.get(`/api/parametrage/settings?etablissement_id=1&_t=${Date.now()}`)
+        // Route publique — pas besoin de token. Pour un appelant authentifié le
+        // backend ignore ce paramètre et sert les réglages de SON établissement
+        // (Lot 10) ; il ne sert donc qu'au visiteur anonyme de la page de login.
+        api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&_t=${Date.now()}`)
             .then(res => {
                 const settings = res.data;
                 const get = (cle: string, fb: string) =>
@@ -353,7 +372,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 }
             })
             .catch(() => {});
-    }, []);
+    }, [etablissementId]);
 
     // Recharge la liste des années + l'année courante depuis le backend.
     // Exposée via le contexte (`refreshAnnee`) pour que toute page qui active
@@ -412,7 +431,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
 
         fetchAnnee().finally(() => setLoading(false));
-    }, [fetchTheme, fetchAnnee, isAuthenticated]);
+        // `fetchEtablissement` et `fetchTheme` dépendent de `etablissementId` :
+        // les inclure ici est ce qui déclenche le rechargement de l'identité et
+        // du thème quand le login révèle enfin l'école du compte.
+    }, [fetchEtablissement, fetchTheme, fetchAnnee, isAuthenticated]);
 
     // Mettre à jour le titre et le favicon
     useEffect(() => {

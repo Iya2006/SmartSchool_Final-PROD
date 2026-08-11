@@ -479,7 +479,11 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depen
 
     from app.api.evaluations import get_bulletin_display_flags
     cl_for_flags = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
-    _etab = cl_for_flags.etablissement_id if cl_for_flags else 1
+    if not cl_for_flags:
+        # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
+        # appliquait les réglages d'affichage d'une autre école au bulletin.
+        raise HTTPException(404, "Classe introuvable pour cette inscription")
+    _etab = cl_for_flags.etablissement_id
     flags = get_bulletin_display_flags(db, _etab)
     # Notation par lettres : la famille doit lire la même chose que le
     # bulletin papier, sinon la lettre n'existe que sur le PDF.
@@ -643,6 +647,7 @@ def envoyer_message_eleve(eleve_id: int, data: EleveMessageSend, _auth: dict = D
     dest_id = data.destinataire_id if dest_type == "ENSEIGNANT" else None
 
     msg = Message(
+        etablissement_id=eleve.etablissement_id,
         expediteur_type="ELEVE", expediteur_id=eleve_id,
         destinataire_type=dest_type, destinataire_id=dest_id,
         sujet=data.sujet, contenu=data.contenu,

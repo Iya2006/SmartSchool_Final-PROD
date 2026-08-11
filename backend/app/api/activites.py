@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import ActiviteJour
 from pydantic import BaseModel
 from typing import Optional
@@ -16,7 +17,6 @@ router = APIRouter(prefix="/api/activites", tags=["Activités du Jour"])
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
 class ActiviteCreate(BaseModel):
-    etablissement_id: int = 1
     titre: str
     description: Optional[str] = None
     heure: Optional[str] = "08:00"
@@ -57,12 +57,22 @@ def _act_to_dict(a: ActiviteJour) -> dict:
 
 
 # ── GET toutes les activités du jour ──────────────────────────────────────────
+def _activite_ou_404(db: Session, activite_id: int, etablissement_id: int) -> ActiviteJour:
+    """ActiviteJour a une colonne etablissement_id directe (Lot 9)."""
+    a = db.query(ActiviteJour).filter(
+        ActiviteJour.activite_id == activite_id, ActiviteJour.etablissement_id == etablissement_id
+    ).first()
+    if not a:
+        raise HTTPException(404, "Activité introuvable")
+    return a
+
+
 @router.get("")
 def list_activites(
-    etablissement_id: int = 1,
     date_act: Optional[date] = None,
     uniquement_publies: bool = False,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     q = db.query(ActiviteJour).filter(ActiviteJour.etablissement_id == etablissement_id)
     if date_act:
@@ -76,10 +86,12 @@ def list_activites(
 
 # ── POST créer une activité ──────────────────────────────────────────────────
 @router.post("", status_code=201)
-def create_activite(data: ActiviteCreate, db: Session = Depends(get_db)):
+def create_activite(data: ActiviteCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     if not data.date_activite:
         data.date_activite = date.today()
-    act = ActiviteJour(**data.model_dump())
+    payload = data.model_dump()
+    payload["etablissement_id"] = etablissement_id
+    act = ActiviteJour(**payload)
     act.est_actif = "N"  # Default to Draft / Brouillon until published by Admin
     db.add(act)
     db.commit()
@@ -89,11 +101,11 @@ def create_activite(data: ActiviteCreate, db: Session = Depends(get_db)):
 
 # ── PUT modifier une activité ─────────────────────────────────────────────────
 @router.put("/{activite_id}")
-def update_activite(activite_id: int, data: ActiviteUpdate, db: Session = Depends(get_db)):
-    a = db.query(ActiviteJour).filter(ActiviteJour.activite_id == activite_id).first()
-    if not a:
-        raise HTTPException(404, "Activité introuvable")
-    for field, val in data.model_dump(exclude_none=True).items():
+def update_activite(activite_id: int, data: ActiviteUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    a = _activite_ou_404(db, activite_id, etablissement_id)
+    update_data = data.model_dump(exclude_none=True)
+    update_data.pop("etablissement_id", None)
+    for field, val in update_data.items():
         setattr(a, field, val)
     db.commit()
     db.refresh(a)
@@ -102,21 +114,24 @@ def update_activite(activite_id: int, data: ActiviteUpdate, db: Session = Depend
 
 # ── POST publier une activité et notifier ─────────────────────────────────────
 @router.post("/{activite_id}/publier")
-def publier_activite(activite_id: int, db: Session = Depends(get_db)):
-    a = db.query(ActiviteJour).filter(ActiviteJour.activite_id == activite_id).first()
-    if not a:
-        raise HTTPException(404, "Activité introuvable")
+def publier_activite(activite_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    a = _activite_ou_404(db, activite_id, etablissement_id)
     a.est_actif = "O"
     db.commit()
     db.refresh(a)
     try:
         from app.models.academique import SsMessage
+        # Extrait de la f-string : un antislash dans une expression de f-string
+        # n'est accepté qu'à partir de Python 3.12 et faisait échouer la
+        # compilation en 3.11.
+        heure_affichee = a.heure or "Aujourd'hui"
+        description_affichee = a.description or ""
         msg = SsMessage(
             etablissement_id=a.etablissement_id,
             expediteur_type="ADMIN",
             expediteur_nom="Administration SmartSchool",
             sujet=f"📢 Activité Publiée : {a.titre}",
-            contenu=f"Programme du jour : {a.titre}\nHeure : {a.heure or 'Aujourd\'hui'}\nDescription : {a.description or ''}",
+            contenu=f"Programme du jour : {a.titre}\nHeure : {heure_affichee}\nDescription : {description_affichee}",
             objet="NOTIFICATION_ACTIVITE",
             destinataire_type="TOUS",
             statut="ENVOYE"
@@ -131,10 +146,8 @@ def publier_activite(activite_id: int, db: Session = Depends(get_db)):
 
 # ── DELETE supprimer une activité ─────────────────────────────────────────────
 @router.delete("/{activite_id}")
-def delete_activite(activite_id: int, db: Session = Depends(get_db)):
-    a = db.query(ActiviteJour).filter(ActiviteJour.activite_id == activite_id).first()
-    if not a:
-        raise HTTPException(404, "Activité introuvable")
+def delete_activite(activite_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    a = _activite_ou_404(db, activite_id, etablissement_id)
     db.delete(a)
     db.commit()
     return {"message": "Activité supprimée avec succès"}

@@ -387,7 +387,7 @@ def valider_note(valeur, note_sur, contexte: str = "") -> Optional[float]:
 # Mentions et appréciations
 # ════════════════════════════════════════════════════════════
 
-def get_notation_seuils(db=None, cycle: str = "college", etablissement_id: int = 1) -> dict:
+def get_notation_seuils(db, cycle: str, etablissement_id: int) -> dict:
     """Seuils de mentions par cycle (`notation.mention.{cycle}.{tb|b|ab|p}`)."""
     seuils = dict(_SEUILS_MENTIONS_DEFAUT.get(cycle, _SEUILS_MENTIONS_DEFAUT["college"]))
     if db is not None:
@@ -407,7 +407,7 @@ def get_notation_seuils(db=None, cycle: str = "college", etablissement_id: int =
     return seuils
 
 
-def get_mention(moyenne: float, db=None, cycle: str = "college", etablissement_id: int = 1) -> str:
+def get_mention(moyenne: float, db, cycle: str, etablissement_id: int) -> str:
     s = get_notation_seuils(db, cycle, etablissement_id)
     if moyenne >= s["tb"]:
         return "TRÈS BIEN"
@@ -1586,7 +1586,7 @@ def calculer_resultats_annuels(
 # Affichage des bulletins
 # ════════════════════════════════════════════════════════════
 
-def get_bulletin_display_flags(db: Session, etablissement_id: int = 1) -> dict:
+def get_bulletin_display_flags(db: Session, etablissement_id: int) -> dict:
     """Réglages "quoi afficher sur le bulletin" — source unique partagée par le
     PDF, le portail élève, le portail parent et la page admin /bulletins.
 

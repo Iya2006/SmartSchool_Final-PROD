@@ -13,6 +13,19 @@ export interface UserInfo {
     email: string;
     telephone: string;
     role: string;
+    /**
+     * Établissement du compte, dérivé côté serveur au moment du login — jamais
+     * fourni ni modifiable par le client. Sert uniquement à afficher la bonne
+     * identité d'école ; l'isolation réelle des données reste imposée par le
+     * JWT côté backend.
+     *
+     * `null`      : SUPER_ADMIN plateforme, ou parent dont les enfants sont
+     *               répartis dans zéro ou plusieurs écoles (aucun établissement
+     *               unique déterminable — on n'en choisit jamais un au hasard).
+     * `undefined` : session ouverte avant l'ajout de ce champ ; l'utilisateur
+     *               doit se reconnecter pour que son école soit connue.
+     */
+    etablissement_id?: number | null;
 }
 
 export interface AuthContextType {
@@ -36,6 +49,18 @@ export const getRedirectPath = (userRole: string): string => {
 };
 
 const PUBLIC_PATHS = ['/login'];
+
+/** Écran où un administrateur plateforme choisit l'école dans laquelle il
+ * travaille. Il n'appartient à aucune école : sans ce passage, toutes les
+ * routes métier lui répondent 403 et l'application paraît cassée. */
+const SELECTION_ETABLISSEMENT = '/selection-etablissement';
+
+/** Un SUPER_ADMIN qui n'a pas encore choisi son école active. `undefined`
+ * (session ouverte avant l'ajout du champ) compte aussi : on le fait choisir
+ * plutôt que de le laisser se heurter à des 403 sur chaque écran. */
+export const doitChoisirEtablissement = (user: UserInfo | null): boolean =>
+    !!user && user.role === 'SUPER_ADMIN' &&
+    (user.etablissement_id === null || user.etablissement_id === undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<UserInfo | null>(null);
@@ -79,7 +104,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
+        // Un administrateur plateforme doit d'abord désigner son école active :
+        // tant qu'il ne l'a pas fait, aucune route métier ne lui répond.
+        if (doitChoisirEtablissement(user)) {
+            if (pathname !== SELECTION_ETABLISSEMENT) {
+                router.push(SELECTION_ETABLISSEMENT);
+            }
+            return;
+        }
+
         const targetPath = getRedirectPath(user.role);
+
+        if (pathname === SELECTION_ETABLISSEMENT) {
+            router.push(targetPath);
+            return;
+        }
 
         if (pathname === '/login') {
             router.push(targetPath);

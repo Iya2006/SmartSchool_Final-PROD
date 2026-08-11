@@ -7,8 +7,9 @@ from sqlalchemy import func, case, literal_column, or_
 from decimal import Decimal
 
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import (
-    ParametreComptabilite, ExerciceComptable, JournalComptable, 
+    ParametreComptabilite, ExerciceComptable, JournalComptable,
     CompteComptable, EcritureComptable, LigneEcriture, Comptable,
     Classe, Eleve, Fournisseur, Inscription
 )
@@ -80,18 +81,13 @@ class EcritureCreate(BaseModel):
 
 # --- UTILITAIRES ---
 
-def init_comptabilite_defaults(db: Session):
-    # 1. Vérifier/Créer le PIN
-    pin_param = db.query(ParametreComptabilite).filter(ParametreComptabilite.cle == 'PIN_ACCESS').first()
-    if not pin_param:
-        db.add(ParametreComptabilite(cle='PIN_ACCESS', valeur='123000'))
-    
-    # 2. Exercice par défaut (2026)
-    exo = db.query(ExerciceComptable).filter(ExerciceComptable.annee == '2026').first()
-    if not exo:
-        db.add(ExerciceComptable(annee='2026', date_debut=date(2026, 1, 1), date_fin=date(2026, 12, 31), statut="OUVERT"))
-    
-    # 3. Journaux par défaut
+def init_comptabilite_globals(db: Session):
+    """Seed des référentiels GLOBAUX (partagés par toutes les écoles) : codes
+    journaux SYSCOHADA et plan comptable OHADA de base. Ne dépend d'aucun
+    établissement — voir la classification GLOBAL/TENANT du chantier
+    multi-écoles (.ai/MULTI_TENANT_PLAN.md, section E). JournalComptable et
+    CompteComptable restent volontairement globaux dans ce chantier (décision
+    produit validée : référentiel SYSCOHADA/OHADA partagé)."""
     if db.query(JournalComptable).count() == 0:
         db.add_all([
             JournalComptable(code='AC', nom='Achats', type_journal='ACHAT'),
@@ -100,8 +96,7 @@ def init_comptabilite_defaults(db: Session):
             JournalComptable(code='CA', nom='Caisse', type_journal='TRESORERIE'),
             JournalComptable(code='OD', nom='Opérations Diverses', type_journal='OD')
         ])
-        
-    # 4. Plan comptable OHADA basique (quelques comptes)
+
     if db.query(CompteComptable).count() == 0:
         db.add_all([
             CompteComptable(numero_compte="4111", libelle="Parents et Élèves", type_compte="ACTIF"),
@@ -111,30 +106,77 @@ def init_comptabilite_defaults(db: Session):
             CompteComptable(numero_compte="7011", libelle="Ventes de marchandises", type_compte="PRODUIT"),
             CompteComptable(numero_compte="7061", libelle="Prestations de services (Scolarité)", type_compte="PRODUIT"),
         ])
+    db.commit()
 
-    # 5. Seeder le comptable par défaut (sams) si vide
-    if db.query(Comptable).count() == 0:
+
+def init_comptabilite_tenant_defaults(db: Session, etablissement_id: int):
+    """Seed des données TENANT propres à un établissement : PIN d'accès et
+    exercice comptable par défaut. Avant le Lot 1 du chantier multi-écoles,
+    ces deux éléments étaient uniques pour TOUTE la plateforme (un seul PIN,
+    un seul exercice '2026' possible) — voir
+    migrations/lot1_comptabilite_etablissement.py. Chaque établissement
+    obtient désormais les siens, indépendants des autres écoles."""
+    pin_param = db.query(ParametreComptabilite).filter(
+        ParametreComptabilite.cle == 'PIN_ACCESS',
+        ParametreComptabilite.etablissement_id == etablissement_id,
+    ).first()
+    if not pin_param:
+        db.add(ParametreComptabilite(cle='PIN_ACCESS', valeur='123000', etablissement_id=etablissement_id))
+
+    exo = db.query(ExerciceComptable).filter(
+        ExerciceComptable.annee == '2026',
+        ExerciceComptable.etablissement_id == etablissement_id,
+    ).first()
+    if not exo:
+        db.add(ExerciceComptable(
+            annee='2026', date_debut=date(2026, 1, 1), date_fin=date(2026, 12, 31),
+            statut="OUVERT", etablissement_id=etablissement_id,
+        ))
+
+    # Comptable : table vestigiale — l'authentification dédiée a été retirée
+    # (voir plus bas), conservée seulement pour compatibilité de schéma.
+    # nom_utilisateur suffixé par l'établissement pour respecter la
+    # contrainte UNIQUE globale existante sur cette colonne (non modifiée
+    # dans ce lot : table morte, hors périmètre).
+    if db.query(Comptable).filter(Comptable.etablissement_id == etablissement_id).count() == 0:
         db.add(Comptable(
-            etablissement_id=1,
-            nom_utilisateur="sams",
+            etablissement_id=etablissement_id,
+            nom_utilisateur=f"sams-{etablissement_id}",
             mot_de_passe=hash_password("smart2025"),
             nom="Camara",
             prenom="Mohamed Sams Deen",
-            telephone="623969686",
-            email="sams@smartschool.gn",
-            statut="ACTIF"
+            statut="ACTIF",
         ))
-    
+
     db.commit()
 
-def _get_exercice(db: Session, exercice_id: Optional[int] = None) -> ExerciceComptable:
-    """Récupère l'exercice demandé ou l'exercice ouvert par défaut."""
+
+def _get_exercice(db: Session, etablissement_id: int, exercice_id: Optional[int] = None) -> ExerciceComptable:
+    """Récupère l'exercice demandé — vérifié appartenir à l'établissement
+    appelant, jamais un exercice d'une autre école même si son ID est deviné
+    — ou l'exercice ouvert par défaut de cet établissement.
+
+    Seede les valeurs par défaut de CET établissement avant de chercher :
+    avant le Lot 1, un seul exercice existait pour TOUTE la plateforme, donc
+    n'importe quelle route pouvait compter sur le fait qu'il avait déjà été
+    créé par une autre école. Depuis que chaque établissement a le sien,
+    toute route qui dépend d'un exercice "ouvert" doit garantir elle-même
+    qu'il existe déjà pour CET établissement, sinon une école tout juste
+    créée échouerait en 400 dès sa première consultation (Balance, Grand
+    Livre, Fournisseurs...) sans jamais être passée par /exercices ou /pin."""
+    init_comptabilite_tenant_defaults(db, etablissement_id)
     if exercice_id:
-        exo = db.query(ExerciceComptable).filter(ExerciceComptable.exercice_id == exercice_id).first()
+        exo = db.query(ExerciceComptable).filter(
+            ExerciceComptable.exercice_id == exercice_id,
+            ExerciceComptable.etablissement_id == etablissement_id,
+        ).first()
         if not exo:
             raise HTTPException(status_code=404, detail="Exercice introuvable")
         return exo
-    exo = db.query(ExerciceComptable).filter(ExerciceComptable.statut == "OUVERT").first()
+    exo = db.query(ExerciceComptable).filter(
+        ExerciceComptable.statut == "OUVERT",
+        ExerciceComptable.etablissement_id == etablissement_id,
+    ).first()
     if not exo:
         raise HTTPException(status_code=400, detail="Aucun exercice comptable ouvert")
     return exo
@@ -197,6 +239,7 @@ def generer_ecriture_auto(
     libelle: str,
     reference: Optional[str],
     lignes: list,
+    etablissement_id: Optional[int],
 ) -> Optional[int]:
     """
     Crée une écriture comptable équilibrée dans LA MÊME transaction que
@@ -207,14 +250,27 @@ def generer_ecriture_auto(
         compte (tuple numero/libelle/type), debit, credit,
         description, classe_id, eleve_id, fournisseur_id (optionnels).
 
-    Retourne l'ecriture_id, ou None si rien n'a pu être généré (ex: aucun
-    exercice/journal disponible, ou lignes déséquilibrées) — dans ce cas
-    l'opération métier d'origine n'est PAS bloquée par cette fonction, mais
-    l'appelant doit alors décider quoi faire (voir usages dans finance.py).
-    """
-    init_comptabilite_defaults(db)
+    `etablissement_id` : établissement propriétaire de l'écriture — dérivé
+    par l'appelant depuis une ressource déjà connue (jamais deviné ni
+    défaulté à 1). Si absent (ex: inscription/facture introuvable côté
+    appelant), aucune écriture n'est générée : voir le repli ci-dessous.
 
-    exo = db.query(ExerciceComptable).filter(ExerciceComptable.statut == "OUVERT").first()
+    Retourne l'ecriture_id, ou None si rien n'a pu être généré (ex: aucun
+    établissement/exercice/journal disponible, ou lignes déséquilibrées) —
+    dans ce cas l'opération métier d'origine n'est PAS bloquée par cette
+    fonction, mais l'appelant doit alors décider quoi faire (voir usages
+    dans finance.py).
+    """
+    if not etablissement_id:
+        return None
+
+    init_comptabilite_globals(db)
+    init_comptabilite_tenant_defaults(db, etablissement_id)
+
+    exo = db.query(ExerciceComptable).filter(
+        ExerciceComptable.statut == "OUVERT",
+        ExerciceComptable.etablissement_id == etablissement_id,
+    ).first()
     journal = db.query(JournalComptable).filter(JournalComptable.code == journal_code).first()
     if not exo or not journal:
         return None
@@ -230,6 +286,7 @@ def generer_ecriture_auto(
         reference=reference,
         libelle=libelle,
         exercice_id=exo.exercice_id,
+        etablissement_id=etablissement_id,
     )
     db.add(ecriture)
     db.flush()
@@ -272,15 +329,21 @@ class PinChangeRequest(BaseModel):
     nouveau_pin: str
 
 @router.get("/pin/status")
-def get_pin_status(db: Session = Depends(get_db)):
-    init_comptabilite_defaults(db)
-    param = db.query(ParametreComptabilite).filter(ParametreComptabilite.cle == "PIN_ACCESS").first()
+def get_pin_status(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    init_comptabilite_tenant_defaults(db, etablissement_id)
+    param = db.query(ParametreComptabilite).filter(
+        ParametreComptabilite.cle == "PIN_ACCESS",
+        ParametreComptabilite.etablissement_id == etablissement_id,
+    ).first()
     return {"configured": bool(param and param.valeur)}
 
 @router.put("/pin")
-def changer_pin(data: PinChangeRequest, db: Session = Depends(get_db)):
-    init_comptabilite_defaults(db)
-    param = db.query(ParametreComptabilite).filter(ParametreComptabilite.cle == "PIN_ACCESS").first()
+def changer_pin(data: PinChangeRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    init_comptabilite_tenant_defaults(db, etablissement_id)
+    param = db.query(ParametreComptabilite).filter(
+        ParametreComptabilite.cle == "PIN_ACCESS",
+        ParametreComptabilite.etablissement_id == etablissement_id,
+    ).first()
     if not param or param.valeur != data.ancien_pin:
         raise HTTPException(status_code=400, detail="PIN actuel incorrect")
     if not data.nouveau_pin or len(data.nouveau_pin) < 4:
@@ -292,7 +355,8 @@ def changer_pin(data: PinChangeRequest, db: Session = Depends(get_db)):
 
 @router.get("/journaux", response_model=List[JournalOut])
 def get_journaux(db: Session = Depends(get_db)):
-    init_comptabilite_defaults(db)
+    # GLOBAL (référentiel SYSCOHADA partagé) — pas de filtre par établissement.
+    init_comptabilite_globals(db)
     return db.query(JournalComptable).all()
 
 @router.post("/journaux", response_model=JournalOut)
@@ -300,7 +364,7 @@ def create_journal(journal: JournalCreate, db: Session = Depends(get_db)):
     db_journal = db.query(JournalComptable).filter(JournalComptable.code == journal.code).first()
     if db_journal:
         raise HTTPException(status_code=400, detail="Ce code journal existe déjà")
-    
+
     nouveau = JournalComptable(**journal.dict())
     db.add(nouveau)
     db.commit()
@@ -308,17 +372,25 @@ def create_journal(journal: JournalCreate, db: Session = Depends(get_db)):
     return nouveau
 
 @router.get("/exercices", response_model=List[ExerciceOut])
-def get_exercices(db: Session = Depends(get_db)):
-    init_comptabilite_defaults(db)
-    return db.query(ExerciceComptable).order_by(ExerciceComptable.annee.desc()).all()
+def get_exercices(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    init_comptabilite_tenant_defaults(db, etablissement_id)
+    return (
+        db.query(ExerciceComptable)
+        .filter(ExerciceComptable.etablissement_id == etablissement_id)
+        .order_by(ExerciceComptable.annee.desc())
+        .all()
+    )
 
 @router.post("/exercices", response_model=ExerciceOut)
-def create_exercice(exo: ExerciceCreate, db: Session = Depends(get_db)):
-    db_exo = db.query(ExerciceComptable).filter(ExerciceComptable.annee == exo.annee).first()
+def create_exercice(exo: ExerciceCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    db_exo = db.query(ExerciceComptable).filter(
+        ExerciceComptable.annee == exo.annee,
+        ExerciceComptable.etablissement_id == etablissement_id,
+    ).first()
     if db_exo:
         raise HTTPException(status_code=400, detail="Cet exercice existe déjà")
-    
-    nouveau = ExerciceComptable(**exo.dict(), statut="OUVERT")
+
+    nouveau = ExerciceComptable(**exo.dict(), statut="OUVERT", etablissement_id=etablissement_id)
     db.add(nouveau)
     db.commit()
     db.refresh(nouveau)
@@ -326,7 +398,8 @@ def create_exercice(exo: ExerciceCreate, db: Session = Depends(get_db)):
 
 @router.get("/comptes", response_model=List[CompteOut])
 def get_comptes(db: Session = Depends(get_db)):
-    init_comptabilite_defaults(db)
+    # GLOBAL (plan comptable OHADA partagé) — pas de filtre par établissement.
+    init_comptabilite_globals(db)
     return db.query(CompteComptable).order_by(CompteComptable.numero_compte).all()
 
 @router.post("/comptes", response_model=CompteOut)
@@ -342,20 +415,49 @@ def create_compte(compte: CompteCreate, db: Session = Depends(get_db)):
     return nouveau
 
 @router.post("/ecritures")
-def creer_ecriture(ecriture: EcritureCreate, db: Session = Depends(get_db)):
+def creer_ecriture(ecriture: EcritureCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     # 1. Vérifier l'équilibre
     total_debit = sum(l.debit for l in ecriture.lignes)
     total_credit = sum(l.credit for l in ecriture.lignes)
     if round(total_debit, 2) != round(total_credit, 2):
         raise HTTPException(status_code=400, detail=f"L'écriture n'est pas équilibrée (Débit: {total_debit}, Crédit: {total_credit})")
-    
+
     if len(ecriture.lignes) < 2:
         raise HTTPException(status_code=400, detail="Une écriture doit comporter au moins 2 lignes")
 
-    # 2. Trouver l'exercice courant
-    exo = db.query(ExerciceComptable).filter(ExerciceComptable.statut == "OUVERT").first()
-    if not exo:
-        raise HTTPException(status_code=400, detail="Aucun exercice comptable ouvert")
+    # 2. Trouver l'exercice courant de CET établissement (jamais un autre) —
+    # _get_exercice seede aussi les valeurs par défaut si c'est la toute
+    # première action comptable de cet établissement.
+    exo = _get_exercice(db, etablissement_id)
+
+    # 2bis. Vérifier que les axes analytiques référencés (classe/élève/
+    # fournisseur) appartiennent bien à CET établissement — une écriture
+    # manuelle ne doit jamais pouvoir pointer vers une ressource d'une autre
+    # école (les comptes/journaux restent GLOBAUX, pas de vérification pour eux).
+    classe_ids = {l.classe_id for l in ecriture.lignes if l.classe_id}
+    eleve_ids = {l.eleve_id for l in ecriture.lignes if l.eleve_id}
+    fournisseur_ids = {l.fournisseur_id for l in ecriture.lignes if l.fournisseur_id}
+
+    if classe_ids:
+        trouvees = {c.classe_id for c in db.query(Classe.classe_id).filter(
+            Classe.classe_id.in_(classe_ids), Classe.etablissement_id == etablissement_id
+        ).all()}
+        if trouvees != classe_ids:
+            raise HTTPException(status_code=403, detail="Classe(s) référencée(s) invalide(s) pour cet établissement")
+
+    if eleve_ids:
+        trouvees = {e.eleve_id for e in db.query(Eleve.eleve_id).filter(
+            Eleve.eleve_id.in_(eleve_ids), Eleve.etablissement_id == etablissement_id
+        ).all()}
+        if trouvees != eleve_ids:
+            raise HTTPException(status_code=403, detail="Élève(s) référencé(s) invalide(s) pour cet établissement")
+
+    if fournisseur_ids:
+        trouvees = {f.fournisseur_id for f in db.query(Fournisseur.fournisseur_id).filter(
+            Fournisseur.fournisseur_id.in_(fournisseur_ids), Fournisseur.etablissement_id == etablissement_id
+        ).all()}
+        if trouvees != fournisseur_ids:
+            raise HTTPException(status_code=403, detail="Fournisseur(s) référencé(s) invalide(s) pour cet établissement")
 
     # 3. Créer l'entête
     new_ecriture = EcritureComptable(
@@ -363,7 +465,8 @@ def creer_ecriture(ecriture: EcritureCreate, db: Session = Depends(get_db)):
         journal_id=ecriture.journal_id,
         reference=ecriture.reference,
         libelle=ecriture.libelle,
-        exercice_id=exo.exercice_id
+        exercice_id=exo.exercice_id,
+        etablissement_id=etablissement_id,
     )
     db.add(new_ecriture)
     db.flush() # pour avoir l'ID
@@ -382,13 +485,19 @@ def creer_ecriture(ecriture: EcritureCreate, db: Session = Depends(get_db)):
             departement=ligne.departement,
         )
         db.add(nouvelle_ligne)
-        
+
     db.commit()
     return {"success": True, "message": "Écriture enregistrée avec succès", "ecriture_id": new_ecriture.ecriture_id}
 
 @router.get("/ecritures")
-def get_ecritures(db: Session = Depends(get_db)):
-    ecritures = db.query(EcritureComptable).order_by(EcritureComptable.date_ecriture.desc(), EcritureComptable.created_at.desc()).limit(100).all()
+def get_ecritures(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    ecritures = (
+        db.query(EcritureComptable)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
+        .order_by(EcritureComptable.date_ecriture.desc(), EcritureComptable.created_at.desc())
+        .limit(100)
+        .all()
+    )
     result = []
     for e in ecritures:
         journal = db.query(JournalComptable).filter(JournalComptable.journal_id == e.journal_id).first()
@@ -420,16 +529,20 @@ def get_ecritures(db: Session = Depends(get_db)):
 @router.get("/balance")
 def get_balance(
     exercice_id: Optional[int] = Query(None, description="ID de l'exercice (défaut: exercice ouvert)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Balance Générale des comptes.
-    Calcule côté serveur le cumul débit/crédit et les soldes (débiteur/créditeur) 
+    Calcule côté serveur le cumul débit/crédit et les soldes (débiteur/créditeur)
     pour chaque compte ayant eu des mouvements durant l'exercice.
     """
-    exo = _get_exercice(db, exercice_id)
-    
-    # Agrégation SQL par compte
+    exo = _get_exercice(db, etablissement_id, exercice_id)
+
+    # Agrégation SQL par compte — filtre double (exercice + etablissement_id)
+    # : le filtre par exercice suffit en théorie (un exercice appartient à un
+    # seul établissement), mais le filtre explicite est conservé en défense
+    # en profondeur plutôt que de reposer uniquement sur une garantie indirecte.
     rows = (
         db.query(
             CompteComptable.compte_id,
@@ -442,6 +555,7 @@ def get_balance(
         .join(LigneEcriture, LigneEcriture.compte_id == CompteComptable.compte_id)
         .join(EcritureComptable, EcritureComptable.ecriture_id == LigneEcriture.ecriture_id)
         .filter(EcritureComptable.exercice_id == exo.exercice_id)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
         .group_by(CompteComptable.compte_id, CompteComptable.numero_compte, CompteComptable.libelle, CompteComptable.type_compte)
         .order_by(CompteComptable.numero_compte)
         .all()
@@ -496,7 +610,8 @@ def get_balance(
 def get_compte_de_resultat(
     exercice_id: Optional[int] = Query(None),
     group_by: Optional[str] = Query(None, description="Axe analytique: 'classe', 'eleve', 'departement' ou None"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Compte de Résultat avec option de ventilation analytique.
@@ -504,7 +619,7 @@ def get_compte_de_resultat(
     - Produits = comptes commençant par '7'
     - group_by permet de ventiler par classe, élève ou département
     """
-    exo = _get_exercice(db, exercice_id)
+    exo = _get_exercice(db, etablissement_id, exercice_id)
     
     if group_by and group_by not in ("classe", "eleve", "departement", "none"):
         raise HTTPException(status_code=400, detail="group_by doit être 'classe', 'eleve', 'departement' ou 'none'")
@@ -525,6 +640,7 @@ def get_compte_de_resultat(
             .join(LigneEcriture, LigneEcriture.compte_id == CompteComptable.compte_id)
             .join(EcritureComptable, EcritureComptable.ecriture_id == LigneEcriture.ecriture_id)
             .filter(EcritureComptable.exercice_id == exo.exercice_id)
+            .filter(EcritureComptable.etablissement_id == etablissement_id)
             .filter(CompteComptable.numero_compte.like("6%"))
             .group_by(CompteComptable.numero_compte, CompteComptable.libelle)
             .order_by(CompteComptable.numero_compte)
@@ -541,6 +657,7 @@ def get_compte_de_resultat(
             .join(LigneEcriture, LigneEcriture.compte_id == CompteComptable.compte_id)
             .join(EcritureComptable, EcritureComptable.ecriture_id == LigneEcriture.ecriture_id)
             .filter(EcritureComptable.exercice_id == exo.exercice_id)
+            .filter(EcritureComptable.etablissement_id == etablissement_id)
             .filter(CompteComptable.numero_compte.like("7%"))
             .group_by(CompteComptable.numero_compte, CompteComptable.libelle)
             .order_by(CompteComptable.numero_compte)
@@ -587,6 +704,7 @@ def get_compte_de_resultat(
         .join(LigneEcriture, LigneEcriture.compte_id == CompteComptable.compte_id)
         .join(EcritureComptable, EcritureComptable.ecriture_id == LigneEcriture.ecriture_id)
         .filter(EcritureComptable.exercice_id == exo.exercice_id)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
         .filter(CompteComptable.numero_compte.like("6%") | CompteComptable.numero_compte.like("7%"))
         .group_by(group_col, CompteComptable.numero_compte, CompteComptable.libelle)
         .order_by(group_col, CompteComptable.numero_compte)
@@ -650,14 +768,15 @@ def get_grand_livre(
     exercice_id: Optional[int] = Query(None),
     compte_id: Optional[int] = Query(None, description="Filtrer par un compte spécifique"),
     journal_id: Optional[int] = Query(None, description="Filtrer par journal"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
-    Grand Livre : toutes les écritures détaillées, groupées par compte, 
+    Grand Livre : toutes les écritures détaillées, groupées par compte,
     avec solde progressif.
     """
-    exo = _get_exercice(db, exercice_id)
-    
+    exo = _get_exercice(db, etablissement_id, exercice_id)
+
     # Construire la requête de base
     query = (
         db.query(
@@ -678,8 +797,9 @@ def get_grand_livre(
         .join(EcritureComptable, EcritureComptable.ecriture_id == LigneEcriture.ecriture_id)
         .join(JournalComptable, JournalComptable.journal_id == EcritureComptable.journal_id)
         .filter(EcritureComptable.exercice_id == exo.exercice_id)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
     )
-    
+
     if compte_id:
         query = query.filter(CompteComptable.compte_id == compte_id)
     if journal_id:
@@ -735,17 +855,20 @@ def get_grand_livre(
 def get_mouvements_compte(
     compte_id: int,
     exercice_id: Optional[int] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Détail des mouvements d'un compte spécifique avec solde progressif.
+    Le compte lui-même est GLOBAL (plan comptable partagé) — seuls les
+    mouvements (écritures) sont scopés par établissement.
     """
     compte = db.query(CompteComptable).filter(CompteComptable.compte_id == compte_id).first()
     if not compte:
         raise HTTPException(status_code=404, detail="Compte introuvable")
-    
-    exo = _get_exercice(db, exercice_id)
-    
+
+    exo = _get_exercice(db, etablissement_id, exercice_id)
+
     rows = (
         db.query(
             EcritureComptable.date_ecriture,
@@ -760,6 +883,7 @@ def get_mouvements_compte(
         .join(JournalComptable, JournalComptable.journal_id == EcritureComptable.journal_id)
         .filter(LigneEcriture.compte_id == compte_id)
         .filter(EcritureComptable.exercice_id == exo.exercice_id)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
         .order_by(EcritureComptable.date_ecriture, EcritureComptable.ecriture_id)
         .all()
     )
@@ -813,18 +937,25 @@ def get_auxiliaire_fournisseurs(
     search: Optional[str] = Query(None),
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Liste les fournisseurs avec leur cumul débit/crédit et leur solde."""
-    exo = _get_exercice(db, exercice_id)
+    """Liste les fournisseurs de CET établissement avec leur cumul débit/crédit
+    et leur solde. Avant le Lot 1 du chantier multi-écoles, cette route
+    retournait TOUS les fournisseurs de la plateforme sans distinction
+    d'établissement — corrigé ici."""
+    exo = _get_exercice(db, etablissement_id, exercice_id)
 
-    # Récupérer tous les fournisseurs
-    fq = db.query(Fournisseur).filter(Fournisseur.statut == "ACTIF")
+    # Récupérer les fournisseurs de CET établissement uniquement
+    fq = db.query(Fournisseur).filter(
+        Fournisseur.statut == "ACTIF",
+        Fournisseur.etablissement_id == etablissement_id,
+    )
     if search:
         like = f"%{search}%"
         fq = fq.filter(or_(Fournisseur.nom.ilike(like), Fournisseur.code.ilike(like)))
     fournisseurs = fq.all()
-    
+
     # Agrégation des mouvements
     mouvements = (
         db.query(
@@ -834,6 +965,7 @@ def get_auxiliaire_fournisseurs(
         )
         .join(EcritureComptable, EcritureComptable.ecriture_id == LigneEcriture.ecriture_id)
         .filter(EcritureComptable.exercice_id == exo.exercice_id)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
         .filter(LigneEcriture.fournisseur_id != None)
         .group_by(LigneEcriture.fournisseur_id)
         .all()
@@ -863,15 +995,20 @@ def get_auxiliaire_fournisseurs(
     return result[skip:skip + limit]
 
 @router.post("/auxiliaire/fournisseurs", response_model=FournisseurOut)
-def creer_fournisseur(fournisseur: FournisseurCreate, db: Session = Depends(get_db)):
-    """Créer un nouveau fournisseur tiers."""
+def creer_fournisseur(fournisseur: FournisseurCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Créer un nouveau fournisseur tiers, rattaché à l'établissement du
+    compte authentifié (jamais une valeur par défaut codée en dur)."""
     # Vérifier l'unicité du code
+    # NOTE : Fournisseur.code est UNIQUE au niveau de TOUTE la plateforme
+    # (contrainte DB existante, non modifiée dans ce lot — voir le rapport de
+    # fin de Lot 1, "problèmes restants" : deux écoles ne peuvent pas encore
+    # utiliser le même code fournisseur).
     existing = db.query(Fournisseur).filter(Fournisseur.code == fournisseur.code).first()
     if existing:
         raise HTTPException(status_code=400, detail="Ce code fournisseur existe déjà")
-        
+
     nouveau = Fournisseur(
-        etablissement_id=1, # Etablissement par défaut
+        etablissement_id=etablissement_id,
         code=fournisseur.code,
         nom=fournisseur.nom,
         telephone=fournisseur.telephone,
@@ -888,15 +1025,22 @@ def creer_fournisseur(fournisseur: FournisseurCreate, db: Session = Depends(get_
 def get_historique_fournisseur(
     fournisseur_id: int,
     exercice_id: Optional[int] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Historique chronologique des factures et paiements pour un fournisseur."""
-    fournisseur = db.query(Fournisseur).filter(Fournisseur.fournisseur_id == fournisseur_id).first()
+    """Historique chronologique des factures et paiements pour un fournisseur.
+    Vérifie que le fournisseur appartient bien à l'établissement appelant —
+    avant le Lot 1, n'importe quel fournisseur_id deviné était accessible
+    depuis n'importe quelle école."""
+    fournisseur = db.query(Fournisseur).filter(
+        Fournisseur.fournisseur_id == fournisseur_id,
+        Fournisseur.etablissement_id == etablissement_id,
+    ).first()
     if not fournisseur:
         raise HTTPException(status_code=404, detail="Fournisseur introuvable")
-        
-    exo = _get_exercice(db, exercice_id)
-    
+
+    exo = _get_exercice(db, etablissement_id, exercice_id)
+
     rows = (
         db.query(
             EcritureComptable.date_ecriture,
@@ -913,6 +1057,7 @@ def get_historique_fournisseur(
         .join(CompteComptable, CompteComptable.compte_id == LigneEcriture.compte_id)
         .filter(LigneEcriture.fournisseur_id == fournisseur_id)
         .filter(EcritureComptable.exercice_id == exo.exercice_id)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
         .order_by(EcritureComptable.date_ecriture, EcritureComptable.ecriture_id)
         .all()
     )
@@ -962,12 +1107,17 @@ def get_auxiliaire_parents_eleves(
     search: Optional[str] = Query(None),
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Liste tous les parents/élèves ayant eu des mouvements comptables sur l'exercice."""
-    exo = _get_exercice(db, exercice_id)
-    
-    # Agrégation des écritures par élève
+    """Liste les parents/élèves de CET établissement ayant eu des mouvements
+    comptables sur l'exercice. Avant le Lot 1, cette route retournait les
+    élèves de TOUTE la plateforme sans distinction d'établissement — l'une
+    des fuites les plus sensibles trouvées lors de l'audit (soldes financiers
+    d'élèves d'autres écoles visibles)."""
+    exo = _get_exercice(db, etablissement_id, exercice_id)
+
+    # Agrégation des écritures par élève, restreinte à CET établissement
     mouvements = (
         db.query(
             LigneEcriture.eleve_id,
@@ -976,19 +1126,24 @@ def get_auxiliaire_parents_eleves(
         )
         .join(EcritureComptable, EcritureComptable.ecriture_id == LigneEcriture.ecriture_id)
         .filter(EcritureComptable.exercice_id == exo.exercice_id)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
         .filter(LigneEcriture.eleve_id != None)
         .group_by(LigneEcriture.eleve_id)
         .all()
     )
-    
+
     if not mouvements:
         response.headers["X-Total-Count"] = "0"
         return []
-        
+
     eleve_ids = [m.eleve_id for m in mouvements]
 
-    # Récupérer les infos des élèves concernés
-    eleves = db.query(Eleve).filter(Eleve.eleve_id.in_(eleve_ids)).all()
+    # Récupérer les infos des élèves concernés — filtre etablissement_id en
+    # défense en profondeur (déjà implicitement garanti par le filtre sur
+    # les écritures ci-dessus, mais jamais supposé).
+    eleves = db.query(Eleve).filter(
+        Eleve.eleve_id.in_(eleve_ids), Eleve.etablissement_id == etablissement_id
+    ).all()
     eleve_map = {e.eleve_id: e for e in eleves}
     
     # Récupérer les classes actuelles de ces élèves pour l'exercice
@@ -1039,14 +1194,20 @@ def get_auxiliaire_parents_eleves(
 def get_historique_parent_eleve(
     eleve_id: int,
     exercice_id: Optional[int] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Historique chronologique des factures de scolarité et paiements d'un élève."""
-    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    """Historique chronologique des factures de scolarité et paiements d'un
+    élève. Vérifie que l'élève appartient bien à l'établissement appelant —
+    avant le Lot 1, n'importe quel eleve_id deviné exposait l'historique
+    financier complet de cet élève, quelle que soit son école."""
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
     if not eleve:
         raise HTTPException(status_code=404, detail="Élève introuvable")
 
-    exo = _get_exercice(db, exercice_id)
+    exo = _get_exercice(db, etablissement_id, exercice_id)
 
     inscription_active = (
         db.query(Inscription)
@@ -1071,10 +1232,11 @@ def get_historique_parent_eleve(
         .join(CompteComptable, CompteComptable.compte_id == LigneEcriture.compte_id)
         .filter(LigneEcriture.eleve_id == eleve_id)
         .filter(EcritureComptable.exercice_id == exo.exercice_id)
+        .filter(EcritureComptable.etablissement_id == etablissement_id)
         .order_by(EcritureComptable.date_ecriture, EcritureComptable.ecriture_id)
         .all()
     )
-    
+
     mouvements = []
     solde_progressif = 0.0
     total_debit = 0.0

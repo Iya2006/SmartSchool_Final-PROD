@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from app.core.database import get_db
+from app.core.auth import require_etablissement
 from app.models.academique import PointageEleve, Eleve, Inscription
 
 router = APIRouter(prefix="/api/pointage-eleves", tags=["Pointage Élèves (QR)"])
@@ -37,15 +38,21 @@ class ScanEleveResponse(BaseModel):
 # ============================================================================
 
 @router.post("/scan", response_model=ScanEleveResponse)
-def scan_eleve_qr(request: ScanEleveRequest, db: Session = Depends(get_db)):
+def scan_eleve_qr(request: ScanEleveRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Enregistre l'arrivée ou le départ d'un élève à l'établissement via QR Code (matricule).
     Ce pointage est indépendant de l'appel en classe fait par l'enseignant.
+
+    Le matricule est résolu DANS l'établissement appelant uniquement (Lot 9) :
+    avant, scanner le badge d'un élève d'une autre école créait un pointage
+    chez elle et renvoyait son identité (nom, photo, classe).
     """
     qr_data = request.qr_data.strip()
 
     # Identifier l'élève par son matricule
-    eleve = db.query(Eleve).filter(Eleve.matricule == qr_data).first()
+    eleve = db.query(Eleve).filter(
+        Eleve.matricule == qr_data, Eleve.etablissement_id == etablissement_id
+    ).first()
     if not eleve:
         raise HTTPException(
             status_code=404,
@@ -91,7 +98,7 @@ def scan_eleve_qr(request: ScanEleveRequest, db: Session = Depends(get_db)):
         # Premier scan : Arrivée à l'école
         nouveau_pointage = PointageEleve(
             eleve_id=eleve.eleve_id,
-            etablissement_id=getattr(eleve, 'etablissement_id', None),
+            etablissement_id=eleve.etablissement_id,
             date_pointage=aujourd_hui,
             heure_arrivee=maintenant,
             statut="PRESENT"
@@ -148,17 +155,26 @@ def get_historique_pointage_eleves(
     date_fin: Optional[date] = None,
     recherche: Optional[str] = None,
     skip: int = 0,
-    limit: int = 50
+    limit: int = 50,
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Historique des pointages élèves, paginé."""
+    """Historique des pointages élèves de CET établissement, paginé.
+
+    Filtré via l'élève (OWNERSHIP fiable) plutôt que via
+    PointageEleve.etablissement_id, qui est nullable et n'était pas
+    systématiquement peuplé avant le Lot 9.
+    """
     if not date_debut:
         date_debut = date.today()
     if not date_fin:
         date_fin = date.today()
 
-    query = db.query(PointageEleve).filter(
+    query = db.query(PointageEleve).join(
+        Eleve, Eleve.eleve_id == PointageEleve.eleve_id
+    ).filter(
         PointageEleve.date_pointage >= date_debut,
-        PointageEleve.date_pointage <= date_fin
+        PointageEleve.date_pointage <= date_fin,
+        Eleve.etablissement_id == etablissement_id,
     ).order_by(PointageEleve.date_pointage.desc(), PointageEleve.heure_arrivee.desc())
 
     total = query.count()
@@ -210,9 +226,10 @@ def get_historique_pointage_eleves(
 def get_stats_pointage_eleves(
     db: Session = Depends(get_db),
     date_debut: Optional[date] = None,
-    date_fin: Optional[date] = None
+    date_fin: Optional[date] = None,
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Statistiques de pointage élèves pour une période."""
+    """Statistiques de pointage élèves de CET établissement pour une période."""
     if not date_debut:
         date_debut = date.today()
     if not date_fin:
@@ -220,12 +237,15 @@ def get_stats_pointage_eleves(
 
     # Total élèves actifs
     total_eleves = db.query(func.count(Eleve.eleve_id)).filter(
-        Eleve.statut == "ACTIF"
+        Eleve.statut == "ACTIF", Eleve.etablissement_id == etablissement_id
     ).scalar() or 0
 
-    pointages = db.query(PointageEleve).filter(
+    pointages = db.query(PointageEleve).join(
+        Eleve, Eleve.eleve_id == PointageEleve.eleve_id
+    ).filter(
         PointageEleve.date_pointage >= date_debut,
-        PointageEleve.date_pointage <= date_fin
+        PointageEleve.date_pointage <= date_fin,
+        Eleve.etablissement_id == etablissement_id,
     ).all()
 
     total_pointages = len(pointages)
@@ -250,10 +270,12 @@ def get_stats_pointage_eleves(
 @router.get("/appel-du-jour")
 def get_appel_du_jour(
     db: Session = Depends(get_db),
-    date_cible: Optional[date] = None
+    date_cible: Optional[date] = None,
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """
-    Vue Admin : état des appels faits par les enseignants pour la journée.
+    Vue Admin : état des appels faits par les enseignants pour la journée,
+    pour les classes DE CET ÉTABLISSEMENT.
     Retourne pour chaque classe : enseignant principal, heure du dernier appel,
     nombre de présents/absents, et si l'appel a été fait.
     """
@@ -263,8 +285,10 @@ def get_appel_du_jour(
     if not date_cible:
         date_cible = date.today()
 
-    # Récupérer toutes les classes
-    classes = db.query(Classe).filter(Classe.statut == "ACTIVE").all()
+    # Récupérer les classes de cet établissement
+    classes = db.query(Classe).filter(
+        Classe.statut == "ACTIVE", Classe.etablissement_id == etablissement_id
+    ).all()
 
     resultats = []
     for cls in classes:

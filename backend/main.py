@@ -132,7 +132,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # ENREGISTREMENT DE TOUS LES ROUTERS
 # ============================================================================
 from fastapi import Depends
-from app.core.auth import get_current_user, require_roles, ADMIN_TIER_ROLES
+from app.core.auth import get_current_user, require_module, require_roles, ADMIN_TIER_ROLES
 
 # Rôles autorisés sur les modules Finance / Comptabilité :
 # l'équipe de direction (ADMIN_TIER_ROLES) + le rôle COMPTABLE dédié.
@@ -154,24 +154,45 @@ PERSONNEL_ROLES = (
 # sujet d'examen (fuite possible avant l'épreuve).
 EXAMENS_ROLES = (*ADMIN_TIER_ROLES, "ENSEIGNANT")
 
+# ── Matrice de permissions configurable (Paramètres > Sécurité) ──
+# `require_module` applique la matrice module × action de `ss_permissions`.
+# Elle ne peut que RETIRER un accès accordé par le rôle : cocher une case ne
+# donne jamais un droit que le rôle statique refuse (voir app/core/auth.py).
+# Seuls les modules déclarés dans `securite.py::SYSTEM_MODULES` sont câblés —
+# ce sont les seuls que l'interface permet de configurer.
+_MOD_ELEVES = require_module("eleves")
+_MOD_ENSEIGNANTS = require_module("enseignants")
+_MOD_NOTES = require_module("notes")
+_MOD_FINANCE = require_module("finance")
+_MOD_COMPTABILITE = require_module("comptabilite")
+_MOD_VIE_SCOLAIRE = require_module("vie_scolaire")
+_MOD_EMPLOI = require_module("emploi_du_temps")
+_MOD_PARAMETRES = require_module("parametres")
+_MOD_SECURITE = require_module("securite")
+
 # ── Routes PROTÉGÉES par JWT (admin uniquement) ──
 app.include_router(dashboard_router, dependencies=[Depends(get_current_user)])
-app.include_router(eleves_router, dependencies=[Depends(get_current_user)])
-app.include_router(enseignants_router, dependencies=[Depends(get_current_user)])
+app.include_router(eleves_router, dependencies=[Depends(get_current_user), Depends(_MOD_ELEVES)])
+app.include_router(enseignants_router, dependencies=[Depends(get_current_user), Depends(_MOD_ENSEIGNANTS)])
 app.include_router(classes_router, dependencies=[Depends(get_current_user)])
 app.include_router(inscriptions_router, dependencies=[Depends(get_current_user)])
 app.include_router(promotion_router, dependencies=[Depends(get_current_user)])
 app.include_router(annee_scolaire_router, dependencies=[Depends(get_current_user)])
 app.include_router(reinscription_router, dependencies=[Depends(get_current_user)])
-app.include_router(evaluations_router, dependencies=[Depends(get_current_user)])
-app.include_router(notes_router, dependencies=[Depends(get_current_user)])
+app.include_router(evaluations_router, dependencies=[Depends(get_current_user), Depends(_MOD_NOTES)])
+app.include_router(notes_router, dependencies=[Depends(get_current_user), Depends(_MOD_NOTES)])
 # ── Routes COMPTABILITÉ / FINANCE / RH / PRÉSENCES AGENTS (rôles restreints) ──
-app.include_router(finance_router, dependencies=[Depends(require_roles(*FINANCE_ROLES))])
-app.include_router(vie_scolaire_router, dependencies=[Depends(get_current_user)])
-app.include_router(parametrage_router, dependencies=[Depends(get_current_user)])
-app.include_router(securite_router, dependencies=[Depends(get_current_user)])
+app.include_router(finance_router, dependencies=[Depends(require_roles(*FINANCE_ROLES)), Depends(_MOD_FINANCE)])
+app.include_router(vie_scolaire_router, dependencies=[Depends(get_current_user), Depends(_MOD_VIE_SCOLAIRE)])
+app.include_router(parametrage_router, dependencies=[Depends(get_current_user), Depends(_MOD_PARAMETRES)])
+# Sécurité & audit : rôles, permissions et journal d'audit. Seule la page
+# admin /parametres/securite consomme ces routes (vérifié côté frontend), donc
+# les restreindre à l'équipe de direction ne casse aucun autre écran. Avant,
+# n'importe quel token valide — y compris ENSEIGNANT, PARENT ou ELEVE —
+# pouvait lire le journal d'audit de son établissement et redéfinir ses rôles.
+app.include_router(securite_router, dependencies=[Depends(require_roles(*ADMIN_TIER_ROLES)), Depends(_MOD_SECURITE)])
 app.include_router(matieres_router, dependencies=[Depends(get_current_user)])
-app.include_router(emploi_router, dependencies=[Depends(get_current_user)])
+app.include_router(emploi_router, dependencies=[Depends(get_current_user), Depends(_MOD_EMPLOI)])
 app.include_router(comm_router, dependencies=[Depends(get_current_user)])
 app.include_router(examens_router, dependencies=[Depends(require_roles(*EXAMENS_ROLES))])
 app.include_router(devoirs_router, dependencies=[Depends(get_current_user)])
@@ -193,7 +214,7 @@ app.include_router(bibliotheque_router)
 app.include_router(informatique_router)
 # Comptabilité générale (SYSCOHADA) : mêmes rôles que Finance, plus d'auth
 # maison séparée — l'accès passe uniquement par le JWT principal.
-app.include_router(comptabilite_router, dependencies=[Depends(require_roles(*FINANCE_ROLES))])
+app.include_router(comptabilite_router, dependencies=[Depends(require_roles(*FINANCE_ROLES)), Depends(_MOD_COMPTABILITE)])
 # Suivi des tâches asynchrones (Étape F) — un id de tâche valide suffit à
 # consulter son statut, mais on exige quand même une session valide (pas
 # de fuite d'information à un client non authentifié).

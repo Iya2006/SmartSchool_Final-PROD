@@ -70,7 +70,13 @@ class ParametreBase(BaseModel):
     valeur: str
     type_valeur: str = "TEXT"
 
-class ParametreCreate(ParametreBase): pass
+class ParametreCreate(ParametreBase):
+    # `etablissement_id` est IGNORÉ en entrée : la route l'impose depuis le
+    # compte authentifié (chantier multi-écoles). Il reste accepté — et
+    # facultatif — pour ne pas rejeter les clients qui l'envoient encore, mais
+    # sa valeur n'a aucun effet. `ParametreBase` le garde obligatoire pour
+    # `ParametreOut`, où il décrit bien le rattachement réel.
+    etablissement_id: Optional[int] = None
 
 class ParametreUpdate(BaseModel):
     valeur: str
@@ -148,7 +154,9 @@ class PersonnelOut(OrmBase, PersonnelBase):
 # BIBLIOTHÈQUE SCOLAIRE
 # ============================================================================
 class OuvrageBase(BaseModel):
-    etablissement_id: int = 1
+    # Plus de champ `etablissement_id` : il valait 1 par défaut et était accepté
+    # depuis le corps de la requête. Il provient désormais du compte
+    # authentifié (Lot 11).
     isbn: Optional[str] = None
     code_interne: str
     titre: str

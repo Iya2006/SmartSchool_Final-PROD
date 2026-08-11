@@ -11,6 +11,7 @@ from datetime import datetime
 import json
 
 from app.core.database import get_db
+from app.core.auth import get_current_user, require_etablissement, require_roles, ADMIN_TIER_ROLES
 from app.models.academique import (
     Message, DemandeEmploi, Disponibilite, Enseignant,
     Classe, ClasseMatiere, Matiere, Affectation, CreneauEmploi,
@@ -26,6 +27,19 @@ HEURES_SLOTS = [
 ]
 OBJET_TYPES = ["EMPLOI", "DISCIPLINE", "GENERAL", "REUNION", "EXAMENS"]
 
+# Ce routeur n'était protégé que par get_current_user (aucun rôle), à la
+# différence de finance/comptabilité/personnel/examens — voir Lot 5 du
+# chantier multi-écoles. Les routes de gestion admin (répertoire parents,
+# validation de disponibilités, création de demandes...) exigent désormais
+# explicitement un rôle admin-tier ; les routes partagées admin/enseignant
+# (messagerie interne, dépôt de disponibilités) restent ouvertes aux deux,
+# avec vérification d'établissement + d'ownership.
+_require_admin = require_roles(*ADMIN_TIER_ROLES)
+
+
+def _est_admin_tier(current_user: dict) -> bool:
+    return current_user.get("role") in ADMIN_TIER_ROLES
+
 
 # ============================================================================
 # MESSAGES
@@ -36,17 +50,31 @@ def list_messages(
     role: str = "ADMIN",
     enseignant_id: Optional[int] = None,
     objet_type: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
 ):
-    """Liste les messages selon le rôle (ADMIN ou ENSEIGNANT)."""
-    q = db.query(Message)
+    """Liste les messages selon le rôle (ADMIN ou ENSEIGNANT).
+    Toujours restreinte à l'établissement appelant. Un compte enseignant ne
+    peut jamais consulter la messagerie d'un collègue en changeant
+    enseignant_id — sa propre identité prévaut toujours."""
+    q = db.query(Message).filter(Message.etablissement_id == etablissement_id)
 
     if role == "ADMIN":
+        if not _est_admin_tier(current_user):
+            raise HTTPException(403, "Accès réservé à l'administration")
         q = q.filter(or_(
             Message.expediteur_type == "ADMIN",
             Message.destinataire_type == "ADMIN"
         ))
-    elif role == "ENSEIGNANT" and enseignant_id:
+    elif role == "ENSEIGNANT":
+        if not _est_admin_tier(current_user):
+            if current_user.get("type") != "enseignant":
+                raise HTTPException(403, "Accès réservé aux enseignants")
+            enseignant_id = int(current_user.get("sub"))
+        if not enseignant_id:
+            raise HTTPException(400, "enseignant_id requis")
+
         # Récupérer les classes de l'enseignant pour les messages CLASSE_ENSEIGNANTS
         classes_ens = db.query(Affectation.classe_id).filter(
             Affectation.enseignant_id == enseignant_id,
@@ -64,6 +92,8 @@ def list_messages(
             filters.append((Message.destinataire_type == "CLASSE_ENSEIGNANTS") & (Message.destinataire_id == cid))
 
         q = q.filter(or_(*filters))
+    else:
+        raise HTTPException(400, "role doit être 'ADMIN' ou 'ENSEIGNANT'")
 
     if objet_type:
         q = q.filter(Message.objet_type == objet_type)
@@ -99,19 +129,50 @@ def list_messages(
 
 
 @router.post("/messages", status_code=201)
-def send_message(data: dict, db: Session = Depends(get_db)):
+def send_message(
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Envoyer un message (Admin ou Enseignant)."""
     required = ["expediteur_type", "destinataire_type", "sujet"]
     for f in required:
         if f not in data:
             raise HTTPException(400, f"Champ requis: {f}")
 
+    expediteur_type = data["expediteur_type"]
+    expediteur_id = data.get("expediteur_id")
+
+    # Un enseignant ne peut envoyer un message que sous sa propre identité —
+    # jamais au nom d'un collègue.
+    if expediteur_type == "ENSEIGNANT" and not _est_admin_tier(current_user):
+        if current_user.get("type") != "enseignant":
+            raise HTTPException(403, "Seul un enseignant peut envoyer un message expediteur_type=ENSEIGNANT")
+        expediteur_id = int(current_user.get("sub"))
+    if expediteur_type == "ENSEIGNANT" and expediteur_id:
+        ens_valide = db.query(Enseignant.enseignant_id).filter(
+            Enseignant.enseignant_id == expediteur_id, Enseignant.etablissement_id == etablissement_id
+        ).first()
+        if not ens_valide:
+            raise HTTPException(404, "Enseignant expéditeur introuvable")
+
+    destinataire_type = data["destinataire_type"]
+    destinataire_id = data.get("destinataire_id")
+    if destinataire_type in ("ENSEIGNANT", "CLASSE_ENSEIGNANTS") and destinataire_id:
+        model = Enseignant if destinataire_type == "ENSEIGNANT" else Classe
+        id_col = Enseignant.enseignant_id if destinataire_type == "ENSEIGNANT" else Classe.classe_id
+        valide = db.query(id_col).filter(id_col == destinataire_id, model.etablissement_id == etablissement_id).first()
+        if not valide:
+            raise HTTPException(404, "Destinataire introuvable pour cet établissement")
+
     msg = Message(
+        etablissement_id=etablissement_id,
         demande_id=data.get("demande_id"),
-        expediteur_type=data["expediteur_type"],
-        expediteur_id=data.get("expediteur_id"),
-        destinataire_type=data["destinataire_type"],
-        destinataire_id=data.get("destinataire_id"),
+        expediteur_type=expediteur_type,
+        expediteur_id=expediteur_id,
+        destinataire_type=destinataire_type,
+        destinataire_id=destinataire_id,
         objet_type=data.get("objet_type", "GENERAL"),
         sujet=data["sujet"],
         contenu=data.get("contenu", ""),
@@ -124,20 +185,23 @@ def send_message(data: dict, db: Session = Depends(get_db)):
 
 
 @router.put("/messages/marquer-tous-lus")
-def marquer_tous_lus(db: Session = Depends(get_db)):
+def marquer_tous_lus(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Marquer tous les messages non lus destinés à l'admin comme lus."""
     count = db.query(Message).filter(
         Message.statut == "ENVOYE",
-        Message.expediteur_type != "ADMIN"
+        Message.expediteur_type != "ADMIN",
+        Message.etablissement_id == etablissement_id,
     ).update({"statut": "LU", "date_lecture": datetime.now()})
     db.commit()
     return {"marked": count}
 
 
 @router.put("/messages/{message_id}/lire")
-def marquer_lu(message_id: int, db: Session = Depends(get_db)):
+def marquer_lu(message_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Marquer un message comme lu."""
-    m = db.query(Message).filter(Message.message_id == message_id).first()
+    m = db.query(Message).filter(
+        Message.message_id == message_id, Message.etablissement_id == etablissement_id
+    ).first()
     if not m:
         raise HTTPException(404, "Message not found")
     m.statut = "LU"
@@ -150,10 +214,12 @@ def marquer_lu(message_id: int, db: Session = Depends(get_db)):
 # DEMANDES D'EMPLOI DU TEMPS
 # ============================================================================
 
-@router.get("/demandes")
-def list_demandes(db: Session = Depends(get_db)):
+@router.get("/demandes", dependencies=[Depends(_require_admin)])
+def list_demandes(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Liste toutes les demandes de disponibilité / examens."""
-    demandes = db.query(DemandeEmploi).order_by(desc(DemandeEmploi.date_creation)).all()
+    demandes = db.query(DemandeEmploi).filter(
+        DemandeEmploi.etablissement_id == etablissement_id
+    ).order_by(desc(DemandeEmploi.date_creation)).all()
     result = []
     for d in demandes:
         if d.objet_type == "EXAMENS":
@@ -207,20 +273,31 @@ def list_demandes(db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/demandes", status_code=201)
-def creer_demande(data: dict, db: Session = Depends(get_db)):
+@router.post("/demandes", status_code=201, dependencies=[Depends(_require_admin)])
+def creer_demande(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Créer une demande de collecte de disponibilité.
-    Envoie automatiquement un message à tous les enseignants.
+    Envoie automatiquement un message à tous les enseignants DE CET ÉTABLISSEMENT
+    (destinataire_type="TOUS_ENSEIGNANTS" est désormais toujours interprété comme
+    "tous les enseignants de l'établissement du message", jamais de la plateforme).
     """
     if "titre" not in data:
         raise HTTPException(400, "Titre requis")
 
     classes_str = data.get("classes_concernees", "TOUTES")
     if isinstance(classes_str, list):
+        # Les classes explicitement listées doivent appartenir à cet
+        # établissement — jamais acceptées aveuglément depuis le body.
+        if classes_str:
+            trouvees = {c.classe_id for c in db.query(Classe.classe_id).filter(
+                Classe.classe_id.in_(classes_str), Classe.etablissement_id == etablissement_id
+            ).all()}
+            if trouvees != set(classes_str):
+                raise HTTPException(403, "Classe(s) invalide(s) pour cet établissement")
         classes_str = json.dumps(classes_str)
 
     demande = DemandeEmploi(
+        etablissement_id=etablissement_id,
         titre=data["titre"],
         description=data.get("description", ""),
         objet_type=data.get("objet_type", "EMPLOI"),
@@ -233,6 +310,7 @@ def creer_demande(data: dict, db: Session = Depends(get_db)):
 
     # Send message to all teachers
     msg = Message(
+        etablissement_id=etablissement_id,
         demande_id=demande.demande_id,
         expediteur_type="ADMIN",
         destinataire_type="TOUS_ENSEIGNANTS",
@@ -249,10 +327,12 @@ def creer_demande(data: dict, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/demandes/{demande_id}")
-def get_demande_detail(demande_id: int, db: Session = Depends(get_db)):
+@router.get("/demandes/{demande_id}", dependencies=[Depends(_require_admin)])
+def get_demande_detail(demande_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Détail d'une demande — disponibilités (EMPLOI) ou sujets (EXAMENS)."""
-    d = db.query(DemandeEmploi).filter(DemandeEmploi.demande_id == demande_id).first()
+    d = db.query(DemandeEmploi).filter(
+        DemandeEmploi.demande_id == demande_id, DemandeEmploi.etablissement_id == etablissement_id
+    ).first()
     if not d:
         raise HTTPException(404, "Demande not found")
 
@@ -355,8 +435,25 @@ def get_demande_detail(demande_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.get("/disponibilites/enseignant/{enseignant_id}")
-def get_mes_disponibilites(enseignant_id: int, demande_id: Optional[int] = None, db: Session = Depends(get_db)):
-    """Un enseignant récupère ses disponibilités soumises."""
+def get_mes_disponibilites(
+    enseignant_id: int,
+    demande_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Un enseignant récupère ses disponibilités soumises.
+    Un compte enseignant ne peut consulter que les siennes ; un admin peut
+    consulter celles de n'importe quel enseignant de son établissement."""
+    ens_valide = db.query(Enseignant.enseignant_id).filter(
+        Enseignant.enseignant_id == enseignant_id, Enseignant.etablissement_id == etablissement_id
+    ).first()
+    if not ens_valide:
+        raise HTTPException(404, "Enseignant introuvable")
+    if not _est_admin_tier(current_user):
+        if current_user.get("type") != "enseignant" or str(current_user.get("sub", "")) != str(enseignant_id):
+            raise HTTPException(403, "Vous ne pouvez consulter que vos propres disponibilités")
+
     q = db.query(Disponibilite).filter(Disponibilite.enseignant_id == enseignant_id)
     if demande_id:
         q = q.filter(Disponibilite.demande_id == demande_id)
@@ -379,7 +476,12 @@ def get_mes_disponibilites(enseignant_id: int, demande_id: Optional[int] = None,
 
 
 @router.post("/disponibilites", status_code=201)
-def soumettre_disponibilites(data: dict, db: Session = Depends(get_db)):
+def soumettre_disponibilites(
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """
     Un enseignant soumet ses disponibilités pour une demande.
     data: { demande_id, enseignant_id, slots: [{classe_id, jour, heure_debut, heure_fin}] }
@@ -389,11 +491,34 @@ def soumettre_disponibilites(data: dict, db: Session = Depends(get_db)):
         if f not in data:
             raise HTTPException(400, f"Champ requis: {f}")
 
-    demande = db.query(DemandeEmploi).filter(DemandeEmploi.demande_id == data["demande_id"]).first()
+    demande = db.query(DemandeEmploi).filter(
+        DemandeEmploi.demande_id == data["demande_id"], DemandeEmploi.etablissement_id == etablissement_id
+    ).first()
     if not demande:
         raise HTTPException(404, "Demande non trouvée")
 
     ens_id = data["enseignant_id"]
+    ens = db.query(Enseignant).filter(
+        Enseignant.enseignant_id == ens_id, Enseignant.etablissement_id == etablissement_id
+    ).first()
+    if not ens:
+        raise HTTPException(404, "Enseignant introuvable")
+    # Un enseignant ne peut soumettre que SES PROPRES disponibilités — jamais
+    # au nom d'un collègue (sauf admin de l'établissement).
+    if not _est_admin_tier(current_user):
+        if current_user.get("type") != "enseignant" or str(current_user.get("sub", "")) != str(ens_id):
+            raise HTTPException(403, "Vous ne pouvez soumettre que vos propres disponibilités")
+
+    # Chaque classe référencée dans les créneaux doit appartenir à cet
+    # établissement — jamais acceptée aveuglément depuis le body.
+    classe_ids_slots = {slot["classe_id"] for slot in data["slots"] if slot.get("classe_id")}
+    if classe_ids_slots:
+        trouvees = {c.classe_id for c in db.query(Classe.classe_id).filter(
+            Classe.classe_id.in_(classe_ids_slots), Classe.etablissement_id == etablissement_id
+        ).all()}
+        if trouvees != classe_ids_slots:
+            raise HTTPException(403, "Classe(s) invalide(s) pour cet établissement")
+
     # Remove old submissions for this teacher/demande
     db.query(Disponibilite).filter(
         Disponibilite.demande_id == data["demande_id"],
@@ -419,9 +544,9 @@ def soumettre_disponibilites(data: dict, db: Session = Depends(get_db)):
     db.commit()
 
     # Send notification to admin
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == ens_id).first()
-    ens_name = f"{ens.prenom} {ens.nom}" if ens else "Enseignant"
+    ens_name = f"{ens.prenom} {ens.nom}"
     msg = Message(
+        etablissement_id=etablissement_id,
         demande_id=data["demande_id"],
         expediteur_type="ENSEIGNANT",
         expediteur_id=ens_id,
@@ -440,10 +565,15 @@ def soumettre_disponibilites(data: dict, db: Session = Depends(get_db)):
 # VALIDATION DES DISPONIBILITÉS (Admin)
 # ============================================================================
 
-@router.put("/disponibilites/{dispo_id}/valider")
-def valider_disponibilite(dispo_id: int, db: Session = Depends(get_db)):
+@router.put("/disponibilites/{dispo_id}/valider", dependencies=[Depends(_require_admin)])
+def valider_disponibilite(dispo_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Admin valide une disponibilité."""
-    d = db.query(Disponibilite).filter(Disponibilite.disponibilite_id == dispo_id).first()
+    d = (
+        db.query(Disponibilite)
+        .join(Classe, Classe.classe_id == Disponibilite.classe_id)
+        .filter(Disponibilite.disponibilite_id == dispo_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
     if not d:
         raise HTTPException(404, "Disponibilité non trouvée")
 
@@ -468,10 +598,15 @@ def valider_disponibilite(dispo_id: int, db: Session = Depends(get_db)):
     return {"message": "Disponibilité validée"}
 
 
-@router.put("/disponibilites/{dispo_id}/rejeter")
-def rejeter_disponibilite(dispo_id: int, data: dict, db: Session = Depends(get_db)):
+@router.put("/disponibilites/{dispo_id}/rejeter", dependencies=[Depends(_require_admin)])
+def rejeter_disponibilite(dispo_id: int, data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Admin rejette une disponibilité avec commentaire."""
-    d = db.query(Disponibilite).filter(Disponibilite.disponibilite_id == dispo_id).first()
+    d = (
+        db.query(Disponibilite)
+        .join(Classe, Classe.classe_id == Disponibilite.classe_id)
+        .filter(Disponibilite.disponibilite_id == dispo_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
     if not d:
         raise HTTPException(404, "Disponibilité non trouvée")
 
@@ -483,6 +618,7 @@ def rejeter_disponibilite(dispo_id: int, data: dict, db: Session = Depends(get_d
     ens = db.query(Enseignant).filter(Enseignant.enseignant_id == d.enseignant_id).first()
     cls = db.query(Classe).filter(Classe.classe_id == d.classe_id).first()
     msg = Message(
+        etablissement_id=etablissement_id,
         demande_id=d.demande_id,
         expediteur_type="ADMIN",
         destinataire_type="ENSEIGNANT",
@@ -497,9 +633,15 @@ def rejeter_disponibilite(dispo_id: int, data: dict, db: Session = Depends(get_d
     return {"message": "Disponibilité rejetée, enseignant notifié"}
 
 
-@router.put("/disponibilites/valider-tout/{demande_id}")
-def valider_toutes_dispos(demande_id: int, db: Session = Depends(get_db)):
+@router.put("/disponibilites/valider-tout/{demande_id}", dependencies=[Depends(_require_admin)])
+def valider_toutes_dispos(demande_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Admin valide toutes les disponibilités soumises d'une demande (sans conflit)."""
+    demande = db.query(DemandeEmploi).filter(
+        DemandeEmploi.demande_id == demande_id, DemandeEmploi.etablissement_id == etablissement_id
+    ).first()
+    if not demande:
+        raise HTTPException(404, "Demande non trouvée")
+
     dispos = db.query(Disponibilite).filter(
         Disponibilite.demande_id == demande_id,
         Disponibilite.statut == "SOUMISE"
@@ -530,13 +672,15 @@ def valider_toutes_dispos(demande_id: int, db: Session = Depends(get_db)):
 # GÉNÉRATION AUTOMATIQUE DEPUIS LES DISPONIBILITÉS VALIDÉES
 # ============================================================================
 
-@router.post("/demandes/{demande_id}/generer-emplois", status_code=201)
-def generer_emplois_depuis_dispos(demande_id: int, db: Session = Depends(get_db)):
+@router.post("/demandes/{demande_id}/generer-emplois", status_code=201, dependencies=[Depends(_require_admin)])
+def generer_emplois_depuis_dispos(demande_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Génère les emplois du temps pour toutes les classes concernées
     en utilisant les disponibilités VALIDÉES des enseignants.
     """
-    demande = db.query(DemandeEmploi).filter(DemandeEmploi.demande_id == demande_id).first()
+    demande = db.query(DemandeEmploi).filter(
+        DemandeEmploi.demande_id == demande_id, DemandeEmploi.etablissement_id == etablissement_id
+    ).first()
     if not demande:
         raise HTTPException(404, "Demande non trouvée")
 
@@ -652,42 +796,50 @@ def get_objet_types():
 # COMMUNICATION PARENTS — Admin side
 # ============================================================================
 
-@router.get("/parents-list")
-def get_parents_list(db: Session = Depends(get_db)):
-    """Liste tous les parents avec leurs enfants (pour l'admin).
+@router.get("/parents-list", dependencies=[Depends(_require_admin)])
+def get_parents_list(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Liste les parents ayant au moins un enfant dans CET établissement,
+    avec UNIQUEMENT leurs enfants de cet établissement.
     Retourne parent_id, nom, prenom, telephone, enfants[{nom, prenom, classe}].
 
-    Réécrit en préchargement par lot (4 requêtes fixes au lieu d'environ
-    4 par parent) — la version précédente faisait plusieurs requêtes DANS la
-    boucle sur les parents, soit ~20 000 requêtes séparées à l'échelle réelle
-    (5033 parents) : mesuré à 69s, largement au-delà du timeout axios (30s)
-    côté page Communication, qui affichait alors "aucune donnée" (la requête
-    entière échouait, aucune des listes de la page ne se remplissait). Voir la
-    règle N+1 déjà établie sur ce projet.
+    AVANT LE LOT 5 : cette route retournait l'annuaire complet de TOUS les
+    parents de TOUTE la plateforme, sans restriction de rôle — l'une des
+    fuites les plus sévères identifiées dans l'audit initial (nom, téléphone,
+    email, profession de chaque parent + noms/classes de chaque enfant).
+    Corrigé en deux temps : (1) restreint aux rôles admin-tier, (2) le
+    roster est dérivé strictement des ÉLÈVES de cet établissement (jamais du
+    Parent lui-même, qui n'a pas de colonne établissement — voir Cas B :
+    un parent avec des enfants dans plusieurs écoles n'expose ici QUE ses
+    enfants de cette école, jamais ceux d'une autre).
+
+    Réécrit en préchargement par lot (requêtes fixes) — voir la règle N+1
+    déjà établie sur ce projet.
     """
     from app.models.academique import Parent, EleveParent, Eleve, Inscription, Classe
 
-    parents = db.query(Parent).filter(Parent.statut == "ACTIF").order_by(Parent.nom).all()
-    if not parents:
+    eleves_etab = db.query(Eleve).filter(Eleve.etablissement_id == etablissement_id).all()
+    eleve_ids = [e.eleve_id for e in eleves_etab]
+    eleves_par_id: Dict[int, Eleve] = {e.eleve_id: e for e in eleves_etab}
+    if not eleve_ids:
         return []
-    parent_ids = [p.parent_id for p in parents]
 
-    liens = db.query(EleveParent).filter(EleveParent.parent_id.in_(parent_ids)).all()
+    liens = db.query(EleveParent).filter(EleveParent.eleve_id.in_(eleve_ids)).all()
+    if not liens:
+        return []
+    parent_ids = list({lien.parent_id for lien in liens})
     liens_par_parent: Dict[int, list] = {}
     for lien in liens:
         liens_par_parent.setdefault(lien.parent_id, []).append(lien)
 
-    eleve_ids = list({lien.eleve_id for lien in liens})
-    eleves_par_id: Dict[int, Eleve] = {}
-    if eleve_ids:
-        eleves_par_id = {e.eleve_id: e for e in db.query(Eleve).filter(Eleve.eleve_id.in_(eleve_ids)).all()}
+    parents = db.query(Parent).filter(
+        Parent.parent_id.in_(parent_ids), Parent.statut == "ACTIF"
+    ).order_by(Parent.nom).all()
 
     inscriptions_actives: Dict[int, Inscription] = {}
-    if eleve_ids:
-        for insc in db.query(Inscription).filter(
-            Inscription.eleve_id.in_(eleve_ids), Inscription.statut == "ACTIVE"
-        ).all():
-            inscriptions_actives[insc.eleve_id] = insc
+    for insc in db.query(Inscription).filter(
+        Inscription.eleve_id.in_(eleve_ids), Inscription.statut == "ACTIVE"
+    ).all():
+        inscriptions_actives[insc.eleve_id] = insc
 
     classe_ids = list({insc.classe_id for insc in inscriptions_actives.values()})
     classes_par_id: Dict[int, Classe] = {}
@@ -725,8 +877,8 @@ def get_parents_list(db: Session = Depends(get_db)):
     return result
 
 
-@router.get("/messages-parents")
-def list_messages_parents(db: Session = Depends(get_db)):
+@router.get("/messages-parents", dependencies=[Depends(_require_admin)])
+def list_messages_parents(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Liste les messages échangés avec les parents (pour l'admin).
 
     Préchargement par lot (parents + classes en 2 requêtes fixes) au lieu
@@ -736,6 +888,7 @@ def list_messages_parents(db: Session = Depends(get_db)):
     from app.models.academique import Parent, Classe
 
     msgs = db.query(Message).filter(
+        Message.etablissement_id == etablissement_id,
         or_(
             Message.destinataire_type.in_(["PARENT", "TOUS_PARENTS", "CLASSE_PARENTS"]),
             Message.expediteur_type == "PARENT",
@@ -791,12 +944,19 @@ def list_messages_parents(db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/messages-parents", status_code=201)
-def send_message_to_parents(data: dict, db: Session = Depends(get_db)):
+@router.post("/messages-parents", status_code=201, dependencies=[Depends(_require_admin)])
+def send_message_to_parents(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Admin envoie un message aux parents.
     data: { destinataire_type: PARENT|TOUS_PARENTS|CLASSE_PARENTS,
             destinataire_id: parent_id|classe_id|null,
-            objet_type, sujet, contenu }"""
+            objet_type, sujet, contenu }
+
+    AVANT LE LOT 5 : "TOUS_PARENTS" partait vers TOUS les parents de TOUTE
+    la plateforme (Message n'avait pas de colonne établissement). Un message
+    ciblé sur un parent_id ou un classe_id n'était pas non plus vérifié
+    appartenir à cet établissement."""
+    from app.models.academique import Parent, EleveParent, Eleve
+
     required = ["destinataire_type", "sujet"]
     for f in required:
         if f not in data:
@@ -806,11 +966,31 @@ def send_message_to_parents(data: dict, db: Session = Depends(get_db)):
     if dest_type not in ["PARENT", "TOUS_PARENTS", "CLASSE_PARENTS"]:
         raise HTTPException(400, "destinataire_type invalide")
 
+    destinataire_id = data.get("destinataire_id")
+    if dest_type == "CLASSE_PARENTS":
+        if not destinataire_id or not db.query(Classe.classe_id).filter(
+            Classe.classe_id == destinataire_id, Classe.etablissement_id == etablissement_id
+        ).first():
+            raise HTTPException(404, "Classe introuvable pour cet établissement")
+    elif dest_type == "PARENT":
+        # Le parent doit avoir au moins un enfant dans CET établissement —
+        # jamais accepté aveuglément depuis le body (Cas B : un parent
+        # multi-écoles ne doit recevoir un message "au nom de cette école"
+        # que s'il y a réellement un enfant).
+        a_un_enfant_ici = destinataire_id and db.query(EleveParent).join(
+            Eleve, Eleve.eleve_id == EleveParent.eleve_id
+        ).filter(
+            EleveParent.parent_id == destinataire_id, Eleve.etablissement_id == etablissement_id
+        ).first()
+        if not a_un_enfant_ici:
+            raise HTTPException(404, "Parent introuvable pour cet établissement")
+
     msg = Message(
+        etablissement_id=etablissement_id,
         expediteur_type="ADMIN",
         expediteur_id=None,
         destinataire_type=dest_type,
-        destinataire_id=data.get("destinataire_id"),
+        destinataire_id=destinataire_id,
         objet_type=data.get("objet_type", "GENERAL"),
         sujet=data["sujet"],
         contenu=data.get("contenu", ""),
@@ -825,19 +1005,31 @@ def send_message_to_parents(data: dict, db: Session = Depends(get_db)):
 # RÉPERTOIRE PARENTS (pour page Familles admin)
 # ============================================================================
 
-@router.get("/parents/stats")
-def get_parents_stats(db: Session = Depends(get_db)):
+@router.get("/parents/stats", dependencies=[Depends(_require_admin)])
+def get_parents_stats(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """KPIs globaux pour l'en-tête de la page Familles — indépendants de la
-    pagination/recherche de l'annuaire (agrégats SQL, aucune boucle Python)."""
-    total_parents = db.query(func.count(Parent.parent_id)).filter(Parent.statut == "ACTIF").scalar() or 0
-    total_enfants = db.query(func.count(EleveParent.eleve_parent_id)).join(
-        Parent, EleveParent.parent_id == Parent.parent_id
-    ).filter(Parent.statut == "ACTIF").scalar() or 0
+    pagination/recherche de l'annuaire (agrégats SQL, aucune boucle Python).
+    Comme /parents-list : scopé aux parents ayant un enfant dans CET
+    établissement, et ne compte que CES enfants-là (Cas B : jamais les
+    enfants d'un même parent inscrits dans une autre école)."""
+    eleve_ids_subq = db.query(Eleve.eleve_id).filter(Eleve.etablissement_id == etablissement_id).subquery()
+    parent_ids_ici = db.query(EleveParent.parent_id).filter(
+        EleveParent.eleve_id.in_(db.query(eleve_ids_subq))
+    ).distinct().subquery()
+
+    total_parents = db.query(func.count(Parent.parent_id)).filter(
+        Parent.statut == "ACTIF", Parent.parent_id.in_(db.query(parent_ids_ici))
+    ).scalar() or 0
+    total_enfants = db.query(func.count(EleveParent.eleve_parent_id)).filter(
+        EleveParent.eleve_id.in_(db.query(eleve_ids_subq))
+    ).scalar() or 0
     avec_password = db.query(func.count(Parent.parent_id)).filter(
-        Parent.statut == "ACTIF", Parent.mot_de_passe.isnot(None)
+        Parent.statut == "ACTIF", Parent.mot_de_passe.isnot(None),
+        Parent.parent_id.in_(db.query(parent_ids_ici))
     ).scalar() or 0
     avec_email = db.query(func.count(Parent.parent_id)).filter(
-        Parent.statut == "ACTIF", Parent.email.isnot(None), Parent.email != ""
+        Parent.statut == "ACTIF", Parent.email.isnot(None), Parent.email != "",
+        Parent.parent_id.in_(db.query(parent_ids_ici))
     ).scalar() or 0
     return {
         "total_parents": total_parents,
@@ -847,21 +1039,31 @@ def get_parents_stats(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/parents/annuaire")
+@router.get("/parents/annuaire", dependencies=[Depends(_require_admin)])
 def get_parents_annuaire(
     response: Response,
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     """Retourne la liste des parents avec infos de base + nombre d'enfants, paginée.
+    Comme /parents-list : scopé aux parents ayant un enfant dans CET
+    établissement, et n'expose que CES enfants-là (Cas B).
 
     Réécrit pour éviter le N+1 (jusqu'à 4 requêtes PAR PARENT — liens, élève,
     inscription, classe) qui faisait timeout la page Familles dès que le nombre
     de parents a dépassé quelques centaines (2753 parents réels dans cette base).
     """
-    query = db.query(Parent).filter(Parent.statut == "ACTIF")
+    eleve_ids_etab_subq = db.query(Eleve.eleve_id).filter(Eleve.etablissement_id == etablissement_id).subquery()
+    parent_ids_ici_subq = db.query(EleveParent.parent_id).filter(
+        EleveParent.eleve_id.in_(db.query(eleve_ids_etab_subq))
+    ).distinct().subquery()
+
+    query = db.query(Parent).filter(
+        Parent.statut == "ACTIF", Parent.parent_id.in_(db.query(parent_ids_ici_subq))
+    )
     if search:
         like = f"%{search.strip()}%"
         query = query.filter(
@@ -875,7 +1077,11 @@ def get_parents_annuaire(
         return []
 
     parent_ids = [p.parent_id for p in parents]
-    liens = db.query(EleveParent).filter(EleveParent.parent_id.in_(parent_ids)).all()
+    # Liens restreints aux enfants de CET établissement — jamais les
+    # enfants d'un même parent inscrits ailleurs (Cas B).
+    liens = db.query(EleveParent).join(Eleve, Eleve.eleve_id == EleveParent.eleve_id).filter(
+        EleveParent.parent_id.in_(parent_ids), Eleve.etablissement_id == etablissement_id
+    ).all()
     eleve_ids = {l.eleve_id for l in liens}
 
     eleves = {e.eleve_id: e for e in db.query(Eleve).filter(Eleve.eleve_id.in_(eleve_ids)).all()}

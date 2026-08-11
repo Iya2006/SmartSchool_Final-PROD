@@ -42,7 +42,7 @@ DOCUMENTS_DEFAULTS = {
 }
 
 
-def get_documents_settings(db: Session, etablissement_id: int = 1) -> dict:
+def get_documents_settings(db: Session, etablissement_id: int) -> dict:
     """Charge les paramètres DOCUMENTS depuis ss_parametres, fusionnés avec les défauts."""
     settings = dict(DOCUMENTS_DEFAULTS)
     try:

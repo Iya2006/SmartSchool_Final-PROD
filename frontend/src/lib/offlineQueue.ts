@@ -40,7 +40,11 @@ export interface OfflineQueueItem {
     method?: 'post' | 'put';
     payload: unknown;
     utilisateur_id: number | string;
-    etablissement_id: number;
+    /** Métadonnée locale uniquement, jamais renvoyée au serveur : au rejeu,
+     * le backend dérive l'établissement du JWT et ignore cette valeur. Facultatif
+     * car il n'est pas toujours connaissable côté client (compte plateforme,
+     * parent multi-écoles) — on n'invente jamais un établissement par défaut. */
+    etablissement_id?: number;
     created_at: string; // ISO 8601
     statut: OfflineQueueStatut;
     tentatives: number;

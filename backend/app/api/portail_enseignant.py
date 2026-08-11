@@ -569,6 +569,12 @@ def _type_eval_par_defaut(db: Session) -> int:
     Cherche le type générique "EVAL" (Évaluation), sinon le premier type actif.
     Remplace un `type_eval_id or 1` qui supposait qu'un type utilisable portait
     forcément l'identifiant 1.
+
+    Les helpers `_categorie_evaluation` / `_coefficient_pour_evaluation` que ce
+    fichier portait ont disparu : la pondération n'est plus figée sur trois
+    catégories Écrit/Oral/Composition, elle vient des coefficients de type
+    configurés par l'école et calculés par `app/services/notation.py`.
+
     """
     t = db.query(TypeEvaluation).filter(
         TypeEvaluation.code == "EVAL", TypeEvaluation.statut == "ACTIF"
@@ -611,7 +617,9 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
     if not aff:
         raise HTTPException(403, "Vous n'êtes pas affecté à cette classe/matière")
     classe = db.query(Classe).filter(Classe.classe_id == data.classe_id).first()
-    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+    if not classe:
+        raise HTTPException(404, "Classe introuvable")
+    verifier_annee_modifiable(db, classe.annee_id)
 
     if data.trimestre_id:
         trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == data.trimestre_id).first()
@@ -621,7 +629,9 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
     from datetime import date
 
     type_eval_id = data.type_evaluation_id or _type_eval_par_defaut(db)
-    etablissement_id = classe.etablissement_id if classe else 1
+    # `classe` est garanti non nul (404 plus haut) : pas de repli sur l'école 1,
+    # qui appliquait à tous les enseignants les pondérations d'une autre école.
+    etablissement_id = classe.etablissement_id
     cycle_key = get_cycle_key(data.classe_id, db)
     coefficient = get_types_evaluation_coefficients(db, etablissement_id, cycle_key).get(type_eval_id, 1.0)
     note_sur = data.note_sur or get_bareme_effectif(
@@ -983,6 +993,7 @@ def signaler_enfant_enseignant(
     )
 
     msg = Message(
+        etablissement_id=ens.etablissement_id,
         expediteur_type="ENSEIGNANT",
         expediteur_id=enseignant_id,
         destinataire_type="ADMIN",

@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from app.core.database import get_db
+from app.core.auth import (
+    ADMIN_TIER_ROLES, etablissement_optionnel, require_etablissement, require_roles,
+)
 from app.models.academique import (
     Etablissement, AnneeScolaire, Trimestre, Cycle, Niveau, Salle, Matiere,
     ParametreEtablissement
@@ -22,6 +25,73 @@ from app.schemas.schemas import (
 
 router = APIRouter(prefix="/api/parametrage", tags=["Paramétrage"])
 
+# Operations de niveau plateforme (creer une ecole, lister toutes les ecoles) :
+# reservees au SUPER_ADMIN. Ce ne sont pas des operations "tenant" — elles ne
+# peuvent par nature pas etre filtrees par etablissement.
+_require_super_admin = require_roles("SUPER_ADMIN")
+
+# Toute ECRITURE de configuration est reservee a l'equipe de direction.
+# Les LECTURES restent ouvertes a tout compte authentifie de l'etablissement :
+# elles alimentent des pages non-admin (en-tete de l'app, bulletins, notes,
+# archive, reinscription comptable) et ne portent que des donnees de reference
+# de sa propre ecole.
+_require_admin = require_roles(*ADMIN_TIER_ROLES)
+
+
+def _annee_ou_404(db: Session, annee_id: int, etablissement_id: int) -> AnneeScolaire:
+    """AnneeScolaire porte une colonne etablissement_id directe (Lot 10)."""
+    a = db.query(AnneeScolaire).filter(
+        AnneeScolaire.annee_id == annee_id,
+        AnneeScolaire.etablissement_id == etablissement_id,
+    ).first()
+    if not a:
+        raise HTTPException(404, "Année non trouvée")
+    return a
+
+
+def _trimestre_ou_404(db: Session, trimestre_id: int, etablissement_id: int) -> Trimestre:
+    """Trimestre est OWNERSHIP via son AnneeScolaire (Lot 10)."""
+    t = (
+        db.query(Trimestre)
+        .join(AnneeScolaire, AnneeScolaire.annee_id == Trimestre.annee_id)
+        .filter(
+            Trimestre.trimestre_id == trimestre_id,
+            AnneeScolaire.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not t:
+        raise HTTPException(404, "Trimestre non trouvé")
+    return t
+
+
+def _cycle_ou_404(db: Session, cycle_id: int, etablissement_id: int) -> Cycle:
+    """Cycle porte une colonne etablissement_id directe (Lot 10)."""
+    c = db.query(Cycle).filter(
+        Cycle.cycle_id == cycle_id, Cycle.etablissement_id == etablissement_id
+    ).first()
+    if not c:
+        raise HTTPException(404, "Cycle non trouvé")
+    return c
+
+
+def _matiere_ou_404(db: Session, matiere_id: int, etablissement_id: int) -> Matiere:
+    """Matiere est OWNERSHIP via son Cycle (meme regle qu'au Lot 9-A).
+
+    Ces routes /api/parametrage/matieres doublonnent celles de /api/matieres
+    securisees au Lot 9-A : sans ce controle, elles constituaient une porte
+    derobee permettant de lire et modifier les matieres de toute autre ecole.
+    """
+    m = (
+        db.query(Matiere)
+        .join(Cycle, Cycle.cycle_id == Matiere.cycle_id)
+        .filter(Matiere.matiere_id == matiere_id, Cycle.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not m:
+        raise HTTPException(404, "Matière non trouvée")
+    return m
+
 # Router PUBLIC (sans JWT) pour les GET nécessaires avant login
 public_router = APIRouter(prefix="/api/parametrage", tags=["Paramétrage (Public)"])
 
@@ -29,8 +99,14 @@ public_router = APIRouter(prefix="/api/parametrage", tags=["Paramétrage (Public
 # ============================================================================
 # ÉTABLISSEMENTS
 # ============================================================================
-@router.get("/etablissements", response_model=List[EtablissementOut])
+@router.get("/etablissements", response_model=List[EtablissementOut],
+            dependencies=[Depends(_require_super_admin)])
 def list_etablissements(db: Session = Depends(get_db)):
+    """Annuaire de TOUTES les ecoles : operation plateforme, SUPER_ADMIN seul.
+
+    Avant (Lot 10) : n'importe quel compte authentifie, y compris un eleve,
+    pouvait enumerer tous les etablissements de la plateforme.
+    """
     return db.query(Etablissement).order_by(Etablissement.nom).all()
 
 # Route publique — accessible sans JWT (page login, portails)
@@ -41,16 +117,30 @@ def get_etablissement_public(id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Établissement non trouvé")
     return e
 
-@router.post("/etablissements", response_model=EtablissementOut, status_code=201)
+@router.post("/etablissements", response_model=EtablissementOut, status_code=201,
+             dependencies=[Depends(_require_super_admin)])
 def create_etablissement(data: EtablissementCreate, db: Session = Depends(get_db)):
+    """Creation d'une ecole : operation plateforme, SUPER_ADMIN seul (Lot 10)."""
     e = Etablissement(**data.model_dump())
     db.add(e)
     db.commit()
     db.refresh(e)
     return e
 
-@router.put("/etablissements/{id}", response_model=EtablissementOut)
-def update_etablissement(id: int, data: EtablissementUpdate, db: Session = Depends(get_db)):
+@router.put("/etablissements/{id}", response_model=EtablissementOut, dependencies=[Depends(_require_admin)])
+def update_etablissement(
+    id: int, data: EtablissementUpdate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Un compte ne peut modifier QUE son propre etablissement (Lot 10).
+
+    Avant : `id` etait pris tel quel, donc n'importe quel compte authentifie
+    pouvait reecrire le nom, le logo, l'adresse, le cachet ou la signature de
+    n'importe quelle autre ecole.
+    """
+    if id != etablissement_id:
+        raise HTTPException(404, "Établissement non trouvé")
     e = db.query(Etablissement).filter(Etablissement.etablissement_id == id).first()
     if not e:
         raise HTTPException(404, "Établissement non trouvé")
@@ -67,10 +157,19 @@ def update_etablissement(id: int, data: EtablissementUpdate, db: Session = Depen
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "etablissements")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-@router.post("/etablissements/{id}/upload/{field}")
-async def upload_etablissement_file(id: int, field: str, fichier: UploadFile = File(...), db: Session = Depends(get_db)):
+@router.post("/etablissements/{id}/upload/{field}", dependencies=[Depends(_require_admin)])
+async def upload_etablissement_file(
+    id: int, field: str, fichier: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     if field not in ["logo", "favicon", "cachet", "signature", "card_bg", "card_bg_eleve", "card_bg_prof"]:
         raise HTTPException(400, "Champ invalide")
+
+    # Meme regle que update_etablissement : on ne televerse que pour SON ecole
+    # (avant, on pouvait remplacer le cachet ou la signature de n'importe qui).
+    if id != etablissement_id:
+        raise HTTPException(404, "Établissement non trouvé")
 
     etablissement = db.query(Etablissement).filter(Etablissement.etablissement_id == id).first()
     if not etablissement:
@@ -204,14 +303,26 @@ def _creer_trimestres_auto(db: Session, annee: AnneeScolaire) -> int:
 
 
 @router.get("/annees", response_model=List[AnneeScolaireOut])
-def list_annees(etablissement_id: int = 1, db: Session = Depends(get_db)):
+def list_annees(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     return db.query(AnneeScolaire).filter(
         AnneeScolaire.etablissement_id == etablissement_id
     ).order_by(AnneeScolaire.date_debut.desc()).all()
 
-@router.post("/annees", response_model=AnneeScolaireOut, status_code=201)
-def create_annee(data: AnneeScolaireCreate, db: Session = Depends(get_db)):
-    a = AnneeScolaire(**data.model_dump())
+@router.post("/annees", response_model=AnneeScolaireOut, status_code=201, dependencies=[Depends(_require_admin)])
+def create_annee(
+    data: AnneeScolaireCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    # etablissement_id impose par le compte authentifie : il venait du corps de
+    # la requete, donc une ecole pouvait creer des annees scolaires chez une
+    # autre (Lot 10).
+    payload = data.model_dump()
+    payload["etablissement_id"] = etablissement_id
+    a = AnneeScolaire(**payload)
     db.add(a)
     db.flush()
 
@@ -235,13 +346,16 @@ def create_annee(data: AnneeScolaireCreate, db: Session = Depends(get_db)):
     db.refresh(a)
     return a
 
-@router.put("/annees/{id}", response_model=AnneeScolaireOut)
-def update_annee(id: int, data: AnneeScolaireUpdate, db: Session = Depends(get_db)):
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == id).first()
-    if not annee:
-        raise HTTPException(404, "Année non trouvée")
+@router.put("/annees/{id}", response_model=AnneeScolaireOut, dependencies=[Depends(_require_admin)])
+def update_annee(
+    id: int, data: AnneeScolaireUpdate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    annee = _annee_ou_404(db, id, etablissement_id)
 
     payload = data.model_dump(exclude_unset=True)
+    payload.pop("etablissement_id", None)
     if "date_debut" in payload and "date_fin" in payload and payload["date_debut"] > payload["date_fin"]:
         raise HTTPException(400, "La date de début doit être antérieure à la date de fin")
 
@@ -265,12 +379,14 @@ def update_annee(id: int, data: AnneeScolaireUpdate, db: Session = Depends(get_d
     db.refresh(annee)
     return annee
 
-@router.put("/annees/{id}/activer")
-def activer_annee(id: int, db: Session = Depends(get_db)):
+@router.put("/annees/{id}/activer", dependencies=[Depends(_require_admin)])
+def activer_annee(
+    id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Permet d'activer une année (et désactiver les autres)"""
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == id).first()
-    if not annee:
-        raise HTTPException(404, "Année non trouvée")
+    annee = _annee_ou_404(db, id, etablissement_id)
     # Désactiver toutes les autres
     db.query(AnneeScolaire).filter(
         AnneeScolaire.etablissement_id == annee.etablissement_id,
@@ -286,16 +402,26 @@ def activer_annee(id: int, db: Session = Depends(get_db)):
 # TRIMESTRES
 # ============================================================================
 @router.get("/trimestres", response_model=List[TrimestreOut])
-def list_trimestres(annee_id: int = 1, db: Session = Depends(get_db)):
+def list_trimestres(
+    annee_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    # L'annee demandee doit etre celle de l'appelant : sans ce controle, il
+    # suffisait d'incrementer annee_id pour lire le calendrier d'une autre
+    # ecole (et la valeur par defaut 1 visait l'ecole 1). Lot 10.
+    _annee_ou_404(db, annee_id, etablissement_id)
     return db.query(Trimestre).filter(
         Trimestre.annee_id == annee_id
     ).order_by(Trimestre.numero).all()
 
-@router.post("/trimestres", response_model=TrimestreOut, status_code=201)
-def create_trimestre(data: TrimestreCreate, db: Session = Depends(get_db)):
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == data.annee_id).first()
-    if not annee:
-        raise HTTPException(404, "Année scolaire non trouvée")
+@router.post("/trimestres", response_model=TrimestreOut, status_code=201, dependencies=[Depends(_require_admin)])
+def create_trimestre(
+    data: TrimestreCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    _annee_ou_404(db, data.annee_id, etablissement_id)
     if data.date_debut > data.date_fin:
         raise HTTPException(400, "La date de début doit être antérieure à la date de fin")
 
@@ -305,11 +431,13 @@ def create_trimestre(data: TrimestreCreate, db: Session = Depends(get_db)):
     db.refresh(trimestre)
     return trimestre
 
-@router.put("/trimestres/{id}", response_model=TrimestreOut)
-def update_trimestre(id: int, data: TrimestreUpdate, db: Session = Depends(get_db)):
-    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == id).first()
-    if not trimestre:
-        raise HTTPException(404, "Période non trouvée")
+@router.put("/trimestres/{id}", response_model=TrimestreOut, dependencies=[Depends(_require_admin)])
+def update_trimestre(
+    id: int, data: TrimestreUpdate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    trimestre = _trimestre_ou_404(db, id, etablissement_id)
 
     payload = data.model_dump(exclude_unset=True)
     future_date_debut = payload.get("date_debut", trimestre.date_debut)
@@ -324,18 +452,24 @@ def update_trimestre(id: int, data: TrimestreUpdate, db: Session = Depends(get_d
     db.refresh(trimestre)
     return trimestre
 
-@router.delete("/trimestres/{id}")
-def delete_trimestre(id: int, db: Session = Depends(get_db)):
-    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == id).first()
-    if not trimestre:
-        raise HTTPException(404, "Période non trouvée")
+@router.delete("/trimestres/{id}", dependencies=[Depends(_require_admin)])
+def delete_trimestre(
+    id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    trimestre = _trimestre_ou_404(db, id, etablissement_id)
     db.delete(trimestre)
     db.commit()
     return {"message": "Période supprimée avec succès"}
 
 
-@router.put("/trimestres/{id}/cloturer")
-def cloturer_trimestre(id: int, db: Session = Depends(get_db)):
+@router.put("/trimestres/{id}/cloturer", dependencies=[Depends(_require_admin)])
+def cloturer_trimestre(
+    id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """
     Clôture un trimestre/semestre : verrouille la saisie de nouvelles
     évaluations/notes pour cette période (voir la garde dans
@@ -344,9 +478,7 @@ def cloturer_trimestre(id: int, db: Session = Depends(get_db)):
     Avant cet endpoint, il n'existait aucun mécanisme de clôture pour les
     trimestres — seul l'exercice comptable pouvait être clôturé.
     """
-    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == id).first()
-    if not trimestre:
-        raise HTTPException(404, "Période non trouvée")
+    trimestre = _trimestre_ou_404(db, id, etablissement_id)
     if trimestre.statut == "CLOTURE":
         raise HTTPException(400, "Cette période est déjà clôturée")
 
@@ -371,7 +503,10 @@ def cloturer_trimestre(id: int, db: Session = Depends(get_db)):
 # CYCLES & NIVEAUX
 # ============================================================================
 @router.get("/cycles")
-def list_cycles(etablissement_id: int = 1, db: Session = Depends(get_db)):
+def list_cycles(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     cycles = db.query(Cycle).filter(
         Cycle.etablissement_id == etablissement_id
     ).order_by(Cycle.ordre).all()
@@ -404,26 +539,44 @@ def list_cycles(etablissement_id: int = 1, db: Session = Depends(get_db)):
 # MATIÈRES
 # ============================================================================
 @router.get("/matieres", response_model=List[MatiereOut])
-def list_matieres(cycle_id: Optional[int] = None, db: Session = Depends(get_db)):
-    query = db.query(Matiere)
+def list_matieres(
+    cycle_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    # Matiere est OWNERSHIP via Cycle : sans cette jointure, cette route
+    # listait les matieres de TOUTES les ecoles (elle doublonne /api/matieres,
+    # securisee au Lot 9-A, et constituait donc une porte derobee). Lot 10.
+    query = db.query(Matiere).join(Cycle, Cycle.cycle_id == Matiere.cycle_id).filter(
+        Cycle.etablissement_id == etablissement_id
+    )
     if cycle_id:
         query = query.filter(Matiere.cycle_id == cycle_id)
     return query.order_by(Matiere.libelle).all()
 
-@router.post("/matieres", response_model=MatiereOut, status_code=201)
-def create_matiere(data: MatiereCreate, db: Session = Depends(get_db)):
+@router.post("/matieres", response_model=MatiereOut, status_code=201, dependencies=[Depends(_require_admin)])
+def create_matiere(
+    data: MatiereCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    # Le cycle cible doit appartenir a l'appelant, sinon la matiere serait
+    # creee dans une autre ecole (Lot 10).
+    _cycle_ou_404(db, data.cycle_id, etablissement_id)
     m = Matiere(**data.model_dump())
     db.add(m)
     db.commit()
     db.refresh(m)
     return m
 
-@router.put("/matieres/{matiere_id}")
-def update_matiere(matiere_id: int, data: dict, db: Session = Depends(get_db)):
+@router.put("/matieres/{matiere_id}", dependencies=[Depends(_require_admin)])
+def update_matiere(
+    matiere_id: int, data: dict,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Met à jour le coefficient et/ou note_sur d'une matière."""
-    m = db.query(Matiere).filter(Matiere.matiere_id == matiere_id).first()
-    if not m:
-        raise HTTPException(404, "Matière non trouvée")
+    m = _matiere_ou_404(db, matiere_id, etablissement_id)
     if "coefficient_defaut" in data:
         m.coefficient_defaut = float(data["coefficient_defaut"])
     if "note_sur" in data:
@@ -437,24 +590,40 @@ class MatiereBatchUpdateItem(BaseModel):
     coefficient_defaut: Optional[float] = Field(None, gt=0, le=10)
     note_sur: Optional[float] = Field(None, gt=0, le=100)
 
-@router.put("/matieres-batch")
-def update_matieres_batch(updates: List[MatiereBatchUpdateItem] = Body(...), db: Session = Depends(get_db)):
+@router.put("/matieres-batch", dependencies=[Depends(_require_admin)])
+def update_matieres_batch(
+    updates: List[MatiereBatchUpdateItem] = Body(...),
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Mise à jour en lot des coefficients et barèmes des matières."""
     count = 0
     for item in updates:
-        m = db.query(Matiere).filter(Matiere.matiere_id == item.matiere_id).first()
-        if m:
-            if item.coefficient_defaut is not None:
-                m.coefficient_defaut = float(item.coefficient_defaut)
-            if item.note_sur is not None:
-                m.note_sur = float(item.note_sur)
-            count += 1
+        # CHAQUE matiere du lot est verifiee : une matiere d'une autre ecole
+        # glissee dans la liste etait modifiee sans controle (Lot 10).
+        m = _matiere_ou_404(db, item.matiere_id, etablissement_id)
+        if item.coefficient_defaut is not None:
+            m.coefficient_defaut = float(item.coefficient_defaut)
+        if item.note_sur is not None:
+            m.note_sur = float(item.note_sur)
+        count += 1
     db.commit()
     return {"message": f"{count} matières mises à jour avec succès"}
 
-@router.post("/matieres/auto-generation", status_code=201)
-def auto_generate_matieres_guinee(db: Session = Depends(get_db)):
-    """Génère automatiquement les matières du programme Guinéen par cycle (Primaire, Collège, Lycée)"""
+@router.post("/matieres/auto-generation", status_code=201, dependencies=[Depends(_require_admin)])
+def auto_generate_matieres_guinee(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Génère automatiquement les matières du programme Guinéen par cycle (Primaire, Collège, Lycée)
+
+    Lot 10 — deux contaminations inter-écoles corrigées ici :
+      * les cycles manquants étaient créés avec `etablissement_id=1` en dur ;
+      * les cycles existants étaient recherchés par leur seul `code`, sans
+        filtre d'établissement, si bien qu'une école déclenchant la génération
+        rattachait ses matières aux cycles d'une AUTRE école (le premier
+        « PRM »/« CLG »/« LYC » trouvé sur la plateforme).
+    """
     
     # S'assurer que les cycles de base existent
     cycles_base = [
@@ -465,9 +634,12 @@ def auto_generate_matieres_guinee(db: Session = Depends(get_db)):
     
     cycle_map = {}
     for cb in cycles_base:
-        c = db.query(Cycle).filter(Cycle.code == cb["code"]).first()
+        c = db.query(Cycle).filter(
+            Cycle.code == cb["code"], Cycle.etablissement_id == etablissement_id
+        ).first()
         if not c:
-            c = Cycle(etablissement_id=1, code=cb["code"], libelle=cb["libelle"], ordre=cb["ordre"])
+            c = Cycle(etablissement_id=etablissement_id, code=cb["code"],
+                      libelle=cb["libelle"], ordre=cb["ordre"])
             db.add(c)
             db.commit()
             db.refresh(c)
@@ -551,7 +723,10 @@ def auto_generate_matieres_guinee(db: Session = Depends(get_db)):
 # SALLES
 # ============================================================================
 @router.get("/salles")
-def list_salles(etablissement_id: int = 1, db: Session = Depends(get_db)):
+def list_salles(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     return db.query(Salle).filter(
         Salle.etablissement_id == etablissement_id
     ).order_by(Salle.code).all()
@@ -560,16 +735,68 @@ def list_salles(etablissement_id: int = 1, db: Session = Depends(get_db)):
 # ============================================================================
 # PARAMÈTRES (SETTINGS)
 # ============================================================================
+# Categories affichables sans authentification : strictement ce dont la page
+# de login et les portails ont besoin AVANT de se connecter (marque, couleurs,
+# fonds de carte). Tout le reste — NOTATION, FINANCE, DOCUMENTS, CALENDRIER —
+# exige un compte, et n'est alors servi que pour SON etablissement.
+CATEGORIES_PUBLIQUES = {"THEME", "IDENTITE", "CARTE"}
+
+
 # Route publique — accessible sans JWT (page login, portails)
 @public_router.get("/settings", response_model=List[ParametreOut])
-def list_parametres_public(etablissement_id: int = 1, categorie: Optional[str] = None, db: Session = Depends(get_db)):
-    query = db.query(ParametreEtablissement).filter(ParametreEtablissement.etablissement_id == etablissement_id)
+def list_parametres_public(
+    etablissement_id: Optional[int] = None,
+    categorie: Optional[str] = None,
+    db: Session = Depends(get_db),
+    etablissement_du_compte: Optional[int] = Depends(etablissement_optionnel),
+):
+    """Paramètres d'affichage.
+
+    Lot 10 — avant, cette route rendait SANS AUCUNE AUTHENTIFICATION la
+    totalité des paramètres de n'importe quelle école (`?etablissement_id=N`),
+    y compris NOTATION et FINANCE.
+
+    Désormais :
+      * appelant authentifié -> tous les paramètres, mais uniquement ceux de
+        SON établissement (le paramètre de requête est ignoré) ;
+      * appelant anonyme -> uniquement les catégories d'affichage, pour
+        l'établissement demandé (nécessaire avant le login).
+    """
+    if etablissement_du_compte is not None:
+        query = db.query(ParametreEtablissement).filter(
+            ParametreEtablissement.etablissement_id == etablissement_du_compte
+        )
+        if categorie:
+            query = query.filter(ParametreEtablissement.categorie == categorie)
+        return query.all()
+
+    if categorie and categorie.upper() not in CATEGORIES_PUBLIQUES:
+        raise HTTPException(401, "Authentification requise pour cette catégorie de paramètres")
+
+    # Un appelant anonyme doit désigner explicitement l'établissement dont il
+    # veut la marque : retomber sur l'établissement 1 est interdit (il servirait
+    # les couleurs et le logo d'une école arbitraire à toutes les autres).
+    if etablissement_id is None:
+        raise HTTPException(400, "etablissement_id est requis pour un appel non authentifié")
+
+    query = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.categorie.in_(CATEGORIES_PUBLIQUES),
+    )
     if categorie:
-        query = query.filter(ParametreEtablissement.categorie == categorie)
+        query = query.filter(ParametreEtablissement.categorie == categorie.upper())
     return query.all()
 
-@router.put("/settings")
-def update_parametres(etablissement_id: int, settings: List[ParametreCreate], db: Session = Depends(get_db)):
+
+@router.put("/settings", dependencies=[Depends(_require_admin)])
+def update_parametres(
+    settings: List[ParametreCreate],
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Lot 10 : `etablissement_id` était un paramètre de requête fourni par le
+    client — n'importe quel compte authentifié pouvait donc réécrire les
+    paramètres (notation, finance, identité) de n'importe quelle école."""
     # Upsert logic
     for s in settings:
         param = db.query(ParametreEtablissement).filter(
@@ -581,7 +808,9 @@ def update_parametres(etablissement_id: int, settings: List[ParametreCreate], db
             if s.type_valeur:
                 param.type_valeur = s.type_valeur
         else:
-            new_param = ParametreEtablissement(**s.model_dump())
+            payload = s.model_dump()
+            payload["etablissement_id"] = etablissement_id
+            new_param = ParametreEtablissement(**payload)
             db.add(new_param)
     db.commit()
     return {"message": "Paramètres mis à jour avec succès"}

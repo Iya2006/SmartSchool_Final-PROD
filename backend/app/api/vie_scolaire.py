@@ -8,12 +8,26 @@ from typing import List, Optional
 from datetime import date as date_type
 from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
+from app.core.auth import require_etablissement
 from app.models.academique import Presence, Incident, Inscription, Classe, Eleve
 from app.schemas.schemas import (
     PresenceCreate, PresenceOut, IncidentCreate, IncidentOut
 )
 
 router = APIRouter(prefix="/api/vie-scolaire", tags=["Vie Scolaire"])
+
+
+def _inscription_ou_404(db: Session, inscription_id: int, etablissement_id: int) -> Inscription:
+    """Inscription est OWNERSHIP via sa Classe (Lot 9)."""
+    insc = (
+        db.query(Inscription)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Inscription.inscription_id == inscription_id, Classe.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not insc:
+        raise HTTPException(status_code=404, detail="Inscription non trouvée")
+    return insc
 
 
 # ============================================================================
@@ -24,7 +38,8 @@ def list_presences(
     classe_id: int = None,
     date_presence: Optional[str] = None,
     demi_journee: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query = db.query(
         Presence.presence_id,
@@ -40,6 +55,10 @@ def list_presences(
         Inscription, Presence.inscription_id == Inscription.inscription_id
     ).join(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
+    ).join(
+        Classe, Classe.classe_id == Inscription.classe_id
+    ).filter(
+        Classe.etablissement_id == etablissement_id
     )
 
     if classe_id:
@@ -65,16 +84,21 @@ def list_presences(
 
 
 @router.post("/presences/batch")
-def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depends(get_db)):
-    """Saisie en lot des présences pour une classe"""
+def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Saisie en lot des présences pour une classe.
+
+    CHAQUE inscription est vérifiée appartenir à l'établissement appelant
+    (Lot 9) : avant, seule la PREMIÈRE servait au verrou d'année et aucune
+    n'était vérifiée — une inscription d'une autre école glissée dans le lot
+    recevait sa présence sans contrôle.
+    """
     if presences:
-        premiere_inscription = db.query(Inscription).filter(
-            Inscription.inscription_id == presences[0].inscription_id
-        ).first()
-        verifier_annee_modifiable(db, premiere_inscription.annee_id if premiere_inscription else None)
+        premiere_inscription = _inscription_ou_404(db, presences[0].inscription_id, etablissement_id)
+        verifier_annee_modifiable(db, premiere_inscription.annee_id)
 
     count = 0
     for p in presences:
+        _inscription_ou_404(db, p.inscription_id, etablissement_id)
         existing = db.query(Presence).filter(
             Presence.inscription_id == p.inscription_id,
             Presence.date_presence == p.date_presence,
@@ -94,8 +118,8 @@ def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depend
 @router.get("/presences/stats")
 def stats_presences(
     classe_id: Optional[int] = None,
-    etablissement_id: int = 1,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query = db.query(Presence).join(
         Inscription, Presence.inscription_id == Inscription.inscription_id
@@ -128,12 +152,12 @@ def stats_presences(
 # ============================================================================
 @router.get("/incidents", response_model=List[IncidentOut])
 def list_incidents(
-    etablissement_id: int = 1,
     gravite: Optional[str] = None,
     statut: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
 ):
     query = db.query(Incident).filter(
         Incident.etablissement_id == etablissement_id
@@ -146,8 +170,16 @@ def list_incidents(
 
 
 @router.post("/incidents", response_model=IncidentOut, status_code=201)
-def create_incident(data: IncidentCreate, db: Session = Depends(get_db)):
-    inc = Incident(**data.model_dump())
+def create_incident(data: IncidentCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    payload = data.model_dump()
+    # etablissement_id imposé par le compte authentifié, et l'élève concerné
+    # (si fourni) doit appartenir à cette école (Lot 9).
+    payload["etablissement_id"] = etablissement_id
+    if payload.get("eleve_id") and not db.query(Eleve.eleve_id).filter(
+        Eleve.eleve_id == payload["eleve_id"], Eleve.etablissement_id == etablissement_id
+    ).first():
+        raise HTTPException(status_code=404, detail="Élève non trouvé")
+    inc = Incident(**payload)
     db.add(inc)
     db.commit()
     db.refresh(inc)
@@ -155,8 +187,10 @@ def create_incident(data: IncidentCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/incidents/{incident_id}/traiter")
-def traiter_incident(incident_id: int, decision: str, traite_par: str, db: Session = Depends(get_db)):
-    inc = db.query(Incident).filter(Incident.incident_id == incident_id).first()
+def traiter_incident(incident_id: int, decision: str, traite_par: str, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    inc = db.query(Incident).filter(
+        Incident.incident_id == incident_id, Incident.etablissement_id == etablissement_id
+    ).first()
     if not inc:
         raise HTTPException(status_code=404, detail="Incident non trouvé")
     inc.statut = "TRAITE"
@@ -165,7 +199,7 @@ def traiter_incident(incident_id: int, decision: str, traite_par: str, db: Sessi
 
 
 @router.get("/incidents/stats")
-def stats_incidents(etablissement_id: int = 1, db: Session = Depends(get_db)):
+def stats_incidents(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     query = db.query(Incident).filter(
         Incident.etablissement_id == etablissement_id,
         Incident.date_incident >= func.current_date() - 90
