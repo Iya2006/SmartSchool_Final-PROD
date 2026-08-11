@@ -232,3 +232,94 @@ def get_my_profile(current_user: dict = Depends(get_current_user)):
         "type": current_user.get("type", "admin"),
         "etablissement_id": current_user.get("etablissement_id"),
     }
+
+
+# ════════════════════════════════════════════════════════════
+# ÉTABLISSEMENT ACTIF D'UN ADMINISTRATEUR PLATEFORME
+# ════════════════════════════════════════════════════════════
+
+class EtablissementActifRequest(BaseModel):
+    etablissement_id: int
+
+
+@router.get("/etablissements-disponibles")
+def lister_etablissements_disponibles(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Écoles dans lesquelles un administrateur plateforme peut entrer.
+
+    Réservée au SUPER_ADMIN : c'est le seul compte qui n'est rattaché à aucune
+    école et qui a vocation à en changer.
+    """
+    if current_user.get("role") != "SUPER_ADMIN":
+        raise HTTPException(403, "Réservé aux administrateurs de la plateforme")
+
+    from app.models.academique import Etablissement
+
+    etablissements = db.query(Etablissement).order_by(Etablissement.nom).all()
+    return {
+        "etablissement_actif": current_user.get("etablissement_id"),
+        "etablissements": [
+            {
+                "etablissement_id": e.etablissement_id,
+                "code": e.code,
+                "nom": e.nom,
+                "ville": e.ville,
+                "statut": e.statut,
+            }
+            for e in etablissements
+        ],
+    }
+
+
+@router.post("/etablissement-actif")
+def choisir_etablissement_actif(
+    data: EtablissementActifRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Délivre un nouveau jeton portant l'établissement choisi.
+
+    Un SUPER_ADMIN n'est rattaché à aucune école : `require_etablissement` le
+    refuse donc partout, volontairement — `None` ne doit jamais valoir « accès
+    à tout ». Sans cette route, la plateforme devenait inexploitable : son
+    administrateur pouvait créer une école mais pas y entrer, ni lui créer un
+    administrateur.
+
+    Le choix est ici **explicite, vérifié côté serveur et matérialisé par un
+    nouveau jeton** — jamais un `etablissement_id` glissé dans une requête
+    métier, qui est précisément le motif supprimé partout ailleurs. Le jeton
+    porte `agit_pour_etablissement` pour que ce contexte reste identifiable.
+    """
+    if current_user.get("role") != "SUPER_ADMIN":
+        raise HTTPException(403, "Réservé aux administrateurs de la plateforme")
+
+    from app.models.academique import Etablissement
+
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == data.etablissement_id
+    ).first()
+    if not etablissement:
+        raise HTTPException(404, "Établissement introuvable")
+
+    token_data = {
+        "sub": current_user.get("sub"),
+        "nom": current_user.get("nom"),
+        "prenom": current_user.get("prenom"),
+        "role": "SUPER_ADMIN",
+        "type": "admin",
+        "etablissement_id": etablissement.etablissement_id,
+        "roles_secondaires": current_user.get("roles_secondaires") or [],
+        # Trace explicite : ce compte n'appartient pas à cette école, il y agit.
+        "agit_pour_etablissement": True,
+    }
+    return {
+        "token": create_access_token(token_data),
+        "etablissement": {
+            "etablissement_id": etablissement.etablissement_id,
+            "code": etablissement.code,
+            "nom": etablissement.nom,
+        },
+        "message": f"Vous travaillez désormais dans : {etablissement.nom}",
+    }
