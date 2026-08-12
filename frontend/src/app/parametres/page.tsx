@@ -89,7 +89,8 @@ const SECTIONS = [
         icon: Bell, 
         color: 'from-teal-500 to-emerald-400', 
         bgIcon: 'bg-teal-100 text-teal-600',
-        href: '/parametres/notifications' 
+        href: '/parametres/notifications',
+        aVenir: true 
     },
     { 
         id: 'horaires', 
@@ -98,7 +99,8 @@ const SECTIONS = [
         icon: Clock, 
         color: 'from-cyan-500 to-blue-400', 
         bgIcon: 'bg-cyan-100 text-cyan-600',
-        href: '/parametres/horaires' 
+        href: '/parametres/horaires',
+        aVenir: true 
     },
     { 
         id: 'data', 
@@ -107,7 +109,8 @@ const SECTIONS = [
         icon: Database, 
         color: 'from-lime-500 to-green-400', 
         bgIcon: 'bg-lime-100 text-lime-600',
-        href: '/parametres/import-export' 
+        href: '/parametres/import-export',
+        aVenir: true 
     }
 ];
 
@@ -159,26 +162,59 @@ export default function ParametresDashboard() {
                 animate="show"
             >
                 {filteredSections.length > 0 ? (
-                    filteredSections.map((section) => (
-                        <motion.div key={section.id} variants={itemVariants}>
-                            <Link href={section.href} className={styles.card}>
-                                <div className={styles.cardInner}>
-                                    <div className={styles.iconWrapper}>
-                                        <div className={`${styles.iconBackground} ${section.bgIcon}`}>
-                                            <section.icon size={24} strokeWidth={2} />
-                                        </div>
+                    filteredSections.map((section) => {
+                        const contenu = (
+                            <div className={styles.cardInner}>
+                                <div className={styles.iconWrapper}>
+                                    <div className={`${styles.iconBackground} ${section.bgIcon}`}>
+                                        <section.icon size={24} strokeWidth={2} />
                                     </div>
-                                    <div className={styles.cardContent}>
-                                        <h3 className={styles.cardTitle}>{section.title}</h3>
-                                        <p className={styles.cardDesc}>{section.desc}</p>
-                                    </div>
+                                </div>
+                                <div className={styles.cardContent}>
+                                    <h3 className={styles.cardTitle}>
+                                        {section.title}
+                                        {section.aVenir && (
+                                            <span style={{
+                                                marginLeft: 8, padding: '2px 8px', borderRadius: 99,
+                                                background: '#f1f5f9', color: '#64748b',
+                                                fontSize: '10.5px', fontWeight: 800,
+                                                textTransform: 'uppercase', letterSpacing: '0.4px',
+                                                verticalAlign: 'middle',
+                                            }}>Bientôt</span>
+                                        )}
+                                    </h3>
+                                    <p className={styles.cardDesc}>{section.desc}</p>
+                                </div>
+                                {!section.aVenir && (
                                     <div className={styles.cardArrow}>
                                         <ChevronRight size={20} />
                                     </div>
-                                </div>
-                            </Link>
-                        </motion.div>
-                    ))
+                                )}
+                            </div>
+                        );
+                        return (
+                            <motion.div key={section.id} variants={itemVariants}>
+                                {/* Une tuile « Bientôt » ne mène nulle part : le lien
+                                    tombait sur un 404, ce qui donne l'impression que
+                                    l'application est cassée alors que la page n'a
+                                    simplement pas encore été construite. */}
+                                {section.aVenir ? (
+                                    <div
+                                        className={styles.card}
+                                        title="Cette section n'est pas encore disponible"
+                                        style={{ opacity: 0.6, cursor: 'not-allowed' }}
+                                        aria-disabled="true"
+                                    >
+                                        {contenu}
+                                    </div>
+                                ) : (
+                                    <Link href={section.href} className={styles.card}>
+                                        {contenu}
+                                    </Link>
+                                )}
+                            </motion.div>
+                        );
+                    })
                 ) : (
                     <div className={styles.emptyState}>
                         <p>Aucun paramètre trouvé pour "{searchQuery}"</p>
