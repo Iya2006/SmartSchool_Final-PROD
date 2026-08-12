@@ -85,7 +85,7 @@ const SECTIONS = [
     { 
         id: 'notifications', 
         title: "Communication", 
-        desc: "Configurations SMS, E-mails, SMTP et APIs.",
+        desc: "Envoi de SMS et d'e-mails vers l'extérieur. La messagerie interne, elle, fonctionne déjà depuis l'écran Communication.",
         icon: Bell, 
         color: 'from-teal-500 to-emerald-400', 
         bgIcon: 'bg-teal-100 text-teal-600',
@@ -99,8 +99,7 @@ const SECTIONS = [
         icon: Clock, 
         color: 'from-cyan-500 to-blue-400', 
         bgIcon: 'bg-cyan-100 text-cyan-600',
-        href: '/parametres/horaires',
-        aVenir: true 
+        href: '/parametres/horaires' 
     },
     { 
         id: 'data', 
@@ -109,8 +108,7 @@ const SECTIONS = [
         icon: Database, 
         color: 'from-lime-500 to-green-400', 
         bgIcon: 'bg-lime-100 text-lime-600',
-        href: '/parametres/import-export',
-        aVenir: true 
+        href: '/parametres/import-export' 
     }
 ];
 

@@ -35,6 +35,7 @@ from app.api.portail_eleve import router as eleve_portal_router
 from app.api.auth import router as auth_router
 from app.api.inscription_etablissement import router as inscription_etablissement_router
 from app.api.incidents import router as incidents_router
+from app.api.export_donnees import router as export_router
 from app.api.devoirs import router as devoirs_router
 from app.api.photos import router as photos_router
 from app.api.fournitures import router as fournitures_router
@@ -295,6 +296,9 @@ app.include_router(inscription_etablissement_router)
 # Incidents applicatifs : vue de l'editeur de la plateforme.
 # _require_super_admin est pose sur chaque route du module.
 app.include_router(incidents_router)
+# Export des donnees de l'ecole : _require_admin + require_etablissement
+# sont poses sur chaque route du module.
+app.include_router(export_router)
 app.include_router(parent_portal_router)  # Login parent → son propre JWT
 app.include_router(teacher_portal_router) # Login enseignant → son propre JWT
 app.include_router(sync_router)           # Sync offline-first — auth via _enseignant_auth par route (même pattern que teacher_portal_router)
