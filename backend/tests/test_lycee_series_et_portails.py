@@ -338,8 +338,17 @@ class TestPortailOwnershipSecurity:
             )
         assert response.status_code in [200, 404]
 
-    def test_admin_bypass_portail_parent(self, client: TestClient):
-        """OK: Admin peut acceder aux donnees de n importe quel parent."""
+    # NOTE — ces deux tests affirmaient "un admin accede aux donnees de
+    # N IMPORTE QUEL parent / eleve". C'etait vrai du temps du
+    # mono-etablissement ; c'est devenu une faille en multi-ecoles : un
+    # administrateur de l'ecole A lisait les notes et bulletins d'un eleve de
+    # l'ecole B en passant son identifiant. Le perimetre de l'admin s'arrete
+    # desormais a son ecole (voir tests/test_portails_isolation.py).
+
+    def test_admin_sans_etablissement_est_refuse_portail_parent(self, client: TestClient):
+        """Un compte admin sans etablissement determine (SUPER_ADMIN
+        plateforme) doit choisir une ecole avant d'entrer — 403, comme
+        partout ailleurs dans l'application."""
         with patch("app.core.auth.decode_token", return_value={
             "sub": "1", "role": "ADMIN", "type": "admin"
         }):
@@ -347,10 +356,21 @@ class TestPortailOwnershipSecurity:
                 "/api/portail-parent/999/dashboard",
                 headers={"Authorization": "Bearer fake_admin"},
             )
-        assert response.status_code not in [401, 403]
+        assert response.status_code == 403
 
-    def test_admin_bypass_portail_eleve(self, client: TestClient):
-        """OK: Admin peut acceder aux donnees de n importe quel eleve."""
+    def test_admin_ne_lit_pas_le_parent_d_une_autre_ecole(self, client: TestClient):
+        """Admin rattache a une ecole : un parent inconnu chez lui repond 404
+        (jamais 403 — on ne confirme pas son existence ailleurs)."""
+        with patch("app.core.auth.decode_token", return_value={
+            "sub": "1", "role": "ADMIN", "type": "admin", "etablissement_id": 1
+        }):
+            response = client.get(
+                "/api/portail-parent/999999/dashboard",
+                headers={"Authorization": "Bearer fake_admin"},
+            )
+        assert response.status_code == 404
+
+    def test_admin_sans_etablissement_est_refuse_portail_eleve(self, client: TestClient):
         with patch("app.core.auth.decode_token", return_value={
             "sub": "1", "role": "ADMIN", "type": "admin"
         }):
@@ -358,4 +378,14 @@ class TestPortailOwnershipSecurity:
                 "/api/portail-eleve/999/dashboard",
                 headers={"Authorization": "Bearer fake_admin"},
             )
-        assert response.status_code not in [401, 403]
+        assert response.status_code == 403
+
+    def test_admin_ne_lit_pas_l_eleve_d_une_autre_ecole(self, client: TestClient):
+        with patch("app.core.auth.decode_token", return_value={
+            "sub": "1", "role": "ADMIN", "type": "admin", "etablissement_id": 1
+        }):
+            response = client.get(
+                "/api/portail-eleve/999999/dashboard",
+                headers={"Authorization": "Bearer fake_admin"},
+            )
+        assert response.status_code == 404

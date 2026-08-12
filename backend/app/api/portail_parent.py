@@ -32,17 +32,45 @@ def _parse_ids(valeur: Optional[str]) -> Optional[list]:
 
 
 # ── Dépendance de sécurité : ownership check ──────────────────────────────
+# Rôles qui peuvent consulter le portail d'un autre — dans leur école.
+ADMIN_PORTAIL_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}
+
+
 async def _parent_auth(
     parent_id: int,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
-    """Vérifie que le token JWT appartient à ce parent (ou à un admin).
+    """Vérifie que le token JWT appartient à ce parent (ou à un admin DE SON ÉCOLE).
+
     Protège contre l'OWASP Broken Access Control sur le portail parent.
+
+    Le raccourci « les admins voient tout » datait du mono-établissement : un
+    administrateur de l'école A pouvait lire les notes et bulletins des enfants
+    de n'importe quel parent de la plateforme. Un parent relève d'une école
+    par ses enfants (jamais par `.first()`) : l'admin ne peut le consulter que
+    si l'un d'eux est scolarisé chez lui.
     """
     role = current_user.get("role", "")
     token_type = current_user.get("type", "")
-    # Admins peuvent accéder à toutes les données
-    if role in {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}:
+    if role in ADMIN_PORTAIL_ROLES:
+        etablissement_id = current_user.get("etablissement_id")
+        if etablissement_id is None:
+            raise HTTPException(
+                403, "Établissement non déterminé pour ce compte : choisissez un établissement."
+            )
+        lien = (
+            db.query(EleveParent.eleve_id)
+            .join(Eleve, Eleve.eleve_id == EleveParent.eleve_id)
+            .filter(
+                EleveParent.parent_id == parent_id,
+                Eleve.etablissement_id == etablissement_id,
+            )
+            .first()
+        )
+        if not lien:
+            # 404 : ne jamais confirmer qu'un parent existe dans une autre école.
+            raise HTTPException(404, "Parent non trouvé")
         return current_user
     # Portail parent : le token doit correspondre au parent_id demandé
     if token_type == "parent" and str(current_user.get("sub", "")) == str(parent_id):
@@ -569,7 +597,11 @@ def get_classement_enfant(
     ids = _parse_ids(evaluation_ids)
 
     classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
-    flags = get_bulletin_display_flags(db, classe.etablissement_id if classe else 1)
+    if not classe:
+        # Jamais de repli sur l'école 1 : cela appliquerait les réglages
+        # d'affichage d'une autre école au classement.
+        raise HTTPException(404, "Classe introuvable pour cette inscription")
+    flags = get_bulletin_display_flags(db, classe.etablissement_id)
 
     resultat = resultat_eleve_sur_epreuves(
         db, inscription.classe_id, trimestre_id, inscription.inscription_id,

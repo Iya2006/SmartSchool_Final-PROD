@@ -28,18 +28,41 @@ router = APIRouter(prefix="/api/portail-eleve", tags=["Portail Élève"])
 DEFAULT_PASSWORD = os.getenv("ELEVE_DEFAULT_PASSWORD", "smartschool")
 
 
+# Rôles qui peuvent consulter le portail d'un autre — dans leur école.
+ADMIN_PORTAIL_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}
+
+
 # ── Dépendance de sécurité : ownership check ─────────────────────────
 async def _eleve_auth(
     eleve_id: int,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
-    """Vérifie que le token JWT appartient à cet élève (ou à un admin).
+    """Vérifie que le token JWT appartient à cet élève (ou à un admin DE SON ÉCOLE).
+
     Protège contre l'OWASP Broken Access Control sur le portail élève.
+
+    Le raccourci « les admins voient tout » datait du mono-établissement : un
+    administrateur de l'école A pouvait lire les notes, le bulletin et le
+    classement de n'importe quel élève de la plateforme en passant son
+    identifiant. Son périmètre s'arrête désormais à son école.
     """
     role = current_user.get("role", "")
     token_type = current_user.get("type", "")
-    # Admins peuvent accéder à toutes les données
-    if role in {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}:
+    if role in ADMIN_PORTAIL_ROLES:
+        etablissement_id = current_user.get("etablissement_id")
+        if etablissement_id is None:
+            # SUPER_ADMIN plateforme : il doit d'abord entrer dans une école
+            # (POST /api/auth/etablissement-actif), comme partout ailleurs.
+            raise HTTPException(
+                403, "Établissement non déterminé pour ce compte : choisissez un établissement."
+            )
+        existe = db.query(Eleve.eleve_id).filter(
+            Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+        ).first()
+        if not existe:
+            # 404 et non 403 : ne jamais confirmer qu'un élève existe ailleurs.
+            raise HTTPException(404, "Élève non trouvé")
         return current_user
     # Portail élève : le token doit correspondre à l'eleve_id demandé
     if token_type == "eleve" and str(current_user.get("sub", "")) == str(eleve_id):
@@ -449,7 +472,11 @@ def get_classement_eleve(
             raise HTTPException(400, "Liste d'identifiants invalide")
 
     classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
-    flags = get_bulletin_display_flags(db, classe.etablissement_id if classe else 1)
+    if not classe:
+        # Jamais de repli sur l'école 1 : cela appliquerait les réglages
+        # d'affichage d'une autre école au classement.
+        raise HTTPException(404, "Classe introuvable pour cette inscription")
+    flags = get_bulletin_display_flags(db, classe.etablissement_id)
 
     return resultat_eleve_sur_epreuves(
         db, inscription.classe_id, trimestre_id, inscription.inscription_id,

@@ -30,17 +30,39 @@ router = APIRouter(prefix="/api/portail-enseignant", tags=["Portail Enseignant"]
 
 
 # ── Dépendance de sécurité : ownership check ───────────────────────────────────────
+# Rôles qui peuvent consulter le portail d'un autre — dans leur école.
+ADMIN_PORTAIL_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}
+
+
 async def _enseignant_auth(
     enseignant_id: int,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
-    """Vérifie que le token JWT appartient à cet enseignant (ou à un admin).
+    """Vérifie que le token JWT appartient à cet enseignant (ou à un admin DE SON ÉCOLE).
+
     Protège contre l'OWASP Broken Access Control sur le portail enseignant.
+
+    Le raccourci « les admins voient tout » datait du mono-établissement : un
+    administrateur de l'école A pouvait consulter les classes, les épreuves et
+    les notes de n'importe quel enseignant de la plateforme — et en saisir en
+    son nom. Son périmètre s'arrête désormais à son école.
     """
     role = current_user.get("role", "")
     token_type = current_user.get("type", "")
-    # Admins peuvent accéder à toutes les données
-    if role in {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}:
+    if role in ADMIN_PORTAIL_ROLES:
+        etablissement_id = current_user.get("etablissement_id")
+        if etablissement_id is None:
+            raise HTTPException(
+                403, "Établissement non déterminé pour ce compte : choisissez un établissement."
+            )
+        existe = db.query(Enseignant.enseignant_id).filter(
+            Enseignant.enseignant_id == enseignant_id,
+            Enseignant.etablissement_id == etablissement_id,
+        ).first()
+        if not existe:
+            # 404 : ne jamais confirmer qu'un enseignant existe ailleurs.
+            raise HTTPException(404, "Enseignant non trouvé")
         return current_user
     # Portail enseignant : le token doit correspondre à l'enseignant_id demandé
     if token_type == "enseignant" and str(current_user.get("sub", "")) == str(enseignant_id):
@@ -87,9 +109,19 @@ def changer_mot_de_passe(enseignant_id: int, data: ChangePasswordRequest, _auth:
 # RÉFÉRENTIELS (Trimestres + Types d'évaluation)
 # ================================================================
 @router.get("/referentiels/trimestres")
-def get_trimestres(db: Session = Depends(get_db)):
-    """Liste des trimestres de l'année courante."""
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.est_courante == "O").first()
+def get_trimestres(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Périodes de l'année courante DE SON ÉCOLE.
+
+    Sans le filtre, `est_courante == "O"` renvoyait l'année de la première
+    école venue : l'enseignant se voyait proposer le calendrier du voisin.
+    """
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == etablissement_id,
+        AnneeScolaire.est_courante == "O",
+    ).first()
     if not annee:
         return []
     trimestres = db.query(Trimestre).filter(
