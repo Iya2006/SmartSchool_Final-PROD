@@ -4,6 +4,7 @@ Assemble tous les routers de chaque module.
 """
 import os
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -33,6 +34,7 @@ from app.api.sync import router as sync_router
 from app.api.portail_eleve import router as eleve_portal_router
 from app.api.auth import router as auth_router
 from app.api.inscription_etablissement import router as inscription_etablissement_router
+from app.api.incidents import router as incidents_router
 from app.api.devoirs import router as devoirs_router
 from app.api.photos import router as photos_router
 from app.api.fournitures import router as fournitures_router
@@ -172,6 +174,64 @@ _MOD_PARAMETRES = require_module("parametres")
 _MOD_SECURITE = require_module("securite")
 
 # ── Routes PROTÉGÉES par JWT (admin uniquement) ──
+# ════════════════════════════════════════════════════════════════════════
+# FILET À ERREURS — pour que l'éditeur sache avant les écoles
+# ════════════════════════════════════════════════════════════════════════
+# Sans lui, une erreur non gérée renvoyait une page cassée à l'école et ne
+# laissait aucune trace : l'éditeur ne l'apprenait qu'en étant appelé.
+#
+# Ce gestionnaire n'intercepte QUE les erreurs non gérées. Les `HTTPException`
+# (404, 403, 409…) sont des réponses voulues, pas des incidents — les
+# enregistrer noierait les vrais bugs.
+
+@app.exception_handler(Exception)
+async def enregistrer_incident(request: Request, exc: Exception):
+    import traceback as _traceback
+
+    from app.api.incidents import enregistrer as _enregistrer
+    from app.core.auth import decode_token as _decode_token
+    from app.core.database import SessionLocal as _SessionLocal
+
+    # L'identité vient du jeton, jamais d'un en-tête libre. Elle est
+    # facultative : une erreur peut survenir avant toute connexion (page de
+    # login, inscription publique).
+    etablissement_id, role = None, None
+    entete = request.headers.get("authorization") or ""
+    if entete.lower().startswith("bearer "):
+        try:
+            charge = _decode_token(entete.split(" ", 1)[1]) or {}
+            etablissement_id = charge.get("etablissement_id")
+            role = charge.get("role") or charge.get("type")
+        except Exception:
+            pass
+
+    # Session dédiée : celle de la requête est très probablement dans un état
+    # invalide, c'est elle qui vient d'échouer.
+    db = _SessionLocal()
+    try:
+        _enregistrer(
+            db,
+            route=str(request.url.path),
+            methode=request.method,
+            type_erreur=type(exc).__name__,
+            message=str(exc),
+            etablissement_id=etablissement_id,
+            role=role,
+            trace="".join(_traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        )
+    finally:
+        db.close()
+
+    # L'utilisateur reçoit une phrase, pas une trace technique : elle ne
+    # l'aiderait pas et exposerait la structure interne.
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Une erreur est survenue. L'équipe SmartSchool en a été "
+                      "informée automatiquement. Réessayez dans un instant."
+        },
+    )
+
 app.include_router(dashboard_router, dependencies=[Depends(get_current_user)])
 app.include_router(eleves_router, dependencies=[Depends(get_current_user), Depends(_MOD_ELEVES)])
 app.include_router(enseignants_router, dependencies=[Depends(get_current_user), Depends(_MOD_ENSEIGNANTS)])
@@ -232,6 +292,9 @@ app.include_router(auth_router)           # Login admin → retourne le JWT
 # Pas de dependance globale : la route d'inscription est volontairement
 # ouverte, les routes de validation portent _require_super_admin chacune.
 app.include_router(inscription_etablissement_router)
+# Incidents applicatifs : vue de l'editeur de la plateforme.
+# _require_super_admin est pose sur chaque route du module.
+app.include_router(incidents_router)
 app.include_router(parent_portal_router)  # Login parent → son propre JWT
 app.include_router(teacher_portal_router) # Login enseignant → son propre JWT
 app.include_router(sync_router)           # Sync offline-first — auth via _enseignant_auth par route (même pattern que teacher_portal_router)

@@ -6,8 +6,7 @@ import api from '@/lib/api';
 import { 
     Building, Save, Upload, MapPin, Phone, Mail, User, 
     Hash, Globe, Image as ImageIcon, Loader2, CheckCircle,
-    Camera
-} from 'lucide-react';
+    Camera, Copy, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import SettingsLayout from '@/components/SettingsLayout';
 import styles from './Identite.module.css';
@@ -20,6 +19,7 @@ export default function IdentiteEtablissementPage() {
     const [etablissement, setEtablissement] = useState<any>(null);
     const [hasChanges, setHasChanges] = useState(false);
 
+    const [codeCopie, setCodeCopie] = useState(false);
     const [formData, setFormData] = useState({
         nom: '', code: '', type_etablissement: '', 
         adresse: '', ville: '', region: '', prefecture: '',
@@ -185,11 +185,60 @@ export default function IdentiteEtablissementPage() {
                                 <input type="text" name="nom" value={formData.nom} onChange={handleChange} placeholder="Ex: Lycée d'Excellence" />
                             </div>
                         </div>
-                        <div className={styles.formGroup}>
-                            <label>Code / Numéro d'Agrément</label>
-                            <div className={styles.inputWrapper}>
-                                <Hash className={styles.inputIcon} size={18} />
-                                <input type="text" name="code" value={formData.code} onChange={handleChange} placeholder="Ex: ETAB-2026-001" />
+                        {/* CODE DE CONNEXION — ce champ s'appelait « Numéro
+                            d'Agrément », ce qui était trompeur : c'est le code
+                            que vos enseignants et parents saisissent pour se
+                            connecter quand ils exercent — ou ont des enfants —
+                            dans plusieurs écoles. Il mérite d'être expliqué, pas
+                            noyé entre deux champs d'adresse. */}
+                        <div className={styles.formGroup} style={{ gridColumn: '1 / -1' }}>
+                            <label>Code de connexion de l&apos;établissement</label>
+                            <div style={{
+                                padding: '14px 16px', borderRadius: '12px',
+                                background: 'linear-gradient(135deg,#eff6ff,#f8fafc)',
+                                border: '1px solid #bfdbfe', display: 'flex',
+                                flexDirection: 'column', gap: '10px',
+                            }}>
+                                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <div className={styles.inputWrapper} style={{ flex: 1, minWidth: '180px' }}>
+                                        <Hash className={styles.inputIcon} size={18} />
+                                        <input
+                                            type="text" name="code" value={formData.code}
+                                            onChange={handleChange} placeholder="Ex: RENAISSANCE"
+                                            style={{ textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.04em' }}
+                                        />
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (!formData.code) return;
+                                            navigator.clipboard?.writeText(formData.code);
+                                            setCodeCopie(true);
+                                            setTimeout(() => setCodeCopie(false), 2000);
+                                        }}
+                                        disabled={!formData.code}
+                                        style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: '6px',
+                                            padding: '10px 14px', borderRadius: '10px',
+                                            border: '1px solid #bfdbfe', background: '#fff',
+                                            color: '#1d4ed8', fontSize: '13px', fontWeight: 700,
+                                            cursor: formData.code ? 'pointer' : 'not-allowed',
+                                            flexShrink: 0,
+                                        }}
+                                    >
+                                        {codeCopie ? <><Check size={15} /> Copié</> : <><Copy size={15} /> Copier</>}
+                                    </button>
+                                </div>
+                                <p style={{ margin: 0, fontSize: '12.5px', color: '#475569', lineHeight: 1.6 }}>
+                                    Communiquez ce code à vos <strong>enseignants</strong> et à vos
+                                    <strong> parents d&apos;élèves</strong>. Ceux qui exercent — ou ont des
+                                    enfants — dans plusieurs établissements le saisissent au moment de
+                                    se connecter, pour entrer dans le vôtre.
+                                </p>
+                                <p style={{ margin: 0, fontSize: '12px', color: '#b45309', lineHeight: 1.55 }}>
+                                    Si vous le modifiez, l&apos;ancien code cesse aussitôt de fonctionner :
+                                    prévenez-les avant.
+                                </p>
                             </div>
                         </div>
                         <div className={styles.formGroup}>

@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import { ArrowLeft, Phone, Mail, MapPin, Calendar, Activity, BookOpen, Clock, Award, Loader2, MessageSquare, Edit, Droplet, Users, CheckCircle, UserCheck, Scan, X } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
+import ParentsEleve from '@/components/ParentsEleve';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import BadgeCarte from '@/components/BadgeCarte';
 import { QRCodeSVG } from 'qrcode.react';
@@ -381,6 +382,11 @@ export default function ProfilEleve() {
                             </table>
                         </div>
                     </motion.div>
+
+                    {/* Parents : le lien ne se creait qu'a l'inscription et pour
+                        un seul contact. On peut desormais ajouter la mere apres
+                        le pere, ou rattacher un parent a un eleve inscrit sans. */}
+                    {eleve?.eleve_id && <ParentsEleve eleveId={eleve.eleve_id} />}
 
                 </div>
 

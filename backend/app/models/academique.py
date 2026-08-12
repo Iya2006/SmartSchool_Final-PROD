@@ -1475,3 +1475,38 @@ class PointageEleve(Base):
     statut           = Column(String(20), default="PRESENT")  # PRESENT, PARTI
     observations     = Column(String(255), nullable=True)
     created_at       = Column(DateTime, server_default=func.now())
+
+
+class IncidentApplicatif(Base):
+    """Erreur non gérée survenue dans l'application.
+
+    `/api/monitoring` surveille la machine ; cette table surveille le LOGICIEL.
+    Sans elle, une école tombant sur une erreur en imprimant un bulletin le
+    découvre seule, et l'éditeur ne l'apprend qu'en étant appelé.
+
+    On n'y met QUE ce qui sert à corriger : la route, le type d'erreur, son
+    message, l'école et le rôle. Jamais le corps de la requête ni le contenu
+    métier — un journal d'incidents ne doit pas devenir une porte dérobée vers
+    les données des écoles.
+
+    `etablissement_id` est nullable : une erreur peut survenir avant toute
+    authentification (page de login, inscription publique).
+    """
+    __tablename__ = "ss_incidents_applicatifs"
+    __table_args__ = (
+        # La liste est toujours lue par date décroissante, filtrée sur le
+        # non-résolu, et regroupée par (route, type).
+        Index("ix_incidents_date", "date_incident"),
+        Index("ix_incidents_resolu_date", "resolu", "date_incident"),
+        Index("ix_incidents_groupe", "route", "type_erreur"),
+    )
+    incident_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    route = Column(String(300), nullable=False)
+    methode = Column(String(10))
+    type_erreur = Column(String(120), nullable=False)
+    message = Column(String(800))
+    trace = Column(Text, nullable=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
+    role = Column(String(40), nullable=True)
+    date_incident = Column(DateTime, server_default=func.now(), nullable=False)
+    resolu = Column(String(1), default="N", nullable=False)
