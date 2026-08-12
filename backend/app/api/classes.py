@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import Classe, Inscription, Eleve, Niveau, Enseignant, ClasseMatiere, Matiere, Cycle
 from app.schemas.schemas import ClasseCreate, ClasseOut, InscriptionCreate, InscriptionOut
+from app.core.annee_courante import resoudre_annee
 
 router = APIRouter(prefix="/api/classes", tags=["Classes"])
 
@@ -164,13 +165,17 @@ def update_lycee_series_coefficients(
 
 @router.get("", response_model=List[ClasseOut])
 def list_classes(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     statut: Optional[str] = "ACTIVE",
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE. La valeur par defaut
+    # etait 1 : l'annee de la premiere ecole inscrite, donc zero classe pour
+    # toutes les autres.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = db.query(Classe).filter(
         Classe.etablissement_id == etablissement_id,
         Classe.annee_id == annee_id

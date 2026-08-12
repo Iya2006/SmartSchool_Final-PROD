@@ -17,6 +17,7 @@ from app.models.academique import (
 )
 from app.schemas.schemas import EleveCreate, EleveUpdate, EleveOut, EleveListOut
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
+from app.core.annee_courante import resoudre_annee
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
 
 @router.get("", response_model=List[EleveListOut])
 def list_eleves(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     statut: Optional[str] = None,
     search: Optional[str] = None,
     classe_code: Optional[str] = None,
@@ -34,6 +35,9 @@ def list_eleves(
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Liste des élèves avec classe et niveau"""
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — jamais l'annee n°1,
+    # qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = db.query(
         Eleve.eleve_id,
         Eleve.matricule,
@@ -88,7 +92,7 @@ class EleveDeltaOut(BaseModel):
 @router.get("/delta", response_model=EleveDeltaOut)
 def delta_eleves(
     since: Optional[datetime] = None,
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -109,6 +113,7 @@ def delta_eleves(
     élève lui-même (Eleve.modified_date), PAS un changement de classe seul
     — Inscription n'a pas encore de suivi de modification dans ce pilote.
     """
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     sync_at = db.query(func.now()).scalar()
 
     query = db.query(
@@ -255,10 +260,19 @@ def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db)
         setattr(eleve, key, value)
 
     if classe_id is not None:
+        # Ces deux `annee_id = 1` inscrivaient l'eleve sur l'annee scolaire de
+        # la premiere ecole inscrite. Pour toute autre ecole, l'inscription
+        # creee n'apparaissait dans aucun de ses ecrans.
+        annee_courante = resoudre_annee(db, etablissement_id, None)
+        if annee_courante is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Aucune annee scolaire n'est ouverte : impossible d'inscrire dans une classe.",
+            )
         current_insc = db.query(Inscription).filter(
             Inscription.eleve_id == eleve_id,
             Inscription.statut == "ACTIVE",
-            Inscription.annee_id == 1
+            Inscription.annee_id == annee_courante
         ).first()
 
         if current_insc and current_insc.classe_id != classe_id:
@@ -272,7 +286,7 @@ def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db)
             new_insc = Inscription(
                 eleve_id=eleve_id,
                 classe_id=classe_id,
-                annee_id=1,
+                annee_id=annee_courante,
                 statut="ACTIVE"
             )
             db.add(new_insc)
@@ -331,7 +345,9 @@ class InscriptionCompleteData(BaseModel):
     telephone: Optional[str] = None
     email: Optional[str] = None
     statut: str = "ACTIF"
-    annee_id: int = 1
+    # `None` = l'annee en cours de l'ecole appelante, resolue cote serveur.
+    # Un client qui envoie 1 inscrirait l'eleve sur l'annee d'une autre ecole.
+    annee_id: Optional[int] = None
     classe_id: Optional[int] = None
     eleve_mot_de_passe: Optional[str] = None  # MDP portail élève (optionnel, défaut: smartschool)
     # Parent
@@ -347,8 +363,18 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
     `data.etablissement_id` est ignoré et remplacé par l'établissement
     authentifié ; la classe cible est vérifiée appartenir à cet
     établissement (sinon un élève pouvait être inscrit dans la classe d'une
-    autre école, en incrémentant son effectif au passage)."""
-    _verifier_annee_modifiable(db, data.annee_id)
+    autre école, en incrémentant son effectif au passage).
+
+    `data.annee_id` absent = l'annee EN COURS DE CETTE ECOLE. Le client ne
+    choisit pas l'annee d'inscription : elle se resout ici, sinon un formulaire
+    qui envoie 1 par defaut inscrit l'eleve chez quelqu'un d'autre."""
+    annee_id = resoudre_annee(db, etablissement_id, data.annee_id)
+    if annee_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucune annee scolaire n'est ouverte pour cet etablissement.",
+        )
+    _verifier_annee_modifiable(db, annee_id)
 
     if data.classe_id:
         classe_valide = db.query(Classe.classe_id).filter(
@@ -397,7 +423,7 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
             inscription = Inscription(
                 eleve_id=eleve.eleve_id,
                 classe_id=data.classe_id,
-                annee_id=data.annee_id,
+                annee_id=annee_id,
                 statut="ACTIVE",
             )
             db.add(inscription)
@@ -500,9 +526,20 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
         factures_generees = 0
         if inscription and data.frais_scolaires:
             f_count = db.query(func.count(Facture.facture_id)).scalar() or 0
+            # Le type de frais appartient a une ecole depuis la migration
+            # 2026_08_compta_01. Sans ce controle, un client pouvait envoyer
+            # l'identifiant du type de frais d'un autre etablissement : la
+            # facture emise portait alors le libelle d'une ecole etrangere.
+            types_de_l_ecole = {
+                t[0] for t in db.query(TypeFrais.type_frais_id).filter(
+                    TypeFrais.etablissement_id == etablissement_id
+                ).all()
+            }
             for frais in data.frais_scolaires:
                 if frais.montant <= 0:
                     continue
+                if frais.type_frais_id not in types_de_l_ecole:
+                    raise HTTPException(404, "Type de frais non trouvé")
                 tarif = db.query(TarifClasse).filter(
                     TarifClasse.classe_id == data.classe_id, TarifClasse.type_frais_id == frais.type_frais_id
                 ).first()
@@ -706,11 +743,13 @@ def get_dossier_annee(eleve_id: int, inscription_id: int, db: Session = Depends(
 @router.get("/{eleve_id}/certificat-scolarite/pdf")
 def generer_certificat_scolarite_pdf(
     eleve_id: int,
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Génère un certificat de scolarité officiel au format PDF."""
+    # Un certificat emis sur l'annee d'une autre ecole est un faux document.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
     from reportlab.lib.units import cm

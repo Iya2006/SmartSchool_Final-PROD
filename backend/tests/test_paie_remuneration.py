@@ -14,8 +14,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models.academique import (
-    Affectation, AnneeScolaire, Classe, Cycle, Depense, Enseignant,
-    Etablissement, Matiere, Niveau, Utilisateur,
+    Affectation, AnneeScolaire, Classe, Cycle, Depense, Eleve, Enseignant,
+    Etablissement, Facture, Inscription, Matiere, Niveau, TypeFrais, Utilisateur,
 )
 from app.services import paie
 
@@ -62,6 +62,10 @@ def ecole(db: Session):
 
     db.rollback()
     for modele, colonne, valeur in (
+        (Facture, Facture.annee_id, annee.annee_id),
+        (Inscription, Inscription.annee_id, annee.annee_id),
+        (Eleve, Eleve.etablissement_id, etab.etablissement_id),
+        (TypeFrais, TypeFrais.etablissement_id, etab.etablissement_id),
         (Affectation, Affectation.annee_id, annee.annee_id),
         (Depense, Depense.etablissement_id, etab.etablissement_id),
         (Enseignant, Enseignant.etablissement_id, etab.etablissement_id),
@@ -377,3 +381,186 @@ class TestPersonneNeDisparaitDeLaPaie:
         ).all()
         assert depenses
         assert all(d.annee_id == ecole["annee"].annee_id for d in depenses)
+
+
+class TestHeuresAffectation:
+    """Les heures d'une affectation SONT le salaire d'un vacataire.
+
+    Elles n'étaient modifiables par aucune route : la seule façon de corriger
+    une erreur de saisie était de supprimer l'affectation et de la recréer, ce
+    qui faisait perdre au passage le tarif spécifique posé dessus.
+    """
+
+    def test_corriger_les_heures_change_le_salaire(self, db: Session, ecole):
+        from app.api.enseignants import modifier_affectation
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        aff = _affecter(db, ecole, ens, ecole["m1"], 4)
+        avant = paie.salaire_enseignant(db, ens.enseignant_id, ecole["annee"].annee_id)
+        assert avant["base"] == 160_000  # 4 × 10 000 × 4 semaines
+
+        modifier_affectation(
+            affectation_id=aff.affectation_id, data={"nb_heures_semaine": 6},
+            db=db, etablissement_id=ecole["etab"].etablissement_id,
+        )
+        apres = paie.salaire_enseignant(db, ens.enseignant_id, ecole["annee"].annee_id)
+        assert apres["base"] == 240_000
+
+    def test_le_tarif_specifique_survit_a_la_correction_des_heures(
+        self, db: Session, ecole
+    ):
+        """C'est tout l'intérêt d'avoir une route de modification : passer par
+        supprimer-puis-recréer effaçait l'exception de tarif."""
+        from app.api.enseignants import modifier_affectation
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        aff = _affecter(db, ecole, ens, ecole["m1"], 4, taux=30_000)
+
+        modifier_affectation(
+            affectation_id=aff.affectation_id, data={"nb_heures_semaine": 5},
+            db=db, etablissement_id=ecole["etab"].etablissement_id,
+        )
+        db.refresh(aff)
+        assert aff.taux_horaire == 30_000
+        r = paie.salaire_enseignant(db, ens.enseignant_id, ecole["annee"].annee_id)
+        assert r["base"] == 600_000  # 5 × 30 000 × 4
+
+    def test_une_saisie_aberrante_est_refusee(self, db: Session, ecole):
+        """Une faute de frappe sur les heures gonfle directement la paie."""
+        from fastapi import HTTPException
+
+        from app.api.enseignants import modifier_affectation
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        aff = _affecter(db, ecole, ens, ecole["m1"], 4)
+
+        for valeur in (-1, 500):
+            with pytest.raises(HTTPException) as e:
+                modifier_affectation(
+                    affectation_id=aff.affectation_id,
+                    data={"nb_heures_semaine": valeur},
+                    db=db, etablissement_id=ecole["etab"].etablissement_id,
+                )
+            assert e.value.status_code == 400
+
+    def test_l_affectation_d_une_autre_ecole_est_introuvable(self, db: Session, ecole):
+        """404, jamais 403 : confirmer l'existence renseignerait déjà."""
+        from fastapi import HTTPException
+
+        from app.api.enseignants import modifier_affectation
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        aff = _affecter(db, ecole, ens, ecole["m1"], 4)
+
+        with pytest.raises(HTTPException) as e:
+            modifier_affectation(
+                affectation_id=aff.affectation_id, data={"nb_heures_semaine": 6},
+                db=db, etablissement_id=ecole["etab"].etablissement_id + 99_999,
+            )
+        assert e.value.status_code == 404
+
+
+class TestFacturesRattacheesARien:
+    """Une facture sans type de frais n'apparaît sous aucun intitulé.
+
+    Le total « recettes par type de frais » l'ignore purement et simplement,
+    alors que l'argent a bien été encaissé. La base en comptait 45.
+    """
+
+    def _facture_orpheline(self, db: Session, ecole, montant=1_500_000):
+        from app.models.academique import Eleve, Facture, Inscription
+
+        uid = _uid()
+        eleve = Eleve(
+            etablissement_id=ecole["etab"].etablissement_id, matricule=f"FORPH-{uid}",
+            nom="Diallo", prenom=f"Eleve{uid}", sexe="F", statut="ACTIF",
+            date_naissance=date(2012, 3, 15),
+        )
+        db.add(eleve); db.commit(); db.refresh(eleve)
+        insc = Inscription(
+            eleve_id=eleve.eleve_id, classe_id=ecole["classe"].classe_id,
+            annee_id=ecole["annee"].annee_id, statut="ACTIVE",
+        )
+        db.add(insc); db.commit(); db.refresh(insc)
+        f = Facture(
+            inscription_id=insc.inscription_id, annee_id=ecole["annee"].annee_id,
+            type_frais_id=None, numero_facture=f"FORPH-{uid}",
+            montant_total=montant, montant_net=montant, montant_paye=0,
+            montant_restant=montant, statut="EN_ATTENTE",
+        )
+        db.add(f); db.commit(); db.refresh(f)
+        return f
+
+    def _type_frais(self, db: Session, ecole, libelle="Scolarité"):
+        from app.models.academique import TypeFrais
+
+        uid = _uid()
+        t = TypeFrais(
+            etablissement_id=ecole["etab"].etablissement_id, code=f"TF{uid}",
+            libelle=libelle, categorie="Scolarité", frequence="ANNUEL",
+            montant_defaut=0, est_obligatoire="O",
+        )
+        db.add(t); db.commit(); db.refresh(t)
+        return t
+
+    def test_les_orphelines_sont_listees_avec_leur_montant(self, db: Session, ecole):
+        from app.api.finance import factures_sans_type
+
+        f = self._facture_orpheline(db, ecole)
+        res = factures_sans_type(db=db, etablissement_id=ecole["etab"].etablissement_id)
+        assert res["total"] == 1
+        assert res["montant_total"] == 1_500_000
+        assert res["factures"][0]["facture_id"] == f.facture_id
+
+    def test_rattacher_range_enfin_la_recette_sous_un_intitule(self, db: Session, ecole):
+        from app.api.finance import RattachementFactures, rattacher_factures_a_un_type
+
+        f = self._facture_orpheline(db, ecole)
+        t = self._type_frais(db, ecole)
+
+        res = rattacher_factures_a_un_type(
+            data=RattachementFactures(facture_ids=[f.facture_id], type_frais_id=t.type_frais_id),
+            db=db, etablissement_id=ecole["etab"].etablissement_id,
+        )
+        assert res["rattachees"] == 1
+        db.refresh(f)
+        assert f.type_frais_id == t.type_frais_id
+
+    def test_une_facture_deja_rattachee_nest_jamais_deplacee(self, db: Session, ecole):
+        """Réaffecter déplacerait une recette déjà comptabilisée d'un intitulé
+        à un autre, sans laisser de trace. Ce n'est pas une correction."""
+        from app.api.finance import RattachementFactures, rattacher_factures_a_un_type
+
+        f = self._facture_orpheline(db, ecole)
+        premier = self._type_frais(db, ecole, "Scolarité")
+        second = self._type_frais(db, ecole, "Cantine")
+
+        rattacher_factures_a_un_type(
+            data=RattachementFactures(facture_ids=[f.facture_id], type_frais_id=premier.type_frais_id),
+            db=db, etablissement_id=ecole["etab"].etablissement_id,
+        )
+        res = rattacher_factures_a_un_type(
+            data=RattachementFactures(facture_ids=[f.facture_id], type_frais_id=second.type_frais_id),
+            db=db, etablissement_id=ecole["etab"].etablissement_id,
+        )
+        assert res["rattachees"] == 0
+        assert res["ignorees"] == 1
+        db.refresh(f)
+        assert f.type_frais_id == premier.type_frais_id
+
+    def test_le_type_de_frais_dune_autre_ecole_est_introuvable(self, db: Session, ecole):
+        """Le type de frais appartient à une école : facturer avec celui d'une
+        autre ferait porter à la facture le libellé d'un établissement tiers."""
+        from fastapi import HTTPException
+
+        from app.api.finance import RattachementFactures, rattacher_factures_a_un_type
+
+        f = self._facture_orpheline(db, ecole)
+        t = self._type_frais(db, ecole)
+
+        with pytest.raises(HTTPException) as e:
+            rattacher_factures_a_un_type(
+                data=RattachementFactures(facture_ids=[f.facture_id], type_frais_id=t.type_frais_id),
+                db=db, etablissement_id=ecole["etab"].etablissement_id + 99_999,
+            )
+        assert e.value.status_code == 404

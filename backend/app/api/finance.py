@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, Fil
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Dict, List, Optional
+
+from pydantic import BaseModel
 from datetime import date as date_type
 from app.core.annee_courante import resoudre_annee
 from app.core.database import get_db
@@ -307,6 +309,108 @@ def delete_type_frais(
 # deux écrans lisent/écrivent la même table ss_tarifs_classe, donc restent
 # automatiquement synchronisés sans logique de synchro dédiée.
 # ============================================================================
+
+# ════════════════════════════════════════════════════════════════════════
+# FACTURES RATTACHÉES À RIEN
+# ════════════════════════════════════════════════════════════════════════
+# Une facture sans type de frais n'apparaît sous aucun intitulé dans les
+# rapports : le total « recettes par type de frais » l'ignore purement et
+# simplement, alors que l'argent, lui, a bien été encaissé. La base en compte
+# 45, toutes antérieures aux contrôles posés depuis.
+#
+# On ne devine pas ce qu'elles facturent — c'est de l'argent. On les montre à
+# l'école, et on lui donne le moyen de le dire.
+
+
+@router.get("/factures/sans-type")
+def factures_sans_type(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Factures de cette école qui ne sont rattachées à aucun type de frais."""
+    lignes = (
+        db.query(Facture, Eleve, Classe)
+        .join(Inscription, Inscription.inscription_id == Facture.inscription_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .join(Eleve, Eleve.eleve_id == Inscription.eleve_id)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            Facture.type_frais_id.is_(None),
+        )
+        .order_by(Facture.facture_id)
+        .all()
+    )
+    return {
+        "total": len(lignes),
+        "montant_total": round(sum(float(f.montant_net or 0) for f, _, _ in lignes), 2),
+        "factures": [
+            {
+                "facture_id": f.facture_id,
+                "numero_facture": f.numero_facture,
+                "montant_net": float(f.montant_net or 0),
+                "statut": f.statut,
+                "eleve": f"{e.prenom} {e.nom}",
+                "classe": c.libelle,
+            }
+            for f, e, c in lignes
+        ],
+    }
+
+
+class RattachementFactures(BaseModel):
+    """Quelles factures, et à quel type de frais."""
+    facture_ids: List[int]
+    type_frais_id: int
+
+
+@router.put("/factures/rattacher-type")
+def rattacher_factures_a_un_type(
+    data: RattachementFactures,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Rattache des factures orphelines à un type de frais de cette école.
+
+    Ne touche QUE les factures encore sans type : réaffecter une facture déjà
+    rattachée déplacerait une recette déjà comptabilisée d'un intitulé à un
+    autre, sans laisser de trace. Ce n'est pas une correction, c'est une
+    réécriture — et ça ne se fait pas depuis un bouton.
+    """
+    if not data.facture_ids:
+        raise HTTPException(400, "Aucune facture sélectionnée.")
+
+    type_frais = db.query(TypeFrais).filter(
+        TypeFrais.type_frais_id == data.type_frais_id,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first()
+    if not type_frais:
+        raise HTTPException(404, "Type de frais non trouvé")
+
+    # Le bornage à l'école ET à l'état « sans type » est dans la requête, pas
+    # dans une vérification que l'on pourrait oublier de faire.
+    factures = (
+        db.query(Facture)
+        .join(Inscription, Inscription.inscription_id == Facture.inscription_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(
+            Facture.facture_id.in_(data.facture_ids),
+            Classe.etablissement_id == etablissement_id,
+            Facture.type_frais_id.is_(None),
+        )
+        .all()
+    )
+    for f in factures:
+        f.type_frais_id = type_frais.type_frais_id
+    db.commit()
+
+    ignorees = len(data.facture_ids) - len(factures)
+    message = f"{len(factures)} facture(s) rattachée(s) à « {type_frais.libelle} »."
+    if ignorees:
+        message += (
+            f" {ignorees} ignorée(s) : déjà rattachée(s), ou hors de cet établissement."
+        )
+    return {"message": message, "rattachees": len(factures), "ignorees": ignorees}
+
 
 @router.get("/tarifs-classe")
 def get_tarifs_classe(
@@ -668,7 +772,14 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db), etablisse
     _verifier_annee_modifiable(db, inscription.annee_id)
 
     # Vérifier le type de frais
-    type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == data.type_frais_id).first()
+    # Le type de frais est desormais PROPRE A CHAQUE ECOLE : le chercher par son
+    # seul identifiant permettait de facturer un eleve avec le type de frais
+    # d'un autre etablissement — la facture portait alors le libelle d'une ecole
+    # etrangere, et la recette se rangeait sous SON intitule.
+    type_frais = db.query(TypeFrais).filter(
+        TypeFrais.type_frais_id == data.type_frais_id,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first()
     if not type_frais:
         raise HTTPException(status_code=404, detail="Type de frais non trouvé")
 
@@ -775,7 +886,14 @@ def generer_factures_classe(
     if not inscriptions:
         raise HTTPException(status_code=404, detail="Aucun élève actif dans cette classe")
 
-    type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == data.type_frais_id).first()
+    # Le type de frais est desormais PROPRE A CHAQUE ECOLE : le chercher par son
+    # seul identifiant permettait de facturer un eleve avec le type de frais
+    # d'un autre etablissement — la facture portait alors le libelle d'une ecole
+    # etrangere, et la recette se rangeait sous SON intitule.
+    type_frais = db.query(TypeFrais).filter(
+        TypeFrais.type_frais_id == data.type_frais_id,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first()
     if not type_frais:
         raise HTTPException(status_code=404, detail="Type de frais non trouvé")
 
@@ -4082,10 +4200,13 @@ def avances_endpoint(data: dict, db: Session = Depends(get_db), etablissement_id
     )
     db.add(avance)
     
-    # Avance is money leaving the school NOW, so we need a Depense
+    # Une avance, c'est de l'argent qui sort de la caisse aujourd'hui : elle
+    # devient une dépense immédiatement. Sur l'année de CETTE école — `1` était
+    # l'année de la première école inscrite, donc une dépense invisible dans la
+    # comptabilité de celle qui l'a réellement versée.
     dep = Depense(
         etablissement_id=etablissement_id,
-        annee_id=1,
+        annee_id=resoudre_annee(db, etablissement_id, None),
         categorie="AVANCE_SALAIRE",
         libelle=f"{motif} {infos['nom']} {infos['prenom']} — {mois}",
         montant=float(montant),

@@ -301,6 +301,41 @@ function FraisScolaritePage() {
         await queryClient.invalidateQueries({ queryKey: ['frais-all'] });
     }, [queryClient]);
 
+    /* ─── Factures rattachées à aucun type de frais ──────────────────────────
+       Une facture sans type n'apparaît sous aucun intitulé dans les rapports :
+       le total « recettes par type de frais » l'ignore, alors que l'argent a
+       bien été encaissé. Elles existaient sans que rien ne les signale. */
+    const { data: orphelines } = useQuery({
+        queryKey: ['factures-sans-type'],
+        queryFn: async () => (await api.get('/api/finance/factures/sans-type')).data,
+        staleTime: 1000 * 60 * 5,
+    });
+    const [rattachTypeId, setRattachTypeId] = useState('');
+    const [rattachEnCours, setRattachEnCours] = useState(false);
+
+    const rattacherOrphelines = async () => {
+        if (!rattachTypeId || !orphelines?.factures?.length) return;
+        const tf = typesFrais.find(t => String(t.type_frais_id) === rattachTypeId);
+        if (!confirm(
+            `Rattacher ${orphelines.total} facture(s) — ${fmtMoney(orphelines.montant_total)} — ` +
+            `au frais « ${tf?.libelle || ''} » ?\n\n` +
+            `Ces recettes seront désormais comptées sous cet intitulé.`
+        )) return;
+        setRattachEnCours(true);
+        try {
+            const res = await api.put('/api/finance/factures/rattacher-type', {
+                facture_ids: orphelines.factures.map((f: any) => f.facture_id),
+                type_frais_id: Number(rattachTypeId),
+            });
+            showMsg(res.data?.message || 'Factures rattachées', 'success');
+            await queryClient.invalidateQueries({ queryKey: ['factures-sans-type'] });
+            await loadAll();
+        } catch (err: any) {
+            showMsg(err?.response?.data?.detail || 'Erreur lors du rattachement', 'error');
+        }
+        setRattachEnCours(false);
+    };
+
     // --- TypeFrais CRUD ---
     const openNewTypeFrais = () => {
         setEditingTypeFrais(null);
@@ -522,6 +557,63 @@ function FraisScolaritePage() {
 
             {/* =========== TAB: TYPES DE FRAIS =========== */}
             {tabParam === 'types' && (
+              <>
+                {/* On ne devine pas ce que ces factures facturent — c'est de
+                    l'argent. On les montre, et l'école le dit elle-même. */}
+                {orphelines?.total > 0 && (
+                    <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '12px', padding: '18px 20px', marginBottom: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                            <AlertTriangle size={20} color="#b45309" style={{ flexShrink: 0, marginTop: 2 }} />
+                            <div style={{ flex: 1 }}>
+                                <h4 style={{ margin: '0 0 4px 0', fontSize: '15px', color: '#92400e' }}>
+                                    {orphelines.total} facture{orphelines.total > 1 ? 's' : ''} ne {orphelines.total > 1 ? 'sont' : 'est'} rattachée{orphelines.total > 1 ? 's' : ''} à aucun frais
+                                </h4>
+                                <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: '#92400e', lineHeight: 1.6 }}>
+                                    Elles totalisent <strong>{fmtMoney(orphelines.montant_total)}</strong>. L&apos;argent
+                                    a bien été encaissé, mais ces recettes n&apos;apparaissent sous aucun intitulé
+                                    dans les rapports — le total par type de frais les ignore.
+                                </p>
+
+                                {typesFrais.length === 0 ? (
+                                    <p style={{ margin: 0, fontSize: '13px', color: '#92400e', fontWeight: 600 }}>
+                                        Créez d&apos;abord un type de frais ci-dessous, puis revenez les rattacher.
+                                    </p>
+                                ) : (
+                                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <select value={rattachTypeId} onChange={e => setRattachTypeId(e.target.value)}
+                                            style={{ padding: '9px 12px', borderRadius: '8px', border: '1px solid #fcd34d', background: '#fff', fontSize: '13px', minWidth: '220px' }}>
+                                            <option value="">Ces factures correspondent à…</option>
+                                            {typesFrais.map(tf => (
+                                                <option key={tf.type_frais_id} value={tf.type_frais_id}>{tf.libelle}</option>
+                                            ))}
+                                        </select>
+                                        <button onClick={rattacherOrphelines} disabled={!rattachTypeId || rattachEnCours}
+                                            style={{
+                                                padding: '9px 16px', borderRadius: '8px', border: 'none',
+                                                background: rattachTypeId ? '#b45309' : '#e2e8f0',
+                                                color: rattachTypeId ? '#fff' : '#94a3b8',
+                                                fontSize: '13px', fontWeight: 700,
+                                                cursor: rattachTypeId ? 'pointer' : 'not-allowed',
+                                            }}>
+                                            {rattachEnCours ? 'Rattachement…' : 'Rattacher'}
+                                        </button>
+                                        <details style={{ fontSize: '12.5px', color: '#92400e' }}>
+                                            <summary style={{ cursor: 'pointer' }}>Voir lesquelles</summary>
+                                            <div style={{ maxHeight: '180px', overflowY: 'auto', marginTop: '8px', background: '#fff', border: '1px solid #fde68a', borderRadius: '8px', padding: '8px 12px' }}>
+                                                {orphelines.factures.map((f: any) => (
+                                                    <div key={f.facture_id} style={{ padding: '4px 0', borderBottom: '1px solid #fef3c7', color: '#78350f' }}>
+                                                        {f.numero_facture} · {f.eleve} · {f.classe} · <strong>{fmtMoney(f.montant_net)}</strong>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </details>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                         <div>
@@ -582,6 +674,7 @@ function FraisScolaritePage() {
                         </div>
                     )}
                 </div>
+              </>
             )}
 
             {/* =========== TAB: FACTURES =========== */}
