@@ -51,7 +51,7 @@ export const getRedirectPath = (userRole: string): string => {
 // Pages accessibles sans compte. `/inscription` en fait partie : un
 // fondateur qui vient inscrire son ecole n'a par definition aucun compte,
 // et sans cette ligne il serait renvoye au login qu'il ne peut pas passer.
-const PUBLIC_PATHS = ['/login', '/inscription'];
+const PUBLIC_PATHS = ['/login', '/login/ecole', '/inscription'];
 
 /** Écran où un administrateur plateforme choisit l'école dans laquelle il
  * travaille. Il n'appartient à aucune école : sans ce passage, toutes les
@@ -123,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        if (pathname === '/login' || pathname === '/inscription') {
+        if (pathname === '/login' || pathname === '/login/ecole' || pathname === '/inscription') {
             router.push(targetPath);
             return;
         }

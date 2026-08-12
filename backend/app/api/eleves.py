@@ -881,3 +881,228 @@ def generer_certificat_scolarite_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PARENTS D'UN ÉLÈVE — ajout d'un second parent, rattachement après coup
+# ════════════════════════════════════════════════════════════════════════
+# Le lien parent-enfant ne se créait qu'à l'inscription de l'élève, et pour UN
+# seul contact. Conséquences : la mère ne pouvait pas être ajoutée après le
+# père, et un élève inscrit sans parent le restait définitivement.
+
+
+class ParentLienCreate(BaseModel):
+    """Rattacher un parent à un élève.
+
+    Deux usages en une seule route, parce que c'est le même geste vu par
+    l'école : « qui est le parent de cet enfant ? »
+
+      - `parent_id` fourni  -> on rattache un parent DÉJÀ enregistré (le père
+        est là, on ajoute la mère qui suit déjà un aîné) ;
+      - sinon                -> on crée la fiche à partir des informations
+        saisies, puis on la rattache.
+    """
+    parent_id: Optional[int] = None
+    lien_parente: str = "PERE"
+    est_contact_principal: bool = False
+    est_responsable_financier: bool = False
+    # Utilisés uniquement à la création
+    nom: Optional[str] = None
+    prenom: Optional[str] = None
+    sexe: Optional[str] = None
+    telephone_1: Optional[str] = None
+    telephone_2: Optional[str] = None
+    email: Optional[str] = None
+    profession: Optional[str] = None
+    adresse: Optional[str] = None
+    mot_de_passe: Optional[str] = None
+
+
+class ParentLienUpdate(BaseModel):
+    lien_parente: Optional[str] = None
+    est_contact_principal: Optional[bool] = None
+    est_responsable_financier: Optional[bool] = None
+
+
+def _eleve_de_l_ecole_ou_404(db: Session, eleve_id: int, etablissement_id: int) -> Eleve:
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id,
+        Eleve.etablissement_id == etablissement_id,
+    ).first()
+    if not eleve:
+        raise HTTPException(404, "Élève non trouvé")
+    return eleve
+
+
+@router.get("/{eleve_id}/parents")
+def lister_parents_eleve(
+    eleve_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Parents rattachés à un élève, avec la nature du lien."""
+    _eleve_de_l_ecole_ou_404(db, eleve_id, etablissement_id)
+    lignes = (
+        db.query(EleveParent, Parent)
+        .join(Parent, Parent.parent_id == EleveParent.parent_id)
+        .filter(EleveParent.eleve_id == eleve_id)
+        .all()
+    )
+    return [
+        {
+            "lien_id": lien.eleve_parent_id,
+            "parent_id": parent.parent_id,
+            "nom": parent.nom,
+            "prenom": parent.prenom,
+            "telephone_1": parent.telephone_1,
+            "telephone_2": parent.telephone_2,
+            "email": parent.email,
+            "profession": parent.profession,
+            "lien_parente": lien.lien_parente,
+            "est_contact_principal": lien.est_contact_principal == "O",
+            "est_responsable_financier": lien.est_responsable_financier == "O",
+        }
+        for lien, parent in lignes
+    ]
+
+
+@router.post("/{eleve_id}/parents", status_code=201)
+def rattacher_parent_eleve(
+    eleve_id: int,
+    data: ParentLienCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Ajoute un parent à un élève : un second contact, ou le premier s'il
+    manquait."""
+    eleve = _eleve_de_l_ecole_ou_404(db, eleve_id, etablissement_id)
+    _verifier_annee_modifiable(db, None)
+
+    if data.parent_id:
+        # Le parent doit relever de CETTE école. Une fiche d'ailleurs n'est
+        # jamais rattachée : chaque école a la sienne (migration 2026_08_multi_01).
+        parent = db.query(Parent).filter(
+            Parent.parent_id == data.parent_id,
+            Parent.etablissement_id == etablissement_id,
+        ).first()
+        if not parent:
+            raise HTTPException(404, "Parent non trouvé")
+    else:
+        if not data.telephone_1 or not data.nom or not data.prenom:
+            raise HTTPException(
+                400, "Nom, prénom et téléphone sont requis pour créer un nouveau parent."
+            )
+        # Déjà enregistré dans cette école ? On le réutilise plutôt que de
+        # créer un doublon que l'index refuserait de toute façon.
+        parent = db.query(Parent).filter(
+            Parent.telephone_1 == data.telephone_1,
+            Parent.etablissement_id == etablissement_id,
+        ).first()
+        if not parent:
+            exiger_identifiants_libres(
+                db, [data.telephone_1, data.email], etablissement_id=etablissement_id
+            )
+            parent = Parent(
+                etablissement_id=etablissement_id,
+                nom=data.nom, prenom=data.prenom, sexe=data.sexe,
+                telephone_1=data.telephone_1, telephone_2=data.telephone_2,
+                email=data.email, profession=data.profession, adresse=data.adresse,
+                mot_de_passe=hash_password(data.mot_de_passe) if data.mot_de_passe else None,
+                statut="ACTIF",
+            )
+            db.add(parent)
+            db.flush()
+
+    if db.query(EleveParent).filter(
+        EleveParent.eleve_id == eleve_id,
+        EleveParent.parent_id == parent.parent_id,
+    ).first():
+        raise HTTPException(409, f"{parent.prenom} {parent.nom} est déjà rattaché à cet élève.")
+
+    # Un seul contact principal, un seul responsable financier : poser le
+    # drapeau sur un parent le retire aux autres, sinon deux « principaux »
+    # coexistent et plus personne ne sait qui appeler.
+    if data.est_contact_principal or data.est_responsable_financier:
+        for autre in db.query(EleveParent).filter(EleveParent.eleve_id == eleve_id).all():
+            if data.est_contact_principal:
+                autre.est_contact_principal = "N"
+            if data.est_responsable_financier:
+                autre.est_responsable_financier = "N"
+
+    lien = EleveParent(
+        eleve_id=eleve_id,
+        parent_id=parent.parent_id,
+        lien_parente=data.lien_parente,
+        est_contact_principal="O" if data.est_contact_principal else "N",
+        est_responsable_financier="O" if data.est_responsable_financier else "N",
+    )
+    db.add(lien)
+    db.commit()
+    db.refresh(lien)
+    return {
+        "message": f"{parent.prenom} {parent.nom} rattaché à {eleve.prenom} {eleve.nom}.",
+        "lien_id": lien.eleve_parent_id,
+        "parent_id": parent.parent_id,
+    }
+
+
+@router.put("/{eleve_id}/parents/{lien_id}")
+def modifier_lien_parent(
+    eleve_id: int,
+    lien_id: int,
+    data: ParentLienUpdate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Change la nature du lien, ou désigne le contact principal."""
+    _eleve_de_l_ecole_ou_404(db, eleve_id, etablissement_id)
+    lien = db.query(EleveParent).filter(
+        EleveParent.eleve_parent_id == lien_id,
+        EleveParent.eleve_id == eleve_id,
+    ).first()
+    if not lien:
+        raise HTTPException(404, "Lien non trouvé")
+
+    if data.lien_parente is not None:
+        lien.lien_parente = data.lien_parente
+    for champ, valeur in (
+        ("est_contact_principal", data.est_contact_principal),
+        ("est_responsable_financier", data.est_responsable_financier),
+    ):
+        if valeur is None:
+            continue
+        if valeur:
+            for autre in db.query(EleveParent).filter(
+                EleveParent.eleve_id == eleve_id,
+                EleveParent.eleve_parent_id != lien_id,
+            ).all():
+                setattr(autre, champ, "N")
+        setattr(lien, champ, "O" if valeur else "N")
+
+    db.commit()
+    return {"message": "Lien mis à jour."}
+
+
+@router.delete("/{eleve_id}/parents/{lien_id}")
+def detacher_parent_eleve(
+    eleve_id: int,
+    lien_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Détache un parent d'un élève.
+
+    Seul le LIEN est supprimé : la fiche du parent reste, avec ses autres
+    enfants et son accès au portail. Supprimer la fiche couperait l'accès d'un
+    parent aux frères et sœurs encore scolarisés.
+    """
+    _eleve_de_l_ecole_ou_404(db, eleve_id, etablissement_id)
+    lien = db.query(EleveParent).filter(
+        EleveParent.eleve_parent_id == lien_id,
+        EleveParent.eleve_id == eleve_id,
+    ).first()
+    if not lien:
+        raise HTTPException(404, "Lien non trouvé")
+    db.delete(lien)
+    db.commit()
+    return {"message": "Parent détaché de cet élève. Sa fiche et ses autres enfants sont conservés."}

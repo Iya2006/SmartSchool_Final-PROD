@@ -154,7 +154,35 @@ def update_etablissement(
     e = db.query(Etablissement).filter(Etablissement.etablissement_id == id).first()
     if not e:
         raise HTTPException(404, "Établissement non trouvé")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    champs = data.model_dump(exclude_unset=True)
+
+    # Le STATUT ne se change pas d'ici. Depuis l'inscription publique, il
+    # commande l'acces : une ecole suspendue ou en attente pourrait sinon se
+    # reactiver elle-meme. Seules les routes SUPER_ADMIN d'inscription-
+    # etablissement le modifient.
+    champs.pop("statut", None)
+
+    # Le CODE sert a se connecter (enseignants et parents multi-ecoles le
+    # saisissent). Il est unique sur la plateforme : verifie ici pour repondre
+    # 409 avec une phrase claire, au lieu d'une erreur 500 de contrainte.
+    nouveau_code = champs.get("code")
+    if nouveau_code is not None:
+        nouveau_code = nouveau_code.strip().upper()
+        if not nouveau_code:
+            raise HTTPException(400, "Le code de l'établissement ne peut pas être vide.")
+        if nouveau_code != e.code:
+            if db.query(Etablissement.etablissement_id).filter(
+                Etablissement.code == nouveau_code,
+                Etablissement.etablissement_id != id,
+            ).first():
+                raise HTTPException(
+                    409,
+                    f"Le code « {nouveau_code} » est déjà utilisé par un autre "
+                    "établissement. Choisissez-en un autre.",
+                )
+        champs["code"] = nouveau_code
+
+    for k, v in champs.items():
         setattr(e, k, v)
     db.commit()
     db.refresh(e)

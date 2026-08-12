@@ -189,6 +189,24 @@ export default function LoginPage() {
                                 Inscrire mon établissement <ArrowRight size={15} />
                             </Link>
                         </div>
+                        {/* Enseignants et parents : espace distinct, parce qu'eux
+                            seuls peuvent relever de plusieurs ecoles et ont donc
+                            besoin du code de l'etablissement. */}
+                        <Link href="/login/ecole" style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            gap: '12px', padding: '14px 16px', borderRadius: '14px',
+                            background: 'white', border: '1px solid #e2e8f0', textDecoration: 'none',
+                        }}>
+                            <span style={{ minWidth: 0 }}>
+                                <span style={{ display: 'block', fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
+                                    Vous êtes enseignant ou parent d’élève ?
+                                </span>
+                                <span style={{ display: 'block', fontSize: '12px', color: '#64748b', marginTop: 2 }}>
+                                    Connectez-vous à l’espace de votre établissement
+                                </span>
+                            </span>
+                            <span style={{ flexShrink: 0, color: '#2563eb' }}><ArrowRight size={18} /></span>
+                        </Link>
                         <p style={{ margin: 0, textAlign: 'center', fontSize: '12px', color: '#94a3b8' }}>
                             SmartSchool • Système d’information scolaire sécurisé
                         </p>
