@@ -306,7 +306,11 @@ def create_enseignant(data: EnseignantCreate, db: Session = Depends(get_db), eta
     # Le téléphone et l'e-mail d'un enseignant servent à se connecter (auth.py) :
     # un doublon, même dans une autre table ou une autre école, rendrait l'un
     # des deux comptes définitivement inaccessible.
-    exiger_identifiants_libres(db, [data.telephone, data.email])
+    # Portee par ecole : un enseignant peut exercer dans plusieurs
+    # etablissements, avec le meme numero. Il y a une fiche par ecole.
+    exiger_identifiants_libres(
+        db, [data.telephone, data.email], etablissement_id=etablissement_id
+    )
 
     # Matricule propre à l'établissement (voir app/core/matricules.py).
     matricule = generer_matricule(db, Enseignant, PREFIXE_ENSEIGNANT, etablissement_id)

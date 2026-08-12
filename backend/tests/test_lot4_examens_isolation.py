@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.models.academique import (
     AnneeScolaire, Classe, Cycle, EmploiExamen, Enseignant, Etablissement,
-    Matiere, Niveau, SujetExamen, Utilisateur,
+    Matiere, Niveau, SujetExamen, Trimestre, Utilisateur,
 )
 
 _COUNTER = 0
@@ -39,6 +39,17 @@ class Ecole:
             date_debut=date(2025, 9, 1), date_fin=date(2026, 7, 1), statut="EN_COURS",
         )
         db.add(self.annee); db.commit(); db.refresh(self.annee)
+
+        # Une période réelle est désormais nécessaire pour déposer un sujet :
+        # le module n'impose plus « trimestre 1/2/3 » en dur, il résout la
+        # période dans le calendrier de l'école (une école à deux semestres
+        # n'a pas de T3). Sans période configurée, le dépôt répond 400.
+        self.trimestre = Trimestre(
+            annee_id=self.annee.annee_id, code=f"T1-{uid}", libelle="1er Trimestre",
+            numero=1, date_debut=date(2025, 9, 1), date_fin=date(2025, 12, 20),
+            statut="EN_COURS",
+        )
+        db.add(self.trimestre); db.commit(); db.refresh(self.trimestre)
 
         self.cycle = Cycle(etablissement_id=self.etab.etablissement_id, code=f"CY{uid}", libelle="Secondaire", ordre=1)
         db.add(self.cycle); db.commit(); db.refresh(self.cycle)

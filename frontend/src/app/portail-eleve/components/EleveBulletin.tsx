@@ -146,6 +146,9 @@ export default function EleveBulletin({
                                             >
                                                 {m.moyenne_eleve !== null ? m.moyenne_eleve.toFixed(2) : '—'}
                                             </span>
+                                            {m.lettre && (
+                                                <span style={{ marginLeft: '6px', fontWeight: 800, fontSize: '13px', color: '#6366f1' }}>{m.lettre}</span>
+                                            )}
                                         </td>
                                         <td className={styles.td} style={{ textAlign: 'center', fontSize: '12.5px', color: '#64748b', fontWeight: 600 }}>
                                             {m.moyenne_classe !== null ? m.moyenne_classe.toFixed(2) : '—'}

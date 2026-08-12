@@ -92,6 +92,12 @@ class AnneeScolaire(Base):
     app/api/annee_scolaire.py) -> ARCHIVEE (Phase 2 : archivage complet).
     """
     __tablename__ = "ss_annees_scolaires"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_annees_etab_courante", 'etablissement_id', 'est_courante'),
+    )
     annee_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(20), nullable=False)
@@ -111,6 +117,12 @@ class AnneeScolaire(Base):
 class ParametreEtablissement(Base):
     """Table clé/valeur pour tous les paramètres de l'établissement."""
     __tablename__ = "ss_parametres"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_parametres_etab_categorie_cle", 'etablissement_id', 'categorie', 'cle'),
+    )
     parametre_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     categorie = Column(String(50), nullable=False)  # IDENTITE, THEME, NOTATION, FINANCE
@@ -123,6 +135,12 @@ class ParametreEtablissement(Base):
 
 class Trimestre(Base):
     __tablename__ = "ss_trimestres"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_trimestres_annee_numero", 'annee_id', 'numero'),
+    )
     trimestre_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     code = Column(String(10), nullable=False)
@@ -211,6 +229,12 @@ class TicketInformatique(Base):
 
 class Classe(Base):
     __tablename__ = "ss_classes"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_classes_etab_annee_statut", 'etablissement_id', 'annee_id', 'statut'),
+    )
     classe_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
@@ -238,6 +262,12 @@ class Classe(Base):
 
 class Eleve(Base):
     __tablename__ = "ss_eleves"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_eleves_etablissement", 'etablissement_id'),
+    )
     eleve_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     matricule = Column(String(30), unique=True, nullable=False, index=True)
@@ -274,8 +304,19 @@ class Eleve(Base):
 
 
 class Parent(Base):
+    """Parent d'élève, rattaché à UNE école.
+
+    Un parent dont les enfants sont scolarisés dans plusieurs établissements a
+    une fiche PAR école : c'est le code de l'établissement, saisi au login, qui
+    dit laquelle. Un compte unique supposerait un endroit central où les écoles
+    se croisent — exactement ce que le chantier multi-écoles a supprimé.
+
+    Son téléphone et son e-mail sont donc uniques PAR ÉCOLE et non globalement
+    (index uq_parents_etab_*, migration 2026_08_multi_01).
+    """
     __tablename__ = "ss_parents"
     parent_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
     sexe = Column(String(1))
@@ -361,12 +402,21 @@ class Matiere(Base):
 class ClasseMatiere(Base):
     """Association entre une Classe et ses Matières enseignées (programme guinéen)"""
     __tablename__ = "ss_classe_matieres"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_classe_matieres_classe_active", 'classe_id', 'est_active'),
+        Index("ix_classe_matieres_matiere", 'matiere_id'),
+    )
     classe_matiere_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     coefficient = Column(Numeric(3, 1), default=1, nullable=False)
     nb_heures_semaine = Column(Integer, default=2)
     est_active = Column(String(1), default="O")
+    # NULL = pas de surcharge ; cascade complète dans services/notation.py
+    note_sur = Column(Numeric(5, 2), nullable=True)
 
 
 class CreneauEmploi(Base):
@@ -386,6 +436,14 @@ class CreneauEmploi(Base):
 
 class Affectation(Base):
     __tablename__ = "ss_affectations"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_affectations_enseignant_statut", 'enseignant_id', 'statut'),
+        Index("ix_affectations_classe_matiere_statut", 'classe_id', 'matiere_id', 'statut'),
+        Index("ix_affectations_annee_statut", 'annee_id', 'statut'),
+    )
     affectation_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
@@ -444,6 +502,14 @@ class Seance(Base):
 
 class Inscription(Base):
     __tablename__ = "ss_inscriptions"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_inscriptions_classe_statut", 'classe_id', 'statut'),
+        Index("ix_inscriptions_eleve_statut", 'eleve_id', 'statut'),
+        Index("ix_inscriptions_annee", 'annee_id'),
+    )
     inscription_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=False)
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
@@ -475,21 +541,87 @@ class Inscription(Base):
     classe = relationship("Classe", back_populates="inscriptions", foreign_keys=[classe_id])
 
 
+class ResultatOfficielExamen(Base):
+    """Résultat officiel du Ministère pour les classes d'examen (Niveau.est_examen='O').
+
+    Pour ces classes (6e/CEE, 10e/BEPC, Terminale/BAC), le passage ne dépend pas
+    de la moyenne annuelle interne mais de ce résultat, saisi manuellement une
+    fois publié : c'est la seule source de vérité pour leur passage. Table
+    distincte de Inscription pour que le recalcul de la proposition interne
+    n'écrase jamais la saisie ministérielle.
+    """
+    __tablename__ = "ss_resultats_officiels_examen"
+    resultat_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False, unique=True)
+    examen_national = Column(String(30), nullable=True)  # CEE | BEPC | BAC (copié de Niveau)
+    resultat = Column(String(20), nullable=False)  # ADMIS | NON_ADMIS
+    date_saisie = Column(Date, server_default=func.current_date())
+    saisi_par = Column(String(100), nullable=True)
+    observation = Column(String(500), nullable=True)
+
+
 # ============================================================================
 # MODULE 3 : ÉVALUATIONS & BULLETINS
 # ============================================================================
 
 class TypeEvaluation(Base):
+    """Nature d'une épreuve (Composition, Interrogation, Oral…), PAR ÉCOLE.
+
+    Cette table était partagée par toute la plateforme : renommer un type dans
+    une école changeait l'intitulé des colonnes de bulletin de toutes les
+    autres. Chaque école a désormais sa propre liste, qu'elle nomme et étend
+    comme elle l'entend — cf. migration
+    2026_08_notation_09_type_evaluation_etablissement.py.
+
+    `code` n'est donc plus unique globalement mais PAR ÉTABLISSEMENT (index
+    uq_types_evaluation_etablissement_code) : deux écoles ont chacune leur
+    « COMPO ».
+    """
     __tablename__ = "ss_types_evaluation"
     type_eval_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    code = Column(String(20), unique=True, nullable=False)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    code = Column(String(20), nullable=False)
     libelle = Column(String(100), nullable=False)
-    poids_pourcentage = Column(Numeric(5, 2), nullable=False)
+    # Legacy : jamais lu par le moteur de notation, conservé pour compat (cf. MIGRATION_NOTES.md)
+    poids_pourcentage = Column(Numeric(5, 2), nullable=True)
+    # Coefficient de référence du type. Surchargeable par cycle via
+    # ParametreEtablissement (notation.coef_type.{cycle}.{code}) — cf. services/notation.py
+    coefficient = Column(Numeric(4, 2), default=1, nullable=False)
     statut = Column(String(20), default="ACTIF")
+
+
+class EvaluationSession(Base):
+    """Regroupe les Evaluation créées en une seule action ("création groupée").
+
+    Une composition couvre normalement toutes les matières d'une classe le même
+    jour : la session porte le choix unique "coefficientée ou non" pour tout le
+    groupe, au lieu de le répéter matière par matière.
+    """
+    __tablename__ = "ss_evaluation_sessions"
+    session_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
+    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=False)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    libelle = Column(String(200), nullable=False)
+    date_evaluation = Column(Date, nullable=False)
+    note_sur = Column(Numeric(5, 2), default=20)
+    est_coefficientee = Column(String(1), default="O", nullable=False)
+    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    statut = Column(String(20), default="PLANIFIEE", nullable=False)
 
 
 class Evaluation(Base):
     __tablename__ = "ss_evaluations"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_evaluations_classe_trimestre_statut", 'classe_id', 'trimestre_id', 'statut'),
+        Index("ix_evaluations_enseignant", 'enseignant_id'),
+        Index("ix_evaluations_matiere", 'matiere_id'),
+        Index("ix_evaluations_type_eval", 'type_eval_id'),
+    )
     evaluation_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
@@ -501,10 +633,44 @@ class Evaluation(Base):
     note_sur = Column(Numeric(5, 2), default=20)
     coefficient = Column(Numeric(3, 1), default=1)
     statut = Column(String(20), default="PLANIFIEE")
+    # NULL pour les évaluations mono-matière (création directe / portail enseignant)
+    session_id = Column(Integer, ForeignKey("ss_evaluation_sessions.session_id"), nullable=True)
+    # Copié depuis la session : évite de joindre EvaluationSession dans le moteur de calcul
+    est_coefficientee = Column(String(1), default="O", nullable=False)
+    # NULL = utiliser le coefficient du type ; sinon surcharge ponctuelle
+    coefficient_override = Column(Numeric(4, 2), nullable=True)
+
+
+class PeriodeEpreuve(Base):
+    """Quelles épreuves comptent pour le résultat officiel d'une période.
+
+    Le résultat d'une période n'est pas forcément « tout ce qui a été noté » :
+    une école peut retenir deux évaluations sans composition, une composition
+    seule, ou toute autre combinaison. Cette table trace ce choix pour que le
+    calcul reste reproductible et vérifiable après coup.
+
+    Compatibilité ascendante : aucune ligne pour (classe, trimestre) = toutes
+    les évaluations centralisées comptent, comme avant l'introduction de cette
+    table. Voir `epreuves_retenues_periode()` dans services/notation.py.
+    """
+    __tablename__ = "ss_periode_epreuves"
+    periode_epreuve_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
+    evaluation_id = Column(Integer, ForeignKey("ss_evaluations.evaluation_id"), nullable=False)
+    created_date = Column(DateTime, server_default=func.now())
+    created_by = Column(String(100), nullable=True)
 
 
 class Note(Base):
     __tablename__ = "ss_notes"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_notes_evaluation_inscription", 'evaluation_id', 'inscription_id'),
+        Index("ix_notes_inscription", 'inscription_id'),
+    )
     note_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     evaluation_id = Column(Integer, ForeignKey("ss_evaluations.evaluation_id"), nullable=False)
     inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
@@ -519,6 +685,12 @@ class Note(Base):
 
 class Bulletin(Base):
     __tablename__ = "ss_bulletins"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_bulletins_inscription_type", 'inscription_id', 'type_bulletin'),
+    )
     bulletin_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
     trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"))
@@ -536,6 +708,13 @@ class Bulletin(Base):
 
 class BulletinLigne(Base):
     __tablename__ = "ss_bulletin_lignes"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_bulletin_lignes_bulletin", 'bulletin_id'),
+        Index("ix_bulletin_lignes_matiere", 'matiere_id'),
+    )
     ligne_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     bulletin_id = Column(Integer, ForeignKey("ss_bulletins.bulletin_id", ondelete="CASCADE"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
@@ -555,9 +734,20 @@ class BulletinLigne(Base):
 # ============================================================================
 
 class TypeFrais(Base):
+    """Nature d'un frais (Scolarité, Inscription, Cantine…), PAR ÉCOLE.
+
+    Cette table était partagée par toute la plateforme : une école renommant
+    « Scolarité » changeait l'intitulé sur les factures et les reçus de toutes
+    les autres — et pouvait supprimer un type qu'une voisine utilisait. Voir
+    migration 2026_08_compta_01_types_frais_etablissement.py.
+
+    `code` n'est donc plus unique globalement mais PAR ÉTABLISSEMENT
+    (uq_types_frais_etab_code) : deux écoles ont chacune leur « SCOL ».
+    """
     __tablename__ = "ss_types_frais"
     type_frais_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    code = Column(String(20), unique=True, nullable=False)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    code = Column(String(20), nullable=False)
     libelle = Column(String(150), nullable=False)
     categorie = Column(String(50), nullable=False)
     montant_defaut = Column(Numeric(12, 2), default=0) # Nouveau champ
@@ -761,12 +951,24 @@ class Disponibilite(Base):
 class SujetExamen(Base):
     """Sujet d'examen téléversé par un enseignant."""
     __tablename__ = "ss_sujets_examen"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_sujets_examen_enseignant", 'enseignant_id'),
+        Index("ix_sujets_examen_trimestre", 'trimestre_id'),
+        Index("ix_sujets_examen_demande", 'demande_id'),
+    )
     sujet_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
     enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
-    trimestre = Column(Integer, nullable=False)  # 1, 2, 3
+    # Période réelle de l'établissement. `trimestre` (numéro) est conservée en
+    # miroir pour les clients existants, mais c'est `trimestre_id` qui fait foi :
+    # une école peut avoir 2 semestres ou 3 trimestres, nommés librement.
+    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=True)
+    trimestre = Column(Integer, nullable=True)
     titre = Column(String(300), nullable=False)
     fichier_nom = Column(String(255), nullable=False)
     fichier_path = Column(String(500), nullable=False)
@@ -1332,3 +1534,38 @@ class PointageEleve(Base):
     statut           = Column(String(20), default="PRESENT")  # PRESENT, PARTI
     observations     = Column(String(255), nullable=True)
     created_at       = Column(DateTime, server_default=func.now())
+
+
+class IncidentApplicatif(Base):
+    """Erreur non gérée survenue dans l'application.
+
+    `/api/monitoring` surveille la machine ; cette table surveille le LOGICIEL.
+    Sans elle, une école tombant sur une erreur en imprimant un bulletin le
+    découvre seule, et l'éditeur ne l'apprend qu'en étant appelé.
+
+    On n'y met QUE ce qui sert à corriger : la route, le type d'erreur, son
+    message, l'école et le rôle. Jamais le corps de la requête ni le contenu
+    métier — un journal d'incidents ne doit pas devenir une porte dérobée vers
+    les données des écoles.
+
+    `etablissement_id` est nullable : une erreur peut survenir avant toute
+    authentification (page de login, inscription publique).
+    """
+    __tablename__ = "ss_incidents_applicatifs"
+    __table_args__ = (
+        # La liste est toujours lue par date décroissante, filtrée sur le
+        # non-résolu, et regroupée par (route, type).
+        Index("ix_incidents_date", "date_incident"),
+        Index("ix_incidents_resolu_date", "resolu", "date_incident"),
+        Index("ix_incidents_groupe", "route", "type_erreur"),
+    )
+    incident_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    route = Column(String(300), nullable=False)
+    methode = Column(String(10))
+    type_erreur = Column(String(120), nullable=False)
+    message = Column(String(800))
+    trace = Column(Text, nullable=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
+    role = Column(String(40), nullable=True)
+    date_incident = Column(DateTime, server_default=func.now(), nullable=False)
+    resolu = Column(String(1), default="N", nullable=False)

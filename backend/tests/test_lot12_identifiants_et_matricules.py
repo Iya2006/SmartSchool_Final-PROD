@@ -153,8 +153,17 @@ class TestMatriculeParEtablissement:
 # ══════════════════════════════════════════════════════════════
 
 class TestUniciteIdentifiants:
-    def test_telephone_deja_pris_par_une_autre_ecole_refuse(self, client: TestClient, db: Session):
-        """409, jamais 500, et surtout jamais un compte inaccessible."""
+    def test_meme_telephone_dans_deux_ecoles_desormais_autorise(
+        self, client: TestClient, db: Session
+    ):
+        """RÈGLE INVERSÉE (migration 2026_08_multi_01).
+
+        Ce test exigeait un 409 : le téléphone était unique sur toute la
+        plateforme. C'était une impossibilité, pas une protection — un
+        enseignant qui exerce dans cinq écoles ne pouvait être inscrit que par
+        la première. Chaque école a désormais SA fiche pour cette personne, et
+        le code d'établissement les départage au login.
+        """
         a, b = Ecole(db, "TA"), Ecole(db, "TB")
         telephone = f"65900{_uid():04d}"
 
@@ -171,10 +180,42 @@ class TestUniciteIdentifiants:
                   "etablissement_id": a.etab.etablissement_id},
             headers=_headers(client, a.admin.nom_utilisateur),
         )
+        assert resp.status_code in (200, 201), resp.text
+        # Deux fiches distinctes, chacune dans son école.
+        fiches = db.query(Enseignant).filter(Enseignant.telephone == telephone).all()
+        assert len(fiches) == 2
+        assert {f.etablissement_id for f in fiches} == {
+            a.etab.etablissement_id, b.etab.etablissement_id
+        }
+
+    def test_meme_telephone_dans_la_meme_ecole_toujours_refuse(
+        self, client: TestClient, db: Session
+    ):
+        """Ce qui reste interdit : deux comptes du MÊME établissement.
+
+        À l'intérieur d'une école, le code ne départage rien : le second compte
+        serait définitivement inconnectable.
+        """
+        a = Ecole(db, "TS")
+        telephone = f"65910{_uid():04d}"
+
+        db.add(Enseignant(
+            etablissement_id=a.etab.etablissement_id, matricule=f"L12S-{_uid()}",
+            nom="Bah", prenom="Ousmane", sexe="M", telephone=telephone,
+            mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
+        ))
+        db.commit()
+
+        resp = client.post(
+            "/api/enseignants",
+            json={"nom": "Sow", "prenom": "Ibrahima", "sexe": "M", "telephone": telephone,
+                  "etablissement_id": a.etab.etablissement_id},
+            headers=_headers(client, a.admin.nom_utilisateur),
+        )
         assert resp.status_code == 409, resp.text
-        # Le message ne révèle ni le propriétaire ni son établissement.
+        # Le message ne révèle toujours ni le propriétaire ni son établissement.
         detail = resp.json()["detail"]
-        assert "Bah" not in detail and b.etab.nom not in detail
+        assert "Bah" not in detail and a.etab.nom not in detail
 
     def test_collision_inter_tables_detectee(self, client: TestClient, db: Session):
         """Un index unique ne couvre qu'une table : la collision entre le
@@ -235,6 +276,9 @@ class TestParentPasDePriseDeControle:
             annee_id=ecole.annee.annee_id, statut="ACTIVE",
         ))
         parent = Parent(
+            # Un parent releve d'UNE ecole depuis la migration 2026_08_multi_01
+            # (une fiche par ecole ou l'un de ses enfants est scolarise).
+            etablissement_id=ecole.etab.etablissement_id,
             nom="Victime", prenom="Réelle", telephone_1=f"65800{uid:04d}",
             email=f"victime.{uid}@smartschool.gn",
             mot_de_passe=hash_password(mot_de_passe), statut="ACTIF",

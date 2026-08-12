@@ -5,7 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     ChevronRight, Loader2, FileText, Download, CheckCircle2, AlertCircle,
     X, Shield, Search, Filter, Clock, Users, BookOpen, Send, Eye,
-    XCircle, BarChart3, FileUp, Award, Printer, PenLine, Inbox, Paperclip, UserCheck, Calendar
+    XCircle, BarChart3, FileUp, Award, Printer, PenLine, Inbox, Paperclip, UserCheck, Calendar,
+    Megaphone, BellRing, ListChecks
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -15,7 +16,8 @@ interface SujetItem {
     enseignant_specialite: string | null;
     matiere_id: number; matiere_code: string; matiere_libelle: string;
     classe_id: number | null; classe_libelle: string | null;
-    trimestre: number; titre: string; fichier_nom: string;
+    trimestre: number; trimestre_id: number | null; periode_libelle: string;
+    titre: string; fichier_nom: string;
     fichier_type: string; fichier_taille: number; duree_minutes: number;
     statut: string; commentaire: string | null;
     date_depot: string | null; date_envoi: string | null;
@@ -25,6 +27,22 @@ interface StatsData {
     total_sujets: number; brouillons: number; envoyes: number;
     valides: number; rejetes: number; enseignants_soumis: number;
     total_enseignants: number; taux_soumission: number;
+}
+
+interface Periode {
+    trimestre_id: number; numero: number; libelle: string; statut: string;
+}
+
+/** Un sujet attendu mais pas encore reçu, avec le nom de qui doit le déposer. */
+interface Manquant {
+    enseignant_id: number; enseignant_nom: string; enseignant_telephone: string | null;
+    matiere_id: number; matiere_libelle: string; classes: string[];
+}
+
+interface Suivi {
+    periode: { trimestre_id: number; libelle: string; statut: string } | null;
+    attendus: number; recus: number; manquants: Manquant[];
+    taux_couverture: number | null; hors_affectation: number;
 }
 
 const STATUT_CONFIG: Record<string, { label: string; color: string; bg: string; icon: any }> = {
@@ -39,7 +57,17 @@ export default function CentreEvaluationPage() {
     const [sujets, setSujets] = useState<SujetItem[]>([]);
     const [stats, setStats] = useState<StatsData | null>(null);
     const [filterStatut, setFilterStatut] = useState('');
+    // Périodes réelles de l'établissement : l'écran affichait « T1 T2 T3 »
+    // en dur, donc un « T3 » inexistant pour une école à deux semestres.
+    const [periodes, setPeriodes] = useState<Periode[]>([]);
     const [filterTrimestre, setFilterTrimestre] = useState<number | null>(null);
+    const [suivi, setSuivi] = useState<Suivi | null>(null);
+    const [showManquants, setShowManquants] = useState(false);
+    const [relanceEnCours, setRelanceEnCours] = useState(false);
+    const [demandeOuverte, setDemandeOuverte] = useState(false);
+    const [demandePeriode, setDemandePeriode] = useState<number | null>(null);
+    const [demandeMessage, setDemandeMessage] = useState('');
+    const [envoiDemande, setEnvoiDemande] = useState(false);
     const [searchQ, setSearchQ] = useState('');
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -68,17 +96,55 @@ export default function CentreEvaluationPage() {
 
     const loadData = useCallback(async () => {
         try {
-            const [sujR, statsR] = await Promise.all([
+            const filtre = filterTrimestre ? `?trimestre_id=${filterTrimestre}` : '';
+            const [sujR, statsR, perR, suiviR] = await Promise.all([
                 api.get('/api/examens/sujets'),
-                api.get('/api/examens/admin/stats'),
+                api.get(`/api/examens/admin/stats${filtre}`),
+                api.get('/api/examens/periodes').catch(() => ({ data: [] })),
+                api.get(`/api/examens/sujets/suivi${filtre}`).catch(() => ({ data: null })),
             ]);
             setSujets(sujR.data);
             setStats(statsR.data);
+            setPeriodes(perR.data || []);
+            setSuivi(suiviR.data);
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
-    }, []);
+    }, [filterTrimestre]);
 
     useEffect(() => { loadData(); }, [loadData]);
+
+    // Réclamer les sujets se faisait uniquement depuis l'écran Communication :
+    // le Centre des Examens, seul endroit où l'on constate l'absence, n'offrait
+    // aucun moyen d'agir.
+    const envoyerDemande = async () => {
+        const periodeId = demandePeriode ?? suivi?.periode?.trimestre_id ?? periodes[0]?.trimestre_id;
+        if (!periodeId) { showError('Aucune période configurée.'); return; }
+        setEnvoiDemande(true);
+        try {
+            const res = await api.post('/api/examens/sujets/demander', {
+                trimestre_id: periodeId,
+                description: demandeMessage || undefined,
+            });
+            showSuccess(res.data.message || 'Demande envoyée aux enseignants.');
+            setDemandeOuverte(false); setDemandeMessage('');
+        } catch (err: any) { showError(err.response?.data?.detail || 'Erreur'); }
+        setEnvoiDemande(false);
+    };
+
+    // Relance nominative : écrire à tout le monde use la crédibilité du message.
+    const relancer = async (enseignantIds?: number[]) => {
+        const periodeId = suivi?.periode?.trimestre_id;
+        if (!periodeId) return;
+        setRelanceEnCours(true);
+        try {
+            const res = await api.post('/api/examens/sujets/relancer', {
+                trimestre_id: periodeId,
+                enseignant_ids: enseignantIds,
+            });
+            showSuccess(res.data.message);
+        } catch (err: any) { showError(err.response?.data?.detail || 'Erreur'); }
+        setRelanceEnCours(false);
+    };
 
     const handleValider = async (id: number) => {
         try {
@@ -109,7 +175,7 @@ export default function CentreEvaluationPage() {
     const adminSujets = sujets.filter(s => s.statut !== 'BROUILLON');
     const filtered = adminSujets.filter(s => {
         if (filterStatut && s.statut !== filterStatut) return false;
-        if (filterTrimestre && s.trimestre !== filterTrimestre) return false;
+        if (filterTrimestre && s.trimestre_id !== filterTrimestre) return false;
         if (searchQ) {
             const q = searchQ.toLowerCase();
             return s.enseignant_nom.toLowerCase().includes(q) || s.matiere_libelle.toLowerCase().includes(q) || s.titre.toLowerCase().includes(q);
@@ -128,7 +194,7 @@ export default function CentreEvaluationPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             {/* Breadcrumb */}
             <div className="breadcrumb">
-                <Link href="/">Accueil</Link><ChevronRight size={14} /><span>Centre d&apos;Évaluation</span>
+                <Link href="/">Accueil</Link><ChevronRight size={14} /><span>Centre des Examens</span>
             </div>
 
             {/* Toasts */}
@@ -158,11 +224,19 @@ export default function CentreEvaluationPage() {
                             <Award size={28} />
                         </div>
                         <div>
-                            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 800 }}>Centre d&apos;Évaluation</h1>
+                            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 800 }}>Centre des Examens</h1>
                             <p style={{ margin: '4px 0 0', fontSize: '14px', opacity: 0.9 }}>Réception et validation des sujets d&apos;examen</p>
                         </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '10px' }}>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        <button onClick={() => { setDemandePeriode(suivi?.periode?.trimestre_id ?? null); setDemandeOuverte(true); }}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 20px', borderRadius: '12px',
+                                background: 'white', color: '#b45309', border: 'none',
+                                fontSize: '13px', fontWeight: 700, cursor: 'pointer'
+                            }}>
+                            <Megaphone size={15} /> Demander les sujets
+                        </button>
                         <Link href="/examens/emploi" style={{
                             display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 20px', borderRadius: '12px',
                             background: 'rgba(255,255,255,0.2)', backdropFilter: 'blur(10px)', color: 'white',
@@ -181,7 +255,14 @@ export default function CentreEvaluationPage() {
                         { label: 'Sujets Reçus', value: stats.envoyes + stats.valides, icon: FileUp, color: '#0d9488' },
                         { label: 'Validés', value: stats.valides, icon: CheckCircle2, color: '#16a34a' },
                         { label: 'En Attente', value: stats.envoyes, icon: Clock, color: '#f59e0b' },
-                        { label: 'Taux Soumission', value: `${stats.taux_soumission}%`, icon: BarChart3, color: '#3b82f6' },
+                        // « Taux de soumission » ne disait ni qui manquait ni pour quelle
+                        // matière. On affiche ce qui reste à obtenir, et on peut cliquer.
+                        {
+                            label: suivi ? 'Sujets manquants' : 'Taux Soumission',
+                            value: suivi ? `${suivi.manquants.length} / ${suivi.attendus}` : `${stats.taux_soumission}%`,
+                            icon: suivi ? ListChecks : BarChart3,
+                            color: suivi && suivi.manquants.length > 0 ? '#dc2626' : '#3b82f6',
+                        },
                     ].map((kpi, i) => (
                         <motion.div key={i} className="kpi-card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -193,6 +274,80 @@ export default function CentreEvaluationPage() {
                         </motion.div>
                     ))}
                 </div>
+            )}
+
+
+            {/* ═══ SUJETS ATTENDUS ET MANQUANTS ═══
+                Le tableau de bord ne donnait qu'un pourcentage : il ne disait ni
+                qui manquait, ni pour quelle matière. On remplace un chiffre que
+                l'on subit par une liste sur laquelle on agit. */}
+            {suivi && suivi.periode && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }}
+                    className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                        <ListChecks size={18} color={suivi.manquants.length ? '#dc2626' : '#16a34a'} />
+                        <div style={{ flex: 1, minWidth: '220px' }}>
+                            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                                {suivi.manquants.length === 0
+                                    ? `Tous les sujets sont arrivés — ${suivi.periode.libelle}`
+                                    : `${suivi.manquants.length} sujet(s) manquant(s) — ${suivi.periode.libelle}`}
+                            </div>
+                            <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>
+                                {suivi.recus} reçu(s) sur {suivi.attendus} attendu(s)
+                                {suivi.taux_couverture !== null && ` · ${suivi.taux_couverture}% de couverture`}
+                                {suivi.hors_affectation > 0 && ` · ${suivi.hors_affectation} hors affectation connue`}
+                            </div>
+                        </div>
+                        {suivi.manquants.length > 0 && (
+                            <>
+                                <button onClick={() => setShowManquants(v => !v)}
+                                    style={{ padding: '8px 16px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'white', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer', color: 'var(--text-primary)' }}>
+                                    {showManquants ? 'Masquer la liste' : 'Voir qui manque'}
+                                </button>
+                                <button onClick={() => relancer()} disabled={relanceEnCours}
+                                    style={{ padding: '8px 16px', borderRadius: '10px', border: 'none', background: '#d97706', color: 'white', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    <BellRing size={14} /> {relanceEnCours ? 'Envoi…' : 'Relancer les retardataires'}
+                                </button>
+                            </>
+                        )}
+                    </div>
+
+                    {showManquants && suivi.manquants.length > 0 && (
+                        <div style={{ borderTop: '1px solid var(--border-light)', maxHeight: '360px', overflowY: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                <thead>
+                                    <tr style={{ background: '#f8fafc' }}>
+                                        {['MATIÈRE', 'ENSEIGNANT', 'CLASSES', ''].map(h => (
+                                            <th key={h} style={{ padding: '10px 16px', textAlign: 'left', fontSize: '10.5px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.4px' }}>{h}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {suivi.manquants.map(m => (
+                                        <tr key={`${m.enseignant_id}-${m.matiere_id}`} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                            <td style={{ padding: '9px 16px', fontWeight: 600, color: 'var(--text-primary)' }}>{m.matiere_libelle}</td>
+                                            <td style={{ padding: '9px 16px', color: 'var(--text-secondary)' }}>
+                                                {m.enseignant_nom}
+                                                {m.enseignant_telephone && (
+                                                    <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}> · {m.enseignant_telephone}</span>
+                                                )}
+                                            </td>
+                                            <td style={{ padding: '9px 16px', color: 'var(--text-muted)', fontSize: '12px' }}>
+                                                {m.classes.join(', ')}
+                                            </td>
+                                            <td style={{ padding: '9px 16px', textAlign: 'right' }}>
+                                                <button onClick={() => relancer([m.enseignant_id])} disabled={relanceEnCours}
+                                                    style={{ padding: '5px 11px', borderRadius: '8px', border: '1px solid #fbbf24', background: 'white', color: '#b45309', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}>
+                                                    Relancer
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </motion.div>
             )}
 
             {/* Filters */}
@@ -213,12 +368,13 @@ export default function CentreEvaluationPage() {
                             background: !filterTrimestre ? '#d97706' : '#f8fafc', color: !filterTrimestre ? 'white' : '#64748b',
                             border: 'none', cursor: 'pointer'
                         }}>Tous</button>
-                        {[1, 2, 3].map(t => (
-                            <button key={t} onClick={() => setFilterTrimestre(t)} style={{
+                        {periodes.map(p => (
+                            <button key={p.trimestre_id} onClick={() => setFilterTrimestre(p.trimestre_id)} style={{
                                 padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600,
-                                background: filterTrimestre === t ? '#d97706' : '#f8fafc', color: filterTrimestre === t ? 'white' : '#64748b',
+                                background: filterTrimestre === p.trimestre_id ? '#d97706' : '#f8fafc',
+                                color: filterTrimestre === p.trimestre_id ? 'white' : '#64748b',
                                 border: 'none', cursor: 'pointer'
-                            }}>T{t}</button>
+                            }}>{p.libelle}</button>
                         ))}
                     </div>
                     {/* Statut */}
@@ -249,6 +405,12 @@ export default function CentreEvaluationPage() {
                         <FileText size={48} style={{ opacity: 0.15, margin: '0 auto 16px' }} />
                         <p style={{ fontWeight: 600, fontSize: '15px' }}>Aucun sujet trouvé.</p>
                         <p style={{ fontSize: '13px' }}>Les sujets des enseignants apparaîtront ici une fois envoyés.</p>
+                        {/* Un écran vide doit dire quoi faire, pas seulement
+                            constater. */}
+                        <button onClick={() => { setDemandePeriode(suivi?.periode?.trimestre_id ?? null); setDemandeOuverte(true); }}
+                            style={{ marginTop: '18px', padding: '10px 20px', borderRadius: '12px', border: 'none', background: '#d97706', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+                            <Megaphone size={15} /> Demander les sujets aux enseignants
+                        </button>
                     </div>
                 ) : (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '16px' }}>
@@ -351,6 +513,67 @@ export default function CentreEvaluationPage() {
                                     display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
                                     background: 'linear-gradient(135deg, #dc2626, #ef4444)', color: 'white', border: 'none', cursor: 'pointer'
                                 }}><XCircle size={14} /> Rejeter</button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ═══ DEMANDER LES SUJETS ═══
+                Ce geste n'existait que dans l'écran Communication : il fallait
+                connaître l'astuce et changer d'écran pour réclamer des sujets. */}
+            <AnimatePresence>
+                {demandeOuverte && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={() => !envoiDemande && setDemandeOuverte(false)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+                        <motion.div initial={{ scale: 0.96, y: 10 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0 }}
+                            onClick={e => e.stopPropagation()}
+                            style={{ background: 'white', borderRadius: '16px', width: '100%', maxWidth: '520px', overflow: 'hidden' }}>
+                            <div style={{ padding: '18px 24px', borderBottom: '1px solid var(--border-light)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <Megaphone size={19} color="#d97706" />
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Demander les sujets</div>
+                                    <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>
+                                        Tous les enseignants recevront la demande dans leur portail.
+                                    </div>
+                                </div>
+                                <button onClick={() => setDemandeOuverte(false)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)' }}>
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            <div style={{ padding: '20px 24px', display: 'grid', gap: '14px' }}>
+                                <div>
+                                    <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>PÉRIODE</label>
+                                    <select value={demandePeriode ?? ''} onChange={e => setDemandePeriode(Number(e.target.value) || null)}
+                                        style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13.5px', fontWeight: 600 }}>
+                                        {periodes.length === 0 && <option value="">Aucune période configurée</option>}
+                                        {periodes.map(p => (
+                                            <option key={p.trimestre_id} value={p.trimestre_id}>{p.libelle}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>MESSAGE (FACULTATIF)</label>
+                                    <textarea value={demandeMessage} onChange={e => setDemandeMessage(e.target.value)} rows={3}
+                                        placeholder="Ex : merci de déposer vos sujets avant le 15 du mois."
+                                        style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', resize: 'vertical' }} />
+                                    <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                                        Laissé vide, un message standard est envoyé.
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style={{ padding: '16px 24px', borderTop: '1px solid var(--border-light)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button onClick={() => setDemandeOuverte(false)}
+                                    style={{ padding: '10px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 600, background: 'white', color: 'var(--text-secondary)', border: '1px solid var(--border-light)', cursor: 'pointer' }}>
+                                    Annuler
+                                </button>
+                                <button onClick={envoyerDemande} disabled={envoiDemande || periodes.length === 0}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '10px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, background: '#d97706', color: 'white', border: 'none', cursor: 'pointer' }}>
+                                    <Send size={14} /> {envoiDemande ? 'Envoi…' : 'Envoyer la demande'}
+                                </button>
                             </div>
                         </motion.div>
                     </motion.div>

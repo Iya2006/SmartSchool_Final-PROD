@@ -26,6 +26,9 @@ Ce qu'il fait
 1. Crée un établissement s'il n'en existe AUCUN (jamais s'il en existe déjà).
 2. Crée une année scolaire courante pour cet établissement s'il n'en a aucune
    (l'application en a besoin partout : classes, notes, factures).
+2 bis. Donne à cette école sa liste de départ de types d'évaluation
+   (Composition, Évaluation…). Depuis qu'ils appartiennent à chaque école,
+   une école sans types ne peut ni créer une épreuve ni calculer une moyenne.
 3. Crée le compte ADMIN de cette école, et affiche son mot de passe UNE FOIS.
 
 Ce qu'il ne fait PAS
@@ -52,6 +55,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.core.database import SessionLocal  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.models.academique import AnneeScolaire, Etablissement, Utilisateur  # noqa: E402
+from app.services.referentiel_evaluation import (  # noqa: E402
+    amorcer_types_evaluation, types_manquants,
+)
+
+from app.services.referentiel_evaluation import TYPES_REFERENCE  # noqa: E402
+TYPES_REFERENCE_TAILLE = TYPES_REFERENCE
 
 CODE_DEFAUT = "ETAB-001"
 NOM_DEFAUT = "Mon établissement"
@@ -109,6 +118,24 @@ def main() -> int:
                 ))
         else:
             print(f"[OK] Une annee scolaire existe deja : {annee.libelle}. Aucune creation.")
+
+        # Types d'evaluation : propres a chaque ecole depuis la migration
+        # 2026_08_notation_09. Sans eux, aucune epreuve n'est creable.
+        if cible is not None and cible.etablissement_id is not None:
+            manquants = types_manquants(db, cible.etablissement_id)
+            if manquants:
+                actions.append(
+                    f"CREER {len(manquants)} type(s) d'evaluation pour cet etablissement "
+                    f"({', '.join(manquants)})"
+                )
+                if appliquer:
+                    amorcer_types_evaluation(db, cible.etablissement_id)
+            else:
+                print("[OK] Les types d'evaluation existent deja. Aucune creation.")
+        elif cible is None:
+            actions.append(
+                f"CREER {len(TYPES_REFERENCE_TAILLE)} type(s) d'evaluation pour la nouvelle ecole"
+            )
 
         # Un SUPER_ADMIN rattache a une ecole est une erreur : il devient un
         # simple administrateur de cette ecole et perd sa position d'editeur

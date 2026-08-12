@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
+import ClassementEpreuves from '@/components/ClassementEpreuves';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 
@@ -796,6 +797,19 @@ export default function PortailParent() {
                                                     </table>
                                                 )}
                                             </div>
+                                            {/* Classement par épreuve : le backend l'exposait
+                                                (/epreuves + /classement), aucun écran ne l'appelait.
+                                                Le parent peut désormais suivre le rang de son enfant
+                                                composition par composition. */}
+                                            {data?.parent?.parent_id && child?.eleve_id && (
+                                                <div style={{ padding: '4px 24px 24px' }}>
+                                                    <ClassementEpreuves
+                                                        baseUrl={`/api/portail-parent/${data.parent.parent_id}/enfant/${child.eleve_id}`}
+                                                        trimestreId={selectedTrimestre}
+                                                        couleur="#7c3aed"
+                                                    />
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
@@ -1183,6 +1197,7 @@ export default function PortailParent() {
                                                                         <td style={{ padding: '10px 12px', textAlign: 'center' }}>
                                                                             <span style={{ fontSize: '14px', fontWeight: 800, color: m.moyenne_eleve !== null && m.moyenne_eleve >= 10 ? '#10b981' : '#ef4444' }}>
                                                                                 {m.moyenne_eleve !== null ? m.moyenne_eleve.toFixed(2) : '—'}
+                                                                                {m.lettre ? ` ${m.lettre}` : ''}
                                                                             </span>
                                                                         </td>
                                                                         <td style={{ padding: '10px 12px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>{m.moyenne_classe !== null ? m.moyenne_classe.toFixed(2) : '—'}</td>

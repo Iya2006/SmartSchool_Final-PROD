@@ -1,24 +1,59 @@
 """
 SMARTSCHOOL API — Routes Évaluations, Centralisation des Notes, Calcul Moyennes
+
+Toute la logique de calcul (coefficients, moyennes, mentions, barèmes) vit dans
+app/services/notation.py — source unique partagée avec portail_enseignant.py.
+Ce module ne fait qu'exposer les routes HTTP.
 """
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, or_
 from typing import List, Optional
+from datetime import date
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.models.academique import (
-    Evaluation, Note, Inscription, Eleve, Classe, Matiere,
+    Evaluation, EvaluationSession, Note, Inscription, Eleve, Classe, Matiere,
     Trimestre, TypeEvaluation, Enseignant, ClasseMatiere,
     Affectation, Bulletin, BulletinLigne, AnneeScolaire, ParametreEtablissement,
-    Cycle, Niveau, Etablissement
+    Cycle, Niveau, Etablissement, PeriodeEpreuve
 )
 from app.schemas.schemas import (
     EvaluationCreate, EvaluationOut, NoteCreate, NoteUpdate, NoteOut,
-    TypeEvaluationCreate, TypeEvaluationUpdate, TypeEvaluationOut
+    TypeEvaluationCreate, TypeEvaluationUpdate, TypeEvaluationOut,
+    EvaluationSessionCreate, EvaluationSessionUpdate, EvaluationSessionOut,
+    EvaluationUpdate
 )
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import require_etablissement
+from app.services.notation import (
+    calendrier_mois,
+    epreuves_retenues_periode,
+    periode_pour_date,
+    verifier_date_dans_periode,
+    calculer_resultats_annuels,
+    calculer_resultats_periode,
+    coefficient_effectif,
+    coefficient_matiere_effectif,
+    detail_par_type_classe,
+    detail_par_type_matiere,
+    get_bareme_defaut_cycle,
+    get_appreciation,
+    get_bareme_effectif,
+    get_bulletin_display_flags,
+    get_cycle_key,
+    get_etablissement_id,
+    get_mention,
+    get_mode_agregation,
+    get_notation_seuils,
+    get_lettres_config,
+    get_types_evaluation_coefficients,
+    lettre_pour_note,
+    moyenne_matiere_eleve,
+    normaliser_note,
+    precharger_notes as _precharger_notes,
+    valider_note,
+)
 
 router = APIRouter(prefix="/api/evaluations", tags=["Évaluations"])
 
@@ -64,278 +99,35 @@ def _bulletin_ou_404(db: Session, bulletin_id: int, etablissement_id: int) -> Bu
     return b
 
 
-# ════════════════════════════════════════════════════════════
-# HELPER: Appréciation automatique
-# ════════════════════════════════════════════════════════════
-def get_appreciation(moyenne: float, note_sur: float = 20) -> str:
-    """Retourne l'appréciation textuelle selon le barème guinéen."""
-    if note_sur == 10:
-        if moyenne >= 9: return "Très Bien"
-        if moyenne >= 7: return "Bien"
-        if moyenne >= 6: return "Assez Bien"
-        if moyenne >= 5: return "Passable"
-        return "Insuffisant"
-    else:  # /20
-        if moyenne >= 16: return "Très Bien"
-        if moyenne >= 14: return "Bien"
-        if moyenne >= 12: return "Assez Bien"
-        if moyenne >= 10: return "Passable"
-        return "Insuffisant"
-
-
-# Seuils de mentions par défaut, alignés sur les valeurs par défaut du
-# frontend (frontend/src/app/parametres/notation/page.tsx — `mentions` state).
-_SEUILS_MENTIONS_DEFAUT = {
-    'primaire': {'tb': 9.0,  'b': 7.0,  'ab': 6.0,  'p': 5.0},
-    'college':  {'tb': 16.0, 'b': 14.0, 'ab': 12.0, 'p': 10.0},
-    'lycee':    {'tb': 16.0, 'b': 14.0, 'ab': 12.0, 'p': 10.0},
-}
-
-# Codes de cycle (ss_cycles.code) -> clé utilisée par le frontend/les paramètres
-_CYCLE_CODE_TO_KEY = {"PRM": "primaire", "CLG": "college", "LYC": "lycee"}
-
-
-def get_cycle_key(classe_id: int, db: Session) -> str:
-    """Retourne la clé de cycle ('primaire'/'college'/'lycee') d'une classe.
-
-    Se base sur Classe -> Niveau -> Cycle.code. Retombe sur 'college' si
-    l'information est introuvable (comportement historique inchangé).
-    """
-    row = (
-        db.query(Cycle.code)
-        .join(Niveau, Niveau.cycle_id == Cycle.cycle_id)
-        .join(Classe, Classe.niveau_id == Niveau.niveau_id)
-        .filter(Classe.classe_id == classe_id)
+def _session_ou_404(db: Session, session_id: int, etablissement_id: int) -> EvaluationSession:
+    """EvaluationSession porte etablissement_id, mais on ne s'y fie pas seul :
+    la classe reste la source de vérité (la colonne est dénormalisée). 404 pour
+    ne pas confirmer l'existence de la session d'une autre école."""
+    s = (
+        db.query(EvaluationSession)
+        .join(Classe, Classe.classe_id == EvaluationSession.classe_id)
+        .filter(
+            EvaluationSession.session_id == session_id,
+            Classe.etablissement_id == etablissement_id,
+        )
         .first()
     )
-    code = row[0] if row else None
-    return _CYCLE_CODE_TO_KEY.get(code, "college")
+    if not s:
+        raise HTTPException(status_code=404, detail="Session non trouvée")
+    return s
 
 
-def get_notation_seuils(db, cycle: str, etablissement_id: int) -> dict:
-    """Lit les seuils de mentions (par cycle) depuis ss_parametres, avec fallback.
-
-    Les clés persistées par la page /parametres/notation sont de la forme
-    `notation.mention.{cycle}.{tb|b|ab|p}` — il faut lire exactement ce format
-    (auparavant ce code lisait `notation.mention_tres_bien`, qui n'existe pas,
-    d'où des mentions toujours calculées avec les valeurs par défaut).
-
-    `etablissement_id` est OBLIGATOIRE (chantier multi-écoles) : il valait 1 par
-    défaut et l'appelant unique ne le passait pas, si bien que TOUS les
-    établissements se voyaient appliquer les seuils de mentions de l'école 1.
-    """
-    seuils = dict(_SEUILS_MENTIONS_DEFAUT.get(cycle, _SEUILS_MENTIONS_DEFAUT["college"]))
-    if db is not None:
-        try:
-            prefix = f"notation.mention.{cycle}."
-            params = db.query(ParametreEtablissement).filter(
-                ParametreEtablissement.etablissement_id == etablissement_id,
-                ParametreEtablissement.categorie == 'NOTATION',
-                ParametreEtablissement.cle.like(f"{prefix}%"),
-            ).all()
-            for p in params:
-                key = p.cle.replace(prefix, '')
-                if key in seuils:
-                    seuils[key] = float(p.valeur)
-        except Exception:
-            pass
-    return seuils
-
-
-def get_mention(moyenne: float, db, cycle: str, etablissement_id: int) -> str:
-    """Retourne la mention pour le bulletin selon les seuils configurés (par cycle)."""
-    s = get_notation_seuils(db, cycle, etablissement_id)
-    if moyenne >= s['tb']: return "TRÈS BIEN"
-    if moyenne >= s['b']:  return "BIEN"
-    if moyenne >= s['ab']: return "ASSEZ BIEN"
-    if moyenne >= s['p']:  return "PASSABLE"
-    return "INSUFFISANT"
-
-
-# ════════════════════════════════════════════════════════════
-# SYSTÈME GUINÉEN À 3 NOTES — écrite / orale / composition
-# ════════════════════════════════════════════════════════════
-_POIDS_EVAL_DEFAUT = {"ecrite": 1.0, "orale": 1.0, "composition": 2.0}
-
-
-def get_poids_evaluations(db: Session, etablissement_id: int) -> dict:
-    """Pondérations Écrit/Oral/Composition configurables par l'administrateur
-    (Paramètres > Notation), avec les valeurs par défaut officielles guinéennes
-    (1 / 1 / 2 — la composition compte double). Le coefficient propre de la
-    matière n'intervient JAMAIS ici : il ne sert qu'à pondérer la moyenne de
-    matière dans la moyenne générale, un niveau au-dessus (voir calculer_moyennes).
-    """
-    poids = dict(_POIDS_EVAL_DEFAUT)
-    try:
-        params = db.query(ParametreEtablissement).filter(
-            ParametreEtablissement.etablissement_id == etablissement_id,
-            ParametreEtablissement.categorie == 'NOTATION',
-            ParametreEtablissement.cle.in_([
-                'notation.poids_ecrit', 'notation.poids_oral', 'notation.poids_composition'
-            ]),
-        ).all()
-        mapping = {'notation.poids_ecrit': 'ecrite', 'notation.poids_oral': 'orale', 'notation.poids_composition': 'composition'}
-        for p in params:
-            key = mapping.get(p.cle)
-            if key:
-                poids[key] = float(p.valeur)
-    except Exception:
-        pass
-    return poids
-
-
-def coefficient_pour_evaluation(db: Session, type_eval_id: int, matiere_id: int, classe_id: int, etablissement_id: int) -> float:
-    """Pondération affichée/stockée sur l'évaluation selon sa catégorie (Écrit/
-    Oral/Composition configurés dans Paramètres > Notation) — jamais un choix
-    manuel de l'enseignant, et jamais le coefficient de la matière (qui ne joue
-    qu'au niveau de la moyenne générale, pas ici).
-    """
-    type_eval = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == type_eval_id).first()
-    cat = _categorie_evaluation(type_eval.code if type_eval else None)
-    return get_poids_evaluations(db, etablissement_id)[cat]
-
-
-def _categorie_evaluation(type_eval_code: Optional[str]) -> str:
-    """Regroupe les types d'évaluation dans les 3 catégories officielles
-    guinéennes : écrite (devoirs/interros/examens/tp/exposé/participation),
-    orale, composition."""
-    if type_eval_code == "COMPO":
-        return "composition"
-    if type_eval_code == "ORAL":
-        return "orale"
-    return "ecrite"
-
-
-def moyenne_matiere_eleve(evaluations: list, inscription_id: int, notes_lookup: dict, type_codes: dict, poids: dict):
-    """Moyenne d'une matière pour un élève, système guinéen à 3 notes.
-
-    Quand plusieurs évaluations tombent dans la même catégorie (ex: plusieurs
-    devoirs saisis au fil du trimestre), seule la note la PLUS HAUTE de cette
-    catégorie compte — pas leur moyenne (pratique confirmée par l'établissement :
-    l'enseignant regroupe ses évaluations et ne retient que la meilleure).
-    Pondération Écrit/Oral/Composition configurable (`poids`, voir
-    `get_poids_evaluations`) — le coefficient de la matière n'intervient pas ici.
-    Si une catégorie n'a aucune note (ex: pas d'oral dans cet établissement), elle
-    est simplement absente de la somme — pas de division par un poids fictif.
-
-    `notes_lookup` : dict {(evaluation_id, inscription_id): Note}, préchargé en
-    UNE requête par l'appelant (jamais de requête ici — c'est ce qui rendait la
-    page Centralisation inutilisable au-delà de quelques dizaines d'élèves).
-
-    Retourne (moyenne_arrondie_ou_None, nb_notes_saisies).
-    """
-    meilleure_par_categorie = {}
-    nb_notes = 0
-
-    for ev in evaluations:
-        note = notes_lookup.get((ev.evaluation_id, inscription_id))
-        if not note or note.valeur is None or note.est_absent == "O":
-            continue
-        nb_notes += 1
-        val = float(note.valeur)
-        note_sur = float(ev.note_sur or 20)
-        normalized = val * 20 / note_sur if note_sur != 20 else val
-        cat = _categorie_evaluation(type_codes.get(ev.type_eval_id))
-        if cat not in meilleure_par_categorie or normalized > meilleure_par_categorie[cat]:
-            meilleure_par_categorie[cat] = normalized
-
-    if not meilleure_par_categorie:
-        return None, 0
-
-    total_coef = 0.0
-    total_points = 0.0
-    for cat, note in meilleure_par_categorie.items():
-        coef = poids.get(cat, 1.0)
-        total_coef += coef
-        total_points += note * coef
-
-    return round(total_points / total_coef, 2) if total_coef > 0 else None, nb_notes
-
-
-def detail_categories_matiere(db: Session, classe_id: int, matiere_id: int, trimestre_id: int, inscription_id: int) -> dict:
-    """Détail Écrit/Oral/Composition (meilleure note normalisée /20 de chaque
-    catégorie, None si absente) pour UNE matière d'UN élève — utilisé par le
-    bulletin PDF pour afficher les 3 notes, pas seulement la moyenne finale.
-    """
-    evals = db.query(Evaluation).filter(
-        Evaluation.classe_id == classe_id,
-        Evaluation.matiere_id == matiere_id,
-        Evaluation.trimestre_id == trimestre_id,
-        Evaluation.statut == "CENTRALISEE"
-    ).all()
-    type_codes = {t.type_eval_id: t.code for t in db.query(TypeEvaluation).all()}
-    detail = {"ecrite": None, "orale": None, "composition": None}
-    for ev in evals:
-        note = db.query(Note).filter(
-            Note.evaluation_id == ev.evaluation_id, Note.inscription_id == inscription_id,
-            Note.est_absent == "N", Note.valeur.isnot(None)
-        ).first()
-        if not note:
-            continue
-        val = float(note.valeur)
-        note_sur = float(ev.note_sur or 20)
-        normalized = val * 20 / note_sur if note_sur != 20 else val
-        cat = _categorie_evaluation(type_codes.get(ev.type_eval_id))
-        if detail[cat] is None or normalized > detail[cat]:
-            detail[cat] = normalized
-    return detail
-
-
-def get_bulletin_display_flags(db: Session, etablissement_id: int) -> dict:
-    """Réglages "quoi afficher sur le bulletin" — SOURCE UNIQUE partagée par le
-    PDF, le portail élève, le portail parent et la page admin /bulletins.
-
-    Deux pages Paramètres écrivent potentiellement ce réglage :
-    Notation > Affichage Bulletins (categorie NOTATION, clés `display.*`) et
-    Documents (categorie DOCUMENTS, clés `champ_*`) — elles vivaient chacune
-    dans leur coin sans jamais se voir, d'où les toggles qui semblaient sans
-    effet selon la page utilisée pour les modifier. `notation.display.*`
-    prend le dessus quand présent ; sinon on retombe sur `documents.champ_*`.
-    """
-    notation_display = {}
-    try:
-        for p in db.query(ParametreEtablissement).filter(
-            ParametreEtablissement.etablissement_id == etablissement_id,
-            ParametreEtablissement.categorie == "NOTATION",
-            ParametreEtablissement.cle.like("display.%"),
-        ).all():
-            notation_display[p.cle.replace("display.", "")] = p.valeur
-    except Exception:
-        pass
-
-    documents_settings = {}
-    try:
-        for p in db.query(ParametreEtablissement).filter(
-            ParametreEtablissement.etablissement_id == etablissement_id,
-            ParametreEtablissement.categorie == "DOCUMENTS",
-            ParametreEtablissement.cle.in_(["champ_rang", "champ_moyenne_classe", "champ_min_max"]),
-        ).all():
-            documents_settings[p.cle] = p.valeur
-    except Exception:
-        pass
-
-    def is_true(v):
-        return str(v).lower() in ("true", "1", "oui", "yes")
-
-    return {
-        "show_rang": is_true(notation_display.get("rang", documents_settings.get("champ_rang", "true"))),
-        "show_mention": is_true(notation_display.get("mention", "true")),
-        "show_appreciation": is_true(notation_display.get("appreciation", "true")),
-        "show_effectif": is_true(notation_display.get("effectif", "true")),
-        "show_stats_matiere": is_true(notation_display.get(
-            "stats_matiere",
-            documents_settings.get("champ_moyenne_classe", "true") == "true" or documents_settings.get("champ_min_max", "true") == "true"
-        )),
-    }
-
-
-def _precharger_notes(db: Session, evaluation_ids: list) -> dict:
-    """Précharge toutes les notes d'un lot d'évaluations en UNE requête —
-    à utiliser avant toute boucle appelant moyenne_matiere_eleve()."""
-    if not evaluation_ids:
-        return {}
-    rows = db.query(Note).filter(Note.evaluation_id.in_(evaluation_ids)).all()
-    return {(n.evaluation_id, n.inscription_id): n for n in rows}
+# ── Note d'architecture (fusion multi-écoles) ──────────────────────────
+# Les helpers de calcul que ce fichier portait (get_appreciation,
+# get_cycle_key, get_notation_seuils, get_mention, get_poids_evaluations,
+# coefficient_pour_evaluation, moyenne_matiere_eleve,
+# detail_categories_matiere, get_bulletin_display_flags, _precharger_notes)
+# ne sont PAS réintroduits ici : ils vivent désormais dans
+# app/services/notation.py et sont importés en haut de ce module. Les y
+# redéfinir masquerait le moteur central et rouvrirait la divergence
+# silencieuse déjà constatée entre ce fichier et portail_enseignant.py.
+# Leur durcissement multi-écoles (etablissement_id obligatoire) est reporté
+# dans le moteur.
 
 
 # ════════════════════════════════════════════════════════════
@@ -366,19 +158,38 @@ def list_evaluations(
 
 @router.post("", response_model=EvaluationOut, status_code=201)
 def create_evaluation(data: EvaluationCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Crée une évaluation mono-matière (le chemin groupé multi-matières est
+    `POST /sessions`)."""
     # La classe cible doit appartenir à cet établissement — sinon une
     # évaluation (et donc des notes) pouvait être créée dans une autre école.
-    _classe_ou_404(db, data.classe_id, etablissement_id)
+    classe = _classe_ou_404(db, data.classe_id, etablissement_id)
+    # Ce garde-fou manquait ici alors qu'il est appliqué partout ailleurs dans
+    # ce module : une année archivée laissait créer des évaluations.
+    verifier_annee_modifiable(db, classe.annee_id)
+
     trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == data.trimestre_id).first()
     if trimestre and trimestre.statut == "CLOTURE":
         raise HTTPException(
             status_code=400,
             detail=f"{trimestre.libelle} est clôturé — impossible de créer une nouvelle évaluation pour cette période."
         )
+    try:
+        verifier_date_dans_periode(db, trimestre, data.date_evaluation)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
     payload = data.model_dump()
-    payload["coefficient"] = coefficient_pour_evaluation(
-        db, payload["type_eval_id"], payload["matiere_id"], payload["classe_id"], etablissement_id
-    )
+    cycle_key = get_cycle_key(data.classe_id, db)
+
+    # Barème : résolu depuis la configuration de l'école si l'appelant n'impose rien
+    if not payload.get("note_sur"):
+        payload["note_sur"] = get_bareme_effectif(
+            db, data.classe_id, data.matiere_id, cycle_key, etablissement_id
+        )
+
+    type_coefs = get_types_evaluation_coefficients(db, etablissement_id, cycle_key)
+    payload["coefficient"] = type_coefs.get(payload["type_eval_id"], 1.0)
+
     ev = Evaluation(**payload)
     db.add(ev)
     db.commit()
@@ -441,30 +252,89 @@ def initialiser_notes(evaluation_id: int, db: Session = Depends(get_db), etablis
 # CENTRALISATION DES NOTES — Vue Admin
 # ════════════════════════════════════════════════════════════
 
+# Recherche insensible aux accents : personne ne tape « Mathématiques » ni
+# « 8ème » avec leurs accents dans une barre de recherche. Sans ça, chercher
+# « Mathematiques » ne renvoyait rien du tout.
+_ACCENTS = "àáâãäåçèéêëìíîïñòóôõöùúûüýÿ"
+_SANS = "aaaaaaceeeeiiiinooooouuuuyy"
+
+
+def _dépouiller(texte: str) -> str:
+    """Retire les accents d'un terme saisi, côté Python."""
+    table = str.maketrans(_ACCENTS + _ACCENTS.upper(), _SANS + _SANS.upper())
+    return texte.translate(table)
+
+
+def _sans_accents(colonne, db: Session):
+    """Même dépouillement, côté base — via translate() natif de Postgres.
+
+    Les autres moteurs (SQLite en test) n'ont pas cette fonction : on retombe
+    alors sur la colonne brute, la recherche reste fonctionnelle mais devient
+    sensible aux accents.
+    """
+    dialecte = getattr(getattr(db, "bind", None), "dialect", None)
+    if dialecte is not None and dialecte.name == "postgresql":
+        return func.translate(colonne, _ACCENTS + _ACCENTS.upper(), _SANS + _SANS.upper())
+    return colonne
+
+
 @router.get("/centralisees")
 def get_evaluations_centralisees(
     response: Response,
     classe_id: Optional[int] = None,
     trimestre_id: Optional[int] = None,
+    statut: Optional[str] = None,
+    q: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Liste les évaluations centralisées (envoyées par les enseignants), paginée.
+    """Liste les évaluations d'une classe/période, paginée.
+
+    `q` recherche sur l'intitulé, la matière, la classe et l'enseignant.
+
+    `statut` filtre sur un état précis (PLANIFIEE, PUBLIEE, CENTRALISEE) ;
+    sans lui, toutes les évaluations sont retournées — l'administration doit
+    voir les compositions qu'elle vient de créer, pas seulement celles déjà
+    remontées par les enseignants.
 
     Réécrit pour éviter le N+1 (6 requêtes par évaluation — matière, classe,
     trimestre, enseignant, nb_notes, moyenne — qui faisait timeout la page
     Centralisation dès que le volume d'évaluations a dépassé quelques dizaines) :
     tout est résolu par des requêtes groupées/en lot, plus jamais une par ligne.
     """
+    # La jointure sur Classe porte l'isolation : une évaluation appartient à
+    # l'école de sa classe. Le statut, lui, reste un filtre libre — l'écran
+    # Centralisation affiche aussi les épreuves annulées ou publiées.
     query = db.query(Evaluation).join(Classe, Classe.classe_id == Evaluation.classe_id).filter(
-        Evaluation.statut == "CENTRALISEE", Classe.etablissement_id == etablissement_id
+        Classe.etablissement_id == etablissement_id
     )
+    if statut:
+        query = query.filter(Evaluation.statut == statut)
     if classe_id:
         query = query.filter(Evaluation.classe_id == classe_id)
     if trimestre_id:
         query = query.filter(Evaluation.trimestre_id == trimestre_id)
+
+    # Recherche sur toute la base, pas seulement sur la page affichée : avec une
+    # pagination à 50 lignes et près de mille évaluations, un filtre appliqué
+    # côté navigateur ne trouvait une épreuve que si elle était déjà à l'écran.
+    if q and q.strip():
+        terme = q.strip()
+        query = (
+            query.outerjoin(Matiere, Matiere.matiere_id == Evaluation.matiere_id)
+            # Classe est déjà jointe plus haut (isolation) : la rejoindre ici
+            # dupliquerait la table et fausserait le compte.
+            .outerjoin(Enseignant, Enseignant.enseignant_id == Evaluation.enseignant_id)
+            .filter(or_(*[
+                _sans_accents(colonne, db).ilike(f"%{_dépouiller(terme)}%")
+                for colonne in (
+                    Evaluation.libelle, Matiere.libelle, Classe.libelle,
+                    Enseignant.nom, Enseignant.prenom,
+                )
+            ]))
+        )
 
     response.headers["X-Total-Count"] = str(query.count())
     evals = query.order_by(desc(Evaluation.date_evaluation)).offset(skip).limit(limit).all()
@@ -515,6 +385,17 @@ def get_evaluations_centralisees(
             "nb_notes": agg.nb_notes if agg else 0,
             "moyenne": round(float(agg.moyenne), 2) if agg and agg.moyenne is not None else None,
             "statut": ev.statut,
+            # Permet au frontend de regrouper les évaluations d'une même
+            # composition en une seule ligne plutôt qu'une par matière.
+            "session_id": ev.session_id,
+            # Nécessaires pour pré-remplir le formulaire de correction d'une
+            # épreuve : sans eux, corriger un barème repartait d'un champ vide.
+            "type_eval_id": ev.type_eval_id,
+            "enseignant_id": ev.enseignant_id,
+            "est_coefficientee": getattr(ev, "est_coefficientee", "O"),
+            "coefficient_override": (
+                float(ev.coefficient_override) if ev.coefficient_override is not None else None
+            ),
         })
     return result
 
@@ -594,8 +475,12 @@ def get_notes_centralisees_classe(
         all_eval_ids.extend(ev.evaluation_id for ev in evals)
 
     notes_lookup = _precharger_notes(db, all_eval_ids)
-    type_codes = {t.type_eval_id: t.code for t in db.query(TypeEvaluation).all()}
-    poids = get_poids_evaluations(db, classe.etablissement_id)
+    etablissement_id = classe.etablissement_id
+    type_coefs = get_types_evaluation_coefficients(db, etablissement_id, cycle_key)
+    echelle = get_bareme_defaut_cycle(db, etablissement_id, cycle_key)
+    # Même règle d'agrégation que le calcul officiel : le tableau affiché doit
+    # montrer exactement les moyennes qui finiront sur le bulletin.
+    mode_agregation = get_mode_agregation(db, etablissement_id, cycle_key)
 
     eleves_data = []
     for insc in inscriptions:
@@ -610,19 +495,21 @@ def get_notes_centralisees_classe(
         for mat_info in matieres:
             evals = evals_by_matiere[mat_info["matiere_id"]]
 
-            # Notes de cet élève dans ces évaluations — système à 3 notes
-            # (écrite/orale/composition), meilleure note par catégorie retenue.
-            moy_mat, nb_notes = moyenne_matiere_eleve(evals, insc.inscription_id, notes_lookup, type_codes, poids)
+            # Moyenne pondérée par type d'évaluation (cf. services/notation.py)
+            moy_mat, nb_notes = moyenne_matiere_eleve(
+                evals, insc.inscription_id, notes_lookup, type_coefs, echelle,
+                mode_agregation
+            )
 
             if moy_mat is not None:
-                coef_mat = mat_info["coefficient"]
+                coef_mat = coefficient_matiere_effectif(mat_info["coefficient"], evals)
                 total_coef += coef_mat
                 total_points += moy_mat * coef_mat
 
             matieres_notes[str(mat_info["matiere_id"])] = {
                 "moyenne": moy_mat,
                 "nb_notes": nb_notes,
-                "appreciation": get_appreciation(moy_mat) if moy_mat is not None else None,
+                "appreciation": get_appreciation(moy_mat, echelle) if moy_mat is not None else None,
             }
 
         # Moyenne générale pondérée
@@ -637,7 +524,7 @@ def get_notes_centralisees_classe(
             "sexe": eleve.sexe,
             "matieres": matieres_notes,
             "moyenne_generale": moy_gen,
-            "mention": get_mention(moy_gen, db, cycle_key, classe.etablissement_id) if moy_gen is not None else None,
+            "mention": get_mention(moy_gen, db, cycle_key, etablissement_id) if moy_gen is not None else None,
         })
 
     # Trier par moyenne décroissante pour le rang
@@ -670,160 +557,1130 @@ def get_notes_centralisees_classe(
 # ════════════════════════════════════════════════════════════
 
 @router.post("/classe/{classe_id}/calculer-moyennes")
-def calculer_moyennes(classe_id: int, trimestre_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Calcule toutes les moyennes et crée/met à jour les bulletins pour une classe + trimestre."""
-    # D'abord récupérer les données via la vue centralisée
+def calculer_moyennes(
+    classe_id: int,
+    trimestre_id: int = 1,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Calcule les moyennes de la période et alimente les bulletins de la classe.
+
+    Le calcul lui-même vit dans services/notation.py — partagé avec l'aperçu
+    intermédiaire (`/resultats-intermediaires`) pour qu'un chiffre affiché avant
+    publication soit exactement celui qui finira sur le bulletin.
+    """
     classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
-    cycle_key = get_cycle_key(classe_id, db)
 
-    cms = db.query(ClasseMatiere).filter(
-        ClasseMatiere.classe_id == classe_id,
-        ClasseMatiere.est_active == "O"
-    ).all()
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(
+            400,
+            f"{trimestre.libelle} est cloture - impossible de recalculer les moyennes de cette periode."
+        )
 
-    matieres_info = {}
-    for cm in cms:
-        mat = db.query(Matiere).filter(Matiere.matiere_id == cm.matiere_id).first()
-        if mat:
-            matieres_info[mat.matiere_id] = {
-                "libelle": mat.libelle,
-                "coefficient": float(cm.coefficient) if cm.coefficient else float(mat.coefficient_defaut or 1),
-            }
+    res = calculer_resultats_periode(db, classe_id, trimestre_id, persist=True)
+    return {
+        "message": f"Moyennes calculees pour {res['classe']} - {res['effectif']} bulletins",
+        "classe": res["classe"],
+        "effectif": res["effectif"],
+        "bulletins_crees": res["bulletins_crees"],
+        "bulletins_total": res["bulletins_total"],
+    }
 
-    inscriptions = db.query(Inscription).filter(
+
+def _enqueue(fonction, *args, timeout: int, etablissement_id: int):
+    """Met une tâche en file, ou échoue franchement si Redis est indisponible.
+
+    Une tâche perdue silencieusement n'est jamais acceptable : contrairement au
+    cache (app/core/cache.py), l'appelant doit savoir que le calcul n'a pas été
+    accepté. Même contrat que `generer_bulletin_pdf_async`.
+
+    Pas de `Retry` ici, à la différence du PDF de bulletin : ces calculs
+    écrivent en base et leurs seuls échecs plausibles (période clôturée entre
+    temps, classe déplacée d'établissement) sont définitifs — les rejouer
+    retarderait le passage en FAILED sans aucune chance de succès.
+
+    `meta["etablissement_id"]` est OBLIGATOIRE : `GET /api/tasks/{id}` compare
+    ce champ à l'établissement du demandeur et refuse par défaut une tâche qui
+    ne le porte pas. Sans lui, la tâche part bien mais son résultat devient
+    illisible — y compris pour celui qui l'a lancée.
+    """
+    from app.core.task_queue import get_queue
+    try:
+        return get_queue().enqueue(
+            fonction, *args, job_timeout=timeout, result_ttl=86400, failure_ttl=86400,
+            meta={"etablissement_id": etablissement_id},
+        )
+    except Exception as exc:
+        raise HTTPException(503, f"File de tâches indisponible : {exc}")
+
+
+@router.post("/classe/{classe_id}/calculer-moyennes-async")
+def calculer_moyennes_async(
+    classe_id: int,
+    trimestre_id: int = 1,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Version asynchrone du calcul de période — suivre via GET /api/tasks/{id}.
+
+    C'est le seul calcul du module qui grossit avec l'effectif : sur une classe
+    de 160 élèves et 12 matières, la version synchrone tient la connexion HTTP
+    ouverte plusieurs dizaines de secondes. L'endpoint synchrone reste en place
+    pour les petites classes et les recalculs ponctuels.
+
+    Les contrôles refaits ici (classe, année, période clôturée) évitent de
+    mettre en file un calcul voué à échouer ; le worker les refait de son côté,
+    car l'état peut changer entre la mise en file et l'exécution.
+    """
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    verifier_annee_modifiable(db, classe.annee_id)
+
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+    if not trimestre:
+        raise HTTPException(404, "Période non trouvée")
+    if trimestre.statut == "CLOTURE":
+        raise HTTPException(
+            400,
+            f"{trimestre.libelle} est clôturé — impossible de recalculer les moyennes de cette période.",
+        )
+
+    from app.tasks.notation_tasks import calculer_periode_task
+    job = _enqueue(
+        calculer_periode_task, classe_id, trimestre_id, etablissement_id,
+        timeout=600, etablissement_id=etablissement_id,
+    )
+    return {
+        "task_id": job.id,
+        "status": "PENDING",
+        "message": f"Calcul de {trimestre.libelle} mis en file pour {classe.libelle}.",
+    }
+
+
+@router.post("/classe/{classe_id}/calculer-moyennes-annuelles-async")
+def calculer_moyennes_annuelles_async(
+    classe_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Version asynchrone du calcul annuel — suivre via GET /api/tasks/{id}."""
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    verifier_annee_modifiable(db, classe.annee_id)
+
+    from app.tasks.notation_tasks import calculer_annuel_task
+    job = _enqueue(calculer_annuel_task, classe_id, etablissement_id,
+                   timeout=600, etablissement_id=etablissement_id)
+    return {
+        "task_id": job.id,
+        "status": "PENDING",
+        "message": f"Calcul annuel mis en file pour {classe.libelle}.",
+    }
+
+
+@router.post("/classe/{classe_id}/bulletins/generer-pdf-async")
+def generer_bulletins_classe_async(
+    classe_id: int,
+    trimestre_id: Optional[int] = None,
+    type_bulletin: str = "TRIMESTRIEL",
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Génère en une fois les PDF de tous les bulletins d'une classe.
+
+    Imprimer une classe entière déclenchait jusqu'ici autant d'appels HTTP que
+    d'élèves, chacun reconstruisant son PDF pendant la requête. Ce lot est
+    exactement le cas que la génération asynchrone d'un bulletin unique
+    préparait sans le couvrir.
+
+    Suivre l'avancement via GET /api/tasks/{id} : le résultat liste les
+    fichiers produits et, séparément, les élèves en échec.
+    """
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+
+    # On vérifie ici qu'il y a quelque chose à imprimer : mettre en file un lot
+    # vide ne renverrait l'erreur qu'après un aller-retour sur la file.
+    query = db.query(func.count(Bulletin.bulletin_id)).join(
+        Inscription, Inscription.inscription_id == Bulletin.inscription_id
+    ).filter(
         Inscription.classe_id == classe_id,
-        Inscription.statut == "ACTIVE"
+        Bulletin.type_bulletin == type_bulletin,
+    )
+    query = (query.filter(Bulletin.trimestre_id == trimestre_id)
+             if trimestre_id else query.filter(Bulletin.trimestre_id.is_(None)))
+    nb = query.scalar() or 0
+    if nb == 0:
+        raise HTTPException(
+            400, "Aucun bulletin à imprimer : calculez d'abord les moyennes de la période."
+        )
+
+    from app.tasks.notation_tasks import generer_bulletins_classe_task
+    job = _enqueue(
+        generer_bulletins_classe_task,
+        classe_id, etablissement_id, trimestre_id, type_bulletin,
+        timeout=1800, etablissement_id=etablissement_id,
+    )
+    return {
+        "task_id": job.id,
+        "status": "PENDING",
+        "nb_bulletins": nb,
+        "message": f"Génération de {nb} bulletins mise en file pour {classe.libelle}.",
+    }
+
+
+@router.get("/classe/{classe_id}/resultats-intermediaires")
+def resultats_intermediaires(
+    classe_id: int,
+    trimestre_id: int,
+    evaluation_ids: Optional[str] = None,
+    session_ids: Optional[str] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Classement de suivi, à la demande, sans rien écrire en base.
+
+    Permet à l'école de sortir un classement mensuel sur une sélection
+    d'évaluations sans toucher aux bulletins officiels de la période. Les
+    identifiants sont passés en liste séparée par des virgules.
+    """
+    def _ids(v: Optional[str]) -> Optional[List[int]]:
+        if not v:
+            return None
+        try:
+            return [int(x) for x in v.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(400, "Liste d'identifiants invalide")
+
+    _classe_ou_404(db, classe_id, etablissement_id)
+
+    return calculer_resultats_periode(
+        db, classe_id, trimestre_id,
+        evaluation_ids=_ids(evaluation_ids),
+        session_ids=_ids(session_ids),
+        persist=False,
+    )
+
+
+# ════════════════════════════════════════════════════════════
+# CALENDRIER — quel mois appartient à quelle période
+# ════════════════════════════════════════════════════════════
+
+@router.get("/calendrier/mois")
+def get_calendrier_mois(annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Mois de l'année scolaire et période à laquelle chacun appartient.
+
+    Sert à ce que l'école choisisse « Janvier » plutôt qu'une date brute : le
+    rattachement à la bonne période en découle, au lieu de dépendre de ce qui
+    était sélectionné à l'écran.
+    """
+    if annee_id is None:
+        annee = (db.query(AnneeScolaire).filter(AnneeScolaire.est_courante == "O").first()
+                 or db.query(AnneeScolaire).order_by(desc(AnneeScolaire.annee_id)).first())
+        if not annee:
+            raise HTTPException(404, "Aucune année scolaire configurée")
+        annee_id = annee.annee_id
+    return {"annee_id": annee_id, "mois": calendrier_mois(db, annee_id)}
+
+
+# ════════════════════════════════════════════════════════════
+# ÉPREUVES D'UNE PÉRIODE — ce qui compte pour le résultat officiel
+# ════════════════════════════════════════════════════════════
+
+@router.get("/classe/{classe_id}/periode/{trimestre_id}/epreuves")
+def lister_epreuves_periode(classe_id: int, trimestre_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Épreuves disponibles sur la période, et lesquelles comptent pour le résultat.
+
+    `retenue` indique si l'épreuve entre dans le calcul officiel. Tant que
+    l'école n'a rien choisi, tout ce qui est centralisé compte (`selection_
+    personnalisee` à false) : c'est le comportement par défaut, pas un choix
+    implicite qu'on lui prêterait.
+    """
+    _classe_ou_404(db, classe_id, etablissement_id)
+
+    evals = db.query(Evaluation).filter(
+        Evaluation.classe_id == classe_id,
+        Evaluation.trimestre_id == trimestre_id,
     ).all()
-
-    effectif = len(inscriptions)
-    bulletins_created = 0
-    bulletins_data = []
-
-    # Préchargement en lot (voir get_notes_centralisees_classe pour le détail du
-    # problème de perf que ça résout : avant, une requête Evaluation + une
-    # requête Note par (élève × matière)).
-    evals_by_matiere = {}
-    all_eval_ids = []
-    for mat_id in matieres_info:
-        evals = db.query(Evaluation).filter(
-            Evaluation.classe_id == classe_id,
-            Evaluation.matiere_id == mat_id,
-            Evaluation.trimestre_id == trimestre_id,
-            Evaluation.statut == "CENTRALISEE"
+    types = {
+        t.type_eval_id: t for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
         ).all()
-        evals_by_matiere[mat_id] = evals
-        all_eval_ids.extend(ev.evaluation_id for ev in evals)
+    }
+    retenues = epreuves_retenues_periode(db, classe_id, trimestre_id)
+    personnalisee = retenues is not None
+    retenues_set = set(retenues or [])
 
-    notes_lookup = _precharger_notes(db, all_eval_ids)
-    type_codes = {t.type_eval_id: t.code for t in db.query(TypeEvaluation).all()}
-    poids = get_poids_evaluations(db, classe.etablissement_id)
-
-    for insc in inscriptions:
-        total_coef = 0
-        total_points = 0
-        lignes_data = []
-
-        for mat_id, mat_info in matieres_info.items():
-            evals = evals_by_matiere[mat_id]
-
-            moy_mat, _nb = moyenne_matiere_eleve(evals, insc.inscription_id, notes_lookup, type_codes, poids)
-
-            if moy_mat is not None:
-                total_coef += mat_info["coefficient"]
-                total_points += moy_mat * mat_info["coefficient"]
-
-            lignes_data.append({
-                "matiere_id": mat_id,
-                "moyenne_matiere": moy_mat,
-                "coefficient": mat_info["coefficient"],
-                "appreciation": get_appreciation(moy_mat) if moy_mat is not None else None,
-            })
-
-        moy_gen = round(total_points / total_coef, 2) if total_coef > 0 else None
-
-        bulletins_data.append({
-            "inscription_id": insc.inscription_id,
-            "moyenne_generale": moy_gen,
-            "lignes": lignes_data,
+    # Regroupement par épreuve : une composition est une seule épreuve, même si
+    # elle porte 12 évaluations (une par matière).
+    epreuves = {}
+    for ev in evals:
+        cle = f"S{ev.session_id}" if ev.session_id else f"E{ev.evaluation_id}"
+        e = epreuves.setdefault(cle, {
+            "cle": cle,
+            "session_id": ev.session_id,
+            "evaluation_ids": [],
+            "libelle": ev.libelle,
+            "type_eval_id": ev.type_eval_id,
+            "type": types[ev.type_eval_id].libelle if ev.type_eval_id in types else "",
+            "coefficient_type": float(types[ev.type_eval_id].coefficient or 1) if ev.type_eval_id in types else 1.0,
+            "date_evaluation": ev.date_evaluation.isoformat() if ev.date_evaluation else None,
+            "est_coefficientee": ev.est_coefficientee,
+            "nb_matieres": 0,
+            "nb_centralisees": 0,
         })
+        e["evaluation_ids"].append(ev.evaluation_id)
+        e["nb_matieres"] += 1
+        if ev.statut == "CENTRALISEE":
+            e["nb_centralisees"] += 1
 
-    # Trier et calculer les rangs
-    bulletins_data.sort(key=lambda x: x["moyenne_generale"] or 0, reverse=True)
-
-    # Calculer moyennes de classe par matière
-    matieres_class_stats = {}
-    for mat_id in matieres_info:
-        vals = [
-            l["moyenne_matiere"]
-            for b in bulletins_data
-            for l in b["lignes"]
-            if l["matiere_id"] == mat_id and l["moyenne_matiere"] is not None
-        ]
-        matieres_class_stats[mat_id] = {
-            "moyenne": round(sum(vals) / len(vals), 2) if vals else None,
-            "min": min(vals) if vals else None,
-            "max": max(vals) if vals else None,
-        }
-
-    # Créer ou mettre à jour les bulletins
-    for rang_idx, bd in enumerate(bulletins_data):
-        rang = rang_idx + 1
-        mention = get_mention(bd["moyenne_generale"], db, cycle_key, classe.etablissement_id) if bd["moyenne_generale"] is not None else None
-
-        # Chercher bulletin existant
-        existing = db.query(Bulletin).filter(
-            Bulletin.inscription_id == bd["inscription_id"],
-            Bulletin.trimestre_id == trimestre_id
-        ).first()
-
-        if existing:
-            existing.moyenne_generale = bd["moyenne_generale"]
-            existing.rang = rang
-            existing.effectif_classe = effectif
-            existing.mention = mention
-            existing.statut = "CALCULE"
-            bulletin = existing
-            # Supprimer anciennes lignes
-            db.query(BulletinLigne).filter(BulletinLigne.bulletin_id == existing.bulletin_id).delete()
-        else:
-            bulletin = Bulletin(
-                inscription_id=bd["inscription_id"],
-                trimestre_id=trimestre_id,
-                type_bulletin="TRIMESTRIEL",
-                moyenne_generale=bd["moyenne_generale"],
-                rang=rang,
-                effectif_classe=effectif,
-                mention=mention,
-                statut="CALCULE",
-            )
-            db.add(bulletin)
-            db.flush()
-            bulletins_created += 1
-
-        # Créer les lignes du bulletin
-        for l in bd["lignes"]:
-            stats = matieres_class_stats.get(l["matiere_id"], {})
-            ligne = BulletinLigne(
-                bulletin_id=bulletin.bulletin_id,
-                matiere_id=l["matiere_id"],
-                moyenne_matiere=l["moyenne_matiere"],
-                moyenne_classe=stats.get("moyenne"),
-                note_min=stats.get("min"),
-                note_max=stats.get("max"),
-                coefficient=l["coefficient"],
-                appreciation=l["appreciation"],
-            )
-            db.add(ligne)
-
-    db.commit()
+    liste = sorted(epreuves.values(), key=lambda e: e["date_evaluation"] or "")
+    for e in liste:
+        e["centralisee"] = e["nb_centralisees"] == e["nb_matieres"]
+        e["retenue"] = (
+            all(i in retenues_set for i in e["evaluation_ids"]) if personnalisee
+            else e["centralisee"]
+        )
 
     return {
-        "message": f"✅ Moyennes calculées pour {classe.libelle} — {effectif} bulletins",
-        "classe": classe.libelle,
-        "effectif": effectif,
-        "bulletins_crees": bulletins_created,
-        "bulletins_total": len(bulletins_data),
+        "classe_id": classe_id,
+        "trimestre_id": trimestre_id,
+        "selection_personnalisee": personnalisee,
+        "epreuves": liste,
+    }
+
+
+class SelectionEpreuves(BaseModel):
+    evaluation_ids: List[int]
+
+
+@router.put("/classe/{classe_id}/periode/{trimestre_id}/epreuves")
+def definir_epreuves_periode(
+    classe_id: int, trimestre_id: int,
+    data: SelectionEpreuves, db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Enregistre les épreuves qui comptent pour le résultat officiel de la période.
+
+    Le résultat d'une période n'est pas forcément « tout ce qui a été noté » :
+    deux évaluations sans composition, une composition seule, ou toute autre
+    combinaison — c'est l'école qui décide, et le choix reste tracé.
+
+    Liste vide = retour au comportement par défaut (tout ce qui est centralisé).
+    """
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    verifier_annee_modifiable(db, classe.annee_id)
+
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — la sélection ne peut plus être modifiée.")
+
+    # On refuse une sélection qui déborde de la période : sinon le résultat
+    # d'un trimestre pourrait inclure une épreuve d'un autre.
+    if data.evaluation_ids:
+        valides = {
+            row[0] for row in db.query(Evaluation.evaluation_id).filter(
+                Evaluation.classe_id == classe_id,
+                Evaluation.trimestre_id == trimestre_id,
+                Evaluation.evaluation_id.in_(data.evaluation_ids),
+            ).all()
+        }
+        hors_periode = set(data.evaluation_ids) - valides
+        if hors_periode:
+            raise HTTPException(
+                400,
+                f"Évaluations hors de cette classe/période : {sorted(hors_periode)}",
+            )
+
+    db.query(PeriodeEpreuve).filter(
+        PeriodeEpreuve.classe_id == classe_id,
+        PeriodeEpreuve.trimestre_id == trimestre_id,
+    ).delete(synchronize_session=False)
+    for evaluation_id in set(data.evaluation_ids):
+        db.add(PeriodeEpreuve(
+            classe_id=classe_id, trimestre_id=trimestre_id, evaluation_id=evaluation_id,
+        ))
+    db.commit()
+
+    if not data.evaluation_ids:
+        return {
+            "message": "Sélection effacée : toutes les évaluations centralisées comptent à nouveau.",
+            "selection_personnalisee": False, "nb_evaluations": 0,
+        }
+    return {
+        "message": f"{len(set(data.evaluation_ids))} évaluations retenues pour cette période.",
+        "selection_personnalisee": True, "nb_evaluations": len(set(data.evaluation_ids)),
+    }
+
+
+@router.post("/classe/{classe_id}/calculer-moyennes-annuelles")
+def calculer_moyennes_annuelles(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Calcule les résultats annuels et génère les bulletins annuels de la classe.
+
+    Agrège les bulletins de période déjà calculés — à lancer une fois toutes
+    les périodes de l'année calculées.
+    """
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    verifier_annee_modifiable(db, classe.annee_id)
+
+    res = calculer_resultats_annuels(db, classe_id, persist=True)
+    return {
+        "message": f"Moyennes annuelles calculées pour {res['classe']} — {res['effectif']} bulletins",
+        "classe": res["classe"],
+        "effectif": res["effectif"],
+        "bulletins_crees": res["bulletins_crees"],
+        "bulletins_total": res["bulletins_total"],
+    }
+
+
+@router.get("/classe/{classe_id}/resultats-annuels")
+def apercu_resultats_annuels(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Aperçu des résultats annuels sans générer les bulletins."""
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    res = calculer_resultats_annuels(db, classe_id, persist=False)
+
+    # Une classe d'examen doit s'annoncer comme telle dès cet aperçu : sans ça,
+    # l'écran de fin d'année n'a aucun moyen de savoir qu'il doit proposer la
+    # saisie du résultat ministériel.
+    niveau = db.query(Niveau).filter(Niveau.niveau_id == classe.niveau_id).first()
+    res["classe_examen"] = bool(niveau and niveau.est_examen == "O")
+    res["examen_national"] = niveau.examen_national if niveau else None
+    return res
+
+
+@router.get("/classe/{classe_id}/fiche-annuelle/pdf")
+def fiche_resultats_annuels_pdf(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Fiche de résultats de fin d'année d'une classe, prête à imprimer.
+
+    Une seule feuille qui répond aux questions qu'on pose réellement en fin
+    d'année : qui est classé où, avec quelle moyenne par période, quelle
+    mention, et — pour une classe d'examen — quel résultat national. Les
+    chiffres de tête (moyenne de classe, taux atteignant le seuil de passage,
+    répartition des mentions) évitent d'avoir à recompter à la main.
+    """
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    from reportlab.lib.utils import ImageReader
+    from app.core.documents_settings import get_documents_settings, dessiner_filigrane
+    from app.models.academique import ResultatOfficielExamen
+    from app.services.notation import ORDRE_MENTIONS
+    import io as _io, os
+
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+
+    res = calculer_resultats_annuels(db, classe_id, persist=False)
+    lignes = [r for r in res["resultats"] if r["moyenne_generale"] is not None]
+    if not lignes:
+        raise HTTPException(
+            400,
+            "Aucun résultat annuel : calculez d'abord les moyennes de chaque période, "
+            "puis les résultats annuels.",
+        )
+
+    periodes = res["periodes"]
+    synthese = res["synthese"]
+    niveau = db.query(Niveau).filter(Niveau.niveau_id == classe.niveau_id).first()
+    classe_examen = bool(niveau and niveau.est_examen == "O")
+    examen_national = (niveau.examen_national if niveau else None) or "Examen national"
+
+    officiels = {}
+    if classe_examen:
+        officiels = {
+            o.inscription_id: o for o in db.query(ResultatOfficielExamen).filter(
+                ResultatOfficielExamen.inscription_id.in_(
+                    [r["inscription_id"] for r in lignes]
+                )
+            ).all()
+        }
+
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == classe.etablissement_id
+    ).first()
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == classe.annee_id).first()
+    settings = get_documents_settings(db, classe.etablissement_id)
+
+    buffer = _io.BytesIO()
+    largeur, hauteur = landscape(A4)
+    pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
+    cp = (0.16, 0.20, 0.45)
+    cs = (0.94, 0.95, 0.98)
+    marge_g, marge_d = 1.2 * cm, largeur - 1.2 * cm
+
+    # Colonnes : rang, matricule, élève, une par période, moyenne, mention,
+    # et le résultat de l'examen quand la classe en passe un.
+    col_rang, col_mat, col_periode = 1.3 * cm, 2.6 * cm, 2.1 * cm
+    col_moy, col_mention = 2.4 * cm, 3.0 * cm
+    col_examen = 2.6 * cm if classe_examen else 0
+    col_eleve = (marge_d - marge_g) - (
+        col_rang + col_mat + col_periode * len(periodes) + col_moy + col_mention + col_examen
+    )
+
+    def entete():
+        y = hauteur - 1.1 * cm
+        logo = (etablissement.logo_url if etablissement else None) or settings.get("documents.logo_url")
+        if logo:
+            chemin = str(logo).lstrip("/")
+            if os.path.exists(chemin):
+                try:
+                    pdf.drawImage(ImageReader(chemin), 1.2 * cm, y - 1.5 * cm,
+                                  width=1.8 * cm, height=1.8 * cm, mask="auto")
+                except Exception:
+                    pass
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.setFillColorRGB(0.35, 0.35, 0.35)
+        pdf.drawCentredString(largeur / 2, y, "RÉPUBLIQUE DE GUINÉE — Travail · Justice · Solidarité")
+        y -= 0.45 * cm
+        pdf.setFont("Helvetica-Bold", 13)
+        pdf.setFillColorRGB(*cp)
+        pdf.drawCentredString(largeur / 2, y, (etablissement.nom if etablissement else "Établissement").upper())
+        y -= 0.5 * cm
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.drawCentredString(
+            largeur / 2, y,
+            "FICHE DE RÉSULTATS DE FIN D'ANNÉE — %s%s" % (
+                classe.libelle, " — %s" % annee.libelle if annee else ""),
+        )
+        y -= 0.42 * cm
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColorRGB(0.4, 0.4, 0.4)
+        pdf.drawCentredString(
+            largeur / 2, y,
+            "Moyenne annuelle = somme des moyennes de période ÷ nombre de périodes"
+            + ("  ·  Classe d'examen %s : le résultat national décide seul du passage." % examen_national
+               if classe_examen else ""),
+        )
+        return y - 0.55 * cm
+
+    def bandeau(y):
+        """Les quatre chiffres qu'un directeur regarde en premier."""
+        cartes = [
+            ("EFFECTIF", str(res["effectif"])),
+            ("MOYENNE DE CLASSE", "%.2f" % synthese["moyenne_classe"] if synthese["moyenne_classe"] is not None else "—"),
+            ("≥ %.0f DE MOYENNE" % synthese["seuil_passage"],
+             "%d / %d  (%.0f%%)" % (synthese["atteignent_seuil"], synthese["evalues"], synthese["taux_reussite"] or 0)),
+            ("PREMIER DE LA CLASSE", synthese["premier"] or "—"),
+        ]
+        if classe_examen:
+            admis = sum(1 for o in officiels.values() if o.resultat == "ADMIS")
+            non_admis = len(officiels) - admis
+            attente = res["effectif"] - len(officiels)
+            cartes.append((
+                examen_national.upper(),
+                "%d admis · %d non admis%s" % (
+                    admis, non_admis, " · %d en attente" % attente if attente else "")
+                if officiels else "aucun résultat saisi",
+            ))
+        w = (marge_d - marge_g) / len(cartes)
+        h = 1.15 * cm
+        for i, (titre, valeur) in enumerate(cartes):
+            x = marge_g + i * w
+            pdf.setFillColorRGB(*cs)
+            pdf.rect(x + 0.06 * cm, y - h, w - 0.12 * cm, h, fill=1, stroke=0)
+            pdf.setFont("Helvetica", 6.5)
+            pdf.setFillColorRGB(0.42, 0.45, 0.55)
+            pdf.drawString(x + 0.25 * cm, y - 0.38 * cm, titre)
+            # Taille réduite plutôt que texte coupé : « 6 admis · 4 non admis ·
+            # 2 en attente » tronqué à 26 caractères mentirait sur le décompte.
+            texte = str(valeur)
+            pdf.setFont("Helvetica-Bold", 9.5 if len(texte) <= 24 else 7.5)
+            pdf.setFillColorRGB(*cp)
+            pdf.drawString(x + 0.25 * cm, y - 0.85 * cm, texte[:40])
+        return y - h - 0.5 * cm
+
+    def entete_tableau(y):
+        pdf.setFillColorRGB(*cp)
+        pdf.rect(marge_g, y - 0.55 * cm, marge_d - marge_g, 0.55 * cm, fill=1, stroke=0)
+        pdf.setFont("Helvetica-Bold", 7)
+        pdf.setFillColorRGB(1, 1, 1)
+        ty = y - 0.37 * cm
+        x = marge_g
+        pdf.drawCentredString(x + col_rang / 2, ty, "RANG"); x += col_rang
+        pdf.drawString(x + 0.1 * cm, ty, "MATRICULE"); x += col_mat
+        pdf.drawString(x + 0.1 * cm, ty, "NOM ET PRÉNOM"); x += col_eleve
+        for p in periodes:
+            # "1er Trimestre" ne tient pas : on garde l'essentiel (T1, S2...)
+            court = "".join(c for c in p["libelle"] if c.isdigit()) or str(p["numero"])
+            prefixe = "S" if "emestre" in p["libelle"] else "T"
+            pdf.drawCentredString(x + col_periode / 2, ty, "%s%s" % (prefixe, court)); x += col_periode
+        pdf.drawCentredString(x + col_moy / 2, ty, "MOY. AN."); x += col_moy
+        pdf.drawCentredString(x + col_mention / 2, ty, "MENTION"); x += col_mention
+        if classe_examen:
+            pdf.drawCentredString(x + col_examen / 2, ty, examen_national.upper()[:10])
+        return y - 0.55 * cm
+
+    y = bandeau(entete())
+    y = entete_tableau(y)
+    row_h = 0.48 * cm
+
+    for idx, l in enumerate(lignes):
+        if y < 3.2 * cm:
+            pdf.showPage()
+            y = entete_tableau(entete())
+        if idx % 2 == 1:
+            pdf.setFillColorRGB(0.975, 0.98, 0.99)
+            pdf.rect(marge_g, y - row_h, marge_d - marge_g, row_h, fill=1, stroke=0)
+
+        ty = y - 0.32 * cm
+        x = marge_g
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.setFillColorRGB(*cp)
+        pdf.drawCentredString(x + col_rang / 2, ty, str(l["rang"])); x += col_rang
+        pdf.setFont("Helvetica", 7)
+        pdf.setFillColorRGB(0.35, 0.35, 0.35)
+        pdf.drawString(x + 0.1 * cm, ty, (l["matricule"] or "—")[:12]); x += col_mat
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.drawString(x + 0.1 * cm, ty, ("%s %s" % (l["nom"] or "", l["prenom"] or "")).strip()[:34])
+        x += col_eleve
+
+        par_periode = {p["trimestre_id"]: p["moyenne"] for p in l["periodes"]}
+        pdf.setFont("Helvetica", 7.5)
+        pdf.setFillColorRGB(0.3, 0.3, 0.3)
+        for p in periodes:
+            v = par_periode.get(p["trimestre_id"])
+            pdf.drawCentredString(x + col_periode / 2, ty, "%.2f" % v if v is not None else "—")
+            x += col_periode
+
+        moy = l["moyenne_generale"]
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.setFillColorRGB(*((0.65, 0.12, 0.12) if moy < synthese["seuil_passage"] else (0, 0, 0)))
+        pdf.drawCentredString(x + col_moy / 2, ty, "%.2f" % moy); x += col_moy
+        pdf.setFont("Helvetica", 7)
+        pdf.setFillColorRGB(0.3, 0.3, 0.3)
+        pdf.drawCentredString(x + col_mention / 2, ty, (l["mention"] or "—")[:14]); x += col_mention
+
+        if classe_examen:
+            o = officiels.get(l["inscription_id"])
+            libelle = "ADMIS" if o and o.resultat == "ADMIS" else ("NON ADMIS" if o else "en attente")
+            pdf.setFont("Helvetica-Bold" if o else "Helvetica-Oblique", 7.5)
+            pdf.setFillColorRGB(*(
+                (0.05, 0.45, 0.3) if o and o.resultat == "ADMIS"
+                else (0.65, 0.12, 0.12) if o else (0.55, 0.55, 0.55)))
+            pdf.drawCentredString(x + col_examen / 2, ty, libelle)
+
+        pdf.setStrokeColorRGB(0.9, 0.92, 0.95)
+        pdf.setLineWidth(0.4)
+        pdf.line(marge_g, y - row_h, marge_d, y - row_h)
+        y -= row_h
+
+    # Répartition des mentions + signatures
+    y -= 0.6 * cm
+    if y < 2.6 * cm:
+        pdf.showPage()
+        y = hauteur - 2.5 * cm
+    pdf.setFont("Helvetica-Bold", 8)
+    pdf.setFillColorRGB(*cp)
+    pdf.drawString(marge_g, y, "Répartition des mentions")
+    y -= 0.4 * cm
+    pdf.setFont("Helvetica", 7.5)
+    pdf.setFillColorRGB(0.3, 0.3, 0.3)
+    pdf.drawString(marge_g, y, "   ".join(
+        "%s : %d" % (m, synthese["mentions"].get(m, 0)) for m in ORDRE_MENTIONS
+    ))
+    y -= 0.9 * cm
+    pdf.setFont("Helvetica", 8)
+    pdf.setFillColorRGB(0.25, 0.25, 0.25)
+    tiers = (marge_d - marge_g) / 3
+    for i, libelle in enumerate(["Le Professeur Principal", "Le Directeur des Études", "Le Directeur"]):
+        x = marge_g + i * tiers
+        pdf.line(x, y, x + tiers - 1.2 * cm, y)
+        pdf.drawString(x, y - 0.35 * cm, libelle)
+
+    try:
+        dessiner_filigrane(pdf, settings, largeur, hauteur)
+    except Exception:
+        pass
+
+    pdf.save()
+    buffer.seek(0)
+    nom_fichier = ("fiche_resultats_annuels_%s.pdf" % classe.libelle).replace(" ", "_")
+    return StreamingResponse(
+        buffer, media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=%s" % nom_fichier},
+    )
+
+
+# ════════════════════════════════════════════════════════════
+# SESSIONS D'ÉVALUATION — création groupée multi-matières
+# ════════════════════════════════════════════════════════════
+
+@router.post("/sessions", status_code=201)
+def creer_session_evaluation(data: EvaluationSessionCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Crée une composition (ou toute évaluation) pour toutes les matières d'un coup.
+
+    Une composition couvre normalement toutes les matières de la classe le même
+    jour : l'école remplit un seul écran, le système crée une évaluation par
+    matière, toutes rattachées à la session.
+    """
+    classe = db.query(Classe).filter(Classe.classe_id == data.classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    verifier_annee_modifiable(db, classe.annee_id)
+
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == data.trimestre_id).first()
+    if not trimestre:
+        raise HTTPException(404, "Période non trouvée")
+    if trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — impossible d'y créer une évaluation.")
+
+    # Une épreuve datée hors de sa période fausserait le bulletin de période
+    # tout en paraissant normale à l'écran.
+    try:
+        verifier_date_dans_periode(db, trimestre, data.date_evaluation)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    # Le type doit appartenir à l'école appelante : désigner celui d'une
+    # autre école reviendrait à lui emprunter son coefficient de référence.
+    type_eval = db.query(TypeEvaluation).filter(
+        TypeEvaluation.type_eval_id == data.type_eval_id,
+        TypeEvaluation.etablissement_id == etablissement_id,
+    ).first()
+    if not type_eval:
+        raise HTTPException(404, "Type d'évaluation non trouvé")
+
+    cms = db.query(ClasseMatiere).filter(
+        ClasseMatiere.classe_id == data.classe_id,
+        ClasseMatiere.est_active == "O",
+    ).all()
+    matiere_ids = [cm.matiere_id for cm in cms]
+    if data.matiere_ids:
+        demandees = set(data.matiere_ids)
+        inconnues = demandees - set(matiere_ids)
+        if inconnues:
+            raise HTTPException(
+                400,
+                f"Matières non enseignées dans cette classe : {sorted(inconnues)}"
+            )
+        matiere_ids = [m for m in matiere_ids if m in demandees]
+    if not matiere_ids:
+        raise HTTPException(400, "Aucune matière active pour cette classe.")
+
+    etablissement_id = classe.etablissement_id
+    cycle_key = get_cycle_key(data.classe_id, db)
+    coefficient_type = get_types_evaluation_coefficients(
+        db, etablissement_id, cycle_key
+    ).get(data.type_eval_id, 1.0)
+
+    session = EvaluationSession(
+        classe_id=data.classe_id,
+        trimestre_id=data.trimestre_id,
+        type_eval_id=data.type_eval_id,
+        etablissement_id=etablissement_id,
+        libelle=data.libelle,
+        date_evaluation=data.date_evaluation,
+        note_sur=data.note_sur,
+        est_coefficientee=data.est_coefficientee,
+        enseignant_id=data.enseignant_id,
+        statut="PLANIFIEE",
+    )
+    db.add(session)
+    db.flush()
+
+    # Un enseignant doit être renseigné sur chaque évaluation : on prend celui
+    # affecté à la matière dans cette classe, sinon celui indiqué sur la session.
+    affectations = {
+        a.matiere_id: a.enseignant_id
+        for a in db.query(Affectation).filter(
+            Affectation.classe_id == data.classe_id,
+            Affectation.statut == "ACTIVE",
+        ).all()
+    }
+
+    creees = []
+    for matiere_id in matiere_ids:
+        enseignant_id = affectations.get(matiere_id) or data.enseignant_id
+        if not enseignant_id:
+            raise HTTPException(
+                400,
+                f"Aucun enseignant affecté à la matière {matiere_id} : précisez un enseignant pour la session.",
+            )
+        note_sur = data.note_sur or get_bareme_effectif(
+            db, data.classe_id, matiere_id, cycle_key, etablissement_id
+        )
+        ev = Evaluation(
+            classe_id=data.classe_id,
+            matiere_id=matiere_id,
+            trimestre_id=data.trimestre_id,
+            type_eval_id=data.type_eval_id,
+            enseignant_id=enseignant_id,
+            libelle=data.libelle,
+            date_evaluation=data.date_evaluation,
+            note_sur=note_sur,
+            coefficient=coefficient_type,
+            statut="PLANIFIEE",
+            session_id=session.session_id,
+            est_coefficientee=data.est_coefficientee,
+        )
+        db.add(ev)
+        db.flush()
+        creees.append(ev.evaluation_id)
+
+    db.commit()
+    return {
+        "message": f"{len(creees)} évaluations créées pour « {data.libelle} »",
+        "session_id": session.session_id,
+        "evaluation_ids": creees,
+    }
+
+
+@router.get("/sessions")
+def lister_sessions(
+    classe_id: Optional[int] = None,
+    trimestre_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    # Isolation portée par la classe, pas par la colonne dénormalisée : une
+    # session ne peut apparaître ici que si sa classe est bien de cette école.
+    query = db.query(EvaluationSession).join(
+        Classe, Classe.classe_id == EvaluationSession.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id)
+    if classe_id:
+        query = query.filter(EvaluationSession.classe_id == classe_id)
+    if trimestre_id:
+        query = query.filter(EvaluationSession.trimestre_id == trimestre_id)
+    sessions = query.order_by(desc(EvaluationSession.date_evaluation)).all()
+    if not sessions:
+        return []
+
+    # Comptages groupés — jamais une requête par session
+    types = {
+        t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
+        ).all()
+    }
+    compte = dict(
+        db.query(Evaluation.session_id, func.count(Evaluation.evaluation_id))
+        .filter(Evaluation.session_id.in_([s.session_id for s in sessions]))
+        .group_by(Evaluation.session_id).all()
+    )
+    return [
+        {
+            "session_id": s.session_id,
+            "classe_id": s.classe_id,
+            "trimestre_id": s.trimestre_id,
+            "type_eval_id": s.type_eval_id,
+            "type_libelle": types.get(s.type_eval_id, "?"),
+            "libelle": s.libelle,
+            "date_evaluation": s.date_evaluation,
+            "note_sur": float(s.note_sur) if s.note_sur else None,
+            "est_coefficientee": s.est_coefficientee,
+            "statut": s.statut,
+            "nb_evaluations": compte.get(s.session_id, 0),
+        }
+        for s in sessions
+    ]
+
+
+@router.get("/sessions/{session_id}")
+def detail_session(session_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    session = _session_ou_404(db, session_id, etablissement_id)
+
+    evals = db.query(Evaluation).filter(Evaluation.session_id == session_id).all()
+    matieres = {
+        m.matiere_id: m.libelle
+        for m in db.query(Matiere).filter(
+            Matiere.matiere_id.in_([e.matiere_id for e in evals])
+        ).all()
+    } if evals else {}
+    nb_notes = dict(
+        db.query(Note.evaluation_id, func.count(Note.note_id))
+        .filter(Note.evaluation_id.in_([e.evaluation_id for e in evals]),
+                Note.valeur.isnot(None))
+        .group_by(Note.evaluation_id).all()
+    ) if evals else {}
+
+    return {
+        "session_id": session.session_id,
+        "classe_id": session.classe_id,
+        "trimestre_id": session.trimestre_id,
+        "type_eval_id": session.type_eval_id,
+        "libelle": session.libelle,
+        "date_evaluation": session.date_evaluation,
+        "est_coefficientee": session.est_coefficientee,
+        "statut": session.statut,
+        "evaluations": [
+            {
+                "evaluation_id": e.evaluation_id,
+                "matiere_id": e.matiere_id,
+                "matiere": matieres.get(e.matiere_id, "?"),
+                "note_sur": float(e.note_sur) if e.note_sur else None,
+                "statut": e.statut,
+                "nb_notes": nb_notes.get(e.evaluation_id, 0),
+            }
+            for e in evals
+        ],
+    }
+
+
+@router.put("/sessions/{session_id}")
+def modifier_session(session_id: int, data: EvaluationSessionUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    session = _session_ou_404(db, session_id, etablissement_id)
+    classe = db.query(Classe).filter(Classe.classe_id == session.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == session.trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — modification impossible.")
+
+    evals = db.query(Evaluation).filter(Evaluation.session_id == session_id).all()
+    if data.libelle is not None:
+        session.libelle = data.libelle
+        for e in evals:
+            e.libelle = data.libelle
+    if data.date_evaluation is not None:
+        # Même contrôle qu'à la création : une composition déplacée hors de sa
+        # période compterait dans un trimestre auquel elle n'appartient pas.
+        try:
+            verifier_date_dans_periode(db, trimestre, data.date_evaluation)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        session.date_evaluation = data.date_evaluation
+        for e in evals:
+            e.date_evaluation = data.date_evaluation
+    if data.note_sur is not None:
+        if data.note_sur <= 0:
+            raise HTTPException(400, "Le barème doit être strictement positif")
+        _verifier_bareme_compatible(db, [e.evaluation_id for e in evals], data.note_sur)
+        session.note_sur = data.note_sur
+        for e in evals:
+            e.note_sur = data.note_sur
+    if data.type_eval_id is not None:
+        if not db.query(TypeEvaluation).filter(
+            TypeEvaluation.type_eval_id == data.type_eval_id,
+            TypeEvaluation.etablissement_id == etablissement_id,
+        ).first():
+            raise HTTPException(404, "Type d'évaluation introuvable")
+        session.type_eval_id = data.type_eval_id
+        for e in evals:
+            e.type_eval_id = data.type_eval_id
+    if data.est_coefficientee is not None:
+        session.est_coefficientee = data.est_coefficientee
+        # Propagé sur les évaluations filles : le moteur de calcul lit ce
+        # drapeau sur l'évaluation, sans jointure vers la session.
+        for e in evals:
+            e.est_coefficientee = data.est_coefficientee
+    # `coefficient_override` absent du corps = ne pas y toucher ; envoyé à null
+    # = revenir au coefficient du type. Sans cette distinction, une surcharge
+    # posée par erreur ne pouvait plus jamais être retirée.
+    if "coefficient_override" in data.model_fields_set:
+        if data.coefficient_override is not None and data.coefficient_override <= 0:
+            raise HTTPException(400, "Le coefficient doit être strictement positif")
+        for e in evals:
+            e.coefficient_override = data.coefficient_override
+    if data.statut is not None:
+        session.statut = data.statut
+        for e in evals:
+            e.statut = data.statut
+
+    db.commit()
+    return {"message": "Session mise à jour", "session_id": session_id}
+
+
+@router.delete("/sessions/{session_id}")
+def supprimer_session(session_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    session = _session_ou_404(db, session_id, etablissement_id)
+    classe = db.query(Classe).filter(Classe.classe_id == session.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+
+    evals = db.query(Evaluation).filter(Evaluation.session_id == session_id).all()
+    eval_ids = [e.evaluation_id for e in evals]
+    if any(e.statut == "CENTRALISEE" for e in evals):
+        raise HTTPException(
+            400,
+            "Des notes de cette session sont déjà centralisées — suppression impossible."
+        )
+    if eval_ids:
+        db.query(Note).filter(Note.evaluation_id.in_(eval_ids)).delete(synchronize_session=False)
+        db.query(Evaluation).filter(Evaluation.session_id == session_id).delete(synchronize_session=False)
+    db.delete(session)
+    db.commit()
+    return {"message": f"Session supprimée ({len(eval_ids)} évaluations)"}
+
+
+# ════════════════════════════════════════════════════════════
+# CORRECTION ET SUPPRESSION D'UNE ÉPREUVE
+# ════════════════════════════════════════════════════════════
+# Une épreuve créée avec la mauvaise date, le mauvais barème ou le mauvais type
+# était définitive : rien dans l'interface ne permettait de la corriger ni de
+# l'effacer, et aucune route ne supprimait une évaluation isolée.
+
+def _epreuve_modifiable(db: Session, ev: Evaluation) -> Classe:
+    """Garde-fous communs : année ouverte, période non clôturée."""
+    classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — modification impossible.")
+    return classe
+
+
+def _verifier_bareme_compatible(db: Session, evaluation_ids: List[int], note_sur: float) -> None:
+    """Refuse un barème inférieur à une note déjà saisie.
+
+    Abaisser le barème sous une note existante ne lèverait aucune erreur : la
+    note serait simplement normalisée au-dessus du maximum et gonflerait la
+    moyenne. C'est exactement le mécanisme qui avait produit des moyennes de
+    250/20 sur cette base.
+    """
+    if not evaluation_ids or not note_sur or note_sur <= 0:
+        return
+    maxi = db.query(func.max(Note.valeur)).filter(
+        Note.evaluation_id.in_(evaluation_ids),
+        Note.valeur.isnot(None),
+    ).scalar()
+    if maxi is not None and float(maxi) > float(note_sur):
+        raise HTTPException(
+            400,
+            f"Barème refusé : une note de {float(maxi):g} est déjà saisie, "
+            f"elle ne tiendrait pas dans un barème sur {float(note_sur):g}. "
+            "Corrigez d'abord les notes concernées.",
+        )
+
+
+@router.put("/{evaluation_id}", response_model=EvaluationOut)
+def modifier_evaluation(evaluation_id: int, data: EvaluationUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Corrige une épreuve : libellé, date, barème, type, enseignant, coefficient.
+
+    La date reste contrôlée contre les bornes de sa période — corriger une
+    épreuve ne doit pas permettre de la déplacer hors du trimestre auquel elle
+    compte, ce que la création interdit déjà.
+    """
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
+    _epreuve_modifiable(db, ev)
+
+    if data.date_evaluation is not None:
+        trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+        try:
+            verifier_date_dans_periode(db, trimestre, data.date_evaluation)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        ev.date_evaluation = data.date_evaluation
+
+    if data.note_sur is not None:
+        if data.note_sur <= 0:
+            raise HTTPException(400, "Le barème doit être strictement positif")
+        _verifier_bareme_compatible(db, [evaluation_id], data.note_sur)
+        ev.note_sur = data.note_sur
+
+    if data.type_eval_id is not None:
+        if not db.query(TypeEvaluation).filter(
+            TypeEvaluation.type_eval_id == data.type_eval_id,
+            TypeEvaluation.etablissement_id == etablissement_id,
+        ).first():
+            raise HTTPException(404, "Type d'évaluation introuvable")
+        ev.type_eval_id = data.type_eval_id
+
+    if data.libelle is not None:
+        ev.libelle = data.libelle
+    if data.enseignant_id is not None:
+        ev.enseignant_id = data.enseignant_id
+    if data.est_coefficientee is not None:
+        ev.est_coefficientee = "N" if data.est_coefficientee in ("N", "false", False) else "O"
+    if "coefficient_override" in data.model_fields_set:
+        # null = retour au coefficient du type (voir modifier_session)
+        if data.coefficient_override is not None and data.coefficient_override <= 0:
+            raise HTTPException(400, "Le coefficient doit être strictement positif")
+        ev.coefficient_override = data.coefficient_override
+
+    db.commit()
+    db.refresh(ev)
+    return ev
+
+
+@router.delete("/{evaluation_id}")
+def supprimer_evaluation(evaluation_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Supprime une épreuve et ses notes.
+
+    Refusée quand l'épreuve est centralisée : ses notes sont entrées dans des
+    bulletins déjà calculés, et les effacer laisserait des moyennes que plus
+    rien ne justifie. Le bon geste dans ce cas est de passer l'épreuve en
+    ANNULEE (`PUT /{id}/statut`), qui la sort du calcul sans détruire la saisie.
+    """
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
+    _epreuve_modifiable(db, ev)
+
+    if ev.statut == "CENTRALISEE":
+        raise HTTPException(
+            400,
+            "Cette épreuve est centralisée : ses notes comptent déjà dans les "
+            "bulletins. Passez-la en « Annulée » pour l'exclure du calcul sans "
+            "perdre la saisie.",
+        )
+
+    nb_notes = db.query(func.count(Note.note_id)).filter(
+        Note.evaluation_id == evaluation_id
+    ).scalar() or 0
+    db.query(Note).filter(Note.evaluation_id == evaluation_id).delete(synchronize_session=False)
+    db.query(PeriodeEpreuve).filter(
+        PeriodeEpreuve.evaluation_id == evaluation_id
+    ).delete(synchronize_session=False)
+
+    session_id = ev.session_id
+    db.delete(ev)
+    db.flush()
+
+    # Une session vidée de toutes ses matières n'a plus d'objet : la laisser
+    # ferait apparaître une composition fantôme dans la liste des épreuves.
+    session_supprimee = False
+    if session_id:
+        restantes = db.query(func.count(Evaluation.evaluation_id)).filter(
+            Evaluation.session_id == session_id
+        ).scalar() or 0
+        if restantes == 0:
+            db.query(EvaluationSession).filter(
+                EvaluationSession.session_id == session_id
+            ).delete(synchronize_session=False)
+            session_supprimee = True
+
+    db.commit()
+    return {
+        "message": f"Épreuve supprimée ({nb_notes} note(s) effacée(s))",
+        "evaluation_id": evaluation_id,
+        "notes_supprimees": nb_notes,
+        "session_supprimee": session_supprimee,
+    }
+
+
+@router.put("/{evaluation_id}/coefficient")
+def modifier_coefficient_evaluation(
+    evaluation_id: int, data: dict, db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Surcharge ponctuelle du coefficient d'une évaluation.
+
+    `coefficient_override = null` rétablit le coefficient de son type.
+    """
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
+    classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — modification impossible.")
+
+    valeur = data.get("coefficient_override")
+    if valeur is not None:
+        try:
+            valeur = float(valeur)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Coefficient invalide")
+        if valeur <= 0:
+            raise HTTPException(400, "Le coefficient doit être strictement positif")
+    ev.coefficient_override = valeur
+
+    if "est_coefficientee" in data:
+        ev.est_coefficientee = "N" if data["est_coefficientee"] in (False, "N", "false") else "O"
+
+    db.commit()
+    return {
+        "message": "Coefficient mis à jour",
+        "evaluation_id": evaluation_id,
+        "coefficient_override": valeur,
+        "est_coefficientee": ev.est_coefficientee,
     }
 
 
@@ -835,13 +1692,18 @@ def calculer_moyennes(classe_id: int, trimestre_id: int = 1, db: Session = Depen
 def get_bulletins_classe(
     response: Response,
     classe_id: int,
-    trimestre_id: int = 1,
+    trimestre_id: Optional[int] = None,
+    type_bulletin: str = "TRIMESTRIEL",
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Récupère les bulletins générés pour une classe + trimestre, paginés.
+    """Récupère les bulletins générés pour une classe, paginés.
+
+    `type_bulletin=ANNUEL` retourne les bulletins annuels (sans période) ;
+    sinon `trimestre_id` sélectionne la période (1 par défaut, comportement
+    historique conservé pour les appelants existants).
 
     Réécrit en préchargement par lot — avant : 1 requête Bulletin + 1 Eleve +
     1 BulletinLigne (+ 1 Matiere PAR ligne) PAR INSCRIPTION, soit ~2000+
@@ -856,9 +1718,14 @@ def get_bulletins_classe(
     insc_ids = [i.inscription_id for i in inscriptions]
     eleve_by_id = {i.inscription_id: i.eleve_id for i in inscriptions}
 
-    bulletins = db.query(Bulletin).filter(
-        Bulletin.inscription_id.in_(insc_ids), Bulletin.trimestre_id == trimestre_id
-    ).all()
+    bulletins_query = db.query(Bulletin).filter(Bulletin.inscription_id.in_(insc_ids))
+    if type_bulletin == "ANNUEL":
+        bulletins_query = bulletins_query.filter(Bulletin.type_bulletin == "ANNUEL")
+    else:
+        bulletins_query = bulletins_query.filter(
+            Bulletin.trimestre_id == (trimestre_id if trimestre_id is not None else 1)
+        )
+    bulletins = bulletins_query.all()
     if not bulletins:
         response.headers["X-Total-Count"] = "0"
         return []
@@ -872,6 +1739,11 @@ def get_bulletins_classe(
     # modale d'aperçu de cette page (rendu HTML, pas le PDF) reste synchronisée
     # avec Paramètres > Notation > Affichage sans dupliquer la logique côté front.
     flags = get_bulletin_display_flags(db, classe.etablissement_id)
+    # Notation par lettres : réglage par cycle, sans effet tant que l'école ne
+    # l'active pas — `lettre` vaut alors null et l'affichage ne change pas.
+    cycle_key = get_cycle_key(classe_id, db)
+    echelle = get_bareme_defaut_cycle(db, classe.etablissement_id, cycle_key)
+    lettres = get_lettres_config(db, classe.etablissement_id, cycle_key)
 
     bulletin_ids = [b.bulletin_id for b in bulletins]
     all_lignes = db.query(BulletinLigne).filter(BulletinLigne.bulletin_id.in_(bulletin_ids)).all()
@@ -901,6 +1773,10 @@ def get_bulletins_classe(
                 "note_min": float(l.note_min) if l.note_min is not None and flags["show_stats_matiere"] else None,
                 "note_max": float(l.note_max) if l.note_max is not None and flags["show_stats_matiere"] else None,
                 "appreciation": l.appreciation if flags["show_appreciation"] else None,
+                "lettre": lettre_pour_note(
+                    float(l.moyenne_matiere) if l.moyenne_matiere is not None else None,
+                    lettres, echelle,
+                ),
             })
             if l.coefficient:
                 total_coef += float(l.coefficient)
@@ -914,6 +1790,10 @@ def get_bulletins_classe(
             "sexe": eleve.sexe,
             "photo": eleve.photo_url,
             "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+            "lettre_generale": lettre_pour_note(
+                float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+                lettres, echelle,
+            ),
             "rang": bulletin.rang if flags["show_rang"] else None,
             "effectif_classe": bulletin.effectif_classe if flags["show_rang"] and flags["show_effectif"] else None,
             "mention": bulletin.mention if flags["show_mention"] else None,
@@ -1023,6 +1903,39 @@ class AdminBatchNotesUpdate(BaseModel):
     notes: list[AdminNoteUpdateItem]
 
 
+@router.put("/{evaluation_id}/statut")
+def changer_statut_evaluation(evaluation_id: int, data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Change le statut d'une évaluation (PLANIFIEE / PUBLIEE / CENTRALISEE).
+
+    Pendant : seules les évaluations CENTRALISEE entrent dans le calcul des
+    moyennes. L'équivalent côté enseignant est
+    `PUT /api/portail-enseignant/{id}/evaluations/{id}/centraliser`.
+    """
+    STATUTS = {"PLANIFIEE", "PUBLIEE", "CENTRALISEE", "ANNULEE"}
+    statut = (data.get("statut") or "").upper()
+    if statut not in STATUTS:
+        raise HTTPException(400, f"Statut invalide. Valeurs acceptées : {', '.join(sorted(STATUTS))}")
+
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
+    classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
+    verifier_annee_modifiable(db, classe.annee_id if classe else None)
+
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — modification impossible.")
+
+    if statut == "CENTRALISEE":
+        # Centraliser une évaluation sans note fausserait les moyennes : la
+        # matière compterait alors qu'aucun élève n'a été évalué.
+        nb = db.query(Note).filter(Note.evaluation_id == evaluation_id, Note.valeur.isnot(None)).count()
+        if nb == 0:
+            raise HTTPException(400, "Impossible de centraliser : aucune note saisie.")
+
+    ev.statut = statut
+    db.commit()
+    return {"message": f"Évaluation passée en {statut}", "evaluation_id": evaluation_id, "statut": statut}
+
+
 @router.put("/{evaluation_id}/notes/batch-update")
 def admin_update_notes_batch(evaluation_id: int, data: AdminBatchNotesUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Admin: modifier des notes en batch sur une évaluation."""
@@ -1030,11 +1943,24 @@ def admin_update_notes_batch(evaluation_id: int, data: AdminBatchNotesUpdate, db
     classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
     verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
+    # Toutes les notes sont validées AVANT d'en écrire une seule : une saisie
+    # partiellement enregistrée serait plus difficile à rattraper pour la
+    # secrétaire qu'un refus net de tout le lot.
+    valeurs = {}
+    for item in data.notes:
+        if item.est_absent:
+            valeurs[item.note_id] = None
+            continue
+        try:
+            valeurs[item.note_id] = valider_note(item.valeur, ev.note_sur)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
     updated = 0
     for item in data.notes:
         note = db.query(Note).filter(Note.note_id == item.note_id, Note.evaluation_id == evaluation_id).first()
         if note:
-            note.valeur = item.valeur if not item.est_absent else None
+            note.valeur = valeurs[item.note_id]
             note.est_absent = "O" if item.est_absent else "N"
             note.observation = item.observation
             updated += 1
@@ -1047,6 +1973,28 @@ def admin_update_notes_batch(evaluation_id: int, data: AdminBatchNotesUpdate, db
 # NOTES CRUD (sous-router)
 # ════════════════════════════════════════════════════════════
 notes_router = APIRouter(prefix="/api/notes", tags=["Notes"])
+
+
+def _verifier_valeur_note(
+    db: Session, evaluation_id: Optional[int], valeur, etablissement_id: int
+) -> None:
+    """Refuse une note hors barème sur ce sous-router aussi.
+
+    Ces routes CRUD sont le chemin le moins utilisé (l'interface passe par les
+    lots), mais elles écrivent dans la même table : les laisser sans contrôle
+    rouvrirait la porte que `valider_note` ferme ailleurs.
+
+    L'évaluation de référence est cherchée dans l'école appelante : sans ce
+    filtre, un identifiant d'une autre école aurait imposé SON barème au
+    contrôle (une note refusée ici, acceptée là).
+    """
+    if valeur is None or evaluation_id is None:
+        return
+    ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
+    try:
+        valider_note(valeur, ev.note_sur if ev else None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 def _note_ou_404(db: Session, note_id: int, etablissement_id: int) -> Note:
@@ -1076,6 +2024,7 @@ def create_note(data: NoteCreate, db: Session = Depends(get_db), etablissement_i
     if not insc:
         raise HTTPException(status_code=404, detail="Inscription non trouvée")
     verifier_annee_modifiable(db, insc.annee_id)
+    _verifier_valeur_note(db, data.evaluation_id, getattr(data, "valeur", None), etablissement_id)
     note = Note(**data.model_dump())
     db.add(note)
     db.commit()
@@ -1088,7 +2037,10 @@ def update_note(note_id: int, data: NoteUpdate, db: Session = Depends(get_db), e
     note = _note_ou_404(db, note_id, etablissement_id)
     insc = db.query(Inscription).filter(Inscription.inscription_id == note.inscription_id).first()
     verifier_annee_modifiable(db, insc.annee_id if insc else None)
-    for key, value in data.model_dump(exclude_unset=True).items():
+    champs = data.model_dump(exclude_unset=True)
+    if "valeur" in champs:
+        _verifier_valeur_note(db, note.evaluation_id, champs["valeur"], etablissement_id)
+    for key, value in champs.items():
         setattr(note, key, value)
     db.commit()
     db.refresh(note)
@@ -1110,8 +2062,13 @@ def update_notes_batch(notes: List[NoteUpdate], note_ids: List[int], db: Session
 
     updated = 0
     for note_id, data in zip(note_ids, notes):
+        # Chaque note du lot est vérifiée, pas seulement la première : un
+        # identifiant d'une autre école glissé en 2ᵉ position doit être refusé.
         note = _note_ou_404(db, note_id, etablissement_id)
-        for key, value in data.model_dump(exclude_unset=True).items():
+        champs = data.model_dump(exclude_unset=True)
+        if "valeur" in champs:
+            _verifier_valeur_note(db, note.evaluation_id, champs["valeur"], etablissement_id)
+        for key, value in champs.items():
             setattr(note, key, value)
         updated += 1
     db.commit()
@@ -1121,40 +2078,98 @@ def update_notes_batch(notes: List[NoteUpdate], note_ids: List[int], db: Session
 # ════════════════════════════════════════════════════════════
 # TYPE EVALUATION CRUD
 # ════════════════════════════════════════════════════════════
+# Chaque école a SA liste de types (Composition, Interrogation, Oral…) et la
+# nomme comme elle l'entend. Cette table était partagée : renommer un type dans
+# une école changeait l'intitulé des colonnes de bulletin de toutes les autres.
+# Voir migration 2026_08_notation_09_type_evaluation_etablissement.py.
+#
+# Le POIDS de chaque type reste réglable par cycle, en plus, via
+# `notation.coef_type.{cycle}.{code}` — cf. get_types_evaluation_coefficients.
+
+def _type_evaluation_ou_404(db: Session, type_eval_id: int, etablissement_id: int) -> TypeEvaluation:
+    t = db.query(TypeEvaluation).filter(
+        TypeEvaluation.type_eval_id == type_eval_id,
+        TypeEvaluation.etablissement_id == etablissement_id,
+    ).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Type d'évaluation non trouvé")
+    return t
+
+
 @router.get("/types", response_model=List[TypeEvaluationOut])
-def get_types_evaluation(db: Session = Depends(get_db)):
-    return db.query(TypeEvaluation).all()
+def get_types_evaluation(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    return db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id
+    ).order_by(TypeEvaluation.type_eval_id).all()
+
 
 @router.post("/types", response_model=TypeEvaluationOut, status_code=201)
-def create_type_evaluation(data: TypeEvaluationCreate, db: Session = Depends(get_db)):
-    type_ev = TypeEvaluation(**data.model_dump())
+def create_type_evaluation(
+    data: TypeEvaluationCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    payload = data.model_dump()
+    # L'établissement vient du jeton, jamais du corps de la requête.
+    payload["etablissement_id"] = etablissement_id
+    # Le code n'est unique QUE dans l'école : le doublon se vérifie donc ici,
+    # sinon l'index remonterait une erreur 500 illisible pour l'utilisateur.
+    if db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id,
+        TypeEvaluation.code == payload["code"],
+    ).first():
+        raise HTTPException(
+            409, f"Le code « {payload['code']} » est déjà utilisé par un autre type dans votre établissement."
+        )
+    type_ev = TypeEvaluation(**payload)
     db.add(type_ev)
     db.commit()
     db.refresh(type_ev)
     return type_ev
 
+
 @router.put("/types/{type_eval_id}", response_model=TypeEvaluationOut)
-def update_type_evaluation(type_eval_id: int, data: TypeEvaluationUpdate, db: Session = Depends(get_db)):
-    type_ev = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == type_eval_id).first()
-    if not type_ev:
-        raise HTTPException(status_code=404, detail="Type d'évaluation non trouvé")
-    for key, value in data.model_dump(exclude_unset=True).items():
+def update_type_evaluation(
+    type_eval_id: int,
+    data: TypeEvaluationUpdate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    type_ev = _type_evaluation_ou_404(db, type_eval_id, etablissement_id)
+    champs = data.model_dump(exclude_unset=True)
+    nouveau_code = champs.get("code")
+    if nouveau_code and nouveau_code != type_ev.code:
+        if db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id,
+            TypeEvaluation.code == nouveau_code,
+            TypeEvaluation.type_eval_id != type_eval_id,
+        ).first():
+            raise HTTPException(
+                409, f"Le code « {nouveau_code} » est déjà utilisé par un autre type dans votre établissement."
+            )
+    for key, value in champs.items():
         setattr(type_ev, key, value)
     db.commit()
     db.refresh(type_ev)
     return type_ev
 
+
 @router.delete("/types/{type_eval_id}")
-def delete_type_evaluation(type_eval_id: int, db: Session = Depends(get_db)):
-    type_ev = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == type_eval_id).first()
-    if not type_ev:
-        raise HTTPException(status_code=404, detail="Type d'évaluation non trouvé")
-    
+def delete_type_evaluation(
+    type_eval_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    type_ev = _type_evaluation_ou_404(db, type_eval_id, etablissement_id)
+
     # Vérifier s'il y a des évaluations liées
     linked_evals_count = db.query(Evaluation).filter(Evaluation.type_eval_id == type_eval_id).count()
     if linked_evals_count > 0:
         raise HTTPException(status_code=400, detail="Impossible de supprimer ce type d'évaluation car il est lié à des évaluations existantes.")
-        
+
     db.delete(type_ev)
     db.commit()
     return {"message": "Type d'évaluation supprimé avec succès"}
@@ -1163,6 +2178,312 @@ def delete_type_evaluation(type_eval_id: int, db: Session = Depends(get_db)):
 # ════════════════════════════════════════════════════════════
 # GÉNÉRATION PDF — Bulletin individuel
 # ════════════════════════════════════════════════════════════
+
+@router.get("/classe/{classe_id}/classement/pdf")
+def generer_fiche_classement_pdf(
+    classe_id: int,
+    trimestre_id: Optional[int] = None,
+    evaluation_ids: Optional[str] = None,
+    session_ids: Optional[str] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Fiche de classement de la classe, prête à imprimer.
+
+    Une page A4 paysage : en-tête établissement, tableau des élèves classés
+    avec la note de chaque matière, la moyenne, le rang et la mention, puis
+    les statistiques de la classe et les signatures.
+
+    Sans `evaluation_ids`/`session_ids`, la fiche porte sur toute la période ;
+    avec, elle porte sur la sélection (résultat d'une composition précise,
+    sans toucher aux bulletins).
+    """
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    from reportlab.lib.utils import ImageReader
+    from app.core.documents_settings import get_documents_settings, dessiner_filigrane
+    import io as _io, os
+
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+
+    def _ids(v):
+        if not v:
+            return None
+        try:
+            return [int(x) for x in v.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(400, "Liste d'identifiants invalide")
+
+    if trimestre_id is None:
+        tri = (db.query(Trimestre).filter(Trimestre.statut == "EN_COURS").first()
+               or db.query(Trimestre).order_by(Trimestre.numero).first())
+        trimestre_id = tri.trimestre_id if tri else 1
+
+    res = calculer_resultats_periode(
+        db, classe_id, trimestre_id,
+        evaluation_ids=_ids(evaluation_ids), session_ids=_ids(session_ids),
+        persist=False,
+    )
+    resultats = res.get("resultats", [])
+    if not resultats:
+        raise HTTPException(400, "Aucun résultat à imprimer : aucune note centralisée pour cette période.")
+
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == classe.etablissement_id
+    ).first()
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == classe.annee_id).first()
+    settings = get_documents_settings(db, classe.etablissement_id)
+
+    inscriptions = {
+        i.inscription_id: i for i in db.query(Inscription).filter(
+            Inscription.inscription_id.in_([r["inscription_id"] for r in resultats])
+        ).all()
+    }
+    eleves = {
+        e.eleve_id: e for e in db.query(Eleve).filter(
+            Eleve.eleve_id.in_([i.eleve_id for i in inscriptions.values()])
+        ).all()
+    }
+
+    # Colonnes matières : uniquement celles réellement notées
+    notees = {
+        l["matiere_id"] for r in resultats for l in r["lignes"]
+        if l["moyenne_matiere"] is not None
+    }
+    matieres_cols = [l for l in resultats[0]["lignes"] if l["matiere_id"] in notees]
+
+    # En-têtes : le code de la matière (FRA, MAT...) tient dans une colonne
+    # étroite là où le libellé se ferait couper au milieu d'un mot. Le libellé
+    # complet est rappelé en légende sous le tableau.
+    codes_matiere = {
+        m.matiere_id: m.code
+        for m in db.query(Matiere).filter(Matiere.matiere_id.in_(notees)).all()
+    }
+
+    buffer = _io.BytesIO()
+    largeur, hauteur = landscape(A4)
+    pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
+    cp = (0.16, 0.20, 0.45)
+    cs = (0.94, 0.95, 0.98)
+
+    def entete():
+        y = hauteur - 1.2 * cm
+        logo = (etablissement.logo_url if etablissement else None) or settings.get("documents.logo_url")
+        if logo:
+            chemin = str(logo).lstrip("/")
+            if os.path.exists(chemin):
+                try:
+                    pdf.drawImage(ImageReader(chemin), 1.2 * cm, y - 1.5 * cm,
+                                  width=1.8 * cm, height=1.8 * cm, mask="auto")
+                except Exception:
+                    pass
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.setFillColorRGB(0.35, 0.35, 0.35)
+        pdf.drawCentredString(largeur / 2, y, "RÉPUBLIQUE DE GUINÉE — Travail · Justice · Solidarité")
+        y -= 0.45 * cm
+        pdf.setFont("Helvetica-Bold", 13)
+        pdf.setFillColorRGB(*cp)
+        pdf.drawCentredString(largeur / 2, y, (etablissement.nom if etablissement else "Établissement").upper())
+        y -= 0.42 * cm
+        pdf.setFont("Helvetica", 8)
+        pdf.setFillColorRGB(0.4, 0.4, 0.4)
+        coords = " · ".join(x for x in [
+            etablissement.adresse if etablissement else None,
+            etablissement.telephone if etablissement else None,
+        ] if x)
+        if coords:
+            pdf.drawCentredString(largeur / 2, y, coords)
+            y -= 0.4 * cm
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.setFillColorRGB(0, 0, 0)
+        periode = trimestre.libelle if trimestre else "Période"
+        pdf.drawCentredString(
+            largeur / 2, y,
+            "CLASSEMENT PAR ORDRE DE MÉRITE — %s — %s" % (classe.libelle, periode)
+        )
+        y -= 0.4 * cm
+        # Sur quelles épreuves porte ce classement : un « ordre de mérite de
+        # janvier » n'a pas le même sens qu'un classement de fin de trimestre.
+        epreuves = res.get("epreuves") or []
+        if epreuves:
+            détail = " + ".join(
+                "%s (%s)" % (e["libelle"], e["type"]) if e["type"] else e["libelle"]
+                for e in epreuves
+            )
+            pdf.setFont("Helvetica-Oblique", 8.5)
+            pdf.setFillColorRGB(0.2, 0.2, 0.2)
+            texte = "D'après : %s" % détail
+            if pdf.stringWidth(texte, "Helvetica-Oblique", 8.5) > largeur - 4 * cm:
+                texte = texte[:150] + "..."
+            pdf.drawCentredString(largeur / 2, y, texte)
+            y -= 0.38 * cm
+        pdf.setFont("Helvetica", 8.5)
+        pdf.setFillColorRGB(0.3, 0.3, 0.3)
+        coef_info = ""
+        if epreuves and all(e.get("est_coefficientee") == "N" for e in epreuves):
+            coef_info = " · Sans coefficients de matière"
+        # Les écoles nomment leur année tantôt « 2025-2026 », tantôt « Année
+        # Scolaire 2025-2026 » : on ne préfixe que si le libellé ne le fait pas.
+        lib_annee = (annee.libelle if annee else "") or ""
+        if lib_annee and not lib_annee.lower().startswith("année"):
+            lib_annee = "Année scolaire %s" % lib_annee
+        pdf.drawCentredString(largeur / 2, y, "%s · Effectif : %s élèves · Édité le %s%s" % (
+            lib_annee,
+            res["effectif"],
+            date.today().strftime("%d/%m/%Y"),
+            coef_info,
+        ))
+        return y - 0.5 * cm
+
+    marge = 1.0 * cm
+    tab_w = largeur - 2 * marge
+    col_rang, col_mat, col_nom = 1.0 * cm, 2.0 * cm, 4.6 * cm
+    col_moy, col_mention = 1.5 * cm, 2.2 * cm
+    reste = tab_w - (col_rang + col_mat + col_nom + col_moy + col_mention)
+    col_matiere = reste / max(len(matieres_cols), 1)
+
+    def entete_tableau(y):
+        pdf.setFillColorRGB(*cp)
+        pdf.rect(marge, y - 0.95 * cm, tab_w, 0.95 * cm, fill=1, stroke=0)
+        pdf.setFillColorRGB(1, 1, 1)
+        pdf.setFont("Helvetica-Bold", 7.5)
+        x = marge + 0.1 * cm
+        pdf.drawString(x, y - 0.62 * cm, "RG")
+        x += col_rang
+        pdf.drawString(x, y - 0.62 * cm, "MATRICULE")
+        x += col_mat
+        pdf.drawString(x, y - 0.62 * cm, "NOM ET PRÉNOM")
+        x += col_nom
+        for l in matieres_cols:
+            code = codes_matiere.get(l["matiere_id"], l["matiere"][:6])
+            pdf.setFont("Helvetica-Bold", 8)
+            pdf.drawCentredString(x + col_matiere / 2, y - 0.5 * cm, code[:8])
+            pdf.setFont("Helvetica", 5.5)
+            pdf.drawCentredString(x + col_matiere / 2, y - 0.82 * cm, "coef %g" % l["coefficient"])
+            x += col_matiere
+        pdf.setFont("Helvetica-Bold", 7.5)
+        pdf.drawCentredString(x + col_moy / 2, y - 0.62 * cm, "MOY.")
+        x += col_moy
+        pdf.drawCentredString(x + col_mention / 2, y - 0.62 * cm, "MENTION")
+        return y - 0.95 * cm
+
+    y = entete()
+    y = entete_tableau(y)
+    row_h = 0.52 * cm
+
+    for idx, r in enumerate(resultats):
+        if y < 3.4 * cm:
+            pdf.showPage()
+            y = entete_tableau(entete())
+        insc = inscriptions.get(r["inscription_id"])
+        el = eleves.get(insc.eleve_id) if insc else None
+
+        if idx % 2 == 0:
+            pdf.setFillColorRGB(*cs)
+            pdf.rect(marge, y - row_h, tab_w, row_h, fill=1, stroke=0)
+
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.setFont("Helvetica-Bold", 8)
+        x = marge + 0.1 * cm
+        pdf.drawString(x, y - 0.36 * cm, str(r["rang"]))
+        x += col_rang
+        pdf.setFont("Helvetica", 7)
+        pdf.drawString(x, y - 0.36 * cm, (el.matricule if el else "") or "")
+        x += col_mat
+        pdf.setFont("Helvetica", 8)
+        nom = ("%s %s" % (el.nom, el.prenom)) if el else ("#%s" % r["inscription_id"])
+        pdf.drawString(x, y - 0.36 * cm, nom[:30])
+        x += col_nom
+
+        par_matiere = {l["matiere_id"]: l["moyenne_matiere"] for l in r["lignes"]}
+        pdf.setFont("Helvetica", 7)
+        for l in matieres_cols:
+            v = par_matiere.get(l["matiere_id"])
+            if v is not None and v < 10:
+                pdf.setFillColorRGB(0.75, 0.15, 0.15)
+            pdf.drawCentredString(x + col_matiere / 2, y - 0.36 * cm,
+                                  ("%.1f" % v) if v is not None else "—")
+            pdf.setFillColorRGB(0, 0, 0)
+            x += col_matiere
+
+        pdf.setFont("Helvetica-Bold", 8.5)
+        moy = r["moyenne_generale"]
+        if moy is not None and moy < 10:
+            pdf.setFillColorRGB(0.75, 0.15, 0.15)
+        pdf.drawCentredString(x + col_moy / 2, y - 0.36 * cm,
+                              ("%.2f" % moy) if moy is not None else "—")
+        pdf.setFillColorRGB(0, 0, 0)
+        x += col_moy
+        pdf.setFont("Helvetica", 6.5)
+        pdf.drawCentredString(x + col_mention / 2, y - 0.36 * cm, (r["mention"] or "")[:14])
+
+        y -= row_h
+
+    # ── Légende des codes matière ──
+    y -= 0.35 * cm
+    pdf.setFont("Helvetica", 6.2)
+    pdf.setFillColorRGB(0.42, 0.42, 0.42)
+    legende = "   ".join(
+        "%s = %s" % (codes_matiere.get(l["matiere_id"], "?"), l["matiere"])
+        for l in matieres_cols
+    )
+    # Repli sur plusieurs lignes : une ligne unique déborderait de la page
+    mots, ligne_courante = legende.split("   "), ""
+    for mot in mots:
+        essai = (ligne_courante + "   " + mot) if ligne_courante else mot
+        if pdf.stringWidth(essai, "Helvetica", 6.2) > (largeur - 2 * marge):
+            pdf.drawString(marge, y, ligne_courante)
+            y -= 0.3 * cm
+            ligne_courante = mot
+        else:
+            ligne_courante = essai
+    if ligne_courante:
+        pdf.drawString(marge, y, ligne_courante)
+        y -= 0.3 * cm
+
+    moyennes = [r["moyenne_generale"] for r in resultats if r["moyenne_generale"] is not None]
+    y -= 0.3 * cm
+    pdf.setStrokeColorRGB(*cp)
+    pdf.setLineWidth(1)
+    pdf.line(marge, y, largeur - marge, y)
+    y -= 0.55 * cm
+    if moyennes:
+        moy_cl = sum(moyennes) / len(moyennes)
+        admis = len([m for m in moyennes if m >= 10])
+        pdf.setFont("Helvetica-Bold", 8.5)
+        pdf.setFillColorRGB(*cp)
+        pdf.drawString(marge, y, "STATISTIQUES DE LA CLASSE")
+        pdf.setFont("Helvetica", 8.5)
+        pdf.setFillColorRGB(0, 0, 0)
+        pdf.drawString(marge + 4.8 * cm, y,
+                       "Moyenne de la classe : %.2f/20      Plus forte : %.2f      Plus faible : %.2f      "
+                       "Moyennes >= 10 : %d/%d (%d%%)" % (
+                           moy_cl, max(moyennes), min(moyennes),
+                           admis, len(moyennes), admis * 100 // len(moyennes)))
+        y -= 1.4 * cm
+
+    pdf.setFont("Helvetica", 8)
+    pdf.setFillColorRGB(0.35, 0.35, 0.35)
+    for i, label in enumerate(["Le Professeur Principal", "Le Directeur des Études", "Le Chef d'Établissement"]):
+        x = marge + i * (tab_w / 3)
+        pdf.line(x, y + 0.05 * cm, x + 4.5 * cm, y + 0.05 * cm)
+        pdf.drawString(x, y - 0.4 * cm, label)
+
+    dessiner_filigrane(pdf, largeur, hauteur, settings)
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+
+    nom_fichier = ("classement_%s_%s.pdf" % (
+        classe.libelle, trimestre.libelle if trimestre else "periode")).replace(" ", "_")
+    return StreamingResponse(
+        buffer, media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=%s" % nom_fichier},
+    )
+
 
 def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     """Construit le PDF d'un bulletin — logique extraite telle quelle de
@@ -1199,7 +2520,10 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
 
     eleve = db.query(Eleve).filter(Eleve.eleve_id == inscription.eleve_id).first()
     classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
-    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == bulletin.trimestre_id).first()
+    # NULL pour un bulletin annuel, qui couvre toute l'année et non une période
+    trimestre = db.query(Trimestre).filter(
+        Trimestre.trimestre_id == bulletin.trimestre_id
+    ).first() if bulletin.trimestre_id else None
     annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == inscription.annee_id).first()
     etablissement = db.query(Etablissement).filter(
         Etablissement.etablissement_id == classe.etablissement_id
@@ -1213,6 +2537,12 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     # Fusion Notation > Affichage Bulletins + Documents > Champs bulletin (voir
     # get_bulletin_display_flags — deux pages Paramètres pilotaient auparavant
     # des espaces de clés disjoints, chacune ignorant l'autre).
+    # Barème réel du cycle : le bulletin affichait « / 20 » en dur, y compris
+    # pour une école du primaire qui note sur 10.
+    _cycle_key_bulletin = get_cycle_key(classe.classe_id, db)
+    echelle_lettres = get_bareme_defaut_cycle(db, classe.etablissement_id, _cycle_key_bulletin)
+    lettres_cfg = get_lettres_config(db, classe.etablissement_id, _cycle_key_bulletin)
+
     _flags = get_bulletin_display_flags(db, classe.etablissement_id)
     show_rang = _flags["show_rang"]
     show_mention = _flags["show_mention"]
@@ -1229,16 +2559,20 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
         .all()
     )
 
-    # ── Statistiques classe (meilleure/plus faible moyenne du trimestre) ──
-    moyennes_classe = [
-        float(m) for (m,) in db.query(Bulletin.moyenne_generale).join(
-            Inscription, Bulletin.inscription_id == Inscription.inscription_id
-        ).filter(
-            Inscription.classe_id == classe.classe_id,
-            Bulletin.trimestre_id == bulletin.trimestre_id,
-            Bulletin.moyenne_generale.isnot(None)
-        ).all()
-    ]
+    # ── Statistiques classe (meilleure/plus faible moyenne de la période) ──
+    # `trimestre_id IS NULL` pour un bulletin annuel : comparer avec `= NULL`
+    # ne remonte jamais rien, et le bulletin annuel sortait sans ses repères de
+    # classe alors que le trimestriel les affichait.
+    _q_stats = db.query(Bulletin.moyenne_generale).join(
+        Inscription, Bulletin.inscription_id == Inscription.inscription_id
+    ).filter(
+        Inscription.classe_id == classe.classe_id,
+        Bulletin.type_bulletin == bulletin.type_bulletin,
+        Bulletin.moyenne_generale.isnot(None),
+    )
+    _q_stats = (_q_stats.filter(Bulletin.trimestre_id == bulletin.trimestre_id)
+                if bulletin.trimestre_id else _q_stats.filter(Bulletin.trimestre_id.is_(None)))
+    moyennes_classe = [float(m) for (m,) in _q_stats.all()]
     meilleure_moyenne_classe = max(moyennes_classe) if moyennes_classe else None
     plus_faible_moyenne_classe = min(moyennes_classe) if moyennes_classe else None
 
@@ -1255,6 +2589,26 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     if presences_periode:
         nb_present = sum(1 for p in presences_periode if p.statut_presence == "PRESENT")
         taux_presence = round(nb_present / len(presences_periode) * 100, 1)
+
+    # ── Bulletin annuel : d'où vient la moyenne, et résultat de l'examen ──
+    # Sur un bulletin annuel, la seule question de la famille est « comment
+    # arrive-t-on à ce chiffre ». On rappelle donc les moyennes de période qui
+    # le composent. Pour une classe d'examen (6ème/10ème/Terminale), on rappelle
+    # aussi que c'est le résultat national — pas cette moyenne — qui décide.
+    periodes_annuelles, resultat_officiel = [], None
+    if bulletin.type_bulletin == "ANNUEL":
+        from app.models.academique import ResultatOfficielExamen
+        for b_per, trim in db.query(Bulletin, Trimestre).join(
+            Trimestre, Bulletin.trimestre_id == Trimestre.trimestre_id
+        ).filter(
+            Bulletin.inscription_id == inscription.inscription_id,
+            Bulletin.type_bulletin != "ANNUEL",
+            Bulletin.moyenne_generale.isnot(None),
+        ).order_by(Trimestre.numero, Trimestre.date_debut).all():
+            periodes_annuelles.append((trim.libelle, float(b_per.moyenne_generale)))
+        resultat_officiel = db.query(ResultatOfficielExamen).filter(
+            ResultatOfficielExamen.inscription_id == inscription.inscription_id
+        ).first()
 
     # ── Créer le PDF ──
     buffer = io.BytesIO()
@@ -1363,8 +2717,11 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     y -= 0.8 * cm
     pdf.setFont(tmpl["police_titre"], 14)
     pdf.setFillColorRGB(*cp)
-    titre_trimestre = trimestre.libelle if trimestre else "Trimestre"
-    pdf.drawCentredString(largeur / 2, y, f"BULLETIN DE NOTES — {titre_trimestre}")
+    if bulletin.type_bulletin == "ANNUEL":
+        titre_periode = f"ANNUEL {annee.libelle}" if annee else "ANNUEL"
+    else:
+        titre_periode = trimestre.libelle if trimestre else "Trimestre"
+    pdf.drawCentredString(largeur / 2, y, f"BULLETIN DE NOTES — {titre_periode}")
     y -= 0.3 * cm
     pdf.setLineWidth(1.5)
     pdf.line(1.5 * cm, y, largeur - 1.5 * cm, y)
@@ -1409,20 +2766,38 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     # pas seulement la moyenne finale de matière) + Points (moyenne × coefficient).
     # show_rang résolu plus haut (fusion Notation+Documents) ; moy.classe/min/max
     # pilotés par le même toggle unique "stats_matiere".
-    show_moy_cl = show_stats_matiere
-    show_minmax = show_stats_matiere
+    # Le bulletin d'un élève ne porte plus de statistiques de classe :
+    # moyenne de classe, min et max répondaient à « où en est la classe ? »,
+    # pas à « où en est mon enfant ? ». Ces chiffres restent disponibles pour
+    # l'école sur la fiche de classement et dans le tableau de centralisation.
+    show_moy_cl = False
+    show_minmax = False
+
+    # Détail par type d'évaluation : les colonnes suivent les types réellement
+    # utilisés par l'école (plus de trio figé Écrit/Oral/Composition). Chargé en
+    # lot pour tout le bulletin — c'était auparavant une requête par matière.
+    detail_par_matiere = detail_par_type_classe(
+        db, classe.classe_id, bulletin.trimestre_id, inscription.inscription_id
+    )
+    types_presents = {}
+    for lignes_detail in detail_par_matiere.values():
+        for d in lignes_detail:
+            types_presents.setdefault(d["type_eval_id"], d["libelle"])
+    # Au-delà de 4 types la largeur de page ne suit plus : on garde les plus
+    # fréquents et le reste bascule dans la moyenne de matière uniquement.
+    MAX_COLONNES_DETAIL = 4
+    types_ordonnes = sorted(types_presents.items(), key=lambda kv: kv[1])[:MAX_COLONNES_DETAIL]
+    nb_detail = len(types_ordonnes)
 
     col_matiere_w = 3.3 * cm
-    col_detail_w = 0.85 * cm   # Écrit / Oral / Composition (3 colonnes)
-    col_moy_w = 1.3 * cm
-    col_coeff_w = 0.9 * cm
-    col_pts_w = 1.2 * cm
-    col_extra_w = 1.1 * cm     # Moy.Cl / Min / Max
-    col_appr_w = tab_w - col_matiere_w - (col_detail_w * 3) - col_moy_w - col_coeff_w - col_pts_w
-    if show_moy_cl:
-        col_appr_w -= col_extra_w
-    if show_minmax:
-        col_appr_w -= col_extra_w * 2
+    col_detail_w = (2.55 * cm / nb_detail) if nb_detail else 0  # même largeur totale qu'avant
+    col_coeff_w = 1.6 * cm
+    col_moy_w = 1.6 * cm
+    # La colonne « Points » (moyenne × coefficient) disparaît de la grille : elle
+    # se déduit des deux colonnes voisines et n'apporte rien à la lecture ligne
+    # par ligne. Le total de points reste affiché dans la synthèse en bas.
+    col_extra_w = 1.1 * cm
+    col_appr_w = tab_w - col_matiere_w - (col_detail_w * nb_detail) - col_moy_w - col_coeff_w
 
     # En-tête du tableau (2 lignes : groupe "NOTES" au-dessus de Écrit/Oral/Compo)
     row_h = 0.55 * cm
@@ -1436,21 +2811,23 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     pdf.drawString(x, y - header_h + 0.2 * cm, "MATIÈRE")
     x += col_matiere_w
 
-    detail_x0 = x
-    pdf.setFont(tmpl["police_titre"], 6)
-    pdf.drawCentredString(detail_x0 + (col_detail_w * 3) / 2, y - 0.35 * cm, "NOTES")
-    pdf.setFont(tmpl["police_titre"], tmpl["taille_entete_tableau"] - 1)
-    for lbl in ("ÉCR", "ORAL", "COMP"):
-        pdf.drawCentredString(x + col_detail_w / 2, y - header_h + 0.2 * cm, lbl)
-        x += col_detail_w
+    if nb_detail:
+        detail_x0 = x
+        pdf.setFont(tmpl["police_titre"], 6)
+        pdf.drawCentredString(detail_x0 + (col_detail_w * nb_detail) / 2, y - 0.35 * cm, "NOTES")
+        pdf.setFont(tmpl["police_titre"], tmpl["taille_entete_tableau"] - 1)
+        for _tid, libelle in types_ordonnes:
+            # Abrégé sur 4 caractères : "Composition" -> "COMP", "Évaluation" -> "ÉVAL"
+            pdf.drawCentredString(x + col_detail_w / 2, y - header_h + 0.2 * cm, libelle[:4].upper())
+            x += col_detail_w
 
     pdf.setFont(tmpl["police_titre"], tmpl["taille_entete_tableau"])
-    pdf.drawCentredString(x + col_moy_w / 2, y - header_h + 0.2 * cm, "MOY")
-    x += col_moy_w
-    pdf.drawCentredString(x + col_coeff_w / 2, y - header_h + 0.2 * cm, "COEF")
+    # « COEFFICIENT » en toutes lettres débordait sur la colonne voisine à
+    # cette largeur : abrégé, comme le reste des en-têtes du tableau.
+    pdf.drawCentredString(x + col_coeff_w / 2, y - header_h + 0.2 * cm, "COEF.")
     x += col_coeff_w
-    pdf.drawCentredString(x + col_pts_w / 2, y - header_h + 0.2 * cm, "PTS")
-    x += col_pts_w
+    pdf.drawCentredString(x + col_moy_w / 2, y - header_h + 0.2 * cm, "MOYENNE")
+    x += col_moy_w
     if show_moy_cl:
         pdf.drawCentredString(x + col_extra_w / 2, y - header_h + 0.2 * cm, "MOY.CL")
         x += col_extra_w
@@ -1494,20 +2871,28 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
         total_coeff += coeff
         total_points += points
 
-        detail = detail_categories_matiere(db, classe.classe_id, matiere.matiere_id, bulletin.trimestre_id, inscription.inscription_id)
-        pdf.setFont(tmpl["police_corps"], max(6, tmpl["taille_corps_tableau"] - 1))
-        for cat in ("ecrite", "orale", "composition"):
-            val = detail.get(cat)
-            pdf.drawCentredString(x + col_detail_w / 2, y - 0.38 * cm, f"{val:.1f}" if val is not None else "—")
-            x += col_detail_w
-        pdf.setFont(tmpl["police_corps"], tmpl["taille_corps_tableau"])
+        if nb_detail:
+            par_type = {
+                d["type_eval_id"]: d["moyenne"]
+                for d in detail_par_matiere.get(matiere.matiere_id if matiere else -1, [])
+            }
+            pdf.setFont(tmpl["police_corps"], max(6, tmpl["taille_corps_tableau"] - 1))
+            for tid, _lbl in types_ordonnes:
+                val = par_type.get(tid)
+                pdf.drawCentredString(x + col_detail_w / 2, y - 0.38 * cm, f"{val:.1f}" if val is not None else "—")
+                x += col_detail_w
+            pdf.setFont(tmpl["police_corps"], tmpl["taille_corps_tableau"])
 
-        pdf.drawCentredString(x + col_moy_w / 2, y - 0.38 * cm, f"{moy:.2f}")
-        x += col_moy_w
         pdf.drawCentredString(x + col_coeff_w / 2, y - 0.38 * cm, f"{coeff:.0f}")
         x += col_coeff_w
-        pdf.drawCentredString(x + col_pts_w / 2, y - 0.38 * cm, f"{points:.1f}")
-        x += col_pts_w
+        # La lettre suit la note quand l'école a activé la notation par lettres
+        # pour ce cycle ; sinon le tableau est inchangé.
+        lettre_mat = lettre_pour_note(moy, lettres_cfg, echelle_lettres)
+        pdf.drawCentredString(
+            x + col_moy_w / 2, y - 0.38 * cm,
+            f"{moy:.2f}  {lettre_mat}" if lettre_mat else f"{moy:.2f}",
+        )
+        x += col_moy_w
 
         if show_moy_cl:
             mc = float(ligne.moyenne_classe) if ligne.moyenne_classe is not None else 0
@@ -1538,10 +2923,12 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     pdf.setFillColorRGB(*cp)
     x = marge_gauche + 0.15 * cm
     pdf.drawString(x, y - 0.38 * cm, "TOTAUX")
-    x += col_matiere_w + col_detail_w * 3 + col_moy_w
+    # Colonnes dans l'ordre du tableau : coefficient, puis moyenne. Le total de
+    # points, qui occupait sa propre colonne, est rappelé dans la synthèse.
+    x += col_matiere_w + col_detail_w * nb_detail
     pdf.drawCentredString(x + col_coeff_w / 2, y - 0.38 * cm, f"{total_coeff:.0f}")
     x += col_coeff_w
-    pdf.drawCentredString(x + col_pts_w / 2, y - 0.38 * cm, f"{total_points:.1f}")
+    pdf.drawCentredString(x + col_moy_w / 2, y - 0.38 * cm, f"{total_points:.1f} pts")
     y -= row_h
 
     pdf.setStrokeColorRGB(*cl)
@@ -1555,7 +2942,12 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     moy_gen = float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else (
         total_points / total_coeff if total_coeff > 0 else 0
     )
-    pdf.drawString(1.8 * cm, y, f"Moyenne Générale : {moy_gen:.2f} / 20")
+    _lettre_gen = lettre_pour_note(moy_gen, lettres_cfg, echelle_lettres)
+    pdf.drawString(
+        1.8 * cm, y,
+        "Moyenne Générale : %.2f / %g%s" % (
+            moy_gen, echelle_lettres, f"   ({_lettre_gen})" if _lettre_gen else ""),
+    )
 
     if show_rang:
         rang_text = f"Rang : {bulletin.rang or 'N/A'}"
@@ -1575,13 +2967,52 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
         pdf.setFont(tmpl["police_corps"], 9)
         pdf.drawRightString(marge_droite, y, f"Décision : {decision}")
 
+    # ── BULLETIN ANNUEL : détail du calcul + résultat de l'examen national ──
+    if periodes_annuelles:
+        y -= 0.6 * cm
+        pdf.setFont(tmpl["police_titre"], 8)
+        pdf.setFillColorRGB(*cp)
+        pdf.drawString(1.8 * cm, y, "Moyennes des périodes")
+        y -= 0.4 * cm
+        pdf.setFont(tmpl["police_corps"], 8)
+        pdf.setFillColorRGB(0.2, 0.2, 0.2)
+        detail = "   |   ".join(f"{lib} : {val:.2f}" for lib, val in periodes_annuelles)
+        pdf.drawString(1.8 * cm, y, detail)
+        y -= 0.35 * cm
+        pdf.setFont(tmpl["police_corps"], 7)
+        pdf.setFillColorRGB(0.45, 0.45, 0.45)
+        pdf.drawString(
+            1.8 * cm, y,
+            "Moyenne annuelle = somme des moyennes de période ÷ %d période(s)"
+            % len(periodes_annuelles),
+        )
+        pdf.setFillColorRGB(0, 0, 0)
+
+    if resultat_officiel is not None:
+        y -= 0.55 * cm
+        libelle_examen = resultat_officiel.examen_national or "Examen national"
+        admis = resultat_officiel.resultat == "ADMIS"
+        pdf.setFont(tmpl["police_titre"], 9)
+        pdf.setFillColorRGB(*((0.05, 0.45, 0.3) if admis else (0.65, 0.12, 0.12)))
+        pdf.drawString(
+            1.8 * cm, y,
+            "%s : %s" % (libelle_examen, "ADMIS" if admis else "NON ADMIS"),
+        )
+        pdf.setFont(tmpl["police_corps"], 7)
+        pdf.setFillColorRGB(0.45, 0.45, 0.45)
+        pdf.drawRightString(
+            marge_droite, y,
+            "Résultat officiel du Ministère — seul décisif pour le passage",
+        )
+        pdf.setFillColorRGB(0, 0, 0)
+
     # ── STATISTIQUES DE CLASSE (meilleure / plus faible moyenne) ──
     if meilleure_moyenne_classe is not None:
         y -= 0.5 * cm
         pdf.setFont(tmpl["police_corps"], 8)
         pdf.setFillColorRGB(0.3, 0.3, 0.3)
-        pdf.drawString(1.8 * cm, y, f"Meilleure moyenne de la classe : {meilleure_moyenne_classe:.2f}/20")
-        pdf.drawRightString(marge_droite, y, f"Plus faible moyenne de la classe : {plus_faible_moyenne_classe:.2f}/20")
+        pdf.drawString(1.8 * cm, y, "Meilleure moyenne de la classe : %.2f/%g" % (meilleure_moyenne_classe, echelle_lettres))
+        pdf.drawRightString(marge_droite, y, "Plus faible moyenne de la classe : %.2f/%g" % (plus_faible_moyenne_classe, echelle_lettres))
         pdf.setFillColorRGB(0, 0, 0)
 
     # ── GRAPHIQUE DES PERFORMANCES PAR MATIÈRE (élève vs moyenne de classe) ──
@@ -1605,8 +3036,8 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
             pdf.setFillColorRGB(0.2, 0.2, 0.2)
             pdf.drawString(marge_gauche, by + 0.05 * cm, lbl)
             bar_x0 = marge_gauche + chart_label_w
-            bar_w_e = chart_bar_max_w * min(moy_e, 20) / 20
-            bar_w_c = chart_bar_max_w * min(moy_c, 20) / 20
+            bar_w_e = chart_bar_max_w * min(moy_e, echelle_lettres) / echelle_lettres
+            bar_w_c = chart_bar_max_w * min(moy_c, echelle_lettres) / echelle_lettres
             pdf.setFillColorRGB(0.85, 0.85, 0.9)
             pdf.rect(bar_x0, by - 0.02 * cm, chart_bar_max_w, 0.14 * cm, fill=1, stroke=0)
             pdf.setFillColorRGB(*cp)
@@ -1624,15 +3055,23 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     # Sans ça, rien n'indiquait comment la moyenne était obtenue — texte
     # aligné dynamiquement sur la pondération réellement configurée
     # (Paramètres > Notation), pas des valeurs figées dans le code.
-    poids_aff = get_poids_evaluations(db, classe.etablissement_id)
+    if types_ordonnes:
+        _coefs_types = get_types_evaluation_coefficients(
+            db, classe.etablissement_id, get_cycle_key(classe.classe_id, db)
+        )
+        _termes = " + ".join(
+            f"{lbl}×{_coefs_types.get(tid, 1):g}" for tid, lbl in types_ordonnes
+        )
+        _somme = " + ".join(f"{_coefs_types.get(tid, 1):g}" for tid, _lbl in types_ordonnes)
+        formule_matiere = (
+            f"Moyenne de matière = ({_termes}) ÷ ({_somme}) — type sans note exclu du calcul."
+        )
+    else:
+        formule_matiere = "Moyenne de matière = moyenne pondérée des types d'évaluation configurés."
     y -= 0.5 * cm
     pdf.setFont("Helvetica-Oblique", 6.5)
     pdf.setFillColorRGB(0.4, 0.4, 0.4)
-    pdf.drawString(
-        1.8 * cm, y,
-        f"Moyenne de matière = (Écrit×{poids_aff['ecrite']:g} + Oral×{poids_aff['orale']:g} + Composition×{poids_aff['composition']:g}) ÷ "
-        f"({poids_aff['ecrite']:g} + {poids_aff['orale']:g} + {poids_aff['composition']:g}) — catégorie absente exclue du calcul."
-    )
+    pdf.drawString(1.8 * cm, y, formule_matiere)
     y -= 0.35 * cm
     pdf.drawString(
         1.8 * cm, y,
@@ -1697,7 +3136,9 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     pdf.save()
     buffer.seek(0)
 
-    nom_fichier = f"bulletin_{eleve.nom}_{eleve.prenom}_{titre_trimestre}.pdf".replace(" ", "_")
+    # `titre_periode` et non `titre_trimestre` : le bulletin peut aussi être
+    # annuel, auquel cas il n'y a pas de trimestre à nommer.
+    nom_fichier = f"bulletin_{eleve.nom}_{eleve.prenom}_{titre_periode}.pdf".replace(" ", "_")
     return buffer.getvalue(), nom_fichier
 
 

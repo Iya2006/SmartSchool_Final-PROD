@@ -26,108 +26,31 @@ interface ClasseItem {
     nb_matieres?: number;
 }
 
-interface DeployItem {
-    code: string;
-    libelle: string;
-    categorie: string;
-    coefficient_defaut: number;
-    nb_heures_semaine: number;
-    est_obligatoire: string;
-    cycle_code: string;
-}
-
-/* ─── Programme Guinéen complet pour le mode checkbox ─── */
-const PROGRAMME_GUINEEN_UI: Record<string, { label: string; cycle: string; matieres: { code: string; libelle: string; categorie: string; coef: number; heures: number }[] }> = {
-    CP1: { label: '1ère Année', cycle: 'PRM', matieres: [
-        { code: 'FRA', libelle: 'Français / Lecture', categorie: 'Langues', coef: 5, heures: 8 },
-        { code: 'CAL', libelle: 'Calcul', categorie: 'Sciences', coef: 4, heures: 6 },
-        { code: 'SCO', libelle: "Science d'Observation", categorie: 'Sciences', coef: 2, heures: 2 },
-        { code: 'ECM', libelle: 'Éducation Civique et Morale', categorie: 'Sciences Sociales', coef: 1, heures: 1 },
-        { code: 'DES', libelle: 'Dessin / Arts Plastiques', categorie: 'Pratique', coef: 1, heures: 2 },
-        { code: 'EPS', libelle: 'Éducation Physique et Sportive', categorie: 'Pratique', coef: 1, heures: 2 },
-        { code: 'MUS', libelle: 'Chant et Musique', categorie: 'Pratique', coef: 1, heures: 1 },
-    ]},
-    CE1: { label: '3ème Année', cycle: 'PRM', matieres: [
-        { code: 'FRA', libelle: 'Français', categorie: 'Langues', coef: 5, heures: 7 },
-        { code: 'LEC', libelle: 'Lecture et Écriture', categorie: 'Langues', coef: 3, heures: 3 },
-        { code: 'CAL', libelle: 'Calcul', categorie: 'Sciences', coef: 4, heures: 5 },
-        { code: 'SCI', libelle: 'Sciences', categorie: 'Sciences', coef: 2, heures: 2 },
-        { code: 'HIS', libelle: 'Histoire', categorie: 'Sciences Sociales', coef: 2, heures: 1 },
-        { code: 'GEO', libelle: 'Géographie', categorie: 'Sciences Sociales', coef: 2, heures: 1 },
-        { code: 'ECM', libelle: 'Éducation Civique et Morale', categorie: 'Sciences Sociales', coef: 1, heures: 1 },
-        { code: 'DES', libelle: 'Dessin / Arts Plastiques', categorie: 'Pratique', coef: 1, heures: 2 },
-        { code: 'EPS', libelle: 'Éducation Physique et Sportive', categorie: 'Pratique', coef: 1, heures: 2 },
-        { code: 'MUS', libelle: 'Chant et Musique', categorie: 'Pratique', coef: 1, heures: 1 },
-    ]},
-    CM1: { label: '5ème Année', cycle: 'PRM', matieres: [
-        { code: 'FRA', libelle: 'Français', categorie: 'Langues', coef: 5, heures: 7 },
-        { code: 'CAL', libelle: 'Calcul', categorie: 'Sciences', coef: 4, heures: 5 },
-        { code: 'SCO', libelle: "Sciences d'Observation", categorie: 'Sciences', coef: 2, heures: 2 },
-        { code: 'HIS', libelle: 'Histoire', categorie: 'Sciences Sociales', coef: 2, heures: 1 },
-        { code: 'GEO', libelle: 'Géographie', categorie: 'Sciences Sociales', coef: 2, heures: 1 },
-        { code: 'ECM', libelle: 'Éducation Civique et Morale', categorie: 'Sciences Sociales', coef: 1, heures: 1 },
-        { code: 'DES', libelle: 'Dessin / Arts Plastiques', categorie: 'Pratique', coef: 1, heures: 2 },
-        { code: 'EPS', libelle: 'Éducation Physique et Sportive', categorie: 'Pratique', coef: 1, heures: 2 },
-        { code: 'MUS', libelle: 'Chant et Musique', categorie: 'Pratique', coef: 1, heures: 1 },
-    ]},
-    '7EME': { label: '7ème Année', cycle: 'CLG', matieres: [
-        { code: 'FRA', libelle: 'Français', categorie: 'Langues', coef: 4, heures: 5 },
-        { code: 'MAT', libelle: 'Mathématiques', categorie: 'Sciences', coef: 4, heures: 5 },
-        { code: 'ANG', libelle: 'Anglais', categorie: 'Langues', coef: 3, heures: 3 },
-        { code: 'PHY', libelle: 'Physique', categorie: 'Sciences', coef: 2, heures: 2 },
-        { code: 'CHI', libelle: 'Chimie', categorie: 'Sciences', coef: 2, heures: 2 },
-        { code: 'BIO', libelle: 'Biologie', categorie: 'Sciences', coef: 2, heures: 2 },
-        { code: 'HIS', libelle: 'Histoire', categorie: 'Sciences Sociales', coef: 2, heures: 2 },
-        { code: 'GEO', libelle: 'Géographie', categorie: 'Sciences Sociales', coef: 2, heures: 2 },
-        { code: 'ECM', libelle: 'Éducation Civique et Morale', categorie: 'Sciences Sociales', coef: 1, heures: 1 },
-        { code: 'EPS', libelle: 'Éducation Physique et Sportive', categorie: 'Pratique', coef: 1, heures: 2 },
-        { code: 'DES', libelle: 'Dessin', categorie: 'Pratique', coef: 1, heures: 1 },
-        { code: 'INF', libelle: 'Informatique', categorie: 'Pratique', coef: 1, heures: 1 },
-    ]},
-    '11SM': { label: '11ème SM', cycle: 'LYC', matieres: [
-        { code: 'FRA', libelle: 'Français', categorie: 'Langues', coef: 3, heures: 3 },
-        { code: 'MAT', libelle: 'Mathématiques', categorie: 'Sciences', coef: 5, heures: 6 },
-        { code: 'ANG', libelle: 'Anglais', categorie: 'Langues', coef: 2, heures: 2 },
-        { code: 'PHY', libelle: 'Physique', categorie: 'Sciences', coef: 4, heures: 4 },
-        { code: 'CHI', libelle: 'Chimie', categorie: 'Sciences', coef: 3, heures: 3 },
-        { code: 'PHI', libelle: 'Philosophie', categorie: 'Sciences Sociales', coef: 2, heures: 2 },
-        { code: 'ECO', libelle: 'Économie', categorie: 'Sciences Sociales', coef: 2, heures: 2 },
-    ]},
-    '11SE': { label: '11ème SE', cycle: 'LYC', matieres: [
-        { code: 'FRA', libelle: 'Français', categorie: 'Langues', coef: 3, heures: 3 },
-        { code: 'MAT', libelle: 'Mathématiques', categorie: 'Sciences', coef: 3, heures: 4 },
-        { code: 'ANG', libelle: 'Anglais', categorie: 'Langues', coef: 2, heures: 2 },
-        { code: 'PHY', libelle: 'Physique', categorie: 'Sciences', coef: 3, heures: 3 },
-        { code: 'CHI', libelle: 'Chimie', categorie: 'Sciences', coef: 3, heures: 3 },
-        { code: 'BIO', libelle: 'Biologie', categorie: 'Sciences', coef: 4, heures: 5 },
-        { code: 'PHI', libelle: 'Philosophie', categorie: 'Sciences Sociales', coef: 2, heures: 2 },
-        { code: 'ECO', libelle: 'Économie', categorie: 'Sciences Sociales', coef: 2, heures: 2 },
-    ]},
-    '11SS': { label: '11ème SS', cycle: 'LYC', matieres: [
-        { code: 'FRA', libelle: 'Français', categorie: 'Langues', coef: 3, heures: 4 },
-        { code: 'MAT', libelle: 'Mathématiques', categorie: 'Sciences', coef: 2, heures: 3 },
-        { code: 'ANG', libelle: 'Anglais', categorie: 'Langues', coef: 2, heures: 3 },
-        { code: 'HIS', libelle: 'Histoire', categorie: 'Sciences Sociales', coef: 3, heures: 3 },
-        { code: 'GEO', libelle: 'Géographie', categorie: 'Sciences Sociales', coef: 3, heures: 3 },
-        { code: 'PHI', libelle: 'Philosophie', categorie: 'Sciences Sociales', coef: 3, heures: 3 },
-        { code: 'ECO', libelle: 'Économie', categorie: 'Sciences Sociales', coef: 4, heures: 4 },
-    ]},
-};
-
-/* On regroupe par cycle pour l'affichage */
-const CYCLE_META: Record<string, { label: string; icon: any; color: string; bg: string; badgeClass: string }> = {
-    PRM: { label: 'Primaire', icon: <School size={15} />, color: '#f59e0b', bg: '#fef3c7', badgeClass: styles.badgePrimaire },
-    CLG: { label: 'Collège', icon: <Compass size={15} />, color: '#3b82f6', bg: '#dbeafe', badgeClass: styles.badgeCollege },
-    LYC: { label: 'Lycée', icon: <GraduationCap size={15} />, color: '#8b5cf6', bg: '#ede9fe', badgeClass: styles.badgeLycee },
-};
-
 const CATEGORY_THEME: Record<string, { gradient: string; bg: string; text: string; border: string; icon: any }> = {
     Sciences: { gradient: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', bg: '#eff6ff', text: '#1d4ed8', border: '#93c5fd', icon: <Compass size={15} /> },
     Langues: { gradient: 'linear-gradient(135deg, #a855f7, #7c3aed)', bg: '#faf5ff', text: '#7c3aed', border: '#c4b5fd', icon: <Languages size={15} /> },
     'Sciences Sociales': { gradient: 'linear-gradient(135deg, #f97316, #ea580c)', bg: '#fff7ed', text: '#ea580c', border: '#fdba74', icon: <FileText size={15} /> },
     Pratique: { gradient: 'linear-gradient(135deg, #10b981, #059669)', bg: '#ecfdf5', text: '#059669', border: '#6ee7b7', icon: <PenTool size={15} /> },
     Autres: { gradient: 'linear-gradient(135deg, #64748b, #475569)', bg: '#f8fafc', text: '#475569', border: '#cbd5e1', icon: <BookOpen size={15} /> },
+    // Au Lycée, la catégorie d'une matière est sa série. Les libellés
+    // génériques ci-dessus ne concernent que le Primaire et le Collège, et
+    // restent utilisés par les matières créées avant ce changement.
+    SM: { gradient: 'linear-gradient(135deg, #8b5cf6, #6d28d9)', bg: '#f5f3ff', text: '#7c3aed', border: '#c4b5fd', icon: <Compass size={15} /> },
+    SE: { gradient: 'linear-gradient(135deg, #06b6d4, #0e7490)', bg: '#ecfeff', text: '#0891b2', border: '#67e8f9', icon: <Compass size={15} /> },
+    SS: { gradient: 'linear-gradient(135deg, #f59e0b, #b45309)', bg: '#fffbeb', text: '#d97706', border: '#fcd34d', icon: <FileText size={15} /> },
+    // Groupes par cycle (Primaire / Collège) et par série au Lycée
+    'Primaire': { gradient: 'linear-gradient(135deg, #f59e0b, #d97706)', bg: '#fef3c7', text: '#b45309', border: '#fcd34d', icon: <School size={15} /> },
+    'Collège': { gradient: 'linear-gradient(135deg, #3b82f6, #1d4ed8)', bg: '#dbeafe', text: '#1d4ed8', border: '#93c5fd', icon: <Compass size={15} /> },
+    'Lycée': { gradient: 'linear-gradient(135deg, #8b5cf6, #6d28d9)', bg: '#ede9fe', text: '#7c3aed', border: '#c4b5fd', icon: <GraduationCap size={15} /> },
+    'Lycée — SM': { gradient: 'linear-gradient(135deg, #8b5cf6, #6d28d9)', bg: '#f5f3ff', text: '#7c3aed', border: '#c4b5fd', icon: <GraduationCap size={15} /> },
+    'Lycée — SE': { gradient: 'linear-gradient(135deg, #06b6d4, #0e7490)', bg: '#ecfeff', text: '#0891b2', border: '#67e8f9', icon: <GraduationCap size={15} /> },
+    'Lycée — SS': { gradient: 'linear-gradient(135deg, #f59e0b, #b45309)', bg: '#fffbeb', text: '#d97706', border: '#fcd34d', icon: <GraduationCap size={15} /> },
 };
+
+/** La catégorie n'existe qu'au Lycée, où elle désigne la série de la matière.
+ *  Au Primaire et au Collège il n'y a pas de série : le champ est masqué et
+ *  la matière est enregistrée sans catégorie. */
+const CATEGORIES_LYCEE = ['SM', 'SE', 'SS'];
 const getCatTheme = (cat: string | null) => CATEGORY_THEME[cat || 'Autres'] || CATEGORY_THEME['Autres'];
 
 /** Retourne l'icône Lucide correspondant à une catégorie (taille configurable). */
@@ -157,10 +80,11 @@ const getClassGradient = (classLibelle: string, levelLibelle: string, isEmpty: b
     return 'linear-gradient(135deg, #f8fafc, #f1f5f9)';
 };
 
+// Un seul onglet : la page affiche uniquement les matières réellement
+// enregistrées en base. Le catalogue du programme guinéen (données codées
+// dans le front) et l'attribution en masse ont été retirés.
 const TABS = [
-    { id: 'deploy', label: 'Déployer les Matières', Icon: Sparkles },
     { id: 'manage', label: 'Gérer les Matières', Icon: BookOpen },
-    { id: 'classes', label: 'Attribution aux Classes', Icon: GraduationCap },
 ];
 
 interface Matiere {
@@ -176,7 +100,7 @@ interface Matiere {
 }
 
 export default function MatieresPage() {
-    const [tab, setTab] = useState('deploy');
+    const [tab, setTab] = useState('manage');
     const [loading, setLoading] = useState(true);
     const [matieres, setMatieres] = useState<Matiere[]>([]);
     const [cycles, setCycles] = useState<Cycle[]>([]);
@@ -195,9 +119,6 @@ export default function MatieresPage() {
 
     // Deploy tab state
     const [deployMode, setDeployMode] = useState<'guinee' | 'custom'>('guinee');
-    const [selectedMatieres, setSelectedMatieres] = useState<Record<string, boolean>>({});
-    const [editOverrides, setEditOverrides] = useState<Record<string, { libelle?: string; coef?: number; heures?: number }>>({});
-    const [deployFilter, setDeployFilter] = useState<string>('ALL');
 
     // Manage tab state
     const [searchQuery, setSearchQuery] = useState('');
@@ -205,10 +126,12 @@ export default function MatieresPage() {
 
     // Custom subject form
     const [showAddForm, setShowAddForm] = useState(false);
-    const [newSubject, setNewSubject] = useState({ code: '', libelle: '', categorie: 'Sciences', cycle_id: 0, coefficient_defaut: 2, nb_heures_semaine: 2, est_obligatoire: 'O' });
+    // categorie = série du Lycée (SM/SE/SS) ; vide pour Primaire et Collège
+    const [newSubject, setNewSubject] = useState({ code: '', libelle: '', categorie: '', cycle_id: 0, coefficient_defaut: 2, nb_heures_semaine: 2, est_obligatoire: 'O' });
+    // Classes auxquelles rattacher la matière dès sa création
+    const [classesSelectionnees, setClassesSelectionnees] = useState<number[]>([]);
 
     // Classes tab
-    const [assigning, setAssigning] = useState(false);
 
     const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
         setToast({ msg, type });
@@ -232,18 +155,6 @@ export default function MatieresPage() {
 
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
-    // Init all Guinea checkboxes ON by default
-    useEffect(() => {
-        if (Object.keys(selectedMatieres).length === 0) {
-            const init: Record<string, boolean> = {};
-            for (const [niv, data] of Object.entries(PROGRAMME_GUINEEN_UI)) {
-                for (const m of data.matieres) {
-                    init[`${data.cycle}_${m.code}`] = true;
-                }
-            }
-            setSelectedMatieres(init);
-        }
-    }, []);
 
     // Helper for trigger confirmation modals
     const triggerConfirm = (title: string, message: string, confirmText: string, type: 'warning' | 'danger' | 'info', action: () => void) => {
@@ -251,66 +162,43 @@ export default function MatieresPage() {
     };
 
     // ─── Deploy: collect unique selected matieres ─────────────────────
-    const getSelectedForDeploy = () => {
-        const unique: Record<string, DeployItem> = {};
-        for (const [niv, data] of Object.entries(PROGRAMME_GUINEEN_UI)) {
-            for (const m of data.matieres) {
-                const key = `${data.cycle}_${m.code}`;
-                if (!selectedMatieres[key]) continue;
-                if (!unique[key]) {
-                    const override = editOverrides[key] || {};
-                    unique[key] = {
-                        code: m.code,
-                        libelle: override.libelle ?? m.libelle,
-                        categorie: m.categorie,
-                        coefficient_defaut: override.coef ?? m.coef,
-                        nb_heures_semaine: override.heures ?? m.heures,
-                        est_obligatoire: 'O',
-                        cycle_code: data.cycle,
-                    };
-                }
-            }
-        }
-        return Object.values(unique);
+
+    /**
+     * Écrit les coefficients propres à chaque série du Lycée (SM / SE / SS).
+     *
+     * Une Matiere est rattachée à un CYCLE : « Mathématiques » est donc unique
+     * pour tout le Lycée et ne peut pas porter à la fois le coef. 5 de SM et le
+     * coef. 2 de SS. Le coefficient réellement utilisé dans les moyennes est
+     * celui de ClasseMatiere — propre à chaque classe, donc à chaque série.
+     *
+     * Appelée après le déploiement ET après l'attribution aux classes, car les
+     * lignes ClasseMatiere doivent exister pour être mises à jour.
+     * Retourne le nombre de coefficients appliqués.
+     */
+
+    // Le cycle sélectionné dans le formulaire de création est-il le Lycée ?
+    const cycleChoisiEstLycee = cycles.find((c: any) => c.cycle_id === newSubject.cycle_id)?.code === 'LYC';
+
+
+    // Classes du cycle sélectionné — au Lycée, restreintes à la série choisie
+    // (une matière SM n'a rien à faire dans une classe SS). Le rattachement
+    // classe → cycle passe par le niveau, fourni par /api/parametrage/cycles.
+    const niveauDuCycle = (cycleId: number): Record<number, string> => {
+        const cyc = cycles.find((c: any) => c.cycle_id === cycleId);
+        const map: Record<number, string> = {};
+        for (const n of (cyc as any)?.niveaux || []) map[n.niveau_id] = n.code;
+        return map;
     };
-
-    const handleDeploy = async () => {
-        const items = getSelectedForDeploy();
-        if (items.length === 0) { showToast('Aucune matière sélectionnée', 'error'); return; }
-        setSaving(true);
-        try {
-            // First make sure auto-gen ran (creates cycles+matieres)
-            await api.post('/api/matieres/auto-generation');
-
-            // Group by cycle
-            const cycleMap: Record<string, number> = {};
-            for (const c of cycles) {
-                cycleMap[c.code] = c.cycle_id;
-            }
-
-            // Then batch update with overrides
-            const batch = items.map(it => ({
-                code: it.code,
-                libelle: it.libelle,
-                categorie: it.categorie,
-                coefficient_defaut: it.coefficient_defaut,
-                nb_heures_semaine: it.nb_heures_semaine,
-                est_obligatoire: it.est_obligatoire,
-                cycle_id: cycleMap[it.cycle_code] || 1,
-            }));
-
-            if (batch.length > 0) {
-                await api.post('/api/matieres/batch-create', batch);
-            }
-
-            showToast(`${items.length} matières déployées avec succès !`);
-            await fetchAll();
-            setTab('manage');
-        } catch (e: any) {
-            showToast(e.response?.data?.detail || 'Erreur lors du déploiement', 'error');
+    const niveauxCycle = niveauDuCycle(newSubject.cycle_id);
+    const classesDuCycle = classes.filter((cl: any) => {
+        if (!newSubject.cycle_id) return false;
+        const codeNiveau = niveauxCycle[cl.niveau_id];
+        if (!codeNiveau) return false;                  // classe d'un autre cycle
+        if (cycleChoisiEstLycee && newSubject.categorie) {
+            return codeNiveau.toUpperCase().endsWith(newSubject.categorie);
         }
-        setSaving(false);
-    };
+        return true;
+    });
 
     // ─── Add custom subject ───────────────────────────────────────────
     const handleAddCustom = async () => {
@@ -320,9 +208,27 @@ export default function MatieresPage() {
         }
         setSaving(true);
         try {
-            await api.post('/api/matieres', newSubject);
-            showToast(`${newSubject.libelle} créée !`);
-            setNewSubject({ code: '', libelle: '', categorie: 'Sciences', cycle_id: 0, coefficient_defaut: 2, nb_heures_semaine: 2, est_obligatoire: 'O' });
+            const res = await api.post('/api/matieres', newSubject);
+            const nouvelleId = res.data?.matiere_id;
+
+            // Rattachement aux classes cochées : la matière devient utilisable
+            // pour les évaluations de ces classes, avec son coefficient.
+            let rattachees = 0;
+            if (nouvelleId && classesSelectionnees.length) {
+                await Promise.all(classesSelectionnees.map(cid =>
+                    api.post(`/api/matieres/classe/${cid}/matiere`, {
+                        matiere_id: nouvelleId,
+                        coefficient: newSubject.coefficient_defaut,
+                        nb_heures_semaine: newSubject.nb_heures_semaine,
+                    }).then(() => { rattachees += 1; }).catch(() => { /* déjà attribuée */ })
+                ));
+            }
+
+            showToast(rattachees
+                ? `${newSubject.libelle} créée et attribuée à ${rattachees} classe(s) !`
+                : `${newSubject.libelle} créée !`);
+            setNewSubject({ code: '', libelle: '', categorie: '', cycle_id: 0, coefficient_defaut: 2, nb_heures_semaine: 2, est_obligatoire: 'O' });
+            setClassesSelectionnees([]);
             setShowAddForm(false);
             await fetchAll();
         } catch (e: any) {
@@ -351,26 +257,6 @@ export default function MatieresPage() {
     };
 
     // ─── Assign to all classes ──────────────────────────────────────
-    const handleAssignAll = async () => {
-        triggerConfirm(
-            'Lancer l\'attribution intelligente ?',
-            'Le système va associer automatiquement les matières déployées aux classes en fonction de leur cycle et de leur niveau (y compris les spécialités du Lycée). Les attributions existantes seront conservées.',
-            'Lancer l\'attribution',
-            'warning',
-            async () => {
-                setAssigning(true);
-                try {
-                    const res = await api.post('/api/matieres/attribuer-programme');
-                    showToast(`Attribution terminée : ${res.data.assigned} nouvelles matières attribuées.`);
-                    await fetchAll();
-                } catch (e: any) {
-                    showToast(e.response?.data?.detail || 'Erreur d\'attribution', 'error');
-                } finally {
-                    setAssigning(false);
-                }
-            }
-        );
-    };
 
     // ─── Filtered matieres ──────────────────────────────────────────
     const filteredMatieres = matieres.filter(m => {
@@ -385,10 +271,15 @@ export default function MatieresPage() {
         return true;
     });
 
+    // Regroupement : au Lycée par série (SM/SE/SS), ailleurs par cycle —
+    // sinon Primaire et Collège se retrouvaient mélangés sous « Autres ».
     const groupedMatieres = filteredMatieres.reduce((acc, m) => {
-        const cat = m.categorie || 'Autres';
-        if (!acc[cat]) acc[cat] = [];
-        acc[cat].push(m);
+        const cyc = cycles.find((c: any) => c.cycle_id === m.cycle_id);
+        const groupe = cyc?.code === 'LYC'
+            ? (m.categorie ? `Lycée — ${m.categorie}` : 'Lycée')
+            : (cyc?.libelle || 'Autres');
+        if (!acc[groupe]) acc[groupe] = [];
+        acc[groupe].push(m);
         return acc;
     }, {} as Record<string, Matiere[]>);
 
@@ -437,159 +328,6 @@ export default function MatieresPage() {
                 ))}
             </div>
 
-            {/* ═══════════════════════════════════════════
-                TAB 1: DÉPLOYER LES MATIÈRES
-            ═══════════════════════════════════════════ */}
-            {tab === 'deploy' && (
-                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-                    <div className={styles.panel}>
-                        <div className={styles.panelHeader}>
-                            <h2><Sparkles size={20} color="#f59e0b" /> Déployer les Matières</h2>
-                        </div>
-
-                        {/* Mode Selection */}
-                        <div className={styles.modeSelectGrid}>
-                            <div className={`${styles.modeCard} ${deployMode === 'guinee' ? styles.modeCardActive : ''}`}
-                                onClick={() => setDeployMode('guinee')}>
-                                <div className={styles.modeIconBox}>
-                                    <Flag size={24} />
-                                </div>
-                                <div className={styles.modeInfo}>
-                                    <h3>Programme Guinéen</h3>
-                                    <p>Matières officielles structurées selon le programme national guinéen.</p>
-                                </div>
-                            </div>
-                            <div className={`${styles.modeCard} ${deployMode === 'custom' ? styles.modeCardActive : ''}`}
-                                onClick={() => setDeployMode('custom')}>
-                                <div className={styles.modeIconBox}>
-                                    <Globe size={24} />
-                                </div>
-                                <div className={styles.modeInfo}>
-                                    <h3>Autre Pays / Spécifique</h3>
-                                    <p>Créez et organisez vos propres matières adaptées à votre règlementation.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        {deployMode === 'guinee' ? (
-                            <>
-                                {/* Warning */}
-                                <div className={styles.warningBox}>
-                                    <AlertTriangle size={20} className={styles.warningIcon} />
-                                    <div className={styles.warningText}>
-                                        <strong>Vérification conseillée :</strong> Vous pouvez décocher les matières inutilisées ou modifier leurs coefficients et volumes d'heures de cours avant de lancer le déploiement global.
-                                    </div>
-                                </div>
-
-                                {/* Cycle Filter */}
-                                <div className={styles.filtersRow} style={{ marginTop: '1.5rem' }}>
-                                    <div className={styles.filterGroup}>
-                                        {[{ key: 'ALL', label: 'Tous' }, { key: 'PRM', label: 'Primaire' }, { key: 'CLG', label: 'Collège' }, { key: 'LYC', label: 'Lycée' }].map(f => (
-                                            <button key={f.key}
-                                                className={`${styles.filterBtn} ${deployFilter === f.key ? styles.filterBtnActive : ''}`}
-                                                onClick={() => setDeployFilter(f.key)}>
-                                                {f.label}
-                                            </button>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                {/* Matières Table grouped by cycle */}
-                                {['PRM', 'CLG', 'LYC'].filter(cc => deployFilter === 'ALL' || deployFilter === cc).map(cycleCode => {
-                                    const cm = CYCLE_META[cycleCode];
-                                    const niveaux = Object.entries(PROGRAMME_GUINEEN_UI).filter(([, d]) => d.cycle === cycleCode);
-                                    // Collect unique matieres for this cycle
-                                    const uniqueMap: Record<string, any> = {};
-                                    for (const [, d] of niveaux) {
-                                        for (const m of d.matieres) {
-                                            if (!uniqueMap[m.code]) uniqueMap[m.code] = m;
-                                        }
-                                    }
-                                    const uniqueMats = Object.values(uniqueMap);
-
-                                    return (
-                                        <div key={cycleCode} style={{ marginBottom: '2rem' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '0.75rem' }}>
-                                                <span style={{ color: cm.color }}>{cm.icon}</span>
-                                                <h3 style={{ margin: 0, fontWeight: 800, fontSize: '1.1rem', color: cm.color }}>{cm.label}</h3>
-                                                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>({uniqueMats.length} matières)</span>
-                                            </div>
-                                            <div className={styles.tableWrap}>
-                                                <div className={styles.tableHeader}>
-                                                    <span>✓</span><span>Code</span><span>Matière</span><span>Catégorie</span><span>Coef.</span><span>Heures/s</span>
-                                                </div>
-                                                {uniqueMats.map(m => {
-                                                    const key = `${cycleCode}_${m.code}`;
-                                                    const checked = selectedMatieres[key] ?? true;
-                                                    const override = editOverrides[key] || {};
-                                                    return (
-                                                        <div key={key} className={`${styles.tableRow} ${!checked ? styles.tableRowInactive : ''}`}>
-                                                            <input type="checkbox" className={styles.checkbox}
-                                                                checked={checked}
-                                                                onChange={e => setSelectedMatieres(p => ({ ...p, [key]: e.target.checked }))}
-                                                            />
-                                                            <span style={{ fontWeight: 800, fontSize: '0.82rem', color: cm.color }}>{m.code}</span>
-                                                            <input className={styles.inputInline}
-                                                                value={override.libelle ?? m.libelle}
-                                                                disabled={!checked}
-                                                                onChange={e => setEditOverrides(p => ({ ...p, [key]: { ...override, libelle: e.target.value } }))}
-                                                            />
-                                                            <span style={{ fontSize: '0.78rem', color: '#64748b' }}>{m.categorie}</span>
-                                                            <input type="number" className={styles.inputInline}
-                                                                style={{ width: '70px', textAlign: 'center', fontWeight: 700 }}
-                                                                value={override.coef ?? m.coef}
-                                                                disabled={!checked}
-                                                                min={0.5} max={10} step={0.5}
-                                                                onChange={e => setEditOverrides(p => ({ ...p, [key]: { ...override, coef: Number(e.target.value) } }))}
-                                                            />
-                                                            <input type="number" className={styles.inputInline}
-                                                                style={{ width: '70px', textAlign: 'center', fontWeight: 700 }}
-                                                                value={override.heures ?? m.heures}
-                                                                disabled={!checked}
-                                                                min={1} max={12}
-                                                                onChange={e => setEditOverrides(p => ({ ...p, [key]: { ...override, heures: Number(e.target.value) } }))}
-                                                            />
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-
-                                <div className={styles.deployActions}>
-                                    <button className={styles.btnPrimary} onClick={() => {
-                                        triggerConfirm(
-                                            'Déployer le programme ?',
-                                            'Êtes-vous sûr de vouloir déployer les matières cochées ? Les matières existantes seront mises à jour avec les nouveaux coefficients et volumes horaires.',
-                                            'Déployer le programme',
-                                            'warning',
-                                            handleDeploy
-                                        );
-                                    }} disabled={saving}>
-                                        {saving ? <Loader2 size={16} className={styles.spinner} /> : <Sparkles size={16} />}
-                                        {saving ? 'Déploiement en cours...' : 'Déployer les matières sélectionnées'}
-                                    </button>
-                                </div>
-                            </>
-                        ) : (
-                            /* Custom / Autre Pays */
-                            <div className={styles.emptyPanel}>
-                                <div className={styles.emptyPanelIconBox} style={{ color: '#4f46e5', background: '#e0e7ff' }}>
-                                    <Globe size={32} />
-                                </div>
-                                <h3>Mode Personnalisé Actif</h3>
-                                <p style={{ marginBottom: '1.5rem', maxWidth: '400px', marginLeft: 'auto', marginRight: 'auto' }}>
-                                    Vous avez choisi de configurer votre propre programme. Allez dans l'onglet <strong>« Gérer les Matières »</strong> pour créer vos matières manuellement.
-                                </p>
-                                <button className={styles.btnPrimary} onClick={() => { setTab('manage'); setShowAddForm(true); }}>
-                                    <Plus size={16} /> Créer mes matières
-                                </button>
-                            </div>
-                        )}
-                    </div>
-                </motion.div>
-            )}
 
             {/* ═══════════════════════════════════════════
                 TAB 2: GÉRER LES MATIÈRES (SUPER CLEAN REDESIGNED)
@@ -628,7 +366,19 @@ export default function MatieresPage() {
                                             <label>Cycle *</label>
                                             <select className={styles.selectInput}
                                                 value={newSubject.cycle_id}
-                                                onChange={e => setNewSubject(p => ({ ...p, cycle_id: Number(e.target.value) }))}>
+                                                onChange={e => {
+                                                    const id = Number(e.target.value);
+                                                    const estLycee = cycles.find((c: any) => c.cycle_id === id)?.code === 'LYC';
+                                                    // Série obligatoire au Lycée, aucune catégorie ailleurs :
+                                                    // on repositionne une valeur cohérente avec le cycle choisi.
+                                                    setNewSubject(p => ({
+                                                        ...p,
+                                                        cycle_id: id,
+                                                        categorie: estLycee
+                                                            ? (CATEGORIES_LYCEE.includes(p.categorie) ? p.categorie : 'SM')
+                                                            : '',
+                                                    }));
+                                                }}>
                                                 <option value={0}>— Choisir —</option>
                                                 {cycles.map((c: any) => (
                                                     <option key={c.cycle_id} value={c.cycle_id}>{c.libelle}</option>
@@ -637,14 +387,24 @@ export default function MatieresPage() {
                                         </div>
                                     </div>
                                     <div className={styles.formRow}>
-                                        <div className={styles.formGroup}>
-                                            <label>Catégorie</label>
-                                            <select className={styles.selectInput}
-                                                value={newSubject.categorie}
-                                                onChange={e => setNewSubject(p => ({ ...p, categorie: e.target.value }))}>
-                                                {Object.keys(CATEGORY_THEME).map(c => <option key={c} value={c}>{c}</option>)}
-                                            </select>
-                                        </div>
+                                        {/* La série n'existe qu'au Lycée : au Primaire et au
+                                            Collège, aucune catégorie n'est demandée. */}
+                                        {cycleChoisiEstLycee && (
+                                            <div className={styles.formGroup}>
+                                                <label>Série *</label>
+                                                <select className={styles.selectInput}
+                                                    value={newSubject.categorie}
+                                                    onChange={e => setNewSubject(p => ({ ...p, categorie: e.target.value }))}>
+                                                    {CATEGORIES_LYCEE.map(c => (
+                                                        <option key={c} value={c}>
+                                                            {c === 'SM' ? 'SM — Sciences Mathématiques'
+                                                                : c === 'SE' ? 'SE — Sciences Expérimentales'
+                                                                    : 'SS — Sciences Sociales'}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
                                         <div className={styles.formGroup}>
                                             <label>Coefficient</label>
                                             <input type="number" className={styles.textInput} min={0.5} max={10} step={0.5}
@@ -658,6 +418,58 @@ export default function MatieresPage() {
                                                 onChange={e => setNewSubject(p => ({ ...p, nb_heures_semaine: Number(e.target.value) }))} />
                                         </div>
                                     </div>
+
+                                    {/* Répartition dans les classes, dès la création :
+                                        sans ça la matière existe mais n'est utilisable
+                                        dans aucune classe. */}
+                                    {newSubject.cycle_id > 0 && (
+                                        <div style={{ marginTop: '1rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '8px' }}>
+                                                <label style={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>
+                                                    Attribuer aux classes
+                                                    <span style={{ fontWeight: 500, color: '#94a3b8' }}>
+                                                        {' '}— {classesSelectionnees.length} / {classesDuCycle.length} sélectionnée(s)
+                                                    </span>
+                                                </label>
+                                                <div style={{ display: 'flex', gap: '6px' }}>
+                                                    <button type="button" onClick={() => setClassesSelectionnees(classesDuCycle.map((c: any) => c.classe_id))}
+                                                        style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', background: 'white', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', color: '#475569' }}>
+                                                        Toutes
+                                                    </button>
+                                                    <button type="button" onClick={() => setClassesSelectionnees([])}
+                                                        style={{ padding: '4px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', background: 'white', fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer', color: '#475569' }}>
+                                                        Aucune
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            {classesDuCycle.length === 0 ? (
+                                                <p style={{ fontSize: '0.76rem', color: '#94a3b8', margin: 0 }}>
+                                                    Aucune classe {cycleChoisiEstLycee && newSubject.categorie ? `de la série ${newSubject.categorie}` : 'pour ce cycle'}.
+                                                </p>
+                                            ) : (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '130px', overflowY: 'auto' }}>
+                                                    {classesDuCycle.map((cl: any) => {
+                                                        const coche = classesSelectionnees.includes(cl.classe_id);
+                                                        return (
+                                                            <button key={cl.classe_id} type="button"
+                                                                onClick={() => setClassesSelectionnees(prev =>
+                                                                    coche ? prev.filter(id => id !== cl.classe_id) : [...prev, cl.classe_id])}
+                                                                style={{
+                                                                    padding: '5px 11px', borderRadius: '999px', cursor: 'pointer',
+                                                                    fontSize: '0.75rem', fontWeight: 600,
+                                                                    border: `1px solid ${coche ? '#4f46e5' : '#e2e8f0'}`,
+                                                                    background: coche ? '#eef2ff' : 'white',
+                                                                    color: coche ? '#4338ca' : '#94a3b8',
+                                                                }}>
+                                                                {coche ? '✓ ' : ''}{cl.libelle}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
                                     <button className={styles.addBtn} onClick={handleAddCustom} disabled={saving}>
                                         {saving ? <Loader2 size={14} className={styles.spinner} /> : <Plus size={14} />}
                                         Créer la matière
@@ -695,7 +507,14 @@ export default function MatieresPage() {
                             </div>
                         ) : (
                             <div className={styles.categoriesWrap}>
-                                {Object.keys(groupedMatieres).sort().map(category => {
+                                {Object.keys(groupedMatieres).sort((a, b) => {
+                                    // Ordre scolaire (Primaire → Collège → Lycée SM/SE/SS)
+                                    // plutôt qu'alphabétique.
+                                    const rang = (g: string) =>
+                                        g === 'Primaire' ? 0 : g === 'Collège' ? 1
+                                            : g.startsWith('Lycée') ? 2 : 3;
+                                    return rang(a) - rang(b) || a.localeCompare(b);
+                                }).map(category => {
                                     const theme = getCatTheme(category);
                                     return (
                                         <div key={category}>
@@ -792,57 +611,6 @@ export default function MatieresPage() {
             {/* ═══════════════════════════════════════════
                 TAB 3: ATTRIBUTION AUX CLASSES
             ═══════════════════════════════════════════ */}
-            {tab === 'classes' && (
-                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-                    <div className={styles.panel}>
-                        <div className={styles.panelHeader}>
-                            <h2><GraduationCap size={20} color="#10b981" /> Attribution aux Classes</h2>
-                            <button className={styles.btnPrimary} onClick={handleAssignAll} disabled={assigning}>
-                                {assigning ? <Loader2 size={16} className={styles.spinner} /> : <Zap size={16} />}
-                                {assigning ? 'Attribution en cours...' : 'Attribuer à toutes les classes'}
-                            </button>
-                        </div>
-
-                        <div className={styles.warningBox}>
-                            <AlertTriangle size={20} className={styles.warningIcon} />
-                            <div className={styles.warningText}>
-                                <strong>Attribution intelligente :</strong> Le système distribue automatiquement les matières en se basant sur le niveau et la série (au Lycée, par exemple 11SM reçoit le pack Sciences Mathématiques).
-                            </div>
-                        </div>
-
-                        <div className={styles.classesGrid} style={{ marginTop: '1.5rem' }}>
-                            {classes.map((cl: any) => {
-                                const nbMat = cl.nb_matieres ?? 0;
-                                const isEmpty = nbMat === 0;
-                                return (
-                                    <div key={cl.classe_id} className={`${styles.classCard} ${isEmpty ? styles.classCardEmpty : ''}`}
-                                        style={{ background: getClassGradient(cl.libelle, cl.niveau_libelle || '', isEmpty) }}>
-                                        <div>
-                                            <div className={styles.className} style={{ color: '#0f172a' }}>{cl.libelle}</div>
-                                            <div className={styles.classLevel} style={{ color: '#475569' }}>{cl.niveau_libelle || cl.niveau?.libelle || '—'}</div>
-                                        </div>
-                                        <span className={styles.classStatus} style={{
-                                            background: isEmpty ? '#fecaca' : '#bbf7d0',
-                                            color: isEmpty ? '#991b1b' : '#166534',
-                                        }}>
-                                            {isEmpty ? 'Pas de matière' : `${nbMat} matière${nbMat > 1 ? 's' : ''}`}
-                                        </span>
-                                    </div>
-                                );
-                            })}
-                            {classes.length === 0 && (
-                                <div className={styles.emptyPanel}>
-                                    <div className={styles.emptyPanelIconBox}>
-                                        <School size={32} />
-                                    </div>
-                                    <h3>Aucune classe enregistrée</h3>
-                                    <p>Créez d'abord des classes depuis la section Paramètres de l'école.</p>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </motion.div>
-            )}
 
             {/* ── Custom Animated Confirmation Dialog ── */}
             <AnimatePresence>

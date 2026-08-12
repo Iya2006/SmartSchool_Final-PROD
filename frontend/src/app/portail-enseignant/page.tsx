@@ -203,12 +203,15 @@ export default function PortailEnseignant() {
     const [uploadTitre, setUploadTitre] = useState('');
     const [uploadMatiere, setUploadMatiere] = useState<number | null>(null);
     const [uploadDuree, setUploadDuree] = useState(60);
-    const [uploadTrimestre, setUploadTrimestre] = useState(1);
+    // Période réelle de l'établissement (trimestre_id). L'écran proposait
+    // « T1 T2 T3 » en dur : une école à deux semestres voyait un T3
+    // inexistant, et personne ne lisait le nom réel de sa période.
+    const [uploadTrimestre, setUploadTrimestre] = useState<number | null>(null);
     const [uploading, setUploading] = useState(false);
     const [mesSujets, setMesSujets] = useState<any[]>([]);
     const [sujetsLoading, setSujetsLoading] = useState(false);
     const [showEditSujet, setShowEditSujet] = useState(false);
-    const [editSujetData, setEditSujetData] = useState<{sujet_id: number; titre: string; duree_minutes: number; trimestre: number} | null>(null);
+    const [editSujetData, setEditSujetData] = useState<{sujet_id: number; titre: string; duree_minutes: number; trimestre_id: number | null} | null>(null);
     const [editSujetSaving, setEditSujetSaving] = useState(false);
     const [toastMsg, setToastMsg] = useState<{type: 'success'|'error'; text: string} | null>(null);
     const [showNotifDropdown, setShowNotifDropdown] = useState(false);
@@ -389,6 +392,12 @@ export default function PortailEnseignant() {
                 setTrimestres(triRes.data);
                 setTypesEval(typeRes.data);
                 if (triRes.data.length > 0 && !selectedTrimestre) setSelectedTrimestre(triRes.data[0].trimestre_id);
+                // Dépôt d'un sujet : on présélectionne la période en cours
+                // plutôt qu'un « T1 » qui n'est presque jamais le bon.
+                if (triRes.data.length > 0) {
+                    const enCours = triRes.data.find((p: any) => p.statut === 'EN_COURS') || triRes.data[0];
+                    setUploadTrimestre(prev => prev ?? enCours.trimestre_id);
+                }
                 if (typeRes.data.length > 0 && !selectedTypeEval) setSelectedTypeEval(typeRes.data[0].type_eval_id);
             } catch { /* silently fail */ }
         };
@@ -569,13 +578,14 @@ export default function PortailEnseignant() {
         if (!data || !uploadFile) { showToast('error', 'Sélectionnez un fichier.'); return; }
         if (!uploadTitre.trim()) { showToast('error', 'Le titre est requis.'); return; }
         if (!uploadMatiere) { showToast('error', 'Sélectionnez une matière.'); return; }
+        if (!uploadTrimestre) { showToast('error', 'Sélectionnez une période.'); return; }
         try {
             setUploading(true);
             const formData = new FormData();
             formData.append('fichier', uploadFile);
             formData.append('enseignant_id', String(data.enseignant.enseignant_id));
             formData.append('matiere_id', String(uploadMatiere));
-            formData.append('trimestre', String(uploadTrimestre));
+            formData.append('trimestre_id', String(uploadTrimestre));
             formData.append('titre', uploadTitre);
             formData.append('duree_minutes', String(uploadDuree));
             if (activeExamDemande?.demande_id) formData.append('demande_id', String(activeExamDemande.demande_id));
@@ -607,7 +617,7 @@ export default function PortailEnseignant() {
             await api.put(`/api/examens/sujets/${editSujetData.sujet_id}/modifier`, {
                 titre: editSujetData.titre,
                 duree_minutes: editSujetData.duree_minutes,
-                trimestre: editSujetData.trimestre,
+                trimestre_id: editSujetData.trimestre_id,
             });
             showToast('success', 'Sujet mis à jour avec succès.');
             setShowEditSujet(false);
@@ -2657,7 +2667,7 @@ export default function PortailEnseignant() {
                                                                 )}
                                                             </td>
                                                             <td style={{ padding: '12px 16px', color: '#475569' }}>{s.matiere_libelle || '—'}</td>
-                                                            <td style={{ padding: '12px 16px' }}><span style={{ padding: '2px 8px', borderRadius: '6px', background: '#f1f5f9', fontWeight: 700 }}>T{s.trimestre}</span></td>
+                                                            <td style={{ padding: '12px 16px' }}><span style={{ padding: '2px 8px', borderRadius: '6px', background: '#f1f5f9', fontWeight: 700 }}>{s.periode_libelle || `T${s.trimestre}`}</span></td>
                                                             <td style={{ padding: '12px 16px', color: '#475569' }}>{s.duree_minutes} min</td>
                                                             <td style={{ padding: '12px 16px' }}>
                                                                 <span style={{ padding: '4px 10px', borderRadius: '8px', background: badgeColor.bg, color: badgeColor.text, fontSize: '11px', fontWeight: 700 }}>
@@ -2674,7 +2684,7 @@ export default function PortailEnseignant() {
                                                                     </button>
                                                                     {!isValide && (
                                                                         <button onClick={() => {
-                                                                            setEditSujetData({ sujet_id: s.sujet_id, titre: s.titre, duree_minutes: s.duree_minutes, trimestre: s.trimestre });
+                                                                            setEditSujetData({ sujet_id: s.sujet_id, titre: s.titre, duree_minutes: s.duree_minutes, trimestre_id: s.trimestre_id ?? null });
                                                                             setShowEditSujet(true);
                                                                         }} style={{ padding: '6px 12px', borderRadius: '8px', background: '#e0e7ff', color: '#4338ca', border: 'none', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
                                                                             Modifier
@@ -3427,10 +3437,18 @@ export default function PortailEnseignant() {
                             <div style={{ padding: '24px', overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                 {/* Trimestre */}
                                 <div>
-                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>Trimestre *</label>
-                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                        {[1, 2, 3].map(t => (
-                                            <button key={t} type="button" onClick={() => setUploadTrimestre(t)} style={{ flex: 1, padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, background: uploadTrimestre === t ? 'linear-gradient(135deg, #f59e0b, #d97706)' : '#f8fafc', color: uploadTrimestre === t ? 'white' : '#64748b', border: uploadTrimestre === t ? 'none' : '1px solid #e2e8f0', cursor: 'pointer' }}>T{t}</button>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '6px' }}>Période *</label>
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                        {trimestres.length === 0 && (
+                                            <span style={{ fontSize: '12.5px', color: '#b45309' }}>
+                                                Aucune période configurée pour cette année.
+                                            </span>
+                                        )}
+                                        {trimestres.map((p: any) => (
+                                            <button key={p.trimestre_id} type="button" onClick={() => setUploadTrimestre(p.trimestre_id)}
+                                                style={{ flex: '1 1 100px', padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, background: uploadTrimestre === p.trimestre_id ? 'linear-gradient(135deg, #f59e0b, #d97706)' : '#f8fafc', color: uploadTrimestre === p.trimestre_id ? 'white' : '#64748b', border: uploadTrimestre === p.trimestre_id ? 'none' : '1px solid #e2e8f0', cursor: 'pointer' }}>
+                                                {p.libelle}
+                                            </button>
                                         ))}
                                     </div>
                                 </div>
@@ -3513,11 +3531,13 @@ export default function PortailEnseignant() {
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                                 <div>
-                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Trimestre</label>
-                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                        {[1, 2, 3].map(t => (
-                                            <button key={t} type="button" onClick={() => setEditSujetData({ ...editSujetData, trimestre: t })}
-                                                style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: editSujetData.trimestre === t ? primaryColor : '#f8fafc', color: editSujetData.trimestre === t ? 'white' : '#64748b', border: '1px solid #e2e8f0', cursor: 'pointer' }}>T{t}</button>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>Période</label>
+                                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                        {trimestres.map((p: any) => (
+                                            <button key={p.trimestre_id} type="button" onClick={() => setEditSujetData({ ...editSujetData, trimestre_id: p.trimestre_id })}
+                                                style={{ flex: '1 1 100px', padding: '8px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: editSujetData.trimestre_id === p.trimestre_id ? primaryColor : '#f8fafc', color: editSujetData.trimestre_id === p.trimestre_id ? 'white' : '#64748b', border: '1px solid #e2e8f0', cursor: 'pointer' }}>
+                                                {p.libelle}
+                                            </button>
                                         ))}
                                     </div>
                                 </div>

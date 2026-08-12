@@ -13,6 +13,7 @@ import EleveSidebar from './components/EleveSidebar';
 import EleveHeader from './components/EleveHeader';
 import EleveDashboard from './components/EleveDashboard';
 import EleveNotes from './components/EleveNotes';
+import ClassementEpreuves from '@/components/ClassementEpreuves';
 import EleveBulletin from './components/EleveBulletin';
 import EleveEmploi from './components/EleveEmploi';
 import EleveAbsences from './components/EleveAbsences';
@@ -210,11 +211,24 @@ export default function PortailEleve() {
                                 )}
 
                                 {activeTab === 'notes' && (
-                                    <EleveNotes
-                                        notesData={notesData}
-                                        loading={notesLoading}
-                                        couleurPortail={couleurPortail}
-                                    />
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                                        <EleveNotes
+                                            notesData={notesData}
+                                            loading={notesLoading}
+                                            couleurPortail={couleurPortail}
+                                        />
+                                        {/* Classement par épreuve : le backend l'exposait depuis
+                                            longtemps (/epreuves + /classement), aucun écran ne
+                                            l'appelait. Placé sous les notes plutôt que dans un
+                                            onglet à part — c'est la même question posée autrement. */}
+                                        {eleveId && (
+                                            <ClassementEpreuves
+                                                baseUrl={`/api/portail-eleve/${eleveId}`}
+                                                trimestreId={bulletinTrimestre}
+                                                couleur={couleurPortail}
+                                            />
+                                        )}
+                                    </div>
                                 )}
 
                                 {activeTab === 'bulletin' && (

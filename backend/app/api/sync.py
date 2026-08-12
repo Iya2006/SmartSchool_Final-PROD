@@ -36,6 +36,7 @@ from app.core.annee_lock import verifier_annee_modifiable
 from app.core.database import get_db
 from app.models.academique import Affectation, Classe, Evaluation, Note, Presence, Trimestre
 from app.api.portail_enseignant import _enseignant_auth
+from app.services.notation import valider_note
 
 router = APIRouter(prefix="/api/sync", tags=["Synchronisation Offline"])
 
@@ -87,6 +88,14 @@ def sync_notes(enseignant_id: int, data: NotesSyncRequest, _auth: dict = Depends
             resultats.append({"note_id": item.note_id, "statut": "REFUSE", "detail": f"{trimestre.libelle} est clôturé"})
             continue
 
+        # Une note saisie hors ligne n'a traversé aucune validation serveur :
+        # c'est ici, et nulle part ailleurs, qu'on peut encore la refuser.
+        try:
+            valeur = None if item.est_absent else valider_note(item.valeur, evaluation.note_sur)
+        except ValueError as e:
+            resultats.append({"note_id": item.note_id, "statut": "REFUSE", "detail": str(e)})
+            continue
+
         conflit = bool(
             item.base_updated_at and note.updated_at
             and note.updated_at.replace(tzinfo=None) > item.base_updated_at.replace(tzinfo=None)
@@ -99,7 +108,7 @@ def sync_notes(enseignant_id: int, data: NotesSyncRequest, _auth: dict = Depends
                 "modifie_le": note.updated_at.isoformat() if note.updated_at else None,
             })
 
-        note.valeur = item.valeur if not item.est_absent else None
+        note.valeur = valeur
         note.est_absent = "O" if item.est_absent else "N"
         note.observation = item.observation
         note.updated_by = str(enseignant_id)

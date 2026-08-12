@@ -4,51 +4,79 @@ import React, { useState, Suspense } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
-    Banknote, AlertTriangle, LayoutDashboard,
-    FileText, Users, LogOut, Menu, ChevronDown, ChevronRight,
-    CreditCard, Building2, Zap, Receipt, GraduationCap, Download, UserCheck
+    Banknote, AlertTriangle, FileText, Users, LogOut, Menu,
+    ChevronDown, ChevronRight, Receipt, UserCheck, Wallet
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 
+// SEPT ENTREES, pas douze.
+//
+// Un comptable d'ecole fait six choses : encaisser, definir les frais, savoir
+// qui doit combien, reinscrire, payer les depenses et le personnel, sortir les
+// chiffres. Le menu suit ce metier plutot que le decoupage technique du code.
+//
+// Rien n'a ete supprime : ce qui n'apparait plus ici (comptabilite auxiliaire,
+// automatisations, solvabilite) releve d'un metier d'expert-comptable ou n'a
+// jamais eu de contenu. Les pages restent dans le code, non referencees — les
+// remettre est une ligne.
+//
+// Ce qui etait un module a part et devient un sous-menu : la gestion des
+// paiements (c'est l'historique de l'encaissement), le tableau de bord et les
+// exports (ce sont deux facons de lire les memes chiffres).
+interface SousMenu {
+    id: string;
+    label: string;
+    path: string;
+    /** Onglet de la page parente. Absent quand le sous-menu mène à une page
+     *  entière (l'historique des paiements, le tableau de bord). */
+    tab?: string;
+}
+
 const MODULES = [
-    { 
-        id: 'encaissement', 
-        label: 'Encaissement Scolarité', 
-        icon: Banknote, 
-        path: '/comptabilite/encaissement',
-    },
     {
-        id: 'frais', label: 'Frais Scolaires', icon: Receipt, path: '/comptabilite/frais',
+        id: 'encaissement',
+        label: 'Encaissement',
+        icon: Banknote,
+        path: '/comptabilite/encaissement',
         subItems: [
-            { id: 'frais-types', label: 'Tarifs & Types de frais', path: '/comptabilite/frais?tab=types', tab: 'types' },
-            { id: 'frais-factures', label: 'Factures', path: '/comptabilite/frais?tab=factures', tab: 'factures' },
-            { id: 'frais-echeances', label: 'Échéanciers', path: '/comptabilite/frais?tab=echeances', tab: 'echeances' },
-            { id: 'frais-paiements', label: 'Encaissements', path: '/comptabilite/frais?tab=paiements', tab: 'paiements' },
+            { id: 'encaisser', label: 'Encaisser un paiement', path: '/comptabilite/encaissement' },
+            { id: 'paiements', label: 'Historique des paiements', path: '/comptabilite/paiements' },
         ]
     },
-    { id: 'impayes', label: 'Suivi des Impayés', icon: AlertTriangle, path: '/comptabilite/impayes' },
+    {
+        id: 'frais', label: 'Frais & Tarifs', icon: Receipt, path: '/comptabilite/frais',
+        subItems: [
+            { id: 'frais-types', label: 'Types de frais', path: '/comptabilite/frais?tab=types', tab: 'types' },
+            { id: 'frais-factures', label: 'Factures', path: '/comptabilite/frais?tab=factures', tab: 'factures' },
+            { id: 'frais-echeances', label: 'Échéanciers', path: '/comptabilite/frais?tab=echeances', tab: 'echeances' },
+        ]
+    },
+    { id: 'impayes', label: 'Impayés', icon: AlertTriangle, path: '/comptabilite/impayes' },
     { id: 'reinscription', label: 'Réinscriptions', icon: UserCheck, path: '/comptabilite/reinscription' },
-    { id: 'paiements', label: 'Gestion des Paiements', icon: CreditCard, path: '/comptabilite/paiements' },
-    { id: 'auxiliaire', label: 'Comptabilité Auxiliaire', icon: Building2, path: '/comptabilite/auxiliaire' },
-    { id: 'automatisations', label: 'Automatisations', icon: Zap, path: '/comptabilite/automatisations' },
-    { id: 'scolaire', label: 'Solvabilité Scolaire', icon: GraduationCap, path: '/comptabilite/scolaire' },
-    { id: 'dashboard', label: 'Tableau de Bord', icon: LayoutDashboard, path: '/comptabilite/dashboard' },
-    { id: 'rapports', label: 'Rapports Financiers', icon: FileText, path: '/comptabilite/rapports' },
-    { id: 'exports', label: 'Journal & Exports CSV', icon: Download, path: '/comptabilite/exports' },
+    { id: 'depenses', label: 'Dépenses', icon: Wallet, path: '/comptabilite/depenses' },
     {
         id: 'salaires',
-        label: 'Salaires et Personnel', 
-        icon: Users, 
+        label: 'Salaires',
+        icon: Users,
         path: '/comptabilite/salaires',
+        // Sept onglets ramenes a quatre : payer le personnel, c'est preparer la
+        // paie, verser des avances, editer les bulletins, et retrouver un
+        // versement passe. « Source des absences » et « Calendrier de paie »
+        // restent accessibles depuis l'ecran lui-meme.
         subItems: [
-            { id: 'personnel', label: 'Liste du personnel', path: '/comptabilite/salaires?tab=personnel', tab: 'personnel' },
-            { id: 'paie', label: 'Calcul des salaires', path: '/comptabilite/salaires?tab=paie', tab: 'paie' },
-            { id: 'avances', label: 'Primes & Avances', path: '/comptabilite/salaires?tab=avances', tab: 'avances' },
-            { id: 'sources', label: 'Source des absences', path: '/comptabilite/salaires?tab=sources', tab: 'sources' },
-            { id: 'calendrier', label: 'Calendrier de paie', path: '/comptabilite/salaires?tab=calendrier', tab: 'calendrier' },
+            { id: 'personnel', label: 'Personnel', path: '/comptabilite/salaires?tab=personnel', tab: 'personnel' },
+            { id: 'paie', label: 'Préparer la paie', path: '/comptabilite/salaires?tab=paie', tab: 'paie' },
+            { id: 'avances', label: 'Primes & avances', path: '/comptabilite/salaires?tab=avances', tab: 'avances' },
             { id: 'bulletins', label: 'Bulletins de paie', path: '/comptabilite/salaires?tab=bulletins', tab: 'bulletins' },
-            { id: 'historique', label: 'Historique de paie', path: '/comptabilite/salaires?tab=historique', tab: 'historique' },
+        ]
+    },
+    {
+        id: 'rapports', label: 'Rapports', icon: FileText, path: '/comptabilite/rapports',
+        subItems: [
+            { id: 'dashboard', label: 'Tableau de bord', path: '/comptabilite/dashboard' },
+            { id: 'rapports-fin', label: 'Rapports financiers', path: '/comptabilite/rapports' },
+            { id: 'exports', label: 'Exports CSV', path: '/comptabilite/exports' },
         ]
     },
 ];
@@ -167,7 +195,12 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
                             {hasSubItems && isOpen && !collapsed && (
                                 <div style={{ marginLeft: '12px', paddingLeft: '12px', borderLeft: '1px solid #e2e8f0', marginTop: '2px', display: 'flex', flexDirection: 'column', gap: '1px' }}>
                                     {mod.subItems?.map(sub => {
-                                        const isSubActive = isActive && activeTab === sub.tab;
+                                        // Un sous-menu sans `tab` mene a une page entiere :
+                                        // il est actif quand on est SUR cette page.
+                                        const sousMenu = sub as SousMenu;
+                                        const isSubActive = sousMenu.tab
+                                            ? isActive && activeTab === sousMenu.tab
+                                            : pathname === sousMenu.path;
                                         return (
                                             <Link key={sub.id} href={sub.path} style={{ textDecoration: 'none' }}>
                                                 <div style={{

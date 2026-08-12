@@ -85,9 +85,11 @@ def _creer_eleve(db: Session, etablissement_id: int) -> Eleve:
     return eleve
 
 
-def _creer_parent(db: Session) -> Parent:
+def _creer_parent(db: Session, etablissement_id: int) -> Parent:
     uid = _uid()
     parent = Parent(
+        # Un parent releve d'UNE ecole (migration 2026_08_multi_01).
+        etablissement_id=etablissement_id,
         nom="Test", prenom="Parent",
         telephone_1=f"65000{uid:04d}",
         mot_de_passe=hash_password("motdepasse123"),
@@ -163,36 +165,73 @@ class TestJwtEtablissementEnseignantEleve:
 
 
 class TestJwtEtablissementParent:
-    def test_parent_mono_ecole_recoit_son_unique_etablissement(self, client: TestClient, db: Session):
-        """Parent dont tous les enfants sont dans la même école → etablissement_id de cette école."""
+    # MODÈLE RÉVISÉ (migration 2026_08_multi_01)
+    # ------------------------------------------
+    # L'établissement d'un parent était DÉDUIT de ses enfants, et valait None
+    # dès qu'il en avait dans plusieurs écoles — donc aucun accès nulle part,
+    # précisément dans le cas où il en avait le plus besoin.
+    #
+    # Un parent a désormais une FICHE PAR ÉCOLE, chacune portant son
+    # établissement. Le code de l'école, saisi au login, désigne laquelle.
+
+    def test_parent_recoit_l_etablissement_de_sa_fiche(self, client: TestClient, db: Session):
         etab_a = _creer_etablissement(db, "PA")
         eleve1 = _creer_eleve(db, etab_a.etablissement_id)
         eleve2 = _creer_eleve(db, etab_a.etablissement_id)
-        parent = _creer_parent(db)
+        parent = _creer_parent(db, etab_a.etablissement_id)
         _rattacher(db, parent, eleve1)
         _rattacher(db, parent, eleve2)
 
         profil = _me(client, _login(client, parent.telephone_1)["token"])
         assert profil["etablissement_id"] == etab_a.etablissement_id
 
-    def test_parent_multi_ecoles_ne_choisit_jamais_arbitrairement(self, client: TestClient, db: Session):
-        """Parent avec des enfants dans 2 écoles différentes → etablissement_id=None (jamais .first())."""
+    def test_parent_present_dans_deux_ecoles_choisit_par_le_code(
+        self, client: TestClient, db: Session
+    ):
+        """Le cas qui était impossible, puis bloquant, et qui fonctionne enfin.
+
+        Deux fiches, même numéro. Sans code, l'identifiant est ambigu et le
+        système REFUSE de deviner (409). Avec le code, il entre dans la bonne
+        école — jamais dans l'autre.
+        """
         etab_a = _creer_etablissement(db, "PMA")
         etab_b = _creer_etablissement(db, "PMB")
-        eleve_a = _creer_eleve(db, etab_a.etablissement_id)
-        eleve_b = _creer_eleve(db, etab_b.etablissement_id)
-        parent = _creer_parent(db)
-        _rattacher(db, parent, eleve_a)
-        _rattacher(db, parent, eleve_b)
+        parent_a = _creer_parent(db, etab_a.etablissement_id)
+        _rattacher(db, parent_a, _creer_eleve(db, etab_a.etablissement_id))
 
-        profil = _me(client, _login(client, parent.telephone_1)["token"])
-        assert profil["etablissement_id"] is None
+        # Même téléphone, autre école : désormais accepté.
+        parent_b = Parent(
+            etablissement_id=etab_b.etablissement_id,
+            nom="Test", prenom="Parent", telephone_1=parent_a.telephone_1,
+            mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
+        )
+        db.add(parent_b); db.commit(); db.refresh(parent_b)
+        _rattacher(db, parent_b, _creer_eleve(db, etab_b.etablissement_id))
 
-    def test_parent_sans_enfant_etablissement_id_null(self, client: TestClient, db: Session):
-        """Parent sans aucun enfant rattaché → etablissement_id=None (pas d'erreur, pas de valeur inventée)."""
-        parent = _creer_parent(db)
+        sans_code = client.post("/api/auth/login", json={
+            "identifiant": parent_a.telephone_1, "mot_de_passe": "motdepasse123",
+        })
+        assert sans_code.status_code == 409, sans_code.text
+        assert "code" in sans_code.json()["detail"].lower()
+
+        for etab in (etab_a, etab_b):
+            resp = client.post("/api/auth/login", json={
+                "identifiant": parent_a.telephone_1, "mot_de_passe": "motdepasse123",
+                "code_etablissement": etab.code,
+            })
+            assert resp.status_code == 200, resp.text
+            profil = _me(client, resp.json()["token"])
+            assert profil["etablissement_id"] == etab.etablissement_id
+
+    def test_parent_sans_enfant_garde_l_etablissement_de_sa_fiche(
+        self, client: TestClient, db: Session
+    ):
+        """Un parent créé mais pas encore rattaché à un enfant relève quand
+        même de l'école qui l'a saisi — la colonne est NOT NULL."""
+        etab = _creer_etablissement(db, "PSE")
+        parent = _creer_parent(db, etab.etablissement_id)
         profil = _me(client, _login(client, parent.telephone_1)["token"])
-        assert profil["etablissement_id"] is None
+        assert profil["etablissement_id"] == etab.etablissement_id
 
 
 class TestAncienTokenSansEtablissement:

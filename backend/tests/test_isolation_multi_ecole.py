@@ -254,6 +254,8 @@ class TestT7T8Parent:
         enfant = a.eleve(db)
         uid = _uid()
         parent = Parent(
+            # Un parent releve d'UNE ecole (migration 2026_08_multi_01).
+            etablissement_id=a.etab.etablissement_id,
             nom="Camara", prenom="Sékou", telephone_1=f"64300{uid:04d}",
             mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
         )
@@ -269,31 +271,53 @@ class TestT7T8Parent:
         charge = jwt.decode(resp.json()["token"], SECRET_KEY, algorithms=[ALGORITHM])
         assert charge["etablissement_id"] == a.etab.etablissement_id
 
-    def test_t8_parent_multi_ecoles_na_pas_detablissement_unique(
+    def test_t8_parent_present_dans_deux_ecoles_choisit_par_le_code(
         self, client: TestClient, db: Session, ecoles
     ):
-        """Aucun établissement n'est choisi arbitrairement (jamais de `.first()`)."""
+        """MODÈLE RÉVISÉ (migration 2026_08_multi_01).
+
+        Ce test exigeait `etablissement_id = None` : l'école du parent était
+        déduite de ses enfants, et le système refusait de choisir. Correct,
+        mais le parent n'avait alors accès à RIEN — dans le cas précis où il
+        en avait le plus besoin.
+
+        Il a désormais une FICHE PAR ÉCOLE. Sans code, l'identifiant est
+        ambigu et le système refuse toujours de deviner (409) ; avec le code,
+        il entre dans la bonne école, jamais dans l'autre.
+        """
         a, b = ecoles
         enfant_a, enfant_b = a.eleve(db), b.eleve(db)
         uid = _uid()
-        parent = Parent(
-            nom="Barry", prenom="Fatoumata", telephone_1=f"64400{uid:04d}",
-            mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
-        )
-        db.add(parent); db.commit(); db.refresh(parent)
-        for enfant in (enfant_a, enfant_b):
+        telephone = f"64400{uid:04d}"
+        fiches = {}
+        for ecole, enfant in ((a, enfant_a), (b, enfant_b)):
+            fiche = Parent(
+                etablissement_id=ecole.etab.etablissement_id,
+                nom="Barry", prenom="Fatoumata", telephone_1=telephone,
+                mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
+            )
+            db.add(fiche); db.commit(); db.refresh(fiche)
             db.add(EleveParent(
-                eleve_id=enfant.eleve_id, parent_id=parent.parent_id, lien_parente="MERE",
+                eleve_id=enfant.eleve_id, parent_id=fiche.parent_id, lien_parente="MERE",
             ))
-        db.commit()
+            db.commit()
+            fiches[ecole.etab.etablissement_id] = fiche
 
-        resp = client.post("/api/auth/login", json={
-            "identifiant": parent.telephone_1, "mot_de_passe": "motdepasse123",
+        sans_code = client.post("/api/auth/login", json={
+            "identifiant": telephone, "mot_de_passe": "motdepasse123",
         })
-        assert resp.status_code == 200
-        assert resp.json()["user"]["etablissement_id"] is None
-        charge = jwt.decode(resp.json()["token"], SECRET_KEY, algorithms=[ALGORITHM])
-        assert charge["etablissement_id"] is None
+        assert sans_code.status_code == 409, sans_code.text
+
+        for ecole in (a, b):
+            resp = client.post("/api/auth/login", json={
+                "identifiant": telephone, "mot_de_passe": "motdepasse123",
+                "code_etablissement": ecole.etab.code,
+            })
+            assert resp.status_code == 200, resp.text
+            attendu = ecole.etab.etablissement_id
+            assert resp.json()["user"]["etablissement_id"] == attendu
+            charge = jwt.decode(resp.json()["token"], SECRET_KEY, algorithms=[ALGORITHM])
+            assert charge["etablissement_id"] == attendu
 
     def test_t8bis_parent_naccede_quaux_donnees_de_ses_enfants(
         self, client: TestClient, db: Session, ecoles
@@ -303,6 +327,7 @@ class TestT7T8Parent:
         enfant_dautrui = a.eleve(db)  # même école, autre famille
         uid = _uid()
         parent = Parent(
+            etablissement_id=a.etab.etablissement_id,
             nom="Sow", prenom="Aminata", telephone_1=f"64500{uid:04d}",
             mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
         )
