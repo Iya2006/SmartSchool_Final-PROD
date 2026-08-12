@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.security import verify_password
 from app.core.auth import create_access_token, get_current_user
 from app.core.rate_limit import limiter
+from app.core.annee_lock import get_active_trimestre_id
 from app.models.academique import (
     Parent, EleveParent, Eleve, Inscription, Classe, Matiere,
     Note, Evaluation, Bulletin, BulletinLigne, Facture, Paiement, Presence,
@@ -412,7 +413,7 @@ def get_edt_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_parent_
 # BULLETIN D'UN ENFANT (pour le parent)
 # ================================================================
 @router.get("/{parent_id}/enfant/{eleve_id}/bulletin")
-def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
+def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
     """Bulletin complet d'un enfant, avec lignes par matière."""
     link = db.query(EleveParent).filter(
         EleveParent.parent_id == parent_id,
@@ -426,6 +427,19 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
     ).first()
     if not inscription:
         return None
+
+    # Info classe — récupérée avant la requête Bulletin : un parent peut
+    # avoir des enfants dans des écoles différentes, donc `trimestre_id` par
+    # défaut se résout via l'école RÉELLE de CET enfant (jamais un `1` codé
+    # en dur, ni le JWT du parent qui n'en porte pas de façon fiable).
+    cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    if not cl:
+        # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
+        # appliquait les réglages d'affichage d'une autre école au bulletin.
+        raise HTTPException(404, "Classe introuvable pour cette inscription")
+
+    if trimestre_id is None:
+        trimestre_id = get_active_trimestre_id(db, cl.etablissement_id)
 
     bulletin = db.query(Bulletin).filter(
         Bulletin.inscription_id == inscription.inscription_id,
@@ -442,13 +456,7 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
     matiere_ids = {l.matiere_id for l in lignes}
     matieres_by_id = {m.matiere_id: m for m in db.query(Matiere).filter(Matiere.matiere_id.in_(matiere_ids)).all()}
 
-    # Info classe
-    cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
     from app.api.evaluations import get_bulletin_display_flags
-    if not cl:
-        # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
-        # appliquait les réglages d'affichage d'une autre école au bulletin.
-        raise HTTPException(404, "Classe introuvable pour cette inscription")
     flags = get_bulletin_display_flags(db, cl.etablissement_id)
 
     matieres = []

@@ -8,6 +8,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from app.core.database import get_db
 from app.core.auth import get_current_user, require_etablissement
+from app.core.annee_lock import resolve_annee_id
 from app.models.academique import Classe, Inscription, Eleve, Niveau, Enseignant, ClasseMatiere, Matiere, Cycle
 from app.schemas.schemas import ClasseCreate, ClasseOut, InscriptionCreate, InscriptionOut
 
@@ -164,7 +165,7 @@ def update_lycee_series_coefficients(
 
 @router.get("", response_model=List[ClasseOut])
 def list_classes(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     statut: Optional[str] = "ACTIVE",
     skip: int = 0,
     limit: int = 100,

@@ -143,6 +143,27 @@ class TestIdentifierEmployeIsole:
         ecole = Ecole(db, "SALOK")
         headers = _headers(client, ecole.admin.nom_utilisateur)
 
+        # Le paiement de salaire vérifie le solde de caisse disponible
+        # (_get_solde_caisse) — une école sans encaissement enregistré a un
+        # solde de 0 GNF ; on encaisse d'abord de quoi couvrir le salaire.
+        # Préfixe "0-" délibéré : create_facture() choisit le prochain numéro
+        # via `ORDER BY numero_facture DESC` sur TOUTE la table (tous
+        # établissements confondus, non isolé par école) ; "0-..." trie avant
+        # tout "FAC-......" et ne peut donc jamais être pris pour le dernier
+        # numéro réel par un autre test de ce fichier.
+        facture = Facture(
+            inscription_id=ecole.inscription.inscription_id, annee_id=ecole.annee.annee_id,
+            numero_facture=f"0-FACSAL-{ecole.etab.etablissement_id}", montant_total=2000000,
+            montant_net=2000000, montant_paye=2000000, montant_restant=0, statut="PAYEE",
+        )
+        db.add(facture); db.commit(); db.refresh(facture)
+        paiement = Paiement(
+            facture_id=facture.facture_id, annee_id=ecole.annee.annee_id,
+            numero_recu=f"RECSAL-{ecole.etab.etablissement_id}", montant=2000000,
+            mode_paiement="Cash", statut="VALIDE",
+        )
+        db.add(paiement); db.commit()
+
         resp = client.post(
             "/api/finance/salaires/payer",
             json={"enseignant_id": ecole.enseignant_ref, "mois": "2026-01", "mode_paiement": "Cash"},

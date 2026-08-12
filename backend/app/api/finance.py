@@ -56,21 +56,6 @@ def _invalidate_dashboard_cache(etablissement_id: int, annee_id: int = 1) -> Non
 
 
 
-def _get_active_annee_id(db: Session, fallback: int = 1) -> int:
-    from app.models.academique import AnneeScolaire
-    # Cherche d'abord sur est_courante='O', puis sur statut='EN_COURS' par sécurité
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.est_courante == "O").first()
-    if not annee:
-        annee = db.query(AnneeScolaire).order_by(AnneeScolaire.annee_id.desc()).first()
-    return annee.annee_id if annee else fallback
-
-
-def _get_default_etablissement_id(db: Session, fallback: int = 1) -> int:
-    from app.models.academique import Etablissement
-    etab = db.query(Etablissement).first()
-    return etab.etablissement_id if etab else fallback
-
-
 def _get_solde_caisse(db: Session, etablissement_id: int, annee_id: int) -> float:
     """Calcule le solde disponible (Total encaissé - Dépenses validées et en attente)"""
     from sqlalchemy import func
@@ -104,6 +89,8 @@ def _get_solde_caisse(db: Session, etablissement_id: int, annee_id: int) -> floa
 # Alias conservé pour que tous les appels internes existants de ce fichier
 # continuent de fonctionner sans modification.
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
+from app.core.annee_lock import get_active_annee_id as _get_active_annee_id
+from app.core.annee_lock import resolve_annee_id
 
 
 UPLOAD_DIR_DEPENSES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "depenses")
@@ -527,7 +514,7 @@ def copier_tarifs(data: dict, db: Session = Depends(get_db), etablissement_id: i
 @router.get("/factures")
 def list_factures(
     response: Response,
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     statut: Optional[str] = None,
     classe_id: Optional[int] = None,
     skip: int = 0,
@@ -592,7 +579,7 @@ def list_factures(
 
 @router.get("/factures/stats")
 def stats_factures(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
     type_frais_id: Optional[int] = None,
@@ -670,15 +657,22 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db), etablisse
             )
 
     # Générer numéro de facture en se basant sur le numéro le plus élevé existant (évite les doublons)
-    last_facture = db.query(Facture).order_by(Facture.numero_facture.desc()).first()
+    # Compteur filtré par établissement (règle §4.5 : sinon une école déduit
+    # le volume de factures des autres, et deux écoles partagent la même
+    # séquence FAC-NNNNNN au lieu d'avoir chacune la leur).
+    last_facture = db.query(Facture).join(
+        Inscription, Facture.inscription_id == Inscription.inscription_id
+    ).join(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id).order_by(Facture.numero_facture.desc()).first()
     if last_facture and last_facture.numero_facture.startswith("FAC-"):
         try:
-            max_num = int(last_facture.numero_facture.split("-")[1])
+            max_num = int(last_facture.numero_facture.rsplit("-", 1)[-1])
         except ValueError:
             max_num = 0
     else:
         max_num = 0
-    numero_facture = f"FAC-{max_num + 1:06d}"
+    numero_facture = f"FAC-{etablissement_id}-{max_num + 1:06d}"
 
     facture = Facture(
         inscription_id=data.inscription_id,
@@ -809,10 +803,17 @@ def generer_factures_classe(
 
     # Récupérer le plus grand numéro de facture existant UNE SEULE FOIS avant la boucle
     # pour garantir que chaque nouveau numéro est unique
-    last_facture = db.query(Facture).order_by(Facture.numero_facture.desc()).first()
+    # Compteur filtré par établissement (règle §4.5 : sinon une école déduit
+    # le volume de factures des autres, et deux écoles partagent la même
+    # séquence FAC-NNNNNN au lieu d'avoir chacune la leur).
+    last_facture = db.query(Facture).join(
+        Inscription, Facture.inscription_id == Inscription.inscription_id
+    ).join(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id).order_by(Facture.numero_facture.desc()).first()
     if last_facture and last_facture.numero_facture.startswith("FAC-"):
         try:
-            max_num = int(last_facture.numero_facture.split("-")[1])
+            max_num = int(last_facture.numero_facture.rsplit("-", 1)[-1])
         except ValueError:
             max_num = 0
     else:
@@ -831,7 +832,7 @@ def generer_factures_classe(
             continue
 
         # Numéro unique basé sur le max_num + offset courant
-        numero_facture = f"FAC-{max_num + created_count + 1:06d}"
+        numero_facture = f"FAC-{etablissement_id}-{max_num + created_count + 1:06d}"
 
         # Réduction fratrie (optionnelle, configurée dans /parametres/finance)
         montant_remise = 0.0
@@ -1015,10 +1016,22 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
             echeance.statut = "PARTIELLEMENT_PAYEE"
 
     # Générer numéro de reçu (préfixe configurable via /parametres/finance)
+    # Compteur filtré par établissement (règle §4.5 : toute agrégation
+    # servant à générer un numéro se filtre par école, sinon une école
+    # déduit le volume de paiements des autres via ses propres reçus).
     settings = get_finance_settings(db, etablissement_id)
     prefixe_recu = settings.get("recu_prefixe") or "REC"
-    count = db.query(func.count(Paiement.paiement_id)).scalar() or 0
-    numero_recu = f"{prefixe_recu}-{count + 1:06d}"
+    count = db.query(func.count(Paiement.paiement_id)).join(
+        Facture, Paiement.facture_id == Facture.facture_id
+    ).join(
+        Inscription, Facture.inscription_id == Inscription.inscription_id
+    ).join(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).filter(Classe.etablissement_id == etablissement_id).scalar() or 0
+    # Établissement dans le numéro (comme numero_facture) : sinon deux écoles
+    # dont c'est le 1er paiement génèrent toutes les deux "REC-000001", qui
+    # entre en collision sur la contrainte UNIQUE globale de la colonne.
+    numero_recu = f"{prefixe_recu}-{etablissement_id}-{count + 1:06d}"
 
     paiement = Paiement(
         facture_id=data.facture_id,
@@ -1092,7 +1105,7 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
 @router.get("/depenses", response_model=List[DepenseOut])
 def list_depenses(
     response: Response,
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     categorie: Optional[str] = None,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
@@ -1179,7 +1192,7 @@ def changer_statut_depense(depense_id: int, statut: str, db: Session = Depends(g
 
 
 @router.get("/depenses/stats")
-def stats_depenses(annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def stats_depenses(annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     query_base = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
         Depense.annee_id == annee_id,
@@ -1214,7 +1227,7 @@ def stats_depenses(annee_id: int = 1, db: Session = Depends(get_db), etablisseme
 @router.get("/impayes")
 def list_impayes(
     response: Response,
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
     type_frais_id: Optional[int] = None,
@@ -1333,7 +1346,7 @@ def list_impayes(
 
 @router.get("/retards")
 def list_retards(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     classe_id: Optional[int] = None,
     niveau_id: Optional[int] = None,
     jours_min: int = 0,
@@ -1408,7 +1421,7 @@ def list_retards(
 
 @router.get("/solvabilite")
 def tableau_solvabilite(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     classe_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
@@ -1496,7 +1509,7 @@ def tableau_solvabilite(
 
 
 @router.get("/solde-eleve/{eleve_id}")
-def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def solde_eleve(eleve_id: int, annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Solde financier en temps réel d'un élève avec historique complet des paiements.
     Vérifie que l'élève appartient à l'établissement appelant — avant le
@@ -1586,7 +1599,7 @@ def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db),
 
 @router.get("/dashboard")
 def dashboard_financier(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     date_debut: Optional[str] = None,
     date_fin: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -1857,7 +1870,7 @@ def dashboard_financier(
 
 @router.get("/rapports/journalier")
 def rapport_journalier(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     date_rapport: Optional[str] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
@@ -1903,7 +1916,7 @@ def rapport_journalier(
 
 @router.get("/rapports/mensuel")
 def rapport_mensuel(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     mois: Optional[int] = None,
     annee: Optional[int] = None,
     db: Session = Depends(get_db),
@@ -1995,7 +2008,7 @@ def rapport_mensuel(
 
 @router.get("/rapports/annuel")
 def rapport_annuel(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     annee: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
@@ -2177,7 +2190,7 @@ def configurer_rappels(config: dict, db: Session = Depends(get_db)):
 
 @router.post("/communication/notifier-impayes")
 def notifier_impayes(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -2621,7 +2634,7 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db), etablissem
 
 @router.get("/fournisseurs")
 def list_fournisseurs(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -2790,7 +2803,7 @@ def valider_depense(depense_id: int, db: Session = Depends(get_db), etablissemen
 @router.get("/decaissements")
 def list_decaissements(
     response: Response,
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     date_debut: Optional[str] = None,
     date_fin: Optional[str] = None,
     categorie: Optional[str] = None,
@@ -2981,7 +2994,7 @@ def annuler_paiement(
 @router.get("/acomptes")
 def list_acomptes(
     response: Response,
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -3217,7 +3230,7 @@ def generer_facture_pdf(facture_id: int, db: Session = Depends(get_db), etabliss
 
 @router.get("/salaires/employes")
 def list_employes_salaires(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     mois: Optional[str] = None,   # format: "2026-06"
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
@@ -3374,7 +3387,10 @@ def payer_salaire_employe(data: dict, db: Session = Depends(get_db), etablisseme
     employe_id_str = data.get("enseignant_id")
     mois = data.get("mois", "")
     mode_paiement = data.get("mode_paiement", "Cash")
-    annee_id = data.get("annee_id") or 1
+    # `annee_id` par défaut vient de l'établissement authentifié, jamais d'un
+    # `1` codé en dur (même anti-pattern déjà corrigé sur
+    # payer_plusieurs_mois_endpoint — voir docs/MULTI_ECOLES_REGLES_DEV.md §4).
+    annee_id = data.get("annee_id") or _get_active_annee_id(db, etablissement_id)
 
     if not employe_id_str or not mois:
         raise HTTPException(status_code=400, detail="Identifiant employé et mois obligatoires")
@@ -3858,12 +3874,15 @@ def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db), eta
     employe_id_str = data.get("enseignant_id") or data.get("employe_id")
     mois_list = data.get("mois_list") or []
     mode_paiement = data.get("mode_paiement", "Cash")
-<<<<<<< HEAD
-    etablissement_id = data.get("etablissement_id") or _get_default_etablissement_id(db)
-    annee_id = data.get("annee_id") or _get_active_annee_id(db)
-=======
-    annee_id = data.get("annee_id", 1)
->>>>>>> main
+    # `etablissement_id` vient du paramètre injecté par `require_etablissement`
+    # (dérivé du JWT) — ne JAMAIS le réécrire depuis `data` (corps client),
+    # règle absolue du chantier multi-écoles (voir docs/MULTI_ECOLES_REGLES_DEV.md
+    # §1 et §4.2). La résolution HEAD conflictuelle faisait exactement ça
+    # (`data.get("etablissement_id") or _get_default_etablissement_id(db)`,
+    # ce dernier utilisant en plus un `.first()` sur Etablissement — le même
+    # anti-pattern que §4.3, juste appliqué à l'école plutôt qu'au parent) ;
+    # supprimée plutôt que fusionnée.
+    annee_id = data.get("annee_id") or _get_active_annee_id(db, etablissement_id)
 
     if not employe_id_str or not mois_list:
         raise HTTPException(status_code=400, detail="employe_id et mois_list requis")

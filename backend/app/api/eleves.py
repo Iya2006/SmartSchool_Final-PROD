@@ -17,6 +17,7 @@ from app.models.academique import (
 )
 from app.schemas.schemas import EleveCreate, EleveUpdate, EleveOut, EleveListOut
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
+from app.core.annee_lock import resolve_annee_id
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
 
 @router.get("", response_model=List[EleveListOut])
 def list_eleves(
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     statut: Optional[str] = None,
     search: Optional[str] = None,
     classe_code: Optional[str] = None,
@@ -88,7 +89,7 @@ class EleveDeltaOut(BaseModel):
 @router.get("/delta", response_model=EleveDeltaOut)
 def delta_eleves(
     since: Optional[datetime] = None,
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -331,7 +332,7 @@ class InscriptionCompleteData(BaseModel):
     telephone: Optional[str] = None
     email: Optional[str] = None
     statut: str = "ACTIF"
-    annee_id: int = 1
+    annee_id: int = Depends(resolve_annee_id)
     classe_id: Optional[int] = None
     eleve_mot_de_passe: Optional[str] = None  # MDP portail élève (optionnel, défaut: smartschool)
     # Parent
@@ -708,7 +709,7 @@ def get_dossier_annee(eleve_id: int, inscription_id: int, db: Session = Depends(
 @router.get("/{eleve_id}/certificat-scolarite/pdf")
 def generer_certificat_scolarite_pdf(
     eleve_id: int,
-    annee_id: int = 1,
+    annee_id: int = Depends(resolve_annee_id),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
