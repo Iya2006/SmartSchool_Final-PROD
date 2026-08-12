@@ -690,9 +690,20 @@ class BulletinLigne(Base):
 # ============================================================================
 
 class TypeFrais(Base):
+    """Nature d'un frais (Scolarité, Inscription, Cantine…), PAR ÉCOLE.
+
+    Cette table était partagée par toute la plateforme : une école renommant
+    « Scolarité » changeait l'intitulé sur les factures et les reçus de toutes
+    les autres — et pouvait supprimer un type qu'une voisine utilisait. Voir
+    migration 2026_08_compta_01_types_frais_etablissement.py.
+
+    `code` n'est donc plus unique globalement mais PAR ÉTABLISSEMENT
+    (uq_types_frais_etab_code) : deux écoles ont chacune leur « SCOL ».
+    """
     __tablename__ = "ss_types_frais"
     type_frais_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    code = Column(String(20), unique=True, nullable=False)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    code = Column(String(20), nullable=False)
     libelle = Column(String(150), nullable=False)
     categorie = Column(String(50), nullable=False)
     montant_defaut = Column(Numeric(12, 2), default=0) # Nouveau champ

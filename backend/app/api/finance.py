@@ -62,7 +62,12 @@ os.makedirs(UPLOAD_DIR_DEPENSES, exist_ok=True)
 
 
 @router.post("/upload-justificatif")
-def upload_justificatif(file: UploadFile = File(...)):
+def upload_justificatif(
+    file: UploadFile = File(...),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    # Deposer un fichier sur le serveur sans etre rattache a une ecole
+    # laissait la porte ouverte a n'importe quel envoi.
     """Upload d'un justificatif (facture/reçu) attaché à une dépense, retourne son URL publique."""
     ext = os.path.splitext(file.filename or "")[1]
     unique_name = f"{uuid.uuid4().hex}{ext}"
@@ -185,18 +190,52 @@ def calculer_penalite(montant_restant: float, jours_retard: int, settings: dict)
 # TYPES DE FRAIS
 # ============================================================================
 
+# Les types de frais appartiennent à chaque école depuis la migration
+# 2026_08_compta_01. Auparavant la table était partagée : une école renommant
+# « Scolarité » changeait l'intitulé sur les factures et les reçus de toutes
+# les autres, et pouvait supprimer un type qu'une voisine utilisait.
+
+def _type_frais_ou_404(db: Session, type_frais_id: int, etablissement_id: int) -> TypeFrais:
+    tf = db.query(TypeFrais).filter(
+        TypeFrais.type_frais_id == type_frais_id,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first()
+    if not tf:
+        # 404 et non 403 : on ne confirme pas l'existence d'un type d'ailleurs.
+        raise HTTPException(status_code=404, detail="Type de frais non trouvé")
+    return tf
+
+
 @router.get("/types-frais", response_model=List[TypeFraisOut])
-def list_types_frais(db: Session = Depends(get_db)):
-    return db.query(TypeFrais).order_by(TypeFrais.categorie, TypeFrais.libelle).all()
+def list_types_frais(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    return db.query(TypeFrais).filter(
+        TypeFrais.etablissement_id == etablissement_id
+    ).order_by(TypeFrais.categorie, TypeFrais.libelle).all()
 
 
 @router.post("/types-frais", response_model=TypeFraisOut, status_code=201)
-def create_type_frais(data: TypeFraisCreate, db: Session = Depends(get_db)):
-    existing = db.query(TypeFrais).filter(TypeFrais.code == data.code.upper()).first()
-    if existing:
-        raise HTTPException(status_code=400, detail=f"Le code '{data.code}' est déjà utilisé")
+def create_type_frais(
+    data: TypeFraisCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    code = data.code.upper()
+    # Le code n'est unique QUE dans l'école : deux établissements peuvent avoir
+    # chacun leur « SCOL ». Le doublon se vérifie donc à ce périmètre.
+    if db.query(TypeFrais).filter(
+        TypeFrais.code == code,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Le code « {data.code} » est déjà utilisé dans votre établissement.",
+        )
     tf = TypeFrais(
-        code=data.code.upper(),
+        etablissement_id=etablissement_id,
+        code=code,
         libelle=data.libelle,
         categorie=data.categorie,
         montant_defaut=data.montant_defaut,
@@ -211,16 +250,25 @@ def create_type_frais(data: TypeFraisCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/types-frais/{type_frais_id}", response_model=TypeFraisOut)
-def update_type_frais(type_frais_id: int, data: TypeFraisCreate, db: Session = Depends(get_db)):
-    tf = db.query(TypeFrais).filter(TypeFrais.type_frais_id == type_frais_id).first()
-    if not tf:
-        raise HTTPException(status_code=404, detail="Type de frais non trouvé")
-    # Check code uniqueness if changed
-    if data.code.upper() != tf.code:
-        existing = db.query(TypeFrais).filter(TypeFrais.code == data.code.upper()).first()
-        if existing:
-            raise HTTPException(status_code=400, detail=f"Le code '{data.code}' est déjà utilisé")
-    tf.code = data.code.upper()
+def update_type_frais(
+    type_frais_id: int,
+    data: TypeFraisCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    tf = _type_frais_ou_404(db, type_frais_id, etablissement_id)
+    code = data.code.upper()
+    if code != tf.code:
+        if db.query(TypeFrais).filter(
+            TypeFrais.code == code,
+            TypeFrais.etablissement_id == etablissement_id,
+            TypeFrais.type_frais_id != type_frais_id,
+        ).first():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Le code « {data.code} » est déjà utilisé dans votre établissement.",
+            )
+    tf.code = code
     tf.libelle = data.libelle
     tf.categorie = data.categorie
     tf.montant_defaut = data.montant_defaut
@@ -232,14 +280,20 @@ def update_type_frais(type_frais_id: int, data: TypeFraisCreate, db: Session = D
 
 
 @router.delete("/types-frais/{type_frais_id}")
-def delete_type_frais(type_frais_id: int, db: Session = Depends(get_db)):
-    tf = db.query(TypeFrais).filter(TypeFrais.type_frais_id == type_frais_id).first()
-    if not tf:
-        raise HTTPException(status_code=404, detail="Type de frais non trouvé")
-    # Check if any facture is linked
+def delete_type_frais(
+    type_frais_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    tf = _type_frais_ou_404(db, type_frais_id, etablissement_id)
+    # Une facture émise reste une pièce comptable : supprimer son type de frais
+    # la rendrait illisible.
     linked = db.query(Facture).filter(Facture.type_frais_id == type_frais_id).count()
     if linked > 0:
-        raise HTTPException(status_code=400, detail=f"Ce type de frais est lié à {linked} facture(s). Impossible de le supprimer.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ce type de frais est lié à {linked} facture(s). Impossible de le supprimer.",
+        )
     db.delete(tf)
     db.commit()
     return {"message": "Type de frais supprimé"}
@@ -2051,18 +2105,69 @@ _rappels_config = {
 }
 
 
+# La configuration des rappels vivait dans une variable Python globale
+# (`_rappels_config`) : elle était donc PARTAGÉE par toutes les écoles — celle
+# qui la modifiait la changeait pour tout le monde — et perdue à chaque
+# redémarrage du serveur. Elle est désormais persistée par école, dans la table
+# des paramètres, comme tous les autres réglages.
+
+_CLE_RAPPELS = "finance.rappels"
+
+
+def _lire_rappels(db: Session, etablissement_id: int) -> dict:
+    from app.models.academique import ParametreEtablissement
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.cle == _CLE_RAPPELS,
+    ).first()
+    config = dict(_rappels_config)
+    if param and param.valeur:
+        try:
+            config.update(json.loads(param.valeur))
+        except (ValueError, TypeError):
+            # Une valeur illisible ne doit pas empêcher l'écran de s'ouvrir :
+            # on retombe sur les valeurs par défaut.
+            pass
+    return config
+
+
 @router.get("/rappels/config")
-def get_rappels_config():
-    """Retourne la configuration actuelle des rappels automatiques."""
-    return _rappels_config
+def get_rappels_config(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Configuration des rappels automatiques DE CETTE ÉCOLE."""
+    return _lire_rappels(db, etablissement_id)
 
 
 @router.post("/rappels/configurer")
-def configurer_rappels(config: dict, db: Session = Depends(get_db)):
-    """Met à jour la configuration des rappels automatiques."""
-    global _rappels_config
-    _rappels_config.update(config)
-    return {"message": "Configuration des rappels mise à jour", "config": _rappels_config}
+def configurer_rappels(
+    config: dict,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Enregistre la configuration des rappels de cette école."""
+    from app.models.academique import ParametreEtablissement
+
+    fusionnee = _lire_rappels(db, etablissement_id)
+    fusionnee.update(config or {})
+
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.cle == _CLE_RAPPELS,
+    ).first()
+    if param:
+        param.valeur = json.dumps(fusionnee)
+    else:
+        db.add(ParametreEtablissement(
+            etablissement_id=etablissement_id,
+            categorie="FINANCE",
+            cle=_CLE_RAPPELS,
+            valeur=json.dumps(fusionnee),
+            type_valeur="JSON",
+        ))
+    db.commit()
+    return {"message": "Configuration des rappels mise à jour", "config": fusionnee}
 
 
 @router.post("/communication/notifier-impayes")

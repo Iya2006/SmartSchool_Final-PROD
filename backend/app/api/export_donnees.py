@@ -29,7 +29,7 @@ from app.core.auth import ADMIN_TIER_ROLES, require_etablissement, require_roles
 from app.core.database import get_db
 from app.models.academique import (
     Bulletin, BulletinLigne, Classe, Eleve, Etablissement, Facture, Inscription,
-    Matiere, Paiement, Trimestre,
+    Matiere, Trimestre,
 )
 
 router = APIRouter(prefix="/api/export", tags=["Export des données"])
@@ -84,7 +84,13 @@ def catalogue(
         .filter(Classe.etablissement_id == etablissement_id)
         .count()
     )
-    factures = db.query(Facture).filter(Facture.etablissement_id == etablissement_id).count()
+    factures = (
+        db.query(Facture)
+        .join(Inscription, Inscription.inscription_id == Facture.inscription_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Classe.etablissement_id == etablissement_id)
+        .count()
+    )
     return [
         {"cle": "eleves", "libelle": "Élèves", "volume": eleves,
          "description": "Identité, classe, contacts."},
@@ -203,14 +209,15 @@ def exporter_paiements(
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Factures avec ce qui a été réglé et ce qui reste dû."""
+    # Une facture ne porte pas d'ecole : elle se rattache par son inscription,
+    # qui porte l'eleve ET la classe. C'est aussi ce qui l'isole.
     factures = (
         db.query(Facture, Eleve, Classe)
-        .outerjoin(Eleve, Eleve.eleve_id == Facture.eleve_id)
-        .outerjoin(Inscription, (Inscription.eleve_id == Eleve.eleve_id)
-                   & (Inscription.statut == "ACTIVE"))
-        .outerjoin(Classe, Classe.classe_id == Inscription.classe_id)
-        .filter(Facture.etablissement_id == etablissement_id)
-        .order_by(Facture.date_emission.desc())
+        .join(Inscription, Inscription.inscription_id == Facture.inscription_id)
+        .join(Eleve, Eleve.eleve_id == Inscription.eleve_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Classe.etablissement_id == etablissement_id)
+        .order_by(Facture.date_facture.desc())
         .all()
     )
     if not factures:
@@ -220,26 +227,21 @@ def exporter_paiements(
             [], f"paiements_{_nom_ecole(db, etablissement_id)}",
         )
 
-    # Total payé par facture en UNE requête : une par ligne remettrait le N+1
-    # que ce projet a déjà payé cher ailleurs.
-    from sqlalchemy import func as _func
-    payes = dict(
-        db.query(Paiement.facture_id, _func.sum(Paiement.montant))
-        .filter(Paiement.facture_id.in_([f.facture_id for f, _, _ in factures]))
-        .group_by(Paiement.facture_id)
-        .all()
-    )
-
+    # `montant_paye` et `montant_restant` sont tenus a jour sur la facture
+    # elle-meme : les recalculer depuis les paiements ferait courir le risque
+    # d'afficher un chiffre different de celui de l'ecran comptabilite.
     lignes = []
     for f, el, cl in factures:
-        total = float(f.montant_total or 0)
-        paye = float(payes.get(f.facture_id, 0) or 0)
+        total = float(f.montant_net or f.montant_total or 0)
+        paye = float(f.montant_paye or 0)
         lignes.append([
             f.numero_facture or f.facture_id,
             el.matricule if el else "", el.nom if el else "", el.prenom if el else "",
             cl.libelle if cl else "",
-            f.date_emission.isoformat() if f.date_emission else "",
-            total, paye, round(total - paye, 2), f.statut or "",
+            f.date_facture.isoformat() if f.date_facture else "",
+            total, paye,
+            float(f.montant_restant) if f.montant_restant is not None else round(total - paye, 2),
+            f.statut or "",
         ])
     return _fichier_csv(
         ["Facture", "Matricule", "Nom", "Prénom", "Classe", "Date",

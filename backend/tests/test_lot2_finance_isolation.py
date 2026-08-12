@@ -94,9 +94,15 @@ def _headers(client: TestClient, nom_utilisateur: str) -> dict:
     return {"Authorization": f"Bearer {resp.json()['token']}"}
 
 
-def _type_frais(db: Session) -> TypeFrais:
+def _type_frais(db: Session, etablissement_id: int) -> TypeFrais:
+    """Un type de frais releve d'UNE ecole (migration 2026_08_compta_01).
+
+    La table etait partagee : une ecole renommant « Scolarite » changeait
+    l'intitule sur les factures de toutes les autres.
+    """
     uid = _uid()
-    tf = TypeFrais(code=f"TF{uid}", libelle="Scolarité", categorie="SCOLARITE", montant_defaut=100000)
+    tf = TypeFrais(etablissement_id=etablissement_id, code=f"TF{uid}",
+                   libelle="Scolarité", categorie="SCOLARITE", montant_defaut=100000)
     db.add(tf); db.commit(); db.refresh(tf)
     return tf
 
@@ -167,7 +173,7 @@ class TestFactureEtPaiementIsolation:
         ecole_a = Ecole(db, "FACA")
         ecole_b = Ecole(db, "FACB")
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
-        type_frais = _type_frais(db)
+        type_frais = _type_frais(db, ecole_b.etab.etablissement_id)
 
         resp = client.post(
             "/api/finance/factures",
@@ -183,7 +189,7 @@ class TestFactureEtPaiementIsolation:
     def test_create_facture_ok_dans_sa_propre_ecole(self, client: TestClient, db: Session):
         ecole = Ecole(db, "FACOK")
         headers = _headers(client, ecole.admin.nom_utilisateur)
-        type_frais = _type_frais(db)
+        type_frais = _type_frais(db, ecole.etab.etablissement_id)
 
         resp = client.post(
             "/api/finance/factures",
@@ -201,7 +207,7 @@ class TestFactureEtPaiementIsolation:
         ecole_b = Ecole(db, "PAYB")
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
         headers_b = _headers(client, ecole_b.admin.nom_utilisateur)
-        type_frais = _type_frais(db)
+        type_frais = _type_frais(db, ecole_b.etab.etablissement_id)
 
         # Facture créée légitimement dans l'école B
         resp = client.post(
@@ -228,7 +234,7 @@ class TestFactureEtPaiementIsolation:
         ecole_b = Ecole(db, "LFB")
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
         headers_b = _headers(client, ecole_b.admin.nom_utilisateur)
-        type_frais = _type_frais(db)
+        type_frais = _type_frais(db, ecole_b.etab.etablissement_id)
 
         client.post(
             "/api/finance/factures",
@@ -252,7 +258,7 @@ class TestFactureEtPaiementIsolation:
         ecole_b = Ecole(db, "ANNB")
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
         headers_b = _headers(client, ecole_b.admin.nom_utilisateur)
-        type_frais = _type_frais(db)
+        type_frais = _type_frais(db, ecole_b.etab.etablissement_id)
 
         resp = client.post(
             "/api/finance/factures",
@@ -339,7 +345,7 @@ class TestTarifsClasseOwnership:
         ecole_a = Ecole(db, "TARA")
         ecole_b = Ecole(db, "TARB")
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
-        type_frais = _type_frais(db)
+        type_frais = _type_frais(db, ecole_b.etab.etablissement_id)
 
         resp = client.put(
             "/api/finance/tarifs-classe",
