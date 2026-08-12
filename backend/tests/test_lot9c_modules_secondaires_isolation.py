@@ -7,6 +7,7 @@ Points sensibles couverts : les deux routes de scan QR résolvaient le
 matricule sur TOUTE la plateforme (badge d'une autre école accepté), et la
 galerie photos exposait l'annuaire complet (élèves, enseignants, parents).
 """
+import io
 from datetime import date
 
 import pytest
@@ -255,6 +256,32 @@ class TestPhotosIsolation:
 
         resp = client.delete(f"/api/photos/enseignant/{b.enseignant.enseignant_id}", headers=headers)
         assert resp.status_code == 404
+
+    def test_login_portail_parent_puis_upload_photo_enfant(self, client: TestClient, db: Session):
+        """Régression : POST /api/portail-parent/login (la route réellement
+        utilisée par le frontend parent, distincte de POST /api/auth/login)
+        omettait `etablissement_id` dans le token émis, ce qui faisait
+        échouer en 403 ("Établissement non déterminé") tout appel protégé
+        par `require_etablissement` — dont l'upload de photo de l'enfant.
+        Reproduit le parcours réel : vrai login parent, puis vrai upload."""
+        a = Ecole(db, "PPL")
+        eleve, _ = a.eleve_inscrit(db)
+        parent = a.parent_de(db, eleve)
+
+        login = client.post("/api/portail-parent/login", json={
+            "telephone": parent.telephone_1, "mot_de_passe": "motdepasse123",
+        })
+        assert login.status_code == 200, login.text
+        token = login.json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        fichier = {"fichier": ("enfant.jpg", io.BytesIO(b"\xff\xd8\xff\xe0fake-jpeg-bytes"), "image/jpeg")}
+        resp = client.post(
+            f"/api/photos/parent-upload/eleve/{eleve.eleve_id}?parent_id={parent.parent_id}",
+            files=fichier, headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["photo_url"]
 
 
 # ══════════════════════════════════════════════════════════════

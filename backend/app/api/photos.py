@@ -513,13 +513,19 @@ def get_pending_ids(
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Version légère de `/pending/all` (aucune jointure de nom) — sert
-    uniquement à afficher le badge "photo en attente" sur les onglets
-    élèves/enseignants/parents de la galerie, qui doit rester exact même
-    une fois la file elle-même paginée."""
+    """Version légère de `/pending/all` (aucune jointure de nom — le nom de
+    la personne n'est pas nécessaire ici) mais `file_path` EST inclus : sans
+    lui, les cartes élèves/enseignants/parents de la galerie ne peuvent pas
+    afficher l'aperçu de la photo réellement soumise (juste ses initiales),
+    ce qui donne l'impression qu'un envoi de photo par un parent — ou même
+    un envoi fait par l'admin lui-même sur une fiche élève/parent — n'a
+    rien fait, alors qu'elle est bien en attente de validation."""
     pending_filtree, _, _ = _pending_de_letablissement(db, etablissement_id)
     return [
-        {"entity_type": p.entity_type, "entity_id": p.entity_id, "photo_id": p.photo_id}
+        {
+            "entity_type": p.entity_type, "entity_id": p.entity_id,
+            "photo_id": p.photo_id, "file_path": p.file_path,
+        }
         for p in pending_filtree
     ]
 

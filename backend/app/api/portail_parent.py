@@ -127,12 +127,21 @@ def login_parent(request: Request, data: LoginParentRequest, db: Session = Depen
         if not verify_password(data.mot_de_passe, parent.mot_de_passe):
             raise HTTPException(401, "Mot de passe incorrect")
 
-    # Générer un token JWT pour le portail parent
+    # Générer un token JWT pour le portail parent — etablissement_id est
+    # OBLIGATOIRE ici : `require_etablissement` (utilisé par exemple par
+    # POST /api/photos/parent-upload/...) exige ce champ et rejette sinon
+    # tout appel en 403 "Établissement non déterminé", quel que soit le
+    # compte. `Parent` est désormais une fiche PAR école (migration
+    # 2026_08_multi_01) : `parent.etablissement_id` est la source directe
+    # et fiable, pas besoin de la redériver depuis les enfants comme le
+    # fait `_etablissement_du_parent` (réservée au routage des messages,
+    # cas différent où plusieurs écoles peuvent légitimement être visées).
     token = create_access_token({
         "sub": str(parent.parent_id),
         "type": "parent",
         "nom": parent.nom,
         "prenom": parent.prenom,
+        "etablissement_id": parent.etablissement_id,
     })
 
     return {

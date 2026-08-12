@@ -41,7 +41,7 @@ interface GalerieMeta {
     };
     classes: ClasseMeta[];
 }
-interface PendingRef { entity_type: string; entity_id: number; photo_id: number; }
+interface PendingRef { entity_type: string; entity_id: number; photo_id: number; file_path: string; }
 
 /* ═══════════════════════════════════════════════════════════
    LIGHTBOX MODAL — plein écran pour voir la photo
@@ -480,9 +480,11 @@ function GalerieContent() {
         if (!id) return undefined;
         const ref = pendingIds.find(p => p.entity_type === type && p.entity_id === id);
         if (!ref) return undefined;
-        // PhotoCard n'a besoin que de photo_id/file_path — on reconstruit une
-        // référence minimale à partir de pending/ids (léger, sans jointure de nom).
-        return { photo_id: ref.photo_id, entity_type: type, entity_id: id, name: '', uploader_name: '', file_path: '', date_upload: '' };
+        // PhotoCard n'a besoin que de photo_id (pour Valider/Rejeter) et
+        // file_path (pour afficher l'aperçu de la photo réellement soumise) —
+        // les deux viennent de pending/ids, name/uploader_name ne sont pas
+        // affichés sur ces cartes (seulement dans l'onglet "En attente").
+        return { photo_id: ref.photo_id, entity_type: type, entity_id: id, name: '', uploader_name: '', file_path: ref.file_path, date_upload: '' };
     };
 
     if (error) return (
@@ -585,7 +587,15 @@ function GalerieContent() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
                 <div style={{ display: 'flex', gap: '6px', background: '#f1f5f9', borderRadius: '12px', padding: '4px' }}>
                     {tabs.map(t => (
-                        <button key={t.id} onClick={() => { setTab(t.id); setSelectedClasse(null); }}
+                        <button key={t.id} onClick={() => {
+                            // Vide immédiatement items/pendingPhotos au clic : useEffect ne
+                            // tourne qu'après le prochain rendu, laissant sinon une fenêtre où
+                            // `tab` a déjà changé mais `items` contient encore les objets de
+                            // l'onglet précédent (ex. des parents avec parent_id pendant que
+                            // items.map(eleve => key={eleve.eleve_id}) est déjà actif) —
+                            // plusieurs cartes se retrouvent alors avec key={undefined}.
+                            setTab(t.id); setSelectedClasse(null); setItems([]); setPendingPhotos([]); setLoading(true);
+                        }}
                             style={{
                                 padding: '10px 18px', borderRadius: '10px', border: 'none', cursor: 'pointer',
                                 fontSize: '13px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px',
