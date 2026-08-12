@@ -45,15 +45,19 @@ describe('TopbarUserMenu', () => {
         expect(screen.getByText('AC')).toBeInTheDocument();
     });
 
-    it('affiche le nom complet et le rôle', () => {
+    it('affiche le nom complet dans le menu déroulant', () => {
+        // Le nom complet n'apparaît qu'une fois le menu ouvert (le bouton
+        // fermé n'affiche que les initiales, le nom complet est en `title`).
         render(<TopbarUserMenu />);
+        fireEvent.click(screen.getByRole('button', { name: 'AC' }));
         expect(screen.getByText('Alpha Camara')).toBeInTheDocument();
-        expect(screen.getByText('ADMIN')).toBeInTheDocument();
     });
 
     it('ouvre le menu dropdown au clic', () => {
         render(<TopbarUserMenu />);
-        const btn = screen.getByRole('button', { name: /alpha camara/i });
+        // Le bouton affiche les initiales ("AC"), le nom complet est en `title`
+        // (infobulle) — pas dans le nom accessible calculé par le navigateur.
+        const btn = screen.getByRole('button', { name: 'AC' });
         fireEvent.click(btn);
         expect(screen.getByText('Se déconnecter')).toBeInTheDocument();
         expect(screen.getByText('Paramètres')).toBeInTheDocument();
@@ -66,7 +70,9 @@ describe('TopbarUserMenu', () => {
                 <div data-testid="outside">Extérieur</div>
             </div>
         );
-        const btn = screen.getByRole('button', { name: /alpha camara/i });
+        // Le bouton affiche les initiales ("AC"), le nom complet est en `title`
+        // (infobulle) — pas dans le nom accessible calculé par le navigateur.
+        const btn = screen.getByRole('button', { name: 'AC' });
         fireEvent.click(btn);
         expect(screen.getByText('Se déconnecter')).toBeInTheDocument();
 
@@ -76,7 +82,9 @@ describe('TopbarUserMenu', () => {
 
     it('appelle logout au clic sur "Se déconnecter"', () => {
         render(<TopbarUserMenu />);
-        const btn = screen.getByRole('button', { name: /alpha camara/i });
+        // Le bouton affiche les initiales ("AC"), le nom complet est en `title`
+        // (infobulle) — pas dans le nom accessible calculé par le navigateur.
+        const btn = screen.getByRole('button', { name: 'AC' });
         fireEvent.click(btn);
 
         const logoutBtn = screen.getByText('Se déconnecter');
