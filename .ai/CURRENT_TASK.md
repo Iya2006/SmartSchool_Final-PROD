@@ -29,6 +29,23 @@ frontend, migration exécutée sur la base locale (schéma confirmé aligné).
 Rendu visuel réel non vérifié (aucun outil d'automatisation navigateur
 disponible cette session).
 
+**Suite directe (même jour) — 3 correctifs suite à un test utilisateur
+réel** : l'utilisateur a testé le mécanisme de photo (parent envoie la
+photo de son enfant → admin valide) et signalé un avertissement React
+"key" sur la Galerie + "rien ne se passe" côté parent et côté admin. Voir
+l'addendum complet dans `.ai/SCALABILITE_GALERIE_PROFIL_RAPPORT.md`.
+Résumé : (1) avertissement "key" = condition de course au changement
+d'onglet, corrigée ; (2) "rien ne se passe" côté admin = régression que
+j'avais moi-même introduite au tour précédent (`/pending/ids` avait perdu
+`file_path`), corrigée ; (3) upload parent qui échoue = **bug préexistant,
+pas une régression de cette session** — `POST /api/portail-parent/login`
+(la vraie route du frontend parent) n'incluait jamais `etablissement_id`
+dans le token, faisant échouer en 403 tout appel protégé par
+`require_etablissement`, dont l'upload de photo. Corrigé, nouveau test de
+régression ajouté (aucune couverture n'existait avant pour cette route).
+Suite finale : 676 passed/2 skipped (1 erreur Docker/Redis non liée),
+`tsc` propre, 102/102 frontend.
+
 ## Tâche précédente — Fusion `origin/main` (PR du collaborateur) dans `IYA` (12/08/2026)
 Voir `.ai/FUSION_MAIN_DANS_IYA_RAPPORT.md` pour le détail complet. Résumé :
 l'utilisateur a accepté une PR de son collaborateur sur `main`

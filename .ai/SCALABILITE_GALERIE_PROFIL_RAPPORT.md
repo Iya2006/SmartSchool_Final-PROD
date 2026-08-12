@@ -230,3 +230,73 @@ proprement retirés sur décision explicite de l'utilisateur. 667 tests
 backend / 102 tests frontend toujours verts. Reste, comme pour tout le
 reste de cette session : le rendu visuel réel non vérifiable sans outil
 d'automatisation navigateur.
+
+---
+
+## Addendum 12/08/2026 — 3 correctifs suite à un test utilisateur réel
+
+L'utilisateur a testé en conditions réelles (parent envoyant la photo de
+son enfant, admin essayant de la valider/modifier) et a signalé : (a) un
+avertissement React "key" dans la console sur la page Galerie, (b) un
+envoi de photo par un parent qui "ne fait rien" même après validation, et
+(c) l'admin qui modifie la photo d'un parent sans effet visible non plus.
+
+**1. Avertissement React "key" (`GalerieContent`)** — condition de
+course au changement d'onglet : `useEffect` (déclenché par le
+changement de `tab`) ne s'exécute qu'après le rendu suivant, laissant une
+fenêtre où `tab` a déjà la nouvelle valeur mais `items` contient encore
+les objets de l'onglet précédent (ex. des parents avec `parent_id`
+pendant qu'un rendu pour élèves utilise déjà `key={eleve.eleve_id}`) —
+plusieurs cartes se retrouvent avec `key={undefined}`. Corrigé en vidant
+`items`/`pendingPhotos` et en passant `loading=true` directement dans le
+`onClick` du bouton d'onglet, sans attendre l'effet.
+Investigué et écarté comme cause alternative : doublons de clé par
+JOIN (élèves avec plusieurs inscriptions actives, parents liés à
+plusieurs enfants) — aucun cas trouvé dans les données réelles, la
+condition de course est bien la seule explication.
+
+**2. "Rien ne se passe visiblement" côté admin** — régression que j'avais
+moi-même introduite à l'étape précédente (voir ci-dessus, partie
+Galerie) : `GET /api/photos/pending/ids` avait été rendu volontairement
+"léger" (pas de jointure de nom) mais j'avais aussi retiré `file_path`,
+qui ne coûte pourtant rien (déjà chargé sur la ligne `PhotoEnAttente`,
+zéro requête supplémentaire). Sans lui, les cartes élèves/enseignants/
+parents de la galerie ne pouvaient afficher que les initiales, jamais
+l'aperçu de la photo réellement soumise — donnant l'impression qu'un
+envoi (parent ou admin) n'avait rien fait alors qu'il était bien en
+attente de validation. `file_path` réajouté côté backend et frontend.
+
+**3. Upload de photo par un parent qui échoue silencieusement — bug
+préexistant, PAS une régression de cette session.** Root-cause confirmée
+par reproduction complète : `POST /api/portail-parent/login` (la route
+réellement appelée par `frontend/src/app/portail-parent/page.tsx`,
+distincte de l'route unifiée `/api/auth/login` qui, elle, était déjà
+correcte) émettait un token JWT **sans** la revendication
+`etablissement_id`. Or `require_etablissement` — la garde utilisée par
+`POST /api/photos/parent-upload/...` — rejette tout appel en 403
+("Établissement non déterminé") si cette revendication est absente, quel
+que soit le compte. Le frontend n'affichait apparemment aucune erreur
+visible pour ce cas, d'où l'impression que "rien ne se passe". Corrigé en
+alignant sur `parent.etablissement_id` (fiche parent = une par école
+depuis la migration multi-écoles, source directe et fiable — pas besoin
+de la redériver depuis les enfants comme le fait `_etablissement_du_parent`,
+qui reste réservée au routage des messages, un cas différent où plusieurs
+écoles peuvent légitimement être visées).
+Aucun test n'existait pour `/api/portail-parent/login` avant ce tour —
+c'est comment ce bug a traversé tout le chantier multi-écoles sans être
+détecté. Nouveau test de régression ajouté :
+`test_login_portail_parent_puis_upload_photo_enfant`
+(`test_lot9c_modules_secondaires_isolation.py`), qui reproduit le vrai
+parcours (vrai login via la vraie route, puis vrai upload multipart) et
+échouerait en 403 si le bug revenait.
+
+**Vérification** : reproduction complète bout-en-bout contre la vraie
+base locale via `TestClient` — vrai login parent → vrai
+`parent-upload` → `pending/ids` confirmé avec `file_path` non vide →
+vrai `POST /photos/validate/{id}` → `Eleve.photo_url` confirmé changé de
+`None` vers le nouveau chemin en base. Fichier de test temporaire
+nettoyé après vérification manuelle.
+
+**Tests** : 676 passed, 2 skipped (1 erreur non liée — un test Redis qui
+dépend d'un conteneur Docker, échec d'infrastructure, aucun rapport avec
+ces 3 correctifs), `tsc --noEmit` propre, `vitest run` 102/102.
