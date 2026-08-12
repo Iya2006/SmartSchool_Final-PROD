@@ -9,6 +9,7 @@ import {
 import api from '@/lib/api';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
+import Pagination from '@/components/Pagination';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
 const avatarColors = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6', '#8b5cf6'];
@@ -29,18 +30,18 @@ interface PersonPhoto {
     nom: string; prenom: string; sexe: string; matricule?: string;
     photo_url: string | null; statut?: string; specialite?: string;
     telephone_1?: string; profession?: string;
+    classe_code?: string; classe?: string;
 }
-interface ClasseGroup { code: string; libelle: string; eleves: PersonPhoto[]; }
-interface GalerieData {
-    eleves_par_classe: ClasseGroup[];
-    enseignants: PersonPhoto[];
-    parents: PersonPhoto[];
+interface ClasseMeta { code: string; libelle: string; total: number; avec_photo: number; }
+interface GalerieMeta {
     stats: {
         total_eleves: number; eleves_avec_photo: number;
         total_enseignants: number; enseignants_avec_photo: number;
         total_parents: number; parents_avec_photo: number;
     };
+    classes: ClasseMeta[];
 }
+interface PendingRef { entity_type: string; entity_id: number; photo_id: number; }
 
 /* ═══════════════════════════════════════════════════════════
    LIGHTBOX MODAL — plein écran pour voir la photo
@@ -364,40 +365,72 @@ export default function GaleriePage() {
     );
 }
 
+const PAGE_SIZE = 50;
+
 function GalerieContent() {
     const searchParams = useSearchParams();
-    const [data, setData] = useState<GalerieData | null>(null);
+    const [meta, setMeta] = useState<GalerieMeta | null>(null);
+    const [items, setItems] = useState<PersonPhoto[]>([]);
+    const [itemsTotal, setItemsTotal] = useState(0);
+    const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
+    const [pendingTotal, setPendingTotal] = useState(0);
+    const [pendingIds, setPendingIds] = useState<PendingRef[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [tab, setTab] = useState<'eleves' | 'enseignants' | 'parents' | 'attente'>((searchParams.get('tab') as any) || 'eleves');
-    const [pendingPhotos, setPendingPhotos] = useState<PendingPhoto[]>([]);
     const [search, setSearch] = useState(searchParams.get('search') || '');
     const [filterPhoto, setFilterPhoto] = useState<'all' | 'with' | 'without'>('all');
     const [selectedClasse, setSelectedClasse] = useState<string | null>(null);
+    const [currentPage, setCurrentPage] = useState(1);
     const [previewPerson, setPreviewPerson] = useState<{ person: PersonPhoto; type: 'eleve' | 'enseignant' | 'parent' } | null>(null);
-    
+
     // Check URL for Highlight / Assignment modes
     const highlightId = searchParams.get('highlight') || searchParams.get('assign_id');
 
-    // Auto-scroll vers la carte surlignée après chargement
-    useEffect(() => {
-        if (!data || !highlightId) return;
-        const timeout = setTimeout(() => {
-            const el = document.getElementById(`highlight-${tab}-${highlightId}`);
-            if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        }, 400);
-        return () => clearTimeout(timeout);
-    }, [data, highlightId, tab]);
+    // Statistiques + classes : comptages uniquement, jamais le chargement
+    // d'une ligne par élève — borné par le nombre de classes, pas d'élèves.
+    const fetchMeta = async () => {
+        const res = await api.get('/api/photos/galerie/meta');
+        setMeta(res.data);
+    };
 
-    const fetchData = async () => {
+    // Badge "photo en attente", exact sur TOUS les onglets même une fois la
+    // file elle-même paginée (voir fetchPendingAll ci-dessous).
+    const fetchPendingIds = async () => {
+        const res = await api.get('/api/photos/pending/ids');
+        setPendingIds(res.data);
+    };
+
+    // Une page de l'onglet actif (50 par défaut), filtrée côté serveur —
+    // remplace l'ancien chargement unique de TOUS les élèves/enseignants/
+    // parents de l'école, qui faisait planter la page au-delà de quelques
+    // milliers de personnes.
+    const fetchTab = async (activeTab: 'eleves' | 'enseignants' | 'parents', page: number) => {
+        const skip = (page - 1) * PAGE_SIZE;
+        const res = await api.get(`/api/photos/galerie/${activeTab}`, {
+            params: {
+                skip, limit: PAGE_SIZE,
+                search: search || undefined,
+                classe_code: activeTab === 'eleves' ? (selectedClasse || undefined) : undefined,
+                filter_photo: filterPhoto !== 'all' ? filterPhoto : undefined,
+            },
+        });
+        setItems(res.data);
+        setItemsTotal(Number(res.headers?.['x-total-count'] ?? res.data.length));
+    };
+
+    const fetchPendingAll = async (page: number) => {
+        const skip = (page - 1) * PAGE_SIZE;
+        const res = await api.get('/api/photos/pending/all', { params: { skip, limit: PAGE_SIZE } });
+        setPendingPhotos(res.data);
+        setPendingTotal(Number(res.headers?.['x-total-count'] ?? res.data.length));
+    };
+
+    const loadCurrentView = async () => {
         try {
             setError('');
-            const res = await api.get('/api/photos/galerie/all');
-            setData(res.data);
-            const pendingRes = await api.get('/api/photos/pending/all');
-            setPendingPhotos(pendingRes.data);
+            if (tab === 'attente') await fetchPendingAll(currentPage);
+            else await fetchTab(tab, currentPage);
         } catch (err: any) {
             console.error('Galerie load error:', err);
             const detail = err?.response?.data?.detail;
@@ -405,20 +438,54 @@ function GalerieContent() {
                 : Array.isArray(detail) ? detail.map((d: any) => d.msg || JSON.stringify(d)).join(', ')
                 : err?.message || 'Erreur de connexion au serveur';
             setError(msg);
+        } finally {
+            setLoading(false);
         }
-        finally { setLoading(false); }
     };
 
-    useEffect(() => { fetchData(); }, []);
+    // Rafraîchit tout après une action (upload, validation, rejet) — les
+    // compteurs (meta) ET les badges "en attente" changent en même temps
+    // que la page courante.
+    const refreshAll = () => {
+        fetchMeta().catch(() => {});
+        fetchPendingIds().catch(() => {});
+        loadCurrentView();
+    };
 
-    if (loading) return (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', flexDirection: 'column', gap: '12px' }}>
-            <Loader2 size={40} className="animate-spin" color="#6366f1" />
-            <p style={{ color: '#94a3b8', fontSize: '14px' }}>Chargement de la galerie...</p>
-        </div>
-    );
+    useEffect(() => { fetchMeta().catch(() => {}); fetchPendingIds().catch(() => {}); }, []);
+    useEffect(() => { setLoading(true); loadCurrentView(); }, [tab, currentPage]);
+    // Recherche/filtre/classe/onglet : revenir à la page 1 pour éviter une
+    // page vide après filtrage (déclenche déjà loadCurrentView via l'effet
+    // ci-dessus quand currentPage change ; si on était déjà en page 1, il
+    // faut relancer explicitement).
+    useEffect(() => { setCurrentPage(1); }, [search, filterPhoto, selectedClasse, tab]);
+    useEffect(() => {
+        if (currentPage === 1) { setLoading(true); loadCurrentView(); }
+    }, [search, filterPhoto, selectedClasse]);
 
-    if (error || !data) return (
+    // Auto-scroll vers la carte surlignée après chargement (si présente sur
+    // la page courante — une recherche par nom l'y amène généralement)
+    useEffect(() => {
+        if (loading || !highlightId) return;
+        const timeout = setTimeout(() => {
+            const el = document.getElementById(`highlight-${tab}-${highlightId}`);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }, 400);
+        return () => clearTimeout(timeout);
+    }, [loading, highlightId, tab]);
+
+    const pendingFor = (type: string, id: number | undefined): PendingPhoto | undefined => {
+        if (!id) return undefined;
+        const ref = pendingIds.find(p => p.entity_type === type && p.entity_id === id);
+        if (!ref) return undefined;
+        // PhotoCard n'a besoin que de photo_id/file_path — on reconstruit une
+        // référence minimale à partir de pending/ids (léger, sans jointure de nom).
+        return { photo_id: ref.photo_id, entity_type: type, entity_id: id, name: '', uploader_name: '', file_path: '', date_upload: '' };
+    };
+
+    if (error) return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '50vh', gap: '16px' }}>
             <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <Image size={32} color="#ef4444" />
@@ -427,7 +494,7 @@ function GalerieContent() {
             <p style={{ margin: 0, color: '#94a3b8', fontSize: '14px', maxWidth: '400px', textAlign: 'center' }}>
                 {error || 'Vérifiez que le serveur backend est bien démarré.'}
             </p>
-            <button onClick={() => { setLoading(true); fetchData(); }}
+            <button onClick={() => { setLoading(true); refreshAll(); }}
                 style={{
                     padding: '10px 24px', borderRadius: '10px', border: 'none',
                     background: '#6366f1', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
@@ -437,32 +504,25 @@ function GalerieContent() {
         </div>
     );
 
-    const s = data.stats;
+    if (!meta) return (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', flexDirection: 'column', gap: '12px' }}>
+            <Loader2 size={40} className="animate-spin" color="#6366f1" />
+            <p style={{ color: '#94a3b8', fontSize: '14px' }}>Chargement de la galerie...</p>
+        </div>
+    );
+
+    const s = meta.stats;
     const totalPhotos = s.eleves_avec_photo + s.enseignants_avec_photo + s.parents_avec_photo;
     const totalPersonnes = s.total_eleves + s.total_enseignants + s.total_parents;
 
-    const matchSearch = (p: PersonPhoto) => {
-        if (!search) return true;
-        const q = search.toLowerCase();
-        // Chercher dans le prénom, nom, matricule, et le nom complet combiné dans les deux sens
-        const fullName = `${p.prenom} ${p.nom}`.toLowerCase();
-        const fullNameRev = `${p.nom} ${p.prenom}`.toLowerCase();
-        return fullName.includes(q) || fullNameRev.includes(q)
-            || p.nom.toLowerCase().includes(q)
-            || p.prenom.toLowerCase().includes(q)
-            || (p.matricule || '').toLowerCase().includes(q);
-    };
-    const matchFilter = (p: PersonPhoto) => {
-        if (filterPhoto === 'all') return true;
-        return filterPhoto === 'with' ? !!p.photo_url : !p.photo_url;
-    };
-
     const tabs = [
-        { id: 'attente' as const, label: 'En Attente', icon: Clock, count: pendingPhotos.length, photos: pendingPhotos.length, color: '#ef4444' },
+        { id: 'attente' as const, label: 'En Attente', icon: Clock, count: pendingIds.length, photos: pendingIds.length, color: '#ef4444' },
         { id: 'eleves' as const, label: 'Élèves', icon: Users, count: s.total_eleves, photos: s.eleves_avec_photo, color: '#6366f1' },
         { id: 'enseignants' as const, label: 'Enseignants', icon: GraduationCap, count: s.total_enseignants, photos: s.enseignants_avec_photo, color: '#10b981' },
         { id: 'parents' as const, label: 'Parents', icon: Heart, count: s.total_parents, photos: s.parents_avec_photo, color: '#f59e0b' },
     ];
+
+    const currentTotal = tab === 'attente' ? pendingTotal : itemsTotal;
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -515,9 +575,9 @@ function GalerieContent() {
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: '24px', marginTop: '24px', position: 'relative' }}>
-                    <PhotoProgress done={data.stats.eleves_avec_photo} total={data.stats.total_eleves} label="Élèves" color="#818cf8" />
-                    <PhotoProgress done={data.stats.enseignants_avec_photo} total={data.stats.total_enseignants} label="Enseignants" color="#34d399" />
-                    <PhotoProgress done={data.stats.parents_avec_photo} total={data.stats.total_parents} label="Parents" color="#fbbf24" />
+                    <PhotoProgress done={s.eleves_avec_photo} total={s.total_eleves} label="Élèves" color="#818cf8" />
+                    <PhotoProgress done={s.enseignants_avec_photo} total={s.total_enseignants} label="Enseignants" color="#34d399" />
+                    <PhotoProgress done={s.parents_avec_photo} total={s.total_parents} label="Parents" color="#fbbf24" />
                 </div>
             </motion.div>
 
@@ -568,7 +628,7 @@ function GalerieContent() {
                 </div>
             </div>
 
-            {/* ═══ ÉLÈVES PAR CLASSE ═══ */}
+            {/* ═══ ÉLÈVES ═══ */}
             {tab === 'eleves' && (
                 <>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -576,48 +636,54 @@ function GalerieContent() {
                             className={`btn ${!selectedClasse ? 'btn-primary' : 'btn-outline'} btn-sm`} style={{ fontSize: '12px' }}>
                             Toutes les classes
                         </button>
-                        {data.eleves_par_classe.map(c => (
+                        {meta.classes.map(c => (
                             <button key={c.code} onClick={() => setSelectedClasse(c.code)}
                                 className={`btn ${selectedClasse === c.code ? 'btn-primary' : 'btn-outline'} btn-sm`} style={{ fontSize: '12px' }}>
-                                {c.code} ({c.eleves.filter(e => matchFilter(e)).length})
+                                {c.code} ({c.total})
                             </button>
                         ))}
                     </div>
-                    {data.eleves_par_classe
-                        .filter(c => !selectedClasse || c.code === selectedClasse)
-                        .map((classe, ci) => {
-                            const filtered = classe.eleves.filter(e => matchSearch(e) && matchFilter(e));
-                            if (filtered.length === 0) return null;
-                            return (
-                                <motion.div key={classe.code} className="card" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: ci * 0.04 }}>
-                                    <div className="card-header">
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                            <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'linear-gradient(135deg, #6366f1, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
-                                                <GraduationCap size={18} />
-                                            </div>
-                                            <div>
-                                                <h5 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>{classe.libelle || classe.code}</h5>
-                                                <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
-                                                    {classe.eleves.filter(e => !!e.photo_url).length}/{classe.eleves.length} photos
-                                                </p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div style={{ padding: '16px 20px' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
-                                            {filtered.map(eleve => {
-                                                const pending = pendingPhotos.find(p => p.entity_type === 'eleve' && p.entity_id === eleve.eleve_id);
-                                                return (
-                                                    <PhotoCard key={eleve.eleve_id} person={eleve} type="eleve" pendingPhoto={pending} onUploaded={fetchData}
-                                                        isHighlighted={eleve.eleve_id?.toString() === highlightId}
-                                                        onPreview={() => setPreviewPerson({ person: eleve, type: 'eleve' })} />
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                </motion.div>
-                            );
-                        })}
+                    {/* Regroupement par classe visuel uniquement possible quand une
+                        classe précise est sélectionnée (la page ne contient alors
+                        qu'elle) — "Toutes les classes" est une grille plate paginée,
+                        conséquence nécessaire de la pagination (sinon retour au
+                        chargement de toute l'école d'un coup, cause du plantage
+                        d'origine). */}
+                    {selectedClasse && (
+                        <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>
+                            {meta.classes.find(c => c.code === selectedClasse)?.libelle || selectedClasse}
+                            {' — '}{meta.classes.find(c => c.code === selectedClasse)?.avec_photo ?? 0}/{meta.classes.find(c => c.code === selectedClasse)?.total ?? 0} photos
+                        </p>
+                    )}
+                    <motion.div className="card" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                        <div className="card-header">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'linear-gradient(135deg, #6366f1, #818cf8)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
+                                    <GraduationCap size={18} />
+                                </div>
+                                <h5 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>
+                                    Élèves ({itemsTotal})
+                                </h5>
+                            </div>
+                        </div>
+                        <div style={{ padding: '16px 20px' }}>
+                            {loading ? (
+                                <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                                    <Loader2 size={28} className="animate-spin" color="#6366f1" />
+                                </div>
+                            ) : items.length === 0 ? (
+                                <p style={{ color: '#94a3b8', textAlign: 'center', padding: '20px' }}>Aucun élève ne correspond.</p>
+                            ) : (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
+                                    {items.map(eleve => (
+                                        <PhotoCard key={eleve.eleve_id} person={eleve} type="eleve" pendingPhoto={pendingFor('eleve', eleve.eleve_id)} onUploaded={refreshAll}
+                                            isHighlighted={eleve.eleve_id?.toString() === highlightId}
+                                            onPreview={() => setPreviewPerson({ person: eleve, type: 'eleve' })} />
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </motion.div>
                 </>
             )}
 
@@ -631,12 +697,16 @@ function GalerieContent() {
                                 <Clock size={18} />
                             </div>
                             <h5 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>
-                                Photos en attente de validation ({pendingPhotos.length})
+                                Photos en attente de validation ({pendingTotal})
                             </h5>
                         </div>
                     </div>
                     <div style={{ padding: '16px 20px' }}>
-                        {pendingPhotos.length === 0 ? (
+                        {loading ? (
+                            <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                                <Loader2 size={28} className="animate-spin" color="#6366f1" />
+                            </div>
+                        ) : pendingPhotos.length === 0 ? (
                             <p style={{ color: '#94a3b8', textAlign: 'center', padding: '20px' }}>Aucune photo en attente.</p>
                         ) : (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px' }}>
@@ -655,14 +725,14 @@ function GalerieContent() {
                                                 <button onClick={async () => {
                                                     try {
                                                         await api.post(`/api/photos/validate/${p.photo_id}`);
-                                                        fetchData();
+                                                        refreshAll();
                                                     } catch (e) { alert('Erreur'); }
                                                 }} style={{ flex: 1, padding: '6px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>Valider</button>
                                                 <button onClick={async () => {
                                                     if(!confirm('Rejeter cette photo ?')) return;
                                                     try {
                                                         await api.post(`/api/photos/reject/${p.photo_id}`);
-                                                        fetchData();
+                                                        refreshAll();
                                                     } catch (e) { alert('Erreur'); }
                                                 }} style={{ flex: 1, padding: '6px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>Rejeter</button>
                                             </div>
@@ -684,21 +754,26 @@ function GalerieContent() {
                                 <GraduationCap size={18} />
                             </div>
                             <h5 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>
-                                Enseignants ({data.enseignants.filter(e => matchSearch(e) && matchFilter(e)).length})
+                                Enseignants ({itemsTotal})
                             </h5>
                         </div>
                     </div>
                     <div style={{ padding: '16px 20px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
-                            {data.enseignants.filter(e => matchSearch(e) && matchFilter(e)).map(ens => {
-                                const pending = pendingPhotos.find(p => p.entity_type === 'enseignant' && p.entity_id === ens.enseignant_id);
-                                return (
-                                    <PhotoCard key={ens.enseignant_id} person={ens} type="enseignant" pendingPhoto={pending} onUploaded={fetchData}
+                        {loading ? (
+                            <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                                <Loader2 size={28} className="animate-spin" color="#6366f1" />
+                            </div>
+                        ) : items.length === 0 ? (
+                            <p style={{ color: '#94a3b8', textAlign: 'center', padding: '20px' }}>Aucun enseignant ne correspond.</p>
+                        ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
+                                {items.map(ens => (
+                                    <PhotoCard key={ens.enseignant_id} person={ens} type="enseignant" pendingPhoto={pendingFor('enseignant', ens.enseignant_id)} onUploaded={refreshAll}
                                         isHighlighted={ens.enseignant_id?.toString() === highlightId}
                                         onPreview={() => setPreviewPerson({ person: ens, type: 'enseignant' })} />
-                                );
-                            })}
-                        </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </motion.div>
             )}
@@ -712,23 +787,32 @@ function GalerieContent() {
                                 <Heart size={18} />
                             </div>
                             <h5 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>
-                                Parents ({data.parents.filter(p => matchSearch(p) && matchFilter(p)).length})
+                                Parents ({itemsTotal})
                             </h5>
                         </div>
                     </div>
                     <div style={{ padding: '16px 20px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
-                            {data.parents.filter(p => matchSearch(p) && matchFilter(p)).map(par => {
-                                const pending = pendingPhotos.find(p => p.entity_type === 'parent' && p.entity_id === par.parent_id);
-                                return (
-                                    <PhotoCard key={par.parent_id} person={par} type="parent" pendingPhoto={pending} onUploaded={fetchData}
+                        {loading ? (
+                            <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                                <Loader2 size={28} className="animate-spin" color="#6366f1" />
+                            </div>
+                        ) : items.length === 0 ? (
+                            <p style={{ color: '#94a3b8', textAlign: 'center', padding: '20px' }}>Aucun parent ne correspond.</p>
+                        ) : (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '14px' }}>
+                                {items.map(par => (
+                                    <PhotoCard key={par.parent_id} person={par} type="parent" pendingPhoto={pendingFor('parent', par.parent_id)} onUploaded={refreshAll}
                                         isHighlighted={par.parent_id?.toString() === highlightId}
                                         onPreview={() => setPreviewPerson({ person: par, type: 'parent' })} />
-                                );
-                            })}
-                        </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </motion.div>
+            )}
+
+            {currentTotal > PAGE_SIZE && (
+                <Pagination page={currentPage} pageSize={PAGE_SIZE} total={currentTotal} onPageChange={setCurrentPage} />
             )}
         </div>
     );
