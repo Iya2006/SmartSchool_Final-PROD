@@ -1,9 +1,9 @@
 """
 SMARTSCHOOL API — Routes Classes & Inscriptions
 """
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from app.core.database import get_db
@@ -165,8 +165,10 @@ def update_lycee_series_coefficients(
 
 @router.get("", response_model=List[ClasseOut])
 def list_classes(
+    response: Response,
     annee_id: int = Depends(resolve_annee_id),
     statut: Optional[str] = "ACTIVE",
+    search: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -178,9 +180,17 @@ def list_classes(
     )
     if statut:
         query = query.filter(Classe.statut == statut)
+    if search:
+        like = f"%{search}%"
+        query = query.filter(or_(Classe.code.ilike(like), Classe.libelle.ilike(like)))
+    # skip/limit et defaut (100) inchanges : cette route sert aussi de simple
+    # selecteur "toutes les classes" a 40+ pages frontend qui n'envoient pas
+    # ces parametres — search/X-Total-Count sont purement additifs.
+    response.headers["X-Total-Count"] = str(query.count())
     classes = query.order_by(Classe.code).offset(skip).limit(limit).all()
 
-    # Niveaux et cycles préchargés en deux requêtes, pas une par classe.
+    # Niveaux, cycles et compte de matieres actives : tous prechargés en
+    # requêtes groupées, jamais une requête par classe dans la boucle.
     niveaux = {
         n.niveau_id: n for n in db.query(Niveau).filter(
             Niveau.niveau_id.in_([cl.niveau_id for cl in classes])
@@ -191,12 +201,18 @@ def list_classes(
             Cycle.cycle_id.in_({n.cycle_id for n in niveaux.values()})
         ).all()
     } if niveaux else {}
+    nb_matieres_par_classe = dict(
+        db.query(ClasseMatiere.classe_id, func.count(ClasseMatiere.classe_matiere_id))
+        .filter(
+            ClasseMatiere.classe_id.in_([cl.classe_id for cl in classes]),
+            ClasseMatiere.est_active == "O",
+        )
+        .group_by(ClasseMatiere.classe_id)
+        .all()
+    ) if classes else {}
 
     for cl in classes:
-        cl.nb_matieres = db.query(ClasseMatiere).filter(
-            ClasseMatiere.classe_id == cl.classe_id,
-            ClasseMatiere.est_active == "O"
-        ).count()
+        cl.nb_matieres = nb_matieres_par_classe.get(cl.classe_id, 0)
         niv = niveaux.get(cl.niveau_id)
         cl.niveau_libelle = niv.libelle if niv else None
         cl.niveau_ordre = niv.ordre if niv else None
@@ -205,6 +221,31 @@ def list_classes(
         cl.cycle_code = cyc.code if cyc else None
         cl.cycle_libelle = cyc.libelle if cyc else None
     return classes
+
+
+@router.get("/stats", summary="Agrégats globaux (effectif, capacité) de toutes les classes")
+def stats_classes(
+    annee_id: int = Depends(resolve_annee_id),
+    statut: Optional[str] = "ACTIVE",
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Total classes/effectif/capacité en agrégats SQL — jamais en sommant la
+    page actuellement affichée côté frontend (qui est paginée depuis l'ajout
+    de skip/limit sur `list_classes`)."""
+    query = db.query(
+        func.count(Classe.classe_id),
+        func.coalesce(func.sum(Classe.effectif_actuel), 0),
+        func.coalesce(func.sum(Classe.capacite_max), 0),
+    ).filter(Classe.etablissement_id == etablissement_id, Classe.annee_id == annee_id)
+    if statut:
+        query = query.filter(Classe.statut == statut)
+    total_classes, total_effectif, total_capacite = query.one()
+    return {
+        "total_classes": total_classes,
+        "total_effectif": total_effectif,
+        "total_capacite": total_capacite,
+    }
 
 
 @router.get("/{classe_id}", response_model=ClasseOut)
@@ -362,13 +403,18 @@ def get_classe_profil(classe_id: int, db: Session = Depends(get_db), etablisseme
     # Chefs de classe
     chefs = [e for e in eleves if e["role_classe"] and e["role_classe"].startswith("CHEF")]
     
-    # Matières attribuées
+    # Matières attribuées — matières préchargées en une requête groupée
+    # (IN sur les ids), pas une requête par matière dans la boucle.
     matieres_assoc = db.query(ClasseMatiere).filter(
         ClasseMatiere.classe_id == classe_id, ClasseMatiere.est_active == "O"
     ).all()
+    matiere_ids = [a.matiere_id for a in matieres_assoc]
+    matieres_map = {
+        m.matiere_id: m for m in db.query(Matiere).filter(Matiere.matiere_id.in_(matiere_ids)).all()
+    } if matiere_ids else {}
     matieres = []
     for a in matieres_assoc:
-        m = db.query(Matiere).filter(Matiere.matiere_id == a.matiere_id).first()
+        m = matieres_map.get(a.matiere_id)
         if m:
             matieres.append({
                 "matiere_id": m.matiere_id, "code": m.code,

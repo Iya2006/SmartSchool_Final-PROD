@@ -17,19 +17,6 @@ from app.schemas.schemas import (
 router = APIRouter(prefix="/api/vie-scolaire", tags=["Vie Scolaire"])
 
 
-def _inscription_ou_404(db: Session, inscription_id: int, etablissement_id: int) -> Inscription:
-    """Inscription est OWNERSHIP via sa Classe (Lot 9)."""
-    insc = (
-        db.query(Inscription)
-        .join(Classe, Classe.classe_id == Inscription.classe_id)
-        .filter(Inscription.inscription_id == inscription_id, Classe.etablissement_id == etablissement_id)
-        .first()
-    )
-    if not insc:
-        raise HTTPException(status_code=404, detail="Inscription non trouvée")
-    return insc
-
-
 # ============================================================================
 # PRÉSENCES
 # ============================================================================
@@ -88,28 +75,45 @@ def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depend
     """Saisie en lot des présences pour une classe.
 
     CHAQUE inscription est vérifiée appartenir à l'établissement appelant
-    (Lot 9) : avant, seule la PREMIÈRE servait au verrou d'année et aucune
-    n'était vérifiée — une inscription d'une autre école glissée dans le lot
-    recevait sa présence sans contrôle.
+    (Lot 9) : une inscription d'une autre école glissée dans le lot ne reçoit
+    aucune présence. Vérification et recherche des présences déjà existantes
+    faites par lot (IN), pas par une requête par élève dans la boucle — sans
+    quoi une classe de plusieurs dizaines d'élèves déclenchait jusqu'à 2
+    requêtes par élève à chaque appel.
     """
-    if presences:
-        premiere_inscription = _inscription_ou_404(db, presences[0].inscription_id, etablissement_id)
-        verifier_annee_modifiable(db, premiere_inscription.annee_id)
+    if not presences:
+        return {"message": "0 présences enregistrées"}
+
+    inscription_ids = {p.inscription_id for p in presences}
+    inscriptions = {
+        i.inscription_id: i for i in db.query(Inscription)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(Inscription.inscription_id.in_(inscription_ids), Classe.etablissement_id == etablissement_id)
+        .all()
+    }
+    if inscription_ids - inscriptions.keys():
+        raise HTTPException(status_code=404, detail="Inscription non trouvée")
+
+    premiere_inscription = inscriptions[presences[0].inscription_id]
+    verifier_annee_modifiable(db, premiere_inscription.annee_id)
+
+    dates = {p.date_presence for p in presences}
+    existantes = {
+        (pr.inscription_id, pr.date_presence, pr.demi_journee): pr
+        for pr in db.query(Presence).filter(
+            Presence.inscription_id.in_(inscription_ids),
+            Presence.date_presence.in_(dates),
+        ).all()
+    }
 
     count = 0
     for p in presences:
-        _inscription_ou_404(db, p.inscription_id, etablissement_id)
-        existing = db.query(Presence).filter(
-            Presence.inscription_id == p.inscription_id,
-            Presence.date_presence == p.date_presence,
-            Presence.demi_journee == p.demi_journee
-        ).first()
+        existing = existantes.get((p.inscription_id, p.date_presence, p.demi_journee))
         if existing:
             existing.statut_presence = p.statut_presence
             existing.motif = p.motif
         else:
-            presence = Presence(**p.model_dump())
-            db.add(presence)
+            db.add(Presence(**p.model_dump()))
         count += 1
     db.commit()
     return {"message": f"{count} présences enregistrées"}

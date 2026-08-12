@@ -230,13 +230,16 @@ class TestPhotosIsolation:
         eleve_b, _ = b.eleve_inscrit(db)
         headers = _headers(client, a.admin.nom_utilisateur)
 
-        resp = client.get("/api/photos/galerie/all", headers=headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["stats"]["total_eleves"] == 1
-        assert data["stats"]["total_enseignants"] == 1
-        tous_eleves = [e for cl in data["eleves_par_classe"] for e in cl["eleves"]]
-        assert all(e["eleve_id"] != eleve_b.eleve_id for e in tous_eleves)
+        meta = client.get("/api/photos/galerie/meta", headers=headers)
+        assert meta.status_code == 200
+        assert meta.json()["stats"]["total_eleves"] == 1
+        assert meta.json()["stats"]["total_enseignants"] == 1
+
+        eleves = client.get("/api/photos/galerie/eleves", headers=headers)
+        assert eleves.status_code == 200
+        ids = {e["eleve_id"] for e in eleves.json()}
+        assert eleve_a.eleve_id in ids
+        assert eleve_b.eleve_id not in ids
 
     def test_get_photo_cross_ecole_404(self, client: TestClient, db: Session):
         a, b = Ecole(db, "PHA"), Ecole(db, "PHB")
@@ -471,4 +474,4 @@ class TestSuperAdminPlateformeRefuse:
 
         assert client.get("/api/fournitures", headers=headers).status_code == 403
         assert client.get("/api/evenements", headers=headers).status_code == 403
-        assert client.get("/api/photos/galerie/all", headers=headers).status_code == 403
+        assert client.get("/api/photos/galerie/meta", headers=headers).status_code == 403

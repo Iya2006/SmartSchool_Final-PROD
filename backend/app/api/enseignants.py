@@ -1,7 +1,7 @@
 """
 SMARTSCHOOL API — Routes Enseignants (CRUD complet + Emploi du Temps + Affectations)
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
 from typing import List, Optional
@@ -34,6 +34,7 @@ def _enseignant_ou_404(db: Session, enseignant_id: int, etablissement_id: int) -
 
 @router.get("", response_model=List[EnseignantOut])
 def list_enseignants(
+    response: Response,
     statut: Optional[str] = None,
     search: Optional[str] = None,
     skip: int = 0,
@@ -52,6 +53,11 @@ def list_enseignants(
             (Enseignant.prenom.ilike(f"%{search}%")) |
             (Enseignant.matricule.ilike(f"%{search}%"))
         )
+    # X-Total-Count : le frontend enseignants/page.tsx paginait avant sur un
+    # lot fixe de 50 (sans jamais connaître le vrai total), rendant tout ce
+    # qui dépasse la 5e page invisible malgré un pagineur qui laissait croire
+    # le contraire.
+    response.headers["X-Total-Count"] = str(query.count())
     return query.order_by(Enseignant.nom).offset(skip).limit(limit).all()
 
 

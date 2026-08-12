@@ -1,14 +1,16 @@
 """
 API: Photo Upload & Management
 Routes:
-  GET  /api/photos/galerie/all                        → Gallery (all photos)
+  GET  /api/photos/galerie/meta                        → Gallery stats + classes
+  GET  /api/photos/galerie/{tab}                        → Gallery page (eleves|enseignants|parents), paginee
   POST /api/photos/upload/{entity_type}/{entity_id}   → Upload photo
   GET  /api/photos/{entity_type}/{entity_id}           → Get photo URL
   DELETE /api/photos/{entity_type}/{entity_id}         → Delete photo
 """
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from sqlalchemy import text
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Response, Query
+from sqlalchemy import text, or_, func, case
 from sqlalchemy.orm import Session
+from typing import Optional
 from app.core.database import get_db
 from app.core.auth import require_etablissement
 import os, shutil, uuid
@@ -21,6 +23,7 @@ ENTITY_MAP = {
     "eleve": {"table": "ss_eleves", "pk": "eleve_id", "folder": "eleves"},
     "enseignant": {"table": "ss_enseignants", "pk": "enseignant_id", "folder": "enseignants"},
     "parent": {"table": "ss_parents", "pk": "parent_id", "folder": "parents"},
+    "personnel": {"table": "ss_utilisateurs", "pk": "utilisateur_id", "folder": "personnel"},
 }
 
 RACINE_PROJET = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,6 +55,10 @@ def _entite_appartient_a_etablissement(db: Session, entity_type: str, entity_id:
             "JOIN ss_eleves e ON e.eleve_id = ep.eleve_id "
             "WHERE ep.parent_id = :id AND e.etablissement_id = :etab LIMIT 1"
         ), {"id": entity_id, "etab": etablissement_id}).fetchone()
+    elif entity_type == "personnel":
+        row = db.execute(text(
+            "SELECT 1 FROM ss_utilisateurs WHERE utilisateur_id = :id AND etablissement_id = :etab"
+        ), {"id": entity_id, "etab": etablissement_id}).fetchone()
     else:
         return False
     return row is not None
@@ -67,75 +74,137 @@ def _exiger_entite_de_letablissement(db: Session, entity_type: str, entity_id: i
 # FastAPI matching "galerie" as entity_type and "all" as entity_id
 # ================================================================
 
-@router.get("/galerie/all")
-def get_galerie(
+@router.get("/galerie/meta")
+def get_galerie_meta(
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Galerie admin des photos — restreinte à CET établissement (Lot 9).
-
-    Avant : listait tous les élèves, enseignants et parents de la plateforme
-    (nom, prénom, matricule, téléphone parent, photo) sans aucun filtre.
+    """Statistiques + liste des classes pour la galerie — uniquement des
+    comptages en base, jamais de charge de ligne complète. Borné par le
+    nombre de classes, pas par le nombre d'élèves (contrairement à l'ancien
+    `/galerie/all`, qui chargeait tout le monde d'un coup et plantait dès
+    quelques milliers d'élèves).
     """
-    # Élèves avec classe
-    eleves = db.execute(text("""
-        SELECT e.eleve_id, e.nom, e.prenom, e.sexe, e.matricule, e.photo_url, e.statut,
-               COALESCE(c.code, '?') as classe_code, COALESCE(c.libelle, 'Non inscrit') as classe
-        FROM ss_eleves e
-        LEFT JOIN ss_inscriptions i ON e.eleve_id = i.eleve_id AND i.statut = 'ACTIVE'
-        LEFT JOIN ss_classes c ON i.classe_id = c.classe_id
-        WHERE e.statut = 'ACTIF' AND e.etablissement_id = :etab
-        ORDER BY c.code, e.nom, e.prenom
-    """), {"etab": etablissement_id}).fetchall()
+    from app.models.academique import Eleve, Enseignant, Parent, Classe, Inscription, EleveParent
 
-    # Enseignants
-    enseignants = db.execute(text("""
-        SELECT enseignant_id, nom, prenom, sexe, matricule, photo_url, specialite, statut
-        FROM ss_enseignants WHERE statut = 'ACTIF' AND etablissement_id = :etab
-        ORDER BY nom, prenom
-    """), {"etab": etablissement_id}).fetchall()
+    total_eleves, eleves_avec_photo = db.query(
+        func.count(Eleve.eleve_id), func.count(Eleve.photo_url)
+    ).filter(Eleve.statut == "ACTIF", Eleve.etablissement_id == etablissement_id).one()
 
-    # Parents — rattachés via leurs enfants de cet établissement
-    parents = db.execute(text("""
-        SELECT DISTINCT p.parent_id, p.nom, p.prenom, p.sexe, p.telephone_1, p.photo_url,
-               p.profession, p.statut
-        FROM ss_parents p
-        JOIN ss_eleve_parent ep ON ep.parent_id = p.parent_id
-        JOIN ss_eleves e ON e.eleve_id = ep.eleve_id
-        WHERE p.statut = 'ACTIF' AND e.etablissement_id = :etab
-        ORDER BY p.nom, p.prenom
-    """), {"etab": etablissement_id}).fetchall()
+    total_enseignants, enseignants_avec_photo = db.query(
+        func.count(Enseignant.enseignant_id), func.count(Enseignant.photo_url)
+    ).filter(Enseignant.statut == "ACTIF", Enseignant.etablissement_id == etablissement_id).one()
 
-    # Group élèves par classe
-    classes_map: dict = {}
-    for e in eleves:
-        cls_key = e[7]  # classe_code
-        if cls_key not in classes_map:
-            classes_map[cls_key] = {"code": cls_key, "libelle": e[8], "eleves": []}
-        classes_map[cls_key]["eleves"].append({
-            "eleve_id": e[0], "nom": e[1], "prenom": e[2], "sexe": e[3],
-            "matricule": e[4], "photo_url": e[5], "statut": e[6],
-        })
+    parent_ids_etab = db.query(EleveParent.parent_id).join(
+        Eleve, Eleve.eleve_id == EleveParent.eleve_id
+    ).filter(Eleve.etablissement_id == etablissement_id)
+    total_parents, parents_avec_photo = db.query(
+        func.count(func.distinct(Parent.parent_id)),
+        func.count(func.distinct(case((Parent.photo_url.isnot(None), Parent.parent_id)))),
+    ).filter(Parent.statut == "ACTIF", Parent.parent_id.in_(parent_ids_etab)).one()
+
+    classes_rows = db.query(
+        Classe.code, Classe.libelle, func.count(Eleve.eleve_id), func.count(Eleve.photo_url),
+    ).join(
+        Inscription, (Inscription.classe_id == Classe.classe_id) & (Inscription.statut == "ACTIVE")
+    ).join(
+        Eleve, (Eleve.eleve_id == Inscription.eleve_id) & (Eleve.statut == "ACTIF")
+    ).filter(
+        Classe.etablissement_id == etablissement_id
+    ).group_by(Classe.code, Classe.libelle).order_by(Classe.code).all()
 
     return {
-        "eleves_par_classe": list(classes_map.values()),
-        "enseignants": [{
-            "enseignant_id": e[0], "nom": e[1], "prenom": e[2], "sexe": e[3],
-            "matricule": e[4], "photo_url": e[5], "specialite": e[6], "statut": e[7],
-        } for e in enseignants],
-        "parents": [{
-            "parent_id": p[0], "nom": p[1], "prenom": p[2], "sexe": p[3],
-            "telephone_1": p[4], "photo_url": p[5], "profession": p[6], "statut": p[7],
-        } for p in parents],
         "stats": {
-            "total_eleves": len(eleves),
-            "eleves_avec_photo": sum(1 for e in eleves if e[5]),
-            "total_enseignants": len(enseignants),
-            "enseignants_avec_photo": sum(1 for e in enseignants if e[5]),
-            "total_parents": len(parents),
-            "parents_avec_photo": sum(1 for p in parents if p[5]),
-        }
+            "total_eleves": total_eleves, "eleves_avec_photo": eleves_avec_photo,
+            "total_enseignants": total_enseignants, "enseignants_avec_photo": enseignants_avec_photo,
+            "total_parents": total_parents, "parents_avec_photo": parents_avec_photo,
+        },
+        "classes": [
+            {"code": code, "libelle": libelle, "total": total, "avec_photo": avec_photo}
+            for code, libelle, total, avec_photo in classes_rows
+        ],
     }
+
+
+@router.get("/galerie/{tab}")
+def get_galerie_tab(
+    tab: str,
+    response: Response,
+    classe_code: Optional[str] = None,
+    search: Optional[str] = None,
+    filter_photo: Optional[str] = Query(None, pattern="^(with|without)$"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Une page de la galerie (50 par défaut), restreinte à CET établissement
+    (Lot 9) et filtrée côté SQL — remplace l'ancien `/galerie/all` qui
+    chargeait TOUS les élèves/enseignants/parents de l'école en une seule
+    réponse, quel que soit leur nombre."""
+    from app.models.academique import Eleve, Enseignant, Parent, Classe, Inscription, EleveParent
+
+    if tab == "eleves":
+        query = db.query(Eleve, Classe.code, Classe.libelle).outerjoin(
+            Inscription, (Inscription.eleve_id == Eleve.eleve_id) & (Inscription.statut == "ACTIVE")
+        ).outerjoin(
+            Classe, Classe.classe_id == Inscription.classe_id
+        ).filter(Eleve.statut == "ACTIF", Eleve.etablissement_id == etablissement_id)
+        if classe_code:
+            query = query.filter(Classe.code == classe_code)
+        if search:
+            like = f"%{search}%"
+            query = query.filter(or_(Eleve.nom.ilike(like), Eleve.prenom.ilike(like), Eleve.matricule.ilike(like)))
+        if filter_photo == "with":
+            query = query.filter(Eleve.photo_url.isnot(None))
+        elif filter_photo == "without":
+            query = query.filter(Eleve.photo_url.is_(None))
+        response.headers["X-Total-Count"] = str(query.count())
+        rows = query.order_by(Classe.code, Eleve.nom, Eleve.prenom).offset(skip).limit(limit).all()
+        return [{
+            "eleve_id": e.eleve_id, "nom": e.nom, "prenom": e.prenom, "sexe": e.sexe,
+            "matricule": e.matricule, "photo_url": e.photo_url, "statut": e.statut,
+            "classe_code": code or "?", "classe": libelle or "Non inscrit",
+        } for e, code, libelle in rows]
+
+    if tab == "enseignants":
+        query = db.query(Enseignant).filter(
+            Enseignant.statut == "ACTIF", Enseignant.etablissement_id == etablissement_id
+        )
+        if search:
+            like = f"%{search}%"
+            query = query.filter(or_(Enseignant.nom.ilike(like), Enseignant.prenom.ilike(like), Enseignant.matricule.ilike(like)))
+        if filter_photo == "with":
+            query = query.filter(Enseignant.photo_url.isnot(None))
+        elif filter_photo == "without":
+            query = query.filter(Enseignant.photo_url.is_(None))
+        response.headers["X-Total-Count"] = str(query.count())
+        rows = query.order_by(Enseignant.nom, Enseignant.prenom).offset(skip).limit(limit).all()
+        return [{
+            "enseignant_id": e.enseignant_id, "nom": e.nom, "prenom": e.prenom, "sexe": e.sexe,
+            "matricule": e.matricule, "photo_url": e.photo_url, "specialite": e.specialite, "statut": e.statut,
+        } for e in rows]
+
+    if tab == "parents":
+        parent_ids_etab = db.query(EleveParent.parent_id).join(
+            Eleve, Eleve.eleve_id == EleveParent.eleve_id
+        ).filter(Eleve.etablissement_id == etablissement_id)
+        query = db.query(Parent).filter(Parent.statut == "ACTIF", Parent.parent_id.in_(parent_ids_etab))
+        if search:
+            like = f"%{search}%"
+            query = query.filter(or_(Parent.nom.ilike(like), Parent.prenom.ilike(like), Parent.telephone_1.ilike(like)))
+        if filter_photo == "with":
+            query = query.filter(Parent.photo_url.isnot(None))
+        elif filter_photo == "without":
+            query = query.filter(Parent.photo_url.is_(None))
+        response.headers["X-Total-Count"] = str(query.count())
+        rows = query.order_by(Parent.nom, Parent.prenom).offset(skip).limit(limit).all()
+        return [{
+            "parent_id": p.parent_id, "nom": p.nom, "prenom": p.prenom, "sexe": p.sexe,
+            "telephone_1": p.telephone_1, "photo_url": p.photo_url, "profession": p.profession, "statut": p.statut,
+        } for p in rows]
+
+    raise HTTPException(404, "Onglet invalide. Utilisez: eleves, enseignants, parents")
 
 
 # ================================================================
@@ -181,19 +250,25 @@ async def upload_photo(
     folder = os.path.join(UPLOAD_BASE, cfg["folder"])
     os.makedirs(folder, exist_ok=True)
 
-    # For enseignants, direct upload
-    if entity_type == "enseignant":
+    # Enseignant et personnel (compte admin) uploadent leur propre photo :
+    # écriture directe, sans file d'attente/validation — contrairement à
+    # élève/parent, il n'y a personne d'autre à qui la faire valider.
+    if entity_type in ("enseignant", "personnel"):
         for old in os.listdir(folder):
-            if old.startswith(f"enseignant_{entity_id}.") or old.startswith(f"enseignant_{entity_id}_"):
+            if old.startswith(f"{entity_type}_{entity_id}.") or old.startswith(f"{entity_type}_{entity_id}_"):
                 os.remove(os.path.join(folder, old))
-        filename = f"enseignant_{entity_id}{ext}"
+        filename = f"{entity_type}_{entity_id}{ext}"
         filepath = os.path.join(folder, filename)
         with open(filepath, "wb") as f:
             shutil.copyfileobj(fichier.file, f)
-        photo_url = f"/uploads/photos/enseignants/{filename}"
+        photo_url = f"/uploads/photos/{cfg['folder']}/{filename}"
 
-        from app.models.academique import Enseignant
-        entity = db.query(Enseignant).filter(Enseignant.enseignant_id == entity_id).first()
+        if entity_type == "enseignant":
+            from app.models.academique import Enseignant
+            entity = db.query(Enseignant).filter(Enseignant.enseignant_id == entity_id).first()
+        else:
+            from app.models.academique import Utilisateur
+            entity = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == entity_id).first()
         if entity:
             entity.photo_url = photo_url
             db.commit()
@@ -340,37 +415,86 @@ async def parent_upload_photo(
 # VALIDATION SYSTEM
 # ================================================================
 
+def _pending_de_letablissement(db: Session, etablissement_id: int):
+    """PhotoEnAttente n'a pas de colonne etablissement_id et son couple
+    (entity_type, entity_id) est générique : le filtrage se fait par lot
+    (deux requêtes IN — élèves et parents propriétaires de cet établissement),
+    jamais entité par entité dans une boucle. Retourne les lignes déjà
+    filtrées, triées par date décroissante."""
+    from app.models.academique import PhotoEnAttente, Eleve, Parent, EleveParent
+
+    pending = db.query(PhotoEnAttente).filter(
+        PhotoEnAttente.statut == 'EN_ATTENTE'
+    ).order_by(PhotoEnAttente.date_upload.desc()).all()
+    if not pending:
+        return [], set(), set()
+
+    eleve_ids = {p.entity_id for p in pending if p.entity_type == 'eleve'}
+    parent_ids = (
+        {p.entity_id for p in pending if p.entity_type == 'parent'}
+        | {p.uploader_id for p in pending if p.uploader_type == 'parent' and p.uploader_id}
+    )
+    eleves_de_letab = {
+        e.eleve_id for e in db.query(Eleve.eleve_id).filter(
+            Eleve.eleve_id.in_(eleve_ids), Eleve.etablissement_id == etablissement_id
+        ).all()
+    } if eleve_ids else set()
+    parents_de_letab_ids = {
+        r[0] for r in db.query(EleveParent.parent_id).join(
+            Eleve, Eleve.eleve_id == EleveParent.eleve_id
+        ).filter(
+            EleveParent.parent_id.in_(parent_ids), Eleve.etablissement_id == etablissement_id
+        ).all()
+    } if parent_ids else set()
+
+    return [
+        p for p in pending
+        if (p.entity_type == 'eleve' and p.entity_id in eleves_de_letab)
+        or (p.entity_type == 'parent' and p.entity_id in parents_de_letab_ids)
+    ], eleves_de_letab, parents_de_letab_ids
+
+
 @router.get("/pending/all")
 def get_all_pending(
+    response: Response,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """File de validation des photos — restreinte à CET établissement (Lot 9).
+    """File de validation des photos — restreinte à CET établissement,
+    paginée (50 par défaut). Noms résolus en 2 requêtes groupées (élèves,
+    parents), pas 1-2 requêtes par photo en attente comme avant."""
+    from app.models.academique import Eleve, Parent
 
-    PhotoEnAttente n'a pas de colonne etablissement_id et son couple
-    (entity_type, entity_id) est générique : le filtrage se fait en Python
-    via _entite_appartient_a_etablissement, entité par entité.
-    """
-    from app.models.academique import PhotoEnAttente
+    pending_filtree, eleve_ids_ok, parent_ids_ok = _pending_de_letablissement(db, etablissement_id)
+    response.headers["X-Total-Count"] = str(len(pending_filtree))
+    page = pending_filtree[skip: skip + limit]
 
-    pending = db.query(PhotoEnAttente).filter(PhotoEnAttente.statut == 'EN_ATTENTE').order_by(PhotoEnAttente.date_upload.desc()).all()
+    noms_eleves = {
+        e.eleve_id: f"{e.prenom} {e.nom}" for e in db.query(Eleve).filter(Eleve.eleve_id.in_(
+            {p.entity_id for p in page if p.entity_type == 'eleve'}
+        )).all()
+    }
+    noms_parents = {
+        pa.parent_id: f"{pa.prenom} {pa.nom}" for pa in db.query(Parent).filter(Parent.parent_id.in_(
+            {p.entity_id for p in page if p.entity_type == 'parent'}
+            | {p.uploader_id for p in page if p.uploader_type == 'parent' and p.uploader_id}
+        )).all()
+    }
+
     result = []
-    for p in pending:
-        if not _entite_appartient_a_etablissement(db, p.entity_type, p.entity_id, etablissement_id):
-            continue
-        # get name
-        name = "Inconnu"
+    for p in page:
         if p.entity_type == 'eleve':
-            row = db.execute(text("SELECT nom, prenom FROM ss_eleves WHERE eleve_id = :id"), {"id": p.entity_id}).fetchone()
-            if row: name = f"{row[1]} {row[0]}"
+            name = noms_eleves.get(p.entity_id, "Inconnu")
         elif p.entity_type == 'parent':
-            row = db.execute(text("SELECT nom, prenom FROM ss_parents WHERE parent_id = :id"), {"id": p.entity_id}).fetchone()
-            if row: name = f"{row[1]} {row[0]}"
+            name = noms_parents.get(p.entity_id, "Inconnu")
+        else:
+            name = "Inconnu"
 
         uploader_name = "Lui-même"
         if p.uploader_type == 'parent' and p.entity_type == 'eleve':
-            row = db.execute(text("SELECT nom, prenom FROM ss_parents WHERE parent_id = :id"), {"id": p.uploader_id}).fetchone()
-            if row: uploader_name = f"Parent: {row[1]} {row[0]}"
+            uploader_name = f"Parent: {noms_parents.get(p.uploader_id, '?')}"
 
         result.append({
             "photo_id": p.photo_id,
@@ -382,6 +506,22 @@ def get_all_pending(
             "date_upload": p.date_upload
         })
     return result
+
+
+@router.get("/pending/ids")
+def get_pending_ids(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Version légère de `/pending/all` (aucune jointure de nom) — sert
+    uniquement à afficher le badge "photo en attente" sur les onglets
+    élèves/enseignants/parents de la galerie, qui doit rester exact même
+    une fois la file elle-même paginée."""
+    pending_filtree, _, _ = _pending_de_letablissement(db, etablissement_id)
+    return [
+        {"entity_type": p.entity_type, "entity_id": p.entity_id, "photo_id": p.photo_id}
+        for p in pending_filtree
+    ]
 
 
 @router.get("/pending/{entity_type}/{entity_id}")

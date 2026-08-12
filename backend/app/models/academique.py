@@ -48,6 +48,10 @@ class Utilisateur(Base):
     numero_cni = Column(String(50), nullable=True)
     created_date = Column(DateTime, server_default=func.now())
 
+    __table_args__ = (
+        Index("ix_utilisateurs_etablissement", 'etablissement_id'),
+    )
+
 
 # ============================================================================
 # MODULE 1 : STRUCTURE INSTITUTIONNELLE
@@ -384,6 +388,10 @@ class Enseignant(Base):
 
     etablissement = relationship("Etablissement", back_populates="enseignants")
     affectations = relationship("Affectation", back_populates="enseignant")
+
+    __table_args__ = (
+        Index("ix_enseignants_etab_statut", 'etablissement_id', 'statut'),
+    )
 
 
 class Matiere(Base):
@@ -793,6 +801,11 @@ class Facture(Base):
 
     echeances = relationship("EcheanceFacture", backref="facture", cascade="all, delete-orphan")
 
+    __table_args__ = (
+        Index("ix_factures_inscription", 'inscription_id'),
+        Index("ix_factures_annee_statut", 'annee_id', 'statut'),
+    )
+
 
 class EcheanceFacture(Base):
     __tablename__ = "ss_echeances_factures"
@@ -803,6 +816,11 @@ class EcheanceFacture(Base):
     montant_attendu = Column(Numeric(12, 2), nullable=False)
     montant_paye = Column(Numeric(12, 2), default=0)
     statut = Column(String(20), default="EN_ATTENTE") # EN_ATTENTE, PARTIELLEMENT_PAYEE, PAYEE, EN_RETARD
+
+    __table_args__ = (
+        Index("ix_echeances_facture_statut", 'facture_id', 'statut'),
+        Index("ix_echeances_statut_date_limite", 'statut', 'date_limite'),
+    )
 
 
 class Paiement(Base):
@@ -823,6 +841,11 @@ class Paiement(Base):
     created_by = Column(String(100))
     created_date = Column(DateTime, server_default=func.now())
 
+    __table_args__ = (
+        Index("ix_paiements_facture", 'facture_id'),
+        Index("ix_paiements_annee_date", 'annee_id', 'date_paiement'),
+    )
+
 
 class Depense(Base):
     __tablename__ = "ss_depenses"
@@ -842,6 +865,10 @@ class Depense(Base):
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
     eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=True)
     departement = Column(String(100), nullable=True)
+
+    __table_args__ = (
+        Index("ix_depenses_etab_annee", 'etablissement_id', 'annee_id'),
+    )
 
 
 # ============================================================================
@@ -866,6 +893,10 @@ class Presence(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     updated_by = Column(String(100), nullable=True)
 
+    __table_args__ = (
+        Index("ix_presences_inscription_date", 'inscription_id', 'date_presence'),
+    )
+
 
 class Incident(Base):
     __tablename__ = "ss_incidents"
@@ -878,6 +909,11 @@ class Incident(Base):
     description = Column(Text, nullable=False)
     signale_par = Column(String(100), nullable=False)
     statut = Column(String(20), default="SIGNALE")
+
+    __table_args__ = (
+        Index("ix_incidents_etablissement", 'etablissement_id'),
+        Index("ix_incidents_eleve", 'eleve_id'),
+    )
 
 
 # ============================================================================
