@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -60,8 +61,8 @@ export default function LoginPage() {
                         )}
                     </div>
                     <div>
-                        <p style={{ margin: 0, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.16em', color: 'rgba(255,255,255,0.68)', fontWeight: 700 }}>Plateforme centralisée</p>
-                        <h1 style={{ margin: '2px 0 0', fontSize: '28px', fontWeight: 900 }}>{etablissementNom || 'SMARTSCHOOL'}</h1>
+                        <p style={{ margin: 0, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.16em', color: 'rgba(255,255,255,0.68)', fontWeight: 700 }}>Gestion scolaire</p>
+                        <h1 style={{ margin: '2px 0 0', fontSize: '28px', fontWeight: 900 }}>SMARTSCHOOL</h1>
                     </div>
                 </div>
 
@@ -80,9 +81,9 @@ export default function LoginPage() {
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
                         {[
-                            { icon: BadgeCheck, title: 'Redirection fiable', text: 'Chaque compte rejoint automatiquement son interface réelle.' },
-                            { icon: Briefcase, title: 'Rôles métier', text: 'Portails dédiés pour les profils opérationnels importants.' },
-                            { icon: Users, title: 'Expérience unifiée', text: 'Une seule page de connexion pour toute la communauté scolaire.' },
+                            { icon: BadgeCheck, title: 'Chaque école chez elle', text: 'Vos élèves, vos notes, votre comptabilité : rien n\u2019est visible par une autre école.' },
+                            { icon: Briefcase, title: 'Votre façon de noter', text: 'Barème, coefficients, mentions, périodes : vous les réglez, le système suit.' },
+                            { icon: Users, title: 'Toute l\u2019école connectée', text: 'Direction, enseignants, élèves et parents \u2014 une seule adresse pour tous.' },
                         ].map((item) => {
                             const Icon = item.icon;
                             return (
@@ -112,7 +113,7 @@ export default function LoginPage() {
                     <div style={{ marginBottom: '24px' }}>
                         <p style={{ margin: 0, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#3b82f6', fontWeight: 800 }}>Portail sécurisé</p>
                         <h2 style={{ margin: '10px 0 8px', fontSize: '2rem', fontWeight: 900, color: '#0f172a' }}>Connexion</h2>
-                        <p style={{ margin: 0, color: '#64748b', lineHeight: 1.7 }}>Entrez votre identifiant et votre mot de passe pour accéder à votre espace de travail.</p>
+                        <p style={{ margin: 0, color: '#64748b', lineHeight: 1.7 }}>Entrez vos identifiants. Vous serez dirigé automatiquement vers l\u2019espace de votre établissement.</p>
                     </div>
 
                     <form onSubmit={handleSubmit} style={{ background: 'rgba(255,255,255,0.92)', border: '1px solid rgba(226,232,240,0.92)', boxShadow: '0 30px 70px rgba(15, 23, 42, 0.08)', borderRadius: '28px', padding: '28px', backdropFilter: 'blur(18px)', display: 'flex', flexDirection: 'column', gap: '18px' }}>
@@ -179,14 +180,35 @@ export default function LoginPage() {
                     </form>
 
                     <div style={{ marginTop: '18px', display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
-                        <div style={{ padding: '16px 18px', borderRadius: '18px', background: 'white', border: '1px solid #e2e8f0' }}>
-                            <p style={{ margin: 0, fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', color: '#64748b', letterSpacing: '0.08em' }}>Bon à savoir</p>
-                            <p style={{ margin: '8px 0 0', fontSize: '13px', lineHeight: 1.7, color: '#475569' }}>
-                                Les personnels sans accès système ne peuvent pas se connecter tant qu’aucun identifiant n’a été créé pour eux dans le module <strong>Personnel</strong>.
+                        <div style={{ padding: '16px 18px', borderRadius: '18px', background: 'linear-gradient(135deg,#eff6ff,#f8fafc)', border: '1px solid #bfdbfe' }}>
+                            <p style={{ margin: 0, fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', color: '#1d4ed8', letterSpacing: '0.08em' }}>Votre école n’est pas encore sur SmartSchool ?</p>
+                            <p style={{ margin: '8px 0 12px', fontSize: '13px', lineHeight: 1.7, color: '#475569' }}>
+                                Inscrivez votre établissement en trois étapes. Vous en devenez l’administrateur et créez ensuite vos enseignants, élèves, parents et personnels.
                             </p>
+                            <Link href="/inscription" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 18px', borderRadius: '11px', background: 'linear-gradient(135deg,#1e3a8a,#2563eb)', color: 'white', fontSize: '13px', fontWeight: 700, textDecoration: 'none' }}>
+                                Inscrire mon établissement <ArrowRight size={15} />
+                            </Link>
                         </div>
+                        {/* Enseignants et parents : espace distinct, parce qu'eux
+                            seuls peuvent relever de plusieurs ecoles et ont donc
+                            besoin du code de l'etablissement. */}
+                        <Link href="/login/ecole" style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            gap: '12px', padding: '14px 16px', borderRadius: '14px',
+                            background: 'white', border: '1px solid #e2e8f0', textDecoration: 'none',
+                        }}>
+                            <span style={{ minWidth: 0 }}>
+                                <span style={{ display: 'block', fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
+                                    Vous êtes enseignant ou parent d’élève ?
+                                </span>
+                                <span style={{ display: 'block', fontSize: '12px', color: '#64748b', marginTop: 2 }}>
+                                    Connectez-vous à l’espace de votre établissement
+                                </span>
+                            </span>
+                            <span style={{ flexShrink: 0, color: '#2563eb' }}><ArrowRight size={18} /></span>
+                        </Link>
                         <p style={{ margin: 0, textAlign: 'center', fontSize: '12px', color: '#94a3b8' }}>
-                            Système d’information sécurisé • {etablissementNom || 'SmartSchool'}
+                            SmartSchool • Système d’information scolaire sécurisé
                         </p>
                     </div>
                 </motion.div>

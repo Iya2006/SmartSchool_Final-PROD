@@ -21,18 +21,56 @@ from app.models.academique import (
 router = APIRouter(prefix="/api/portail-parent", tags=["Portail Parent"])
 
 
+def _parse_ids(valeur: Optional[str]) -> Optional[list]:
+    """« 12,13,14 » -> [12, 13, 14]. None ou vide = pas de filtre."""
+    if not valeur:
+        return None
+    try:
+        return [int(x) for x in valeur.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(400, "Liste d'identifiants invalide")
+
+
 # ── Dépendance de sécurité : ownership check ──────────────────────────────
+# Rôles qui peuvent consulter le portail d'un autre — dans leur école.
+ADMIN_PORTAIL_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}
+
+
 async def _parent_auth(
     parent_id: int,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
-    """Vérifie que le token JWT appartient à ce parent (ou à un admin).
+    """Vérifie que le token JWT appartient à ce parent (ou à un admin DE SON ÉCOLE).
+
     Protège contre l'OWASP Broken Access Control sur le portail parent.
+
+    Le raccourci « les admins voient tout » datait du mono-établissement : un
+    administrateur de l'école A pouvait lire les notes et bulletins des enfants
+    de n'importe quel parent de la plateforme. Un parent relève d'une école
+    par ses enfants (jamais par `.first()`) : l'admin ne peut le consulter que
+    si l'un d'eux est scolarisé chez lui.
     """
     role = current_user.get("role", "")
     token_type = current_user.get("type", "")
-    # Admins peuvent accéder à toutes les données
-    if role in {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}:
+    if role in ADMIN_PORTAIL_ROLES:
+        etablissement_id = current_user.get("etablissement_id")
+        if etablissement_id is None:
+            raise HTTPException(
+                403, "Établissement non déterminé pour ce compte : choisissez un établissement."
+            )
+        lien = (
+            db.query(EleveParent.eleve_id)
+            .join(Eleve, Eleve.eleve_id == EleveParent.eleve_id)
+            .filter(
+                EleveParent.parent_id == parent_id,
+                Eleve.etablissement_id == etablissement_id,
+            )
+            .first()
+        )
+        if not lien:
+            # 404 : ne jamais confirmer qu'un parent existe dans une autre école.
+            raise HTTPException(404, "Parent non trouvé")
         return current_user
     # Portail parent : le token doit correspondre au parent_id demandé
     if token_type == "parent" and str(current_user.get("sub", "")) == str(parent_id):
@@ -445,11 +483,20 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
     # Info classe
     cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
     from app.api.evaluations import get_bulletin_display_flags
+    from app.services.notation import (
+        get_bareme_defaut_cycle, get_cycle_key, get_lettres_config, lettre_pour_note,
+    )
     if not cl:
         # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
         # appliquait les réglages d'affichage d'une autre école au bulletin.
         raise HTTPException(404, "Classe introuvable pour cette inscription")
-    flags = get_bulletin_display_flags(db, cl.etablissement_id)
+    _etab = cl.etablissement_id
+    flags = get_bulletin_display_flags(db, _etab)
+    # Notation par lettres : la famille doit lire la même chose que le bulletin
+    # papier, sinon la lettre n'existe que sur le PDF.
+    _cycle = get_cycle_key(inscription.classe_id, db)
+    _echelle = get_bareme_defaut_cycle(db, _etab, _cycle)
+    _lettres = get_lettres_config(db, _etab, _cycle)
 
     matieres = []
     total_coef = 0
@@ -463,6 +510,10 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
             "note_min": float(ligne.note_min) if ligne.note_min is not None and flags["show_stats_matiere"] else None,
             "note_max": float(ligne.note_max) if ligne.note_max is not None and flags["show_stats_matiere"] else None,
             "appreciation": ligne.appreciation if flags["show_appreciation"] else None,
+            "lettre": lettre_pour_note(
+                float(ligne.moyenne_matiere) if ligne.moyenne_matiere is not None else None,
+                _lettres, _echelle,
+            ),
         })
         total_coef += float(ligne.coefficient) if ligne.coefficient else 1
 
@@ -471,6 +522,10 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
         "classe": cl.libelle if cl else "?",
         "trimestre_id": trimestre_id,
         "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+        "lettre_generale": lettre_pour_note(
+            float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
+            _lettres, _echelle,
+        ),
         "rang": bulletin.rang if flags["show_rang"] else None,
         "effectif_classe": bulletin.effectif_classe if flags["show_rang"] and flags["show_effectif"] else None,
         "mention": bulletin.mention if flags["show_mention"] else None,
@@ -478,6 +533,83 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
         "total_coefficient": total_coef,
         "matieres": matieres,
     }
+
+
+# ================================================================
+# CLASSEMENT D'UN ENFANT SUR UNE ÉPREUVE OU UNE PÉRIODE
+# ================================================================
+
+def _inscription_enfant(db: Session, parent_id: int, eleve_id: int) -> Inscription:
+    """Vérifie le lien parent → enfant et retourne l'inscription active.
+
+    Le lien est revérifié à chaque appel : `_parent_auth` prouve seulement
+    l'identité du parent, pas qu'il a le droit de consulter CET élève.
+    """
+    link = db.query(EleveParent).filter(
+        EleveParent.parent_id == parent_id,
+        EleveParent.eleve_id == eleve_id,
+    ).first()
+    if not link:
+        raise HTTPException(403, "Accès refusé")
+    inscription = db.query(Inscription).filter(
+        Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
+    ).first()
+    if not inscription:
+        raise HTTPException(404, "Aucune inscription active pour cet élève")
+    return inscription
+
+
+@router.get("/{parent_id}/enfant/{eleve_id}/epreuves")
+def get_epreuves_enfant(
+    parent_id: int, eleve_id: int, trimestre_id: int = 1,
+    _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
+):
+    """Épreuves consultables pour cet enfant sur la période.
+
+    Le parent choisit ensuite ce qu'il veut regarder : le classement du seul
+    mois de janvier, celui d'une composition, ou celui de toute la période.
+    """
+    from app.services.notation import epreuves_consultables
+
+    inscription = _inscription_enfant(db, parent_id, eleve_id)
+    return {
+        "trimestre_id": trimestre_id,
+        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id),
+    }
+
+
+@router.get("/{parent_id}/enfant/{eleve_id}/classement")
+def get_classement_enfant(
+    parent_id: int, eleve_id: int, trimestre_id: int = 1,
+    evaluation_ids: Optional[str] = None,
+    _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
+):
+    """Résultat et rang de l'enfant sur une sélection d'épreuves.
+
+    `evaluation_ids` absent = toute la période. Seule la ligne de l'enfant est
+    renvoyée : le calcul porte sur la classe entière (le rang n'a pas de sens
+    autrement), mais aucune donnée d'un autre élève ne sort d'ici.
+    """
+    from app.api.evaluations import get_bulletin_display_flags
+    from app.services.notation import resultat_eleve_sur_epreuves
+
+    inscription = _inscription_enfant(db, parent_id, eleve_id)
+    ids = _parse_ids(evaluation_ids)
+
+    classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    if not classe:
+        # Jamais de repli sur l'école 1 : cela appliquerait les réglages
+        # d'affichage d'une autre école au classement.
+        raise HTTPException(404, "Classe introuvable pour cette inscription")
+    flags = get_bulletin_display_flags(db, classe.etablissement_id)
+
+    resultat = resultat_eleve_sur_epreuves(
+        db, inscription.classe_id, trimestre_id, inscription.inscription_id,
+        evaluation_ids=ids, flags=flags,
+    )
+    if not resultat:
+        return None
+    return resultat
 
 
 # ================================================================

@@ -103,6 +103,7 @@ class TestLoginExposeEtablissement:
         db.add(el); db.commit(); db.refresh(el)
 
         p = Parent(
+            etablissement_id=ecole.etablissement_id,
             nom="Camara", prenom="Sékou", telephone_1=f"62300{uid:04d}",
             mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
         )
@@ -133,16 +134,22 @@ class TestCasSansEtablissementUnique:
         assert data["user"]["etablissement_id"] is None
         assert _etablissement_du_token(data["token"]) is None
 
-    def test_parent_multi_ecoles(self, client: TestClient, db: Session):
-        """Un enfant dans chaque école : aucun établissement unique
-        déterminable, donc None — et surtout pas l'un des deux au hasard."""
-        uid = _uid()
-        parent = Parent(
-            nom="Barry", prenom="Fatoumata", telephone_1=f"62500{uid:04d}",
-            mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
-        )
-        db.add(parent); db.commit(); db.refresh(parent)
+    def test_parent_present_dans_deux_ecoles_choisit_par_le_code(
+        self, client: TestClient, db: Session
+    ):
+        """MODÈLE RÉVISÉ (migration 2026_08_multi_01).
 
+        Ce test exigeait `None` : l'école du parent était déduite de ses
+        enfants, et le système refusait — à juste titre — de choisir. Mais le
+        parent n'avait alors accès à rien.
+
+        Il a désormais une FICHE PAR ÉCOLE, et le code de l'établissement
+        désigne laquelle. Sans code, l'ambiguïté est signalée (409) : on ne
+        devine jamais.
+        """
+        uid = _uid()
+        telephone = f"62500{uid:04d}"
+        ecoles = []
         for i in range(2):
             e_uid = _uid()
             etab = Etablissement(
@@ -155,11 +162,29 @@ class TestCasSansEtablissementUnique:
                 statut="ACTIF",
             )
             db.add(enfant); db.commit(); db.refresh(enfant)
+            fiche = Parent(
+                etablissement_id=etab.etablissement_id,
+                nom="Barry", prenom="Fatoumata", telephone_1=telephone,
+                mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
+            )
+            db.add(fiche); db.commit(); db.refresh(fiche)
             db.add(EleveParent(
-                eleve_id=enfant.eleve_id, parent_id=parent.parent_id, lien_parente="MERE",
+                eleve_id=enfant.eleve_id, parent_id=fiche.parent_id, lien_parente="MERE",
             ))
             db.commit()
+            ecoles.append(etab)
 
-        data = _connexion(client, parent.telephone_1)
-        assert data["user"]["etablissement_id"] is None
-        assert _etablissement_du_token(data["token"]) is None
+        sans_code = client.post("/api/auth/login", json={
+            "identifiant": telephone, "mot_de_passe": "motdepasse123",
+        })
+        assert sans_code.status_code == 409, sans_code.text
+
+        for etab in ecoles:
+            resp = client.post("/api/auth/login", json={
+                "identifiant": telephone, "mot_de_passe": "motdepasse123",
+                "code_etablissement": etab.code,
+            })
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["user"]["etablissement_id"] == etab.etablissement_id
+            assert _etablissement_du_token(resp.json()["token"]) == etab.etablissement_id
+

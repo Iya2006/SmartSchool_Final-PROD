@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Dict, List, Optional
 from datetime import date as date_type
+from app.core.annee_courante import resoudre_annee
 from app.core.database import get_db
 from app.core.auth import require_etablissement
 from app.models.academique import (
@@ -37,7 +38,7 @@ from app.api.comptabilite import (
 router = APIRouter(prefix="/api/finance", tags=["Finance"])
 
 
-def _invalidate_dashboard_cache(etablissement_id: int, annee_id: int = 1) -> None:
+def _invalidate_dashboard_cache(etablissement_id: int, annee_id: Optional[int] = None) -> None:
     """
     Invalide le cache Redis du tableau de bord financier (TTL 60s) après
     toute mutation (encaissement, décaissement, salaire...), pour que le
@@ -62,7 +63,12 @@ os.makedirs(UPLOAD_DIR_DEPENSES, exist_ok=True)
 
 
 @router.post("/upload-justificatif")
-def upload_justificatif(file: UploadFile = File(...)):
+def upload_justificatif(
+    file: UploadFile = File(...),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    # Deposer un fichier sur le serveur sans etre rattache a une ecole
+    # laissait la porte ouverte a n'importe quel envoi.
     """Upload d'un justificatif (facture/reçu) attaché à une dépense, retourne son URL publique."""
     ext = os.path.splitext(file.filename or "")[1]
     unique_name = f"{uuid.uuid4().hex}{ext}"
@@ -185,18 +191,52 @@ def calculer_penalite(montant_restant: float, jours_retard: int, settings: dict)
 # TYPES DE FRAIS
 # ============================================================================
 
+# Les types de frais appartiennent à chaque école depuis la migration
+# 2026_08_compta_01. Auparavant la table était partagée : une école renommant
+# « Scolarité » changeait l'intitulé sur les factures et les reçus de toutes
+# les autres, et pouvait supprimer un type qu'une voisine utilisait.
+
+def _type_frais_ou_404(db: Session, type_frais_id: int, etablissement_id: int) -> TypeFrais:
+    tf = db.query(TypeFrais).filter(
+        TypeFrais.type_frais_id == type_frais_id,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first()
+    if not tf:
+        # 404 et non 403 : on ne confirme pas l'existence d'un type d'ailleurs.
+        raise HTTPException(status_code=404, detail="Type de frais non trouvé")
+    return tf
+
+
 @router.get("/types-frais", response_model=List[TypeFraisOut])
-def list_types_frais(db: Session = Depends(get_db)):
-    return db.query(TypeFrais).order_by(TypeFrais.categorie, TypeFrais.libelle).all()
+def list_types_frais(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    return db.query(TypeFrais).filter(
+        TypeFrais.etablissement_id == etablissement_id
+    ).order_by(TypeFrais.categorie, TypeFrais.libelle).all()
 
 
 @router.post("/types-frais", response_model=TypeFraisOut, status_code=201)
-def create_type_frais(data: TypeFraisCreate, db: Session = Depends(get_db)):
-    existing = db.query(TypeFrais).filter(TypeFrais.code == data.code.upper()).first()
-    if existing:
-        raise HTTPException(status_code=400, detail=f"Le code '{data.code}' est déjà utilisé")
+def create_type_frais(
+    data: TypeFraisCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    code = data.code.upper()
+    # Le code n'est unique QUE dans l'école : deux établissements peuvent avoir
+    # chacun leur « SCOL ». Le doublon se vérifie donc à ce périmètre.
+    if db.query(TypeFrais).filter(
+        TypeFrais.code == code,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first():
+        raise HTTPException(
+            status_code=409,
+            detail=f"Le code « {data.code} » est déjà utilisé dans votre établissement.",
+        )
     tf = TypeFrais(
-        code=data.code.upper(),
+        etablissement_id=etablissement_id,
+        code=code,
         libelle=data.libelle,
         categorie=data.categorie,
         montant_defaut=data.montant_defaut,
@@ -211,16 +251,25 @@ def create_type_frais(data: TypeFraisCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/types-frais/{type_frais_id}", response_model=TypeFraisOut)
-def update_type_frais(type_frais_id: int, data: TypeFraisCreate, db: Session = Depends(get_db)):
-    tf = db.query(TypeFrais).filter(TypeFrais.type_frais_id == type_frais_id).first()
-    if not tf:
-        raise HTTPException(status_code=404, detail="Type de frais non trouvé")
-    # Check code uniqueness if changed
-    if data.code.upper() != tf.code:
-        existing = db.query(TypeFrais).filter(TypeFrais.code == data.code.upper()).first()
-        if existing:
-            raise HTTPException(status_code=400, detail=f"Le code '{data.code}' est déjà utilisé")
-    tf.code = data.code.upper()
+def update_type_frais(
+    type_frais_id: int,
+    data: TypeFraisCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    tf = _type_frais_ou_404(db, type_frais_id, etablissement_id)
+    code = data.code.upper()
+    if code != tf.code:
+        if db.query(TypeFrais).filter(
+            TypeFrais.code == code,
+            TypeFrais.etablissement_id == etablissement_id,
+            TypeFrais.type_frais_id != type_frais_id,
+        ).first():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Le code « {data.code} » est déjà utilisé dans votre établissement.",
+            )
+    tf.code = code
     tf.libelle = data.libelle
     tf.categorie = data.categorie
     tf.montant_defaut = data.montant_defaut
@@ -232,14 +281,20 @@ def update_type_frais(type_frais_id: int, data: TypeFraisCreate, db: Session = D
 
 
 @router.delete("/types-frais/{type_frais_id}")
-def delete_type_frais(type_frais_id: int, db: Session = Depends(get_db)):
-    tf = db.query(TypeFrais).filter(TypeFrais.type_frais_id == type_frais_id).first()
-    if not tf:
-        raise HTTPException(status_code=404, detail="Type de frais non trouvé")
-    # Check if any facture is linked
+def delete_type_frais(
+    type_frais_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    tf = _type_frais_ou_404(db, type_frais_id, etablissement_id)
+    # Une facture émise reste une pièce comptable : supprimer son type de frais
+    # la rendrait illisible.
     linked = db.query(Facture).filter(Facture.type_frais_id == type_frais_id).count()
     if linked > 0:
-        raise HTTPException(status_code=400, detail=f"Ce type de frais est lié à {linked} facture(s). Impossible de le supprimer.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ce type de frais est lié à {linked} facture(s). Impossible de le supprimer.",
+        )
     db.delete(tf)
     db.commit()
     return {"message": "Type de frais supprimé"}
@@ -478,7 +533,7 @@ def copier_tarifs(data: dict, db: Session = Depends(get_db), etablissement_id: i
 @router.get("/factures")
 def list_factures(
     response: Response,
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     statut: Optional[str] = None,
     classe_id: Optional[int] = None,
     skip: int = 0,
@@ -487,6 +542,9 @@ def list_factures(
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Retourne toutes les factures avec infos élève, classe et type de frais."""
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = (
         db.query(Facture, Eleve, Classe, TypeFrais)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
@@ -543,13 +601,16 @@ def list_factures(
 
 @router.get("/factures/stats")
 def stats_factures(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
     type_frais_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query_base = (
         db.query(Facture)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
@@ -873,6 +934,9 @@ def list_paiements(
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = (
         db.query(Paiement, Facture, Eleve)
         .join(Facture, Paiement.facture_id == Facture.facture_id)
@@ -1043,7 +1107,7 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
 @router.get("/depenses", response_model=List[DepenseOut])
 def list_depenses(
     response: Response,
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     categorie: Optional[str] = None,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
@@ -1053,6 +1117,9 @@ def list_depenses(
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
         Depense.annee_id == annee_id
@@ -1130,7 +1197,10 @@ def changer_statut_depense(depense_id: int, statut: str, db: Session = Depends(g
 
 
 @router.get("/depenses/stats")
-def stats_depenses(annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def stats_depenses(annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query_base = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
         Depense.annee_id == annee_id,
@@ -1165,7 +1235,7 @@ def stats_depenses(annee_id: int = 1, db: Session = Depends(get_db), etablisseme
 @router.get("/impayes")
 def list_impayes(
     response: Response,
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
     type_frais_id: Optional[int] = None,
@@ -1179,6 +1249,9 @@ def list_impayes(
     Tableau complet des impayés avec informations élève, classe et parent.
     Retourne les factures non-payées avec calcul des jours de retard.
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from datetime import date as today_type
     from app.models.academique import Parent, EleveParent, Niveau
 
@@ -1284,7 +1357,7 @@ def list_impayes(
 
 @router.get("/retards")
 def list_retards(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     classe_id: Optional[int] = None,
     niveau_id: Optional[int] = None,
     jours_min: int = 0,
@@ -1297,6 +1370,9 @@ def list_retards(
     Liste des élèves en retard de paiement, classés par ancienneté du retard.
     Calcule le nombre de jours de retard pour chaque échéance dépassée.
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from datetime import date as today_type
     from app.models.academique import Niveau
 
@@ -1359,7 +1435,7 @@ def list_retards(
 
 @router.get("/solvabilite")
 def tableau_solvabilite(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     classe_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
@@ -1368,6 +1444,9 @@ def tableau_solvabilite(
     Tableau de solvabilité : évalue la situation financière de chaque élève.
     Indicateurs : SOLVABLE (100% payé), PARTIEL (>50%), NON_SOLVABLE (<50%), CRITIQUE (0%)
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = (
         db.query(Eleve, Inscription, Classe)
         .join(Inscription, Eleve.eleve_id == Inscription.eleve_id)
@@ -1436,12 +1515,15 @@ def tableau_solvabilite(
 
 
 @router.get("/solde-eleve/{eleve_id}")
-def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def solde_eleve(eleve_id: int, annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Solde financier en temps réel d'un élève avec historique complet des paiements.
     Vérifie que l'élève appartient à l'établissement appelant — avant le
     Lot 2, n'importe quel eleve_id deviné exposait ce solde financier complet.
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     eleve = db.query(Eleve).filter(
         Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
     ).first()
@@ -1526,7 +1608,7 @@ def solde_eleve(eleve_id: int, annee_id: int = 1, db: Session = Depends(get_db),
 
 @router.get("/dashboard")
 def dashboard_financier(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -1536,6 +1618,9 @@ def dashboard_financier(
     Mis en cache dans Redis (TTL 60s) pour limiter la charge sur la base de
     données et rester réactif même en cas de connexion instable.
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from datetime import date as today_type, timedelta
     from sqlalchemy import extract
     from app.core.cache import cache_get, cache_set
@@ -1747,12 +1832,15 @@ def dashboard_financier(
 
 @router.get("/rapports/journalier")
 def rapport_journalier(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     date_rapport: Optional[str] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Rapport financier journalier avec détail des paiements du jour."""
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from datetime import date as today_type
     target_date = today_type.fromisoformat(date_rapport) if date_rapport else today_type.today()
 
@@ -1793,13 +1881,16 @@ def rapport_journalier(
 
 @router.get("/rapports/mensuel")
 def rapport_mensuel(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     mois: Optional[int] = None,
     annee: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Rapport financier mensuel avec KPIs et détail par classe."""
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from datetime import date as today_type
     from sqlalchemy import extract
 
@@ -1885,12 +1976,15 @@ def rapport_mensuel(
 
 @router.get("/rapports/annuel")
 def rapport_annuel(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     annee: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Rapport financier annuel : recettes, dépenses, masse salariale et résultat net."""
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from datetime import date as today_type
     from sqlalchemy import extract
 
@@ -2051,23 +2145,74 @@ _rappels_config = {
 }
 
 
+# La configuration des rappels vivait dans une variable Python globale
+# (`_rappels_config`) : elle était donc PARTAGÉE par toutes les écoles — celle
+# qui la modifiait la changeait pour tout le monde — et perdue à chaque
+# redémarrage du serveur. Elle est désormais persistée par école, dans la table
+# des paramètres, comme tous les autres réglages.
+
+_CLE_RAPPELS = "finance.rappels"
+
+
+def _lire_rappels(db: Session, etablissement_id: int) -> dict:
+    from app.models.academique import ParametreEtablissement
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.cle == _CLE_RAPPELS,
+    ).first()
+    config = dict(_rappels_config)
+    if param and param.valeur:
+        try:
+            config.update(json.loads(param.valeur))
+        except (ValueError, TypeError):
+            # Une valeur illisible ne doit pas empêcher l'écran de s'ouvrir :
+            # on retombe sur les valeurs par défaut.
+            pass
+    return config
+
+
 @router.get("/rappels/config")
-def get_rappels_config():
-    """Retourne la configuration actuelle des rappels automatiques."""
-    return _rappels_config
+def get_rappels_config(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Configuration des rappels automatiques DE CETTE ÉCOLE."""
+    return _lire_rappels(db, etablissement_id)
 
 
 @router.post("/rappels/configurer")
-def configurer_rappels(config: dict, db: Session = Depends(get_db)):
-    """Met à jour la configuration des rappels automatiques."""
-    global _rappels_config
-    _rappels_config.update(config)
-    return {"message": "Configuration des rappels mise à jour", "config": _rappels_config}
+def configurer_rappels(
+    config: dict,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Enregistre la configuration des rappels de cette école."""
+    from app.models.academique import ParametreEtablissement
+
+    fusionnee = _lire_rappels(db, etablissement_id)
+    fusionnee.update(config or {})
+
+    param = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.cle == _CLE_RAPPELS,
+    ).first()
+    if param:
+        param.valeur = json.dumps(fusionnee)
+    else:
+        db.add(ParametreEtablissement(
+            etablissement_id=etablissement_id,
+            categorie="FINANCE",
+            cle=_CLE_RAPPELS,
+            valeur=json.dumps(fusionnee),
+            type_valeur="JSON",
+        ))
+    db.commit()
+    return {"message": "Configuration des rappels mise à jour", "config": fusionnee}
 
 
 @router.post("/communication/notifier-impayes")
 def notifier_impayes(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -2075,6 +2220,9 @@ def notifier_impayes(
     Déclenche l'envoi de notifications groupées aux parents des élèves en retard.
     Prépare les messages (canal SYSTEME pour l'instant, extensible SMS/Email).
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from app.models.academique import Parent, EleveParent, Message
     from datetime import date as today_type
 
@@ -2511,11 +2659,14 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db), etablissem
 
 @router.get("/fournisseurs")
 def list_fournisseurs(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Retourne la liste des fournisseurs uniques avec le total des dépenses et le nombre de transactions."""
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     results = (
         db.query(
             Depense.fournisseur,
@@ -2672,7 +2823,7 @@ def valider_depense(depense_id: int, db: Session = Depends(get_db), etablissemen
 @router.get("/decaissements")
 def list_decaissements(
     response: Response,
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     date_debut: Optional[str] = None,
     date_fin: Optional[str] = None,
     categorie: Optional[str] = None,
@@ -2685,6 +2836,9 @@ def list_decaissements(
     Vue consolidée de toutes les sorties de fonds (dépenses).
     Retourne les transactions détaillées et un résumé par catégorie.
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from datetime import date as today_type
 
     query = db.query(Depense).filter(
@@ -2863,7 +3017,7 @@ def annuler_paiement(
 @router.get("/acomptes")
 def list_acomptes(
     response: Response,
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -2873,6 +3027,9 @@ def list_acomptes(
     Liste les paiements qui constituent des acomptes (avances).
     Un acompte est un paiement validé dont la facture associée a encore un montant restant > 0.
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = (
         db.query(Paiement, Facture, Eleve, Classe)
         .join(Facture, Paiement.facture_id == Facture.facture_id)
@@ -3099,7 +3256,7 @@ def generer_facture_pdf(facture_id: int, db: Session = Depends(get_db), etabliss
 
 @router.get("/salaires/employes")
 def list_employes_salaires(
-    annee_id: int = 1,
+    annee_id: Optional[int] = None,
     mois: Optional[str] = None,   # format: "2026-06"
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
@@ -3107,6 +3264,9 @@ def list_employes_salaires(
     """
     Liste tous les enseignants et le personnel administratif actifs avec leur historique de paiements.
     """
+    # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
+    # l'annee n°1, qui appartient a la premiere ecole inscrite.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     enseignants = (
         db.query(Enseignant)
         .filter(

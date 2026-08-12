@@ -7,7 +7,7 @@ from sqlalchemy import func, case, literal_column, or_
 from decimal import Decimal
 
 from app.core.database import get_db
-from app.core.auth import require_etablissement
+from app.core.auth import require_etablissement, require_roles
 from app.models.academique import (
     ParametreComptabilite, ExerciceComptable, JournalComptable,
     CompteComptable, EcritureComptable, LigneEcriture, Comptable,
@@ -359,8 +359,12 @@ def get_journaux(db: Session = Depends(get_db)):
     init_comptabilite_globals(db)
     return db.query(JournalComptable).all()
 
-@router.post("/journaux", response_model=JournalOut)
+@router.post("/journaux", response_model=JournalOut,
+             dependencies=[Depends(require_roles("SUPER_ADMIN"))])
 def create_journal(journal: JournalCreate, db: Session = Depends(get_db)):
+    """Le referentiel des journaux est PARTAGE par toutes les ecoles : y
+    ajouter une ligne l'ajoute pour tout le monde. Reserve a l'editeur de
+    la plateforme — une ecole ne decide pas du plan comptable des autres."""
     db_journal = db.query(JournalComptable).filter(JournalComptable.code == journal.code).first()
     if db_journal:
         raise HTTPException(status_code=400, detail="Ce code journal existe déjà")
@@ -402,8 +406,11 @@ def get_comptes(db: Session = Depends(get_db)):
     init_comptabilite_globals(db)
     return db.query(CompteComptable).order_by(CompteComptable.numero_compte).all()
 
-@router.post("/comptes", response_model=CompteOut)
+@router.post("/comptes", response_model=CompteOut,
+             dependencies=[Depends(require_roles("SUPER_ADMIN"))])
 def create_compte(compte: CompteCreate, db: Session = Depends(get_db)):
+    """Meme raison que pour les journaux : le plan comptable OHADA est
+    commun, seul l'editeur de la plateforme l'etend."""
     db_compte = db.query(CompteComptable).filter(CompteComptable.numero_compte == compte.numero_compte).first()
     if db_compte:
         raise HTTPException(status_code=400, detail="Ce numéro de compte existe déjà")

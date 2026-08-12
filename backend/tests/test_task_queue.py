@@ -20,17 +20,25 @@ bruyamment dans un environnement qui n'a simplement pas Redis démarré.
 
 feat(test): ajouter tests de la file de tâches asynchrones RQ (Étape F)
 """
+import os
 import time
 from datetime import date
 
 import pytest
 from redis import Redis
-from rq import Queue, Worker
+from rq import Queue, SimpleWorker, Worker
 from rq.job import JobStatus, Retry
 from rq.registry import FailedJobRegistry
 
 TEST_REDIS_URL = "redis://localhost:6379/15"
 TEST_QUEUE_NAME = "test-default"
+
+# `Worker` fait os.fork() : absent sous Windows, où ces tests échouaient tous
+# avec AttributeError. On garde le worker forké partout où il existe (Linux,
+# CI, production — c'est bien ce comportement-là qu'on veut vérifier, jusqu'au
+# copy-on-write documenté plus bas) et on retombe sur SimpleWorker, qui exécute
+# le job dans le process courant, uniquement là où fork n'est pas disponible.
+WorkerClass = Worker if hasattr(os, "fork") else SimpleWorker
 
 
 def _connect_test_redis() -> Redis:
@@ -91,7 +99,7 @@ class TestQueueBasique:
 
     def test_enqueue_execution_succes(self, queue, redis_conn):
         job = queue.enqueue(_task_double, 21)
-        Worker([queue], connection=redis_conn).work(burst=True)
+        WorkerClass([queue], connection=redis_conn).work(burst=True)
 
         job.refresh()
         assert job.get_status() == JobStatus.FINISHED
@@ -99,7 +107,7 @@ class TestQueueBasique:
 
     def test_echec_definitif_va_dans_failed_registry(self, queue, redis_conn):
         job = queue.enqueue(_task_always_fails)
-        Worker([queue], connection=redis_conn).work(burst=True)
+        WorkerClass([queue], connection=redis_conn).work(burst=True)
 
         job.refresh()
         assert job.get_status() == JobStatus.FAILED
@@ -112,7 +120,7 @@ class TestQueueBasique:
         intervention manuelle. Pas de reset explicite du compteur ici : la
         fixture `redis_conn` a déjà fait `flushdb()` sur la base de test."""
         job = queue.enqueue(_task_fails_twice_then_succeeds, retry=Retry(max=3, interval=[0, 0]))
-        worker = Worker([queue], connection=redis_conn)
+        worker = WorkerClass([queue], connection=redis_conn)
 
         # interval=0 : la tentative suivante est immédiatement re-queueable,
         # mais peut nécessiter un passage supplémentaire du worker selon la
@@ -135,7 +143,7 @@ class TestQueueBasique:
         Redis (BLPOP) sur laquelle RQ s'appuie, pas une simulation de vraie
         concurrence (hors de portée d'un test unitaire déterministe)."""
         jobs = [queue.enqueue(_task_double, i) for i in range(5)]
-        Worker([queue], connection=redis_conn, name="worker-a").work(burst=True)
+        WorkerClass([queue], connection=redis_conn, name="worker-a").work(burst=True)
 
         for j in jobs:
             j.refresh()
@@ -144,7 +152,7 @@ class TestQueueBasique:
         assert queue.count == 0
         # Un second worker qui démarre maintenant ne traite plus rien —
         # aucun job n'a pu être "repris" en double.
-        Worker([queue], connection=redis_conn, name="worker-b").work(burst=True)
+        WorkerClass([queue], connection=redis_conn, name="worker-b").work(burst=True)
         for j in jobs:
             assert j.return_value() == j.args[0] * 2  # inchangé, pas retraité
 

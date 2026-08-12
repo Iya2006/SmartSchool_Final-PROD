@@ -14,7 +14,7 @@ Séquence d'utilisation : calculer-resultats (classe ou année entière) → aju
 manuellement au besoin (decision, choisir-filiere) → valider (classe ou année
 entière, verrouille définitivement et ouvre la campagne de réinscription).
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import Optional, Dict, List
@@ -24,7 +24,11 @@ from app.core.database import get_db
 from app.core.auth import require_etablissement
 from app.models.academique import (
     Classe, Niveau, Cycle, Inscription, Eleve, AnneeScolaire,
-    Bulletin, BulletinLigne, ParametreEtablissement,
+    Bulletin, BulletinLigne, ParametreEtablissement, ResultatOfficielExamen,
+)
+from app.services.notation import (
+    get_seuil_passage,
+    resultats_annuels_bulk as _resultats_annuels_bulk,
 )
 
 router = APIRouter(prefix="/api/promotion", tags=["Promotion & Clôture d'année"])
@@ -63,7 +67,12 @@ def _inscription_ou_404(db: Session, inscription_id: int, etablissement_id: int)
     return insc
 
 CODE_CYCLE_KEY = {"PRM": "primaire", "CLG": "college", "LYC": "lycee"}
-DECISIONS_VALIDES = ("ADMIS", "REDOUBLANT", "EN_ATTENTE_FILIERE", "EXCLU", "DIPLOME")
+# EN_ATTENTE_RESULTAT_OFFICIEL : classe d'examen dont le résultat ministériel
+# n'est pas encore saisi — bloque la validation de la classe.
+DECISIONS_VALIDES = (
+    "ADMIS", "REDOUBLANT", "EN_ATTENTE_FILIERE", "EXCLU", "DIPLOME",
+    "EN_ATTENTE_RESULTAT_OFFICIEL",
+)
 # Décisions qui entrent en campagne de réinscription à la validation (statut_reinscription
 # = A_REINSCRIRE) — EN_ATTENTE_FILIERE en fait partie : ces élèves seront réinscrits, juste
 # après avoir choisi leur série au moment de la réinscription (voir reinscription.py).
@@ -155,46 +164,46 @@ def _cycle_key_pour_classe(db: Session, classe: Classe):
     return niveau, cycle, cycle_key
 
 
-def _resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int, dict]:
+def _situation_niveau(niveau: Optional[Niveau], cycle: Optional[Cycle]) -> dict:
+    """Caractérise un niveau pour la décision de fin d'année.
+
+    Factorise un calcul qui vivait en double (aperçu et calcul persisté) et
+    ajoute `est_examen` : pour un niveau d'examen national (6e/CEE, 10e/BEPC,
+    Terminale/BAC), le passage ne dépend pas de la moyenne interne mais du
+    résultat publié par le Ministère (voir ss_resultats_officiels_examen).
     """
-    Calcule, pour un lot d'inscriptions, la moyenne annuelle pondérée et le
-    total de points : agrège les BulletinLigne (déjà produites par
-    calculer_moyennes, evaluations.py) de tous les trimestres de l'inscription,
-    moyenne chaque matière sur les trimestres où elle apparaît, pondère par son
-    coefficient. Une seule requête pour tout le lot (jamais de requête par
-    élève dans une boucle — voir la règle N+1 documentée dans la mémoire projet).
-    """
+    return {
+        "est_frontiere_lycee": bool(cycle and niveau and cycle.code == "CLG" and niveau.ordre == 4),
+        "est_terminal": bool(cycle and niveau and cycle.code == "LYC" and niveau.ordre + 3 > 19),
+        "est_examen": bool(niveau and niveau.est_examen == "O"),
+        "examen_national": niveau.examen_national if niveau else None,
+    }
+
+
+def _resultats_officiels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int, ResultatOfficielExamen]:
+    """Résultats ministériels d'un lot d'inscriptions, en une requête."""
     if not inscription_ids:
         return {}
-    rows = db.query(BulletinLigne, Bulletin.inscription_id).join(
-        Bulletin, BulletinLigne.bulletin_id == Bulletin.bulletin_id
-    ).filter(
-        Bulletin.inscription_id.in_(inscription_ids),
-        BulletinLigne.moyenne_matiere.isnot(None),
-    ).all()
+    return {
+        r.inscription_id: r
+        for r in db.query(ResultatOfficielExamen).filter(
+            ResultatOfficielExamen.inscription_id.in_(inscription_ids)
+        ).all()
+    }
 
-    par_inscription: Dict[int, Dict[int, List[tuple]]] = {}
-    for ligne, inscription_id in rows:
-        par_matiere = par_inscription.setdefault(inscription_id, {})
-        par_matiere.setdefault(ligne.matiere_id, []).append(
-            (float(ligne.moyenne_matiere), float(ligne.coefficient or 1))
-        )
 
-    resultats: Dict[int, dict] = {}
-    for inscription_id, par_matiere in par_inscription.items():
-        total_points = 0.0
-        total_coef = 0.0
-        for valeurs in par_matiere.values():
-            moyenne_matiere_annuelle = sum(v for v, _ in valeurs) / len(valeurs)
-            coef = valeurs[-1][1]  # coefficient le plus récent (constant sur l'année en pratique)
-            total_points += moyenne_matiere_annuelle * coef
-            total_coef += coef
-        if total_coef > 0:
-            resultats[inscription_id] = {
-                "moyenne": round(total_points / total_coef, 2),
-                "total_points": round(total_points, 2),
-            }
-    return resultats
+def _decision_classe_examen(resultat: Optional[ResultatOfficielExamen], est_terminal: bool) -> str:
+    """Décision d'un élève de classe d'examen, à partir du seul résultat officiel.
+
+    Tant que le Ministère n'a pas publié (ou que la saisie n'est pas faite),
+    l'élève reste en attente : sa moyenne interne, examens blancs compris, n'a
+    aucune valeur décisionnelle ici.
+    """
+    if resultat is None:
+        return "EN_ATTENTE_RESULTAT_OFFICIEL"
+    if resultat.resultat == "ADMIS":
+        return "DIPLOME" if est_terminal else "ADMIS"
+    return "REDOUBLANT"
 
 
 @router.get("/classe/{classe_id}/apercu")
@@ -211,10 +220,12 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
         raise HTTPException(404, "Niveau introuvable pour cette classe")
 
     redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", False)
-    seuil = _get_notation_param(db, classe.etablissement_id, f"notation.seuil_redoublement.{cycle_key}", 10.0)
+    seuil = get_seuil_passage(db, classe.etablissement_id, cycle_key)
     niveau_suivant = _niveau_suivant(db, niveau)
-    est_frontiere_lycee = bool(cycle and cycle.code == "CLG" and niveau.ordre == 4)
-    est_terminal = bool(cycle and cycle.code == "LYC" and niveau.ordre + 3 > 19)
+    situation = _situation_niveau(niveau, cycle)
+    est_frontiere_lycee = situation["est_frontiere_lycee"]
+    est_terminal = situation["est_terminal"]
+    est_examen = situation["est_examen"]
 
     inscriptions = db.query(Inscription, Eleve).join(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
@@ -226,9 +237,13 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
     resultats_calc = {} if deja_calcule else _resultats_annuels_bulk(
         db, [insc.inscription_id for insc, _ in inscriptions]
     )
+    resultats_officiels = _resultats_officiels_bulk(
+        db, [insc.inscription_id for insc, _ in inscriptions]
+    ) if est_examen else {}
 
     eleves = []
     for insc, eleve in inscriptions:
+        officiel = resultats_officiels.get(insc.inscription_id)
         if deja_calcule:
             moyenne, total_points, rang = insc.moyenne_annuelle, insc.total_points, insc.rang_final
             moyenne = float(moyenne) if moyenne is not None else None
@@ -237,7 +252,11 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
         else:
             r = resultats_calc.get(insc.inscription_id, {})
             moyenne, total_points, rang = r.get("moyenne"), r.get("total_points"), None
-            if est_terminal:
+            if est_examen:
+                # Classe d'examen : seul le résultat du Ministère décide. La
+                # moyenne interne reste affichée comme indicateur pédagogique.
+                decision = _decision_classe_examen(officiel, est_terminal)
+            elif est_terminal:
                 decision = "DIPLOME"
             elif redoublement_actif and moyenne is not None and moyenne < seuil:
                 decision = "REDOUBLANT"
@@ -260,6 +279,7 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
             "necessite_choix_serie": necessite_choix_serie,
             "classe_cible_id": insc.classe_cible_id,
             "statut_promotion": insc.statut_promotion,
+            "resultat_officiel": officiel.resultat if officiel else None,
         })
 
     return {
@@ -267,6 +287,13 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
         "niveau_suivant": {"niveau_id": niveau_suivant.niveau_id, "libelle": niveau_suivant.libelle} if niveau_suivant else None,
         "frontiere_lycee": est_frontiere_lycee,
         "terminal": est_terminal,
+        # Classe d'examen : le frontend doit proposer la saisie du résultat
+        # ministériel au lieu de s'appuyer sur le seuil de redoublement.
+        "classe_examen": est_examen,
+        "examen_national": situation["examen_national"],
+        "en_attente_resultat_officiel": sum(
+            1 for e in eleves if e["decision"] == "EN_ATTENTE_RESULTAT_OFFICIEL"
+        ),
         "seuil_redoublement": seuil,
         "redoublement_actif": redoublement_actif,
         "deja_calcule": deja_calcule,
@@ -289,10 +316,12 @@ def _calculer_resultats_classe_core(
     """
     niveau, cycle, cycle_key = _cycle_key_pour_classe(db, classe)
     redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", False)
-    seuil = _get_notation_param(db, classe.etablissement_id, f"notation.seuil_redoublement.{cycle_key}", 10.0)
+    seuil = get_seuil_passage(db, classe.etablissement_id, cycle_key)
     niveau_suivant = _niveau_suivant(db, niveau) if niveau else None
-    est_frontiere_lycee = bool(cycle and cycle.code == "CLG" and niveau.ordre == 4)
-    est_terminal = bool(cycle and cycle.code == "LYC" and niveau.ordre + 3 > 19)
+    situation = _situation_niveau(niveau, cycle)
+    est_frontiere_lycee = situation["est_frontiere_lycee"]
+    est_terminal = situation["est_terminal"]
+    est_examen = situation["est_examen"]
 
     def classe_active_cached(niveau_id: int) -> Optional[Classe]:
         key = (niveau_id, annee_cible_id)
@@ -317,13 +346,26 @@ def _calculer_resultats_classe_core(
         reverse=True,
     )
 
-    resume = {"proposes": 0, "en_attente_filiere": 0, "exclus": 0, "diplomes": 0}
+    resultats_officiels = _resultats_officiels_bulk(
+        db, [insc.inscription_id for insc, _ in inscriptions]
+    ) if est_examen else {}
+
+    resume = {
+        "proposes": 0, "en_attente_filiere": 0, "exclus": 0, "diplomes": 0,
+        "en_attente_resultat_officiel": 0,
+    }
 
     for rang_idx, (insc, eleve) in enumerate(inscriptions_triees):
         r = resultats_calc.get(insc.inscription_id, {})
         moyenne, total_points = r.get("moyenne"), r.get("total_points")
 
-        if est_terminal:
+        if est_examen:
+            # Classe d'examen : la décision vient du Ministère, jamais du seuil
+            # interne. La moyenne reste enregistrée comme indicateur.
+            decision = _decision_classe_examen(
+                resultats_officiels.get(insc.inscription_id), est_terminal
+            )
+        elif est_terminal:
             decision = "DIPLOME"
         elif redoublement_actif and moyenne is not None and moyenne < seuil:
             decision = "REDOUBLANT"
@@ -341,7 +383,11 @@ def _calculer_resultats_classe_core(
         insc.decision_fin_annee = decision
         insc.statut_promotion = "PROPOSE"
 
-        if decision == "DIPLOME":
+        if decision == "EN_ATTENTE_RESULTAT_OFFICIEL":
+            insc.niveau_cible_id = None
+            insc.classe_cible_id = None
+            resume["en_attente_resultat_officiel"] += 1
+        elif decision == "DIPLOME":
             insc.niveau_cible_id = None
             insc.classe_cible_id = None
             resume["diplomes"] += 1
@@ -506,7 +552,14 @@ def _valider_classe_core(db: Session, classe: Classe) -> dict:
     if not inscriptions:
         return {"classe": classe.libelle, "valides": 0, "bloque": False, "erreurs": []}
 
+    # Classe d'examen : tant que le résultat du Ministère n'est pas saisi pour
+    # un élève, rien ne peut être validé — son passage n'est pas décidable.
     bloquants = [
+        f"{eleve.prenom} {eleve.nom} : résultat officiel du Ministère non saisi"
+        for insc, eleve in inscriptions
+        if insc.decision_fin_annee == "EN_ATTENTE_RESULTAT_OFFICIEL"
+    ]
+    bloquants += [
         f"{eleve.prenom} {eleve.nom} : classe cible non résolue"
         for insc, eleve in inscriptions
         if insc.decision_fin_annee in DECISIONS_NECESSITANT_CLASSE_CIBLE and not insc.classe_cible_id
@@ -569,6 +622,366 @@ def valider_promotion_annee(annee_source_id: int, db: Session = Depends(get_db),
         "classes_bloquees": classes_bloquees,
         "detail": resultats,
     }
+
+
+# ════════════════════════════════════════════════════════════
+# RÉSULTATS OFFICIELS DU MINISTÈRE (classes d'examen)
+# ════════════════════════════════════════════════════════════
+
+class ResultatOfficielItem(BaseModel):
+    inscription_id: int
+    resultat: str            # ADMIS | NON_ADMIS
+    observation: Optional[str] = None
+
+
+class ResultatsOfficielsBulk(BaseModel):
+    resultats: List[ResultatOfficielItem]
+    saisi_par: Optional[str] = None
+
+
+RESULTATS_OFFICIELS_VALIDES = ("ADMIS", "NON_ADMIS")
+
+
+@router.get("/classe/{classe_id}/resultats-officiels")
+def lister_resultats_officiels(
+    classe_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Liste les élèves d'une classe d'examen avec leur résultat ministériel.
+
+    Sert d'écran de saisie : tous les élèves sont retournés, ceux sans résultat
+    ayant `resultat = null`.
+    """
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    niveau, cycle, _ = _cycle_key_pour_classe(db, classe)
+    situation = _situation_niveau(niveau, cycle)
+
+    inscriptions = db.query(Inscription, Eleve).join(
+        Eleve, Inscription.eleve_id == Eleve.eleve_id
+    ).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
+    ).order_by(Eleve.nom, Eleve.prenom).all()
+
+    officiels = _resultats_officiels_bulk(db, [i.inscription_id for i, _ in inscriptions])
+
+    return {
+        "classe": {"classe_id": classe.classe_id, "libelle": classe.libelle},
+        "classe_examen": situation["est_examen"],
+        "examen_national": situation["examen_national"],
+        "eleves": [
+            {
+                "inscription_id": insc.inscription_id,
+                "eleve_id": eleve.eleve_id,
+                "nom": eleve.nom,
+                "prenom": eleve.prenom,
+                "matricule": eleve.matricule,
+                # Indicateur pédagogique uniquement : ne décide pas du passage
+                "moyenne_annuelle": float(insc.moyenne_annuelle) if insc.moyenne_annuelle is not None else None,
+                "resultat": officiels[insc.inscription_id].resultat if insc.inscription_id in officiels else None,
+                "observation": officiels[insc.inscription_id].observation if insc.inscription_id in officiels else None,
+                "date_saisie": officiels[insc.inscription_id].date_saisie if insc.inscription_id in officiels else None,
+            }
+            for insc, eleve in inscriptions
+        ],
+    }
+
+
+@router.post("/resultats-officiels/bulk")
+def saisir_resultats_officiels(
+    data: ResultatsOfficielsBulk,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Enregistre les résultats du Ministère pour toute une classe d'examen.
+
+    Rejouable : un résultat déjà saisi pour une inscription est mis à jour.
+
+    Chaque inscription du lot est vérifiée, pas seulement la première : c'est
+    en ne contrôlant que le premier élément qu'un intrus glissé en 2ᵉ position
+    passait ailleurs dans ce projet.
+    """
+    invalides = [r.resultat for r in data.resultats if r.resultat not in RESULTATS_OFFICIELS_VALIDES]
+    if invalides:
+        raise HTTPException(
+            400,
+            f"Résultat invalide {sorted(set(invalides))} — valeurs acceptées : {list(RESULTATS_OFFICIELS_VALIDES)}",
+        )
+    if not data.resultats:
+        return {"message": "Aucun résultat à enregistrer", "enregistres": 0}
+
+    inscription_ids = [r.inscription_id for r in data.resultats]
+    # Jointure sur Classe : une inscription d'une autre école ne remonte pas,
+    # et tombe donc dans « introuvables » — 404, sans révéler qu'elle existe.
+    inscriptions = {
+        i.inscription_id: i
+        for i in db.query(Inscription)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(
+            Inscription.inscription_id.in_(inscription_ids),
+            Classe.etablissement_id == etablissement_id,
+        ).all()
+    }
+    manquantes = set(inscription_ids) - set(inscriptions)
+    if manquantes:
+        raise HTTPException(404, f"Inscriptions introuvables : {sorted(manquantes)}")
+
+    # Le niveau porte le nom de l'examen (CEE/BEPC/BAC) : copié sur le résultat
+    # pour garder une trace même si la configuration change ensuite.
+    classe_ids = {i.classe_id for i in inscriptions.values()}
+    niveaux_par_classe = {}
+    for c in db.query(Classe).filter(Classe.classe_id.in_(classe_ids)).all():
+        niveaux_par_classe[c.classe_id] = db.query(Niveau).filter(
+            Niveau.niveau_id == c.niveau_id
+        ).first()
+
+    existants = _resultats_officiels_bulk(db, inscription_ids)
+    enregistres = 0
+    for item in data.resultats:
+        insc = inscriptions[item.inscription_id]
+        niveau = niveaux_par_classe.get(insc.classe_id)
+        existant = existants.get(item.inscription_id)
+        if existant:
+            existant.resultat = item.resultat
+            existant.observation = item.observation
+            existant.saisi_par = data.saisi_par
+        else:
+            db.add(ResultatOfficielExamen(
+                inscription_id=item.inscription_id,
+                examen_national=niveau.examen_national if niveau else None,
+                resultat=item.resultat,
+                saisi_par=data.saisi_par,
+                observation=item.observation,
+            ))
+        enregistres += 1
+
+    db.commit()
+    return {
+        "message": f"{enregistres} résultat(s) officiel(s) enregistré(s)",
+        "enregistres": enregistres,
+        "rappel": "Relancez le calcul des résultats de la classe pour appliquer ces décisions.",
+    }
+
+
+# ── Import d'un fichier de résultats d'examen national ──────────────────
+# Une classe d'examen, c'est 40 à 120 élèves dont le résultat arrive sous forme
+# de liste préfectorale. Les ressaisir un par un dans un menu déroulant est à la
+# fois long et une source d'erreur qu'on ne détecte qu'au moment du litige.
+
+# Ce que l'école peut écrire dans la colonne résultat. On accepte largement :
+# le fichier reçu n'est pas normalisé, et refuser "Admise" au motif que le
+# gabarit dit "ADMIS" ferait perdre plus de temps que la saisie manuelle.
+_SYNONYMES_RESULTAT = {
+    "ADMIS": ("admis", "admise", "adm", "a", "oui", "o", "1", "reussi", "reussie",
+              "succes", "passe", "passee", "recu", "recue"),
+    "NON_ADMIS": ("non admis", "non admise", "non_admis", "nonadmis", "refuse",
+                  "refusee", "echec", "echoue", "n", "non", "0", "ajourne",
+                  "ajournee", "recale", "recalee"),
+}
+
+
+def _normaliser_resultat(brut: str) -> Optional[str]:
+    """Traduit ce qu'a écrit l'école en ADMIS / NON_ADMIS, ou None si illisible."""
+    from app.services.import_tabulaire import normaliser_entete
+    v = normaliser_entete(brut).replace("-", " ").replace("_", " ")
+    for canonique, variantes in _SYNONYMES_RESULTAT.items():
+        if v in variantes or v.replace(" ", "") in [x.replace(" ", "") for x in variantes]:
+            return canonique
+    return None
+
+
+@router.get("/classe/{classe_id}/resultats-officiels/modele")
+def modele_import_resultats_officiels(
+    classe_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Modèle CSV pré-rempli avec la liste réelle des élèves de la classe.
+
+    L'école n'a plus qu'à compléter la colonne RESULTAT : les matricules sont
+    déjà les bons, ce qui supprime la principale cause de lignes non
+    rapprochées à l'import.
+    """
+    from fastapi.responses import Response
+    import csv as _csv, io as _io
+
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+
+    inscriptions = db.query(Inscription, Eleve).join(
+        Eleve, Inscription.eleve_id == Eleve.eleve_id
+    ).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
+    ).order_by(Eleve.nom, Eleve.prenom).all()
+
+    tampon = _io.StringIO()
+    # `;` et BOM UTF-8 : c'est ce qu'attend Excel en configuration française,
+    # sinon le fichier s'ouvre avec tout sur une seule colonne.
+    writer = _csv.writer(tampon, delimiter=";")
+    writer.writerow(["MATRICULE", "NOM", "PRENOM", "RESULTAT", "OBSERVATION"])
+    for insc, eleve in inscriptions:
+        writer.writerow([eleve.matricule or "", eleve.nom or "", eleve.prenom or "", "", ""])
+
+    nom_fichier = f"resultats_{classe.libelle}.csv".replace(" ", "_")
+    return Response(
+        content="﻿" + tampon.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
+    )
+
+
+@router.post("/classe/{classe_id}/resultats-officiels/import")
+async def importer_resultats_officiels(
+    classe_id: int,
+    fichier: UploadFile = File(...),
+    dry_run: bool = True,
+    saisi_par: Optional[str] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Importe les résultats d'examen national d'une classe depuis un fichier.
+
+    `dry_run=true` (défaut) analyse sans rien écrire et renvoie exactement ce
+    qui serait appliqué : on ne remplace pas un résultat officiel déjà saisi
+    sans que l'école ait vu le rapport d'abord.
+
+    Rapprochement par matricule, puis à défaut par nom + prénom. Toute ligne
+    non rapprochée ou dont le résultat est illisible est remontée nommément —
+    jamais ignorée en silence.
+    """
+    from app.services.import_tabulaire import (
+        FichierIllisible, lire_lignes, normaliser_entete, valeur,
+    )
+
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    niveau, cycle, _ = _cycle_key_pour_classe(db, classe)
+    situation = _situation_niveau(niveau, cycle)
+    if not situation["est_examen"]:
+        raise HTTPException(
+            400,
+            f"{classe.libelle} n'est pas une classe d'examen national — "
+            "aucun résultat ministériel à importer.",
+        )
+
+    contenu = await fichier.read()
+    try:
+        _, lignes = lire_lignes(fichier.filename, contenu)
+    except FichierIllisible as e:
+        raise HTTPException(400, str(e))
+    if not lignes:
+        raise HTTPException(400, "Le fichier ne contient aucune ligne de données.")
+
+    inscriptions = db.query(Inscription, Eleve).join(
+        Eleve, Inscription.eleve_id == Eleve.eleve_id
+    ).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
+    ).all()
+    par_matricule = {
+        normaliser_entete(e.matricule): (i, e) for i, e in inscriptions if e.matricule
+    }
+    par_nom = {}
+    for i, e in inscriptions:
+        cle = normaliser_entete(f"{e.nom} {e.prenom}")
+        # Deux homonymes exacts : on refuse de deviner lequel des deux.
+        par_nom[cle] = None if cle in par_nom else (i, e)
+
+    existants = _resultats_officiels_bulk(db, [i.inscription_id for i, _ in inscriptions])
+
+    a_appliquer, ignorees = {}, []
+    for numero, ligne in enumerate(lignes, start=2):  # 1 = ligne d'en-tête
+        matricule = valeur(ligne, "matricule", "n matricule", "no matricule",
+                           "numero", "numero matricule", "code eleve")
+        nom = valeur(ligne, "nom", "nom de l eleve", "nom eleve")
+        prenom = valeur(ligne, "prenom", "prenoms", "prenom de l eleve")
+        brut = valeur(ligne, "resultat", "resultat final", "decision", "mention",
+                      "admis", "statut")
+
+        cible = par_matricule.get(normaliser_entete(matricule)) if matricule else None
+        if cible is None and (nom or prenom):
+            cible = par_nom.get(normaliser_entete(f"{nom} {prenom}"))
+        identite = " ".join(x for x in [matricule, nom, prenom] if x) or "(ligne vide)"
+
+        if cible is None:
+            ignorees.append({"ligne": numero, "eleve": identite,
+                             "raison": "élève non trouvé dans cette classe"})
+            continue
+        resultat = _normaliser_resultat(brut)
+        if resultat is None:
+            ignorees.append({
+                "ligne": numero, "eleve": identite,
+                "raison": f"résultat illisible : « {brut} »" if brut else "résultat non renseigné",
+            })
+            continue
+
+        insc, eleve = cible
+        if insc.inscription_id in a_appliquer:
+            ignorees.append({"ligne": numero, "eleve": identite,
+                             "raison": "élève présent plusieurs fois dans le fichier"})
+            continue
+        ancien = existants.get(insc.inscription_id)
+        a_appliquer[insc.inscription_id] = {
+            "ligne": numero,
+            "inscription_id": insc.inscription_id,
+            "matricule": eleve.matricule,
+            "eleve": f"{eleve.nom} {eleve.prenom}",
+            "resultat": resultat,
+            "observation": valeur(ligne, "observation", "remarque", "commentaire") or None,
+            "ancien_resultat": ancien.resultat if ancien else None,
+            "remplace": bool(ancien and ancien.resultat != resultat),
+        }
+
+    manquants = [
+        {"inscription_id": i.inscription_id, "matricule": e.matricule,
+         "eleve": f"{e.nom} {e.prenom}"}
+        for i, e in inscriptions
+        if i.inscription_id not in a_appliquer and i.inscription_id not in existants
+    ]
+
+    rapport = {
+        "classe": classe.libelle,
+        "examen_national": situation["examen_national"],
+        "fichier": fichier.filename,
+        "lignes_lues": len(lignes),
+        "a_appliquer": len(a_appliquer),
+        "remplacements": sum(1 for v in a_appliquer.values() if v["remplace"]),
+        "admis": sum(1 for v in a_appliquer.values() if v["resultat"] == "ADMIS"),
+        "non_admis": sum(1 for v in a_appliquer.values() if v["resultat"] == "NON_ADMIS"),
+        "details": sorted(a_appliquer.values(), key=lambda d: d["ligne"]),
+        "ignorees": ignorees,
+        "eleves_sans_resultat": manquants,
+        "dry_run": dry_run,
+    }
+
+    if dry_run:
+        rapport["message"] = (
+            f"{len(a_appliquer)} résultat(s) prêt(s) à être importé(s), "
+            f"{len(ignorees)} ligne(s) ignorée(s). Rien n'a été enregistré."
+        )
+        return rapport
+
+    if not a_appliquer:
+        raise HTTPException(400, "Aucune ligne exploitable : rien à importer.")
+
+    for item in a_appliquer.values():
+        existant = existants.get(item["inscription_id"])
+        if existant:
+            existant.resultat = item["resultat"]
+            existant.observation = item["observation"]
+            existant.saisi_par = saisi_par
+        else:
+            db.add(ResultatOfficielExamen(
+                inscription_id=item["inscription_id"],
+                examen_national=niveau.examen_national if niveau else None,
+                resultat=item["resultat"],
+                saisi_par=saisi_par,
+                observation=item["observation"],
+            ))
+    db.commit()
+
+    rapport["message"] = (
+        f"{len(a_appliquer)} résultat(s) importé(s) pour {classe.libelle}."
+    )
+    rapport["rappel"] = "Relancez le calcul des résultats de la classe pour appliquer ces décisions."
+    return rapport
 
 
 @router.get("/annee/{annee_id}/etat")

@@ -41,13 +41,19 @@ function BulletinsContent() {
     const [docSettings, setDocSettings] = useState<any>({});
     const printRef = useRef<HTMLDivElement>(null);
 
+    // Bulletin de période (trimestre/semestre) ou bulletin annuel consolidé
+    const [typeBulletin, setTypeBulletin] = useState<'PERIODE' | 'ANNUEL'>('PERIODE');
+    const [calculAnnuel, setCalculAnnuel] = useState(false);
+    const [annuelMsg, setAnnuelMsg] = useState('');
+
     // Pagination + KPIs classe entière (une classe réelle peut dépasser 150
     // élèves — sans ça, tous les bulletins s'affichaient sur une seule page).
     const [bulletinsPage, setBulletinsPage] = useState(1);
     const [bulletinsTotal, setBulletinsTotal] = useState(0);
     const [classeKpis, setClasseKpis] = useState<{ moyenne: number | null; meilleure: number | null; plusFaible: number | null }>({ moyenne: null, meilleure: null, plusFaible: null });
     const BULLETINS_PAGE_SIZE = 24;
-    const [poids, setPoids] = useState({ ecrit: 1, oral: 1, composition: 2 });
+    // Types d'évaluation configurés — sert à expliquer le calcul en clair
+    const [typesEval, setTypesEval] = useState<any[]>([]);
 
     // Infos de classe pour le bulletin
     const selectedClasseInfo = classes.find(c => c.classe_id === selectedClasse);
@@ -64,15 +70,10 @@ function BulletinsContent() {
                 ]);
                 setClasses(clsRes.data);
                 setTrimestres(triRes.data);
-                const getPoids = (cle: string, fb: number) => {
-                    const p = (notationRes.data || []).find((s: any) => s.cle === cle);
-                    return p ? parseFloat(p.valeur) : fb;
-                };
-                setPoids({
-                    ecrit: getPoids('notation.poids_ecrit', 1),
-                    oral: getPoids('notation.poids_oral', 1),
-                    composition: getPoids('notation.poids_composition', 2),
-                });
+                try {
+                    const typesRes = await api.get('/api/evaluations/types');
+                    setTypesEval((typesRes.data || []).filter((t: any) => t.statut === 'ACTIF'));
+                } catch { setTypesEval([]); }
 
                 const parsed: any = {
                     champ_photo: true,
@@ -132,7 +133,11 @@ function BulletinsContent() {
         setLoading(true);
         try {
             const skip = (bulletinsPage - 1) * BULLETINS_PAGE_SIZE;
-            const res = await api.get(`/api/evaluations/classe/${selectedClasse}/bulletins?trimestre_id=${selectedTrimestre}&skip=${skip}&limit=${BULLETINS_PAGE_SIZE}`);
+            // Bulletin annuel : pas de période, on interroge type_bulletin=ANNUEL
+            const params = typeBulletin === 'ANNUEL'
+                ? `type_bulletin=ANNUEL&skip=${skip}&limit=${BULLETINS_PAGE_SIZE}`
+                : `trimestre_id=${selectedTrimestre}&skip=${skip}&limit=${BULLETINS_PAGE_SIZE}`;
+            const res = await api.get(`/api/evaluations/classe/${selectedClasse}/bulletins?${params}`);
             setBulletins(res.data);
             const h = res.headers || {};
             setBulletinsTotal(h['x-total-count'] !== undefined ? Number(h['x-total-count']) : res.data.length);
@@ -143,18 +148,35 @@ function BulletinsContent() {
             });
         } catch (e) { console.error(e); setBulletins([]); setBulletinsTotal(0); }
         setLoading(false);
-    }, [selectedClasse, selectedTrimestre, bulletinsPage]);
+    }, [selectedClasse, selectedTrimestre, bulletinsPage, typeBulletin]);
 
     useEffect(() => {
         if (selectedClasse) loadBulletins();
     }, [selectedClasse, selectedTrimestre, loadBulletins]);
 
-    // Revenir à la page 1 en changeant de classe/trimestre
-    useEffect(() => { setBulletinsPage(1); }, [selectedClasse, selectedTrimestre]);
+    // Revenir à la page 1 en changeant de classe/période/type
+    useEffect(() => { setBulletinsPage(1); }, [selectedClasse, selectedTrimestre, typeBulletin]);
 
+    // Génération des bulletins annuels (agrège les périodes déjà calculées)
+    const handleCalculerAnnuel = async () => {
+        if (!selectedClasse) return;
+        if (!confirm("Générer les bulletins annuels de cette classe ?\n\nIls agrègent les résultats des périodes déjà calculées.")) return;
+        setCalculAnnuel(true);
+        try {
+            const res = await api.post(`/api/evaluations/classe/${selectedClasse}/calculer-moyennes-annuelles`);
+            setAnnuelMsg(res.data.message);
+            setTimeout(() => setAnnuelMsg(''), 6000);
+            setTypeBulletin('ANNUEL');
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || 'Erreur lors du calcul annuel');
+        }
+        setCalculAnnuel(false);
+    };
+
+    // Cycle réel issu de la base (Classe → Niveau → Cycle), et non déduit du
+    // libellé : « contient Année » rangeait la 7ème à la 12ème dans le primaire.
     const groupedClasses = classes.reduce((acc: any, cls: any) => {
-        const cycle = cls.libelle?.includes('Année') ? 'Primaire' :
-            cls.libelle?.match(/[7-9]|10/) ? 'Collège' : 'Lycée';
+        const cycle = cls.cycle_libelle || 'Autres';
         if (!acc[cycle]) acc[cycle] = [];
         acc[cycle].push(cls);
         return acc;
@@ -280,9 +302,20 @@ function BulletinsContent() {
             <div style={{ padding: '12px 18px', borderRadius: '12px', background: '#f5f3ff', border: '1px solid #ddd6fe', marginBottom: '20px', fontSize: '12.5px', color: '#5b21b6', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
                 <ClipboardList size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
                 <span>
-                    <strong>Comment ces moyennes sont calculées :</strong> pour chaque matière, moyenne = (meilleure note Écrite×{poids.ecrit} + meilleure note Orale×{poids.oral} + Composition×{poids.composition}) ÷ ({poids.ecrit} + {poids.oral} + {poids.composition}) — une catégorie sans note est exclue. Moyenne générale = somme (moyenne matière × coefficient matière) ÷ somme des coefficients. Pondération configurable dans Paramètres &gt; Notation.
+                    <strong>Comment ces moyennes sont calculées :</strong> pour chaque matière, les notes d&apos;un même
+                    type sont moyennées entre elles puis pondérées par le coefficient du type
+                    {typesEval.length > 0 && <> — {typesEval.map((t: any) => `${t.libelle} (coef. ${t.coefficient})`).join(', ')}</>}.
+                    Moyenne générale = somme (moyenne matière × coefficient matière) ÷ somme des coefficients.
+                    {typeBulletin === 'ANNUEL' && <> <strong>Le bulletin annuel</strong> agrège les moyennes de toutes les périodes de l&apos;année.</>}
+                    {' '}Coefficients configurables dans Paramètres &gt; Notation.
                 </span>
             </div>
+
+            {annuelMsg && (
+                <div style={{ padding: '12px 18px', borderRadius: '12px', background: '#ecfdf5', border: '1px solid #a7f3d0', marginBottom: '16px', fontSize: '13px', color: '#065f46', fontWeight: 600 }}>
+                    {annuelMsg}
+                </div>
+            )}
 
             {/* ═══ SÉLECTEURS ═══ */}
             <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -295,18 +328,43 @@ function BulletinsContent() {
                         </optgroup>
                     ))}
                 </select>
-                <select value={selectedTrimestre} onChange={e => setSelectedTrimestre(Number(e.target.value))}
-                    style={{ padding: '10px 16px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', fontWeight: 600, minWidth: '200px', background: 'white', cursor: 'pointer' }}>
-                    {trimestres.length > 0 ? trimestres.map((t: any) => (
-                        <option key={t.trimestre_id} value={t.trimestre_id}>{t.libelle}</option>
-                    )) : (
-                        <>
-                            <option value={1}>1er Trimestre</option>
-                            <option value={2}>2ème Trimestre</option>
-                            <option value={3}>3ème Trimestre</option>
-                        </>
-                    )}
-                </select>
+                {/* Période ou bulletin annuel consolidé */}
+                <div style={{ display: 'flex', borderRadius: '10px', overflow: 'hidden', border: '1.5px solid #e2e8f0' }}>
+                    {([
+                        { key: 'PERIODE' as const, label: 'Par période' },
+                        { key: 'ANNUEL' as const, label: 'Annuel' },
+                    ]).map(opt => (
+                        <button key={opt.key} onClick={() => setTypeBulletin(opt.key)}
+                            style={{
+                                padding: '10px 18px', border: 'none', cursor: 'pointer',
+                                fontSize: '13.5px', fontWeight: 700,
+                                background: typeBulletin === opt.key ? '#059669' : 'white',
+                                color: typeBulletin === opt.key ? 'white' : '#64748b',
+                            }}>
+                            {opt.label}
+                        </button>
+                    ))}
+                </div>
+                {typeBulletin === 'PERIODE' && (
+                    <select value={selectedTrimestre} onChange={e => setSelectedTrimestre(Number(e.target.value))}
+                        style={{ padding: '10px 16px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', fontWeight: 600, minWidth: '200px', background: 'white', cursor: 'pointer' }}>
+                        {trimestres.length > 0 ? trimestres.map((t: any) => (
+                            <option key={t.trimestre_id} value={t.trimestre_id}>{t.libelle}</option>
+                        )) : (
+                            <>
+                                <option value={1}>1er Trimestre</option>
+                                <option value={2}>2ème Trimestre</option>
+                                <option value={3}>3ème Trimestre</option>
+                            </>
+                        )}
+                    </select>
+                )}
+                {typeBulletin === 'ANNUEL' && selectedClasse && (
+                    <button onClick={handleCalculerAnnuel} disabled={calculAnnuel}
+                        style={{ padding: '10px 18px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #059669, #10b981)', color: 'white', fontSize: '13.5px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <ClipboardList size={15} /> {calculAnnuel ? 'Calcul...' : 'Générer les bulletins annuels'}
+                    </button>
+                )}
                 {filteredBulletins.length > 0 && (
                     <div style={{ position: 'relative', marginLeft: 'auto' }}>
                         <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
@@ -582,16 +640,12 @@ function BulletinsContent() {
                                             <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '16px' }}>
                                                 <thead>
                                                     <tr style={{ background: 'linear-gradient(135deg, #064e3b, #059669)' }}>
+                                                        {/* Trois colonnes seulement : coefficient, moyenne, appréciation.
+                                                            Moyenne de classe, min et max encombraient le bulletin
+                                                            d'un élève avec des chiffres qui parlent de la classe. */}
                                                         <th style={{ padding: '10px 12px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'left', letterSpacing: '0.5px' }}>MATIÈRE</th>
-                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '50px' }}>COEF</th>
-                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: '#fbbf24', textAlign: 'center', width: '80px' }}>MOY. ÉLÈVE</th>
-                                                        {docSettings.champ_moyenne_classe !== false && <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '70px' }}>MOY. CL.</th>}
-                                                        {docSettings.champ_min_max !== false && (
-                                                            <>
-                                                                <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '45px' }}>MIN</th>
-                                                                <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '45px' }}>MAX</th>
-                                                            </>
-                                                        )}
+                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'center', width: '80px' }}>COEFFICIENT</th>
+                                                        <th style={{ padding: '10px 8px', fontSize: '10px', fontWeight: 700, color: '#fbbf24', textAlign: 'center', width: '90px' }}>MOYENNE</th>
                                                         <th style={{ padding: '10px 12px', fontSize: '10px', fontWeight: 700, color: 'white', textAlign: 'left' }}>APPRÉCIATION</th>
                                                     </tr>
                                                 </thead>
@@ -612,22 +666,12 @@ function BulletinsContent() {
                                                                         }}>
                                                                             {moyEleve !== null ? Number(moyEleve).toFixed(2) : '—'}
                                                                         </span>
+                                                                        {/* Notation par lettres : affichée seulement
+                                                                            si l'école l'a activée pour ce cycle. */}
+                                                                        {l.lettre && (
+                                                                            <span style={{ marginLeft: '6px', fontWeight: 800, fontSize: '12px', color: '#6366f1' }}>{l.lettre}</span>
+                                                                        )}
                                                                     </td>
-                                                                    {docSettings.champ_moyenne_classe !== false && (
-                                                                        <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#64748b' }}>
-                                                                            {l.moyenne_classe !== null ? Number(l.moyenne_classe).toFixed(1) : '—'}
-                                                                        </td>
-                                                                    )}
-                                                                    {docSettings.champ_min_max !== false && (
-                                                                        <>
-                                                                            <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#94a3b8' }}>
-                                                                                {l.note_min !== null ? Number(l.note_min).toFixed(0) : '—'}
-                                                                            </td>
-                                                                            <td style={{ padding: '9px 8px', textAlign: 'center', fontSize: '11px', color: '#059669', fontWeight: 600 }}>
-                                                                                {l.note_max !== null ? Number(l.note_max).toFixed(0) : '—'}
-                                                                            </td>
-                                                                        </>
-                                                                    )}
                                                                     <td style={{ padding: '9px 12px', fontSize: '11px', color: '#475569', fontStyle: 'italic' }}>
                                                                         {l.appreciation || '—'}
                                                                     </td>
@@ -636,7 +680,7 @@ function BulletinsContent() {
                                                         })
                                                     ) : (
                                                         <tr>
-                                                            <td colSpan={7} style={{ padding: '30px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
+                                                            <td colSpan={4} style={{ padding: '30px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>
                                                                 Détails par matière non disponibles
                                                             </td>
                                                         </tr>
@@ -659,7 +703,9 @@ function BulletinsContent() {
                                                     <div style={{ fontSize: '32px', fontWeight: 900, color: getNoteColor(selectedBulletin.moyenne_generale), lineHeight: 1 }}>
                                                         {selectedBulletin.moyenne_generale !== null ? Number(selectedBulletin.moyenne_generale).toFixed(2) : '—'}
                                                     </div>
-                                                    <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>/20</div>
+                                                    <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>
+                                                        /20{selectedBulletin.lettre_generale ? ` · ${selectedBulletin.lettre_generale}` : ''}
+                                                    </div>
                                                 </div>
 
                                                 {/* Rang */}

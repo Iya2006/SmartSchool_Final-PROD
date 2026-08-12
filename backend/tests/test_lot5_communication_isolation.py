@@ -85,9 +85,11 @@ def _headers(client: TestClient, nom_utilisateur: str) -> dict:
     return {"Authorization": f"Bearer {resp.json()['token']}"}
 
 
-def _creer_parent(db: Session) -> Parent:
+def _creer_parent(db: Session, etablissement_id: int) -> Parent:
     uid = _uid()
     parent = Parent(
+        # Un parent releve d'UNE ecole (migration 2026_08_multi_01).
+        etablissement_id=etablissement_id,
         nom="Test", prenom="Parent", telephone_1=f"79000{uid:04d}",
         mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
     )
@@ -114,8 +116,8 @@ class TestParentsListFuiteNommee:
         ecole_b = Ecole(db, "PLB")
         eleve_a = ecole_a.ajouter_eleve(db)
         eleve_b = ecole_b.ajouter_eleve(db)
-        parent_a = _creer_parent(db)
-        parent_b = _creer_parent(db)
+        parent_a = _creer_parent(db, ecole_a.etab.etablissement_id)
+        parent_b = _creer_parent(db, ecole_b.etab.etablissement_id)
         _lier(db, parent_a, eleve_a)
         _lier(db, parent_b, eleve_b)
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
@@ -133,9 +135,13 @@ class TestParentsListFuiteNommee:
         ecole_b = Ecole(db, "CBB")
         eleve_a = ecole_a.ajouter_eleve(db, nom="Camara", prenom="EnfantA")
         eleve_b = ecole_b.ajouter_eleve(db, nom="Camara", prenom="EnfantB")
-        parent = _creer_parent(db)
+        # Une FICHE PAR ECOLE depuis la migration 2026_08_multi_01 : la meme
+        # personne existe deux fois, chacune rattachee a son propre enfant.
+        # L'annuaire de l'ecole A ne doit voir que la fiche de l'ecole A.
+        parent = _creer_parent(db, ecole_a.etab.etablissement_id)
+        parent_chez_b = _creer_parent(db, ecole_b.etab.etablissement_id)
         _lier(db, parent, eleve_a)
-        _lier(db, parent, eleve_b)
+        _lier(db, parent_chez_b, eleve_b)
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
         headers_b = _headers(client, ecole_b.admin.nom_utilisateur)
 
@@ -145,7 +151,10 @@ class TestParentsListFuiteNommee:
         assert noms_enfants_a == {"EnfantA"}
 
         resp_b = client.get("/api/communication/parents-list", headers=headers_b)
-        fiche_b = next(p for p in resp_b.json() if p["parent_id"] == parent.parent_id)
+        # L'ecole B ne voit pas la fiche de A : elle voit LA SIENNE, celle qui
+        # porte son propre enfant. Deux fiches distinctes, aucun croisement.
+        assert all(p["parent_id"] != parent.parent_id for p in resp_b.json())
+        fiche_b = next(p for p in resp_b.json() if p["parent_id"] == parent_chez_b.parent_id)
         noms_enfants_b = {e["prenom"] for e in fiche_b["enfants"]}
         assert noms_enfants_b == {"EnfantB"}
 
@@ -156,8 +165,8 @@ class TestParentsAnnuaireEtStats:
         ecole_b = Ecole(db, "ANB")
         eleve_a = ecole_a.ajouter_eleve(db)
         eleve_b = ecole_b.ajouter_eleve(db)
-        parent_a = _creer_parent(db)
-        parent_b = _creer_parent(db)
+        parent_a = _creer_parent(db, ecole_a.etab.etablissement_id)
+        parent_b = _creer_parent(db, ecole_b.etab.etablissement_id)
         _lier(db, parent_a, eleve_a)
         _lier(db, parent_b, eleve_b)
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
@@ -173,8 +182,8 @@ class TestParentsAnnuaireEtStats:
         ecole_b = Ecole(db, "STB")
         eleve_a = ecole_a.ajouter_eleve(db)
         eleve_b = ecole_b.ajouter_eleve(db)
-        parent_a = _creer_parent(db)
-        parent_b = _creer_parent(db)
+        parent_a = _creer_parent(db, ecole_a.etab.etablissement_id)
+        parent_b = _creer_parent(db, ecole_b.etab.etablissement_id)
         _lier(db, parent_a, eleve_a)
         _lier(db, parent_b, eleve_b)
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
@@ -208,7 +217,7 @@ class TestMessagesParents:
         ecole_a = Ecole(db, "MPB")
         ecole_b = Ecole(db, "MPC")
         eleve_b = ecole_b.ajouter_eleve(db)
-        parent_b = _creer_parent(db)
+        parent_b = _creer_parent(db, ecole_b.etab.etablissement_id)
         _lier(db, parent_b, eleve_b)
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
 

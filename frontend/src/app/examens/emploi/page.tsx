@@ -185,14 +185,14 @@ export default function EmploiExamenPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                 <div className="breadcrumb">
                     <Link href="/">Accueil</Link><ChevronRight size={14} />
-                    <Link href="/centre-evaluation">Centre d&apos;Évaluation</Link><ChevronRight size={14} />
+                    <Link href="/centre-evaluation">Centre des Examens</Link><ChevronRight size={14} />
                     <span>Emploi des Examens</span>
                 </div>
                 <Link href="/centre-evaluation" style={{
                     display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px',
                     border: '1px solid var(--border-light)', color: 'var(--text-secondary)', textDecoration: 'none',
                     fontSize: '13px', fontWeight: 600, background: 'white'
-                }}><ArrowLeft size={15} /> Centre d&apos;Évaluation</Link>
+                }}><ArrowLeft size={15} /> Centre des Examens</Link>
             </div>
 
             {/* Toasts */}

@@ -3,15 +3,17 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, Trophy, Building2, AlertTriangle } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { useUI } from '@/context/UIContext';
 import styles from './Sidebar.module.css';
 
 export default function Sidebar() {
     const pathname = usePathname();
     const { etablissementNom, etablissementLogo } = useApp();
+    const { user } = useAuth();
     const { sidebarCollapsed } = useUI();
     const [unreadCount, setUnreadCount] = useState(0);
 
@@ -196,10 +198,16 @@ export default function Sidebar() {
                             <span className={styles.menuText}>Bulletins</span>
                         </Link>
                     </li>
+                    <li className={pathname.startsWith('/resultats-annuels') ? styles.currentPage : ''}>
+                        <Link href="/resultats-annuels">
+                            <Trophy size={18} className={styles.menuIcon} />
+                            <span className={styles.menuText}>Résultats de fin d&apos;année</span>
+                        </Link>
+                    </li>
                     <li className={pathname.startsWith('/centre-evaluation') ? styles.currentPage : ''}>
                         <Link href="/centre-evaluation">
                             <Award size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Centre d&apos;Évaluation</span>
+                            <span className={styles.menuText}>Centre des Examens</span>
                         </Link>
                     </li>
                     <li className={pathname.startsWith('/archive') ? styles.currentPage : ''}>
@@ -219,27 +227,35 @@ export default function Sidebar() {
                         </Link>
                     </li>
 
-                    <li className={styles.sidebarTitle}>
-                        <h6 className={styles.titleText}>PORTAILS</h6>
-                    </li>
-                    <li className={pathname.startsWith('/portail-parent') ? styles.currentPage : ''}>
-                        <Link href="/portail-parent" target="_blank">
-                            <Shield size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Portail Parent</span>
-                        </Link>
-                    </li>
-                    <li className={pathname.startsWith('/portail-enseignant') ? styles.currentPage : ''}>
-                        <Link href="/portail-enseignant" target="_blank">
-                            <Briefcase size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Portail Enseignant</span>
-                        </Link>
-                    </li>
-                    <li className={pathname.startsWith('/portail-eleve') ? styles.currentPage : ''}>
-                        <Link href="/portail-eleve" target="_blank">
-                            <BookUser size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Portail Élève</span>
-                        </Link>
-                    </li>
+                        {/* ESPACE PLATEFORME — l'editeur de SmartSchool, pas une
+                        ecole. Regroupe ce qui porte SUR les ecoles plutot que
+                        DANS une ecole. Masque partout ailleurs ; le controle
+                        reel reste backend. */}
+                    {user?.role === 'SUPER_ADMIN' && (
+                        <>
+                            <li className={styles.sidebarTitle}>
+                                <h6 className={styles.titleText}>PLATEFORME</h6>
+                            </li>
+                            <li className={pathname.startsWith('/administration/etablissements') ? styles.currentPage : ''}>
+                                <Link href="/administration/etablissements">
+                                    <Building2 size={18} className={styles.menuIcon} />
+                                    <span className={styles.menuText}>Établissements</span>
+                                </Link>
+                            </li>
+                            <li className={pathname.startsWith('/administration/incidents') ? styles.currentPage : ''}>
+                                <Link href="/administration/incidents">
+                                    <AlertTriangle size={18} className={styles.menuIcon} />
+                                    <span className={styles.menuText}>Incidents</span>
+                                </Link>
+                            </li>
+                            <li className={pathname.startsWith('/monitoring') ? styles.currentPage : ''}>
+                                <Link href="/monitoring">
+                                    <Activity size={18} className={styles.menuIcon} />
+                                    <span className={styles.menuText}>Monitoring</span>
+                                </Link>
+                            </li>
+                        </>
+                    )}
                 </ul>
             </div>
             {/* Sidebar menu ends */}

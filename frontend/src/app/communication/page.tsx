@@ -948,7 +948,7 @@ function CommunicationAdminPageInner() {
                                                     fontSize: '12px', fontWeight: 700, background: 'linear-gradient(135deg, #d97706, #f59e0b)', color: 'white',
                                                     border: 'none', textDecoration: 'none', cursor: 'pointer'
                                                 }}>
-                                                    <Award size={14} /> Ouvrir le Centre d&apos;Évaluation
+                                                    <Award size={14} /> Ouvrir le Centre des Examens
                                                 </Link>
                                             </div>
                                             {/* Enseignants with their sujets */}

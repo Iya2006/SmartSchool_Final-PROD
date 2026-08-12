@@ -9,29 +9,60 @@ from typing import Optional
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.core.security import verify_password, hash_password
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import (
     Enseignant, Affectation, CreneauEmploi, Classe, Matiere, Niveau,
     Note, Evaluation, Inscription, Eleve, Presence, Trimestre, TypeEvaluation,
     AnneeScolaire, RessourcePedagogique, ClasseMatiere, ParametreEtablissement
 )
 from app.core.annee_lock import verifier_annee_modifiable
+# Moteur de notation partagé avec evaluations.py — ne jamais redéfinir
+# localement une logique de coefficient/moyenne : les deux copies avaient
+# déjà divergé une première fois.
+from app.services.notation import (
+    get_bareme_effectif,
+    get_cycle_key,
+    get_types_evaluation_coefficients,
+    valider_note,
+)
 
 router = APIRouter(prefix="/api/portail-enseignant", tags=["Portail Enseignant"])
 
 
 # ── Dépendance de sécurité : ownership check ───────────────────────────────────────
+# Rôles qui peuvent consulter le portail d'un autre — dans leur école.
+ADMIN_PORTAIL_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}
+
+
 async def _enseignant_auth(
     enseignant_id: int,
     current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
-    """Vérifie que le token JWT appartient à cet enseignant (ou à un admin).
+    """Vérifie que le token JWT appartient à cet enseignant (ou à un admin DE SON ÉCOLE).
+
     Protège contre l'OWASP Broken Access Control sur le portail enseignant.
+
+    Le raccourci « les admins voient tout » datait du mono-établissement : un
+    administrateur de l'école A pouvait consulter les classes, les épreuves et
+    les notes de n'importe quel enseignant de la plateforme — et en saisir en
+    son nom. Son périmètre s'arrête désormais à son école.
     """
     role = current_user.get("role", "")
     token_type = current_user.get("type", "")
-    # Admins peuvent accéder à toutes les données
-    if role in {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}:
+    if role in ADMIN_PORTAIL_ROLES:
+        etablissement_id = current_user.get("etablissement_id")
+        if etablissement_id is None:
+            raise HTTPException(
+                403, "Établissement non déterminé pour ce compte : choisissez un établissement."
+            )
+        existe = db.query(Enseignant.enseignant_id).filter(
+            Enseignant.enseignant_id == enseignant_id,
+            Enseignant.etablissement_id == etablissement_id,
+        ).first()
+        if not existe:
+            # 404 : ne jamais confirmer qu'un enseignant existe ailleurs.
+            raise HTTPException(404, "Enseignant non trouvé")
         return current_user
     # Portail enseignant : le token doit correspondre à l'enseignant_id demandé
     if token_type == "enseignant" and str(current_user.get("sub", "")) == str(enseignant_id):
@@ -78,9 +109,19 @@ def changer_mot_de_passe(enseignant_id: int, data: ChangePasswordRequest, _auth:
 # RÉFÉRENTIELS (Trimestres + Types d'évaluation)
 # ================================================================
 @router.get("/referentiels/trimestres")
-def get_trimestres(db: Session = Depends(get_db)):
-    """Liste des trimestres de l'année courante."""
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.est_courante == "O").first()
+def get_trimestres(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Périodes de l'année courante DE SON ÉCOLE.
+
+    Sans le filtre, `est_courante == "O"` renvoyait l'année de la première
+    école venue : l'enseignant se voyait proposer le calendrier du voisin.
+    """
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == etablissement_id,
+        AnneeScolaire.est_courante == "O",
+    ).first()
     if not annee:
         return []
     trimestres = db.query(Trimestre).filter(
@@ -92,11 +133,22 @@ def get_trimestres(db: Session = Depends(get_db)):
 
 
 @router.get("/referentiels/types-evaluation")
-def get_types_evaluation(db: Session = Depends(get_db)):
-    """Liste des types d'évaluation actifs."""
-    types = db.query(TypeEvaluation).filter(TypeEvaluation.statut == "ACTIF").all()
+def get_types_evaluation(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Liste des types d'évaluation actifs DE SON ÉCOLE.
+
+    Chaque école nomme ses types comme elle l'entend : sans ce filtre,
+    l'enseignant se serait vu proposer ceux du voisin.
+    """
+    types = db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id,
+        TypeEvaluation.statut == "ACTIF",
+    ).order_by(TypeEvaluation.type_eval_id).all()
     return [{"type_eval_id": t.type_eval_id, "code": t.code, "libelle": t.libelle,
-             "poids_pourcentage": float(t.poids_pourcentage)} for t in types]
+             "poids_pourcentage": float(t.poids_pourcentage) if t.poids_pourcentage is not None else None}
+            for t in types]
 
 
 # ================================================================
@@ -554,43 +606,29 @@ def enregistrer_appel(enseignant_id: int, data: AppelRequest, _auth: dict = Depe
 # SAISIE DES NOTES (créer évaluation + sauvegarder notes)
 # ================================================================
 
-_POIDS_EVAL_DEFAUT = {"ecrite": 1.0, "orale": 1.0, "composition": 2.0}
+def _type_eval_par_defaut(db: Session, etablissement_id: int) -> int:
+    """Type d'évaluation à utiliser quand l'enseignant n'en précise aucun.
 
+    Cherche le type générique "EVAL" (Évaluation), sinon le premier type actif.
+    Remplace un `type_eval_id or 1` qui supposait qu'un type utilisable portait
+    forcément l'identifiant 1.
 
-def _categorie_evaluation(type_eval_code):
-    if type_eval_code == "COMPO":
-        return "composition"
-    if type_eval_code == "ORAL":
-        return "orale"
-    return "ecrite"
+    Les helpers `_categorie_evaluation` / `_coefficient_pour_evaluation` que ce
+    fichier portait ont disparu : la pondération n'est plus figée sur trois
+    catégories Écrit/Oral/Composition, elle vient des coefficients de type
+    configurés par l'école et calculés par `app/services/notation.py`.
 
-
-def _coefficient_pour_evaluation(db: Session, type_eval_id: int, matiere_id: int, classe_id: int, etablissement_id: int) -> float:
-    """Système guinéen à 3 notes, pondérations Écrit/Oral/Composition
-    configurables par l'administrateur (Paramètres > Notation, défaut 1/1/2 —
-    la composition compte double). Le coefficient de la matière n'intervient
-    jamais ici (il ne pondère que la moyenne de matière dans la moyenne
-    générale, un niveau au-dessus) — jamais un choix manuel de l'enseignant.
     """
-    type_eval = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == type_eval_id).first()
-    cat = _categorie_evaluation(type_eval.code if type_eval else None)
-    poids = dict(_POIDS_EVAL_DEFAUT)
-    try:
-        params = db.query(ParametreEtablissement).filter(
-            ParametreEtablissement.etablissement_id == etablissement_id,
-            ParametreEtablissement.categorie == 'NOTATION',
-            ParametreEtablissement.cle.in_([
-                'notation.poids_ecrit', 'notation.poids_oral', 'notation.poids_composition'
-            ]),
-        ).all()
-        mapping = {'notation.poids_ecrit': 'ecrite', 'notation.poids_oral': 'orale', 'notation.poids_composition': 'composition'}
-        for p in params:
-            key = mapping.get(p.cle)
-            if key:
-                poids[key] = float(p.valeur)
-    except Exception:
-        pass
-    return poids[cat]
+    base = db.query(TypeEvaluation).filter(
+        TypeEvaluation.etablissement_id == etablissement_id,
+        TypeEvaluation.statut == "ACTIF",
+    )
+    t = base.filter(TypeEvaluation.code == "EVAL").first()
+    if not t:
+        t = base.order_by(TypeEvaluation.type_eval_id).first()
+    if not t:
+        raise HTTPException(400, "Aucun type d'évaluation actif n'est configuré pour l'établissement.")
+    return t.type_eval_id
 
 
 class NoteItem(BaseModel):
@@ -603,8 +641,8 @@ class SaisieNotesRequest(BaseModel):
     matiere_id: int
     trimestre_id: Optional[int] = None
     type_evaluation_id: Optional[int] = None
-    libelle: str  # ex: "Devoir 1", "Interrogation 2"
-    note_sur: float = 20
+    libelle: str  # texte libre saisi par l'école, ex: "Évaluation de Janvier"
+    note_sur: Optional[float] = None  # None => barème configuré pour la classe/matière
     coefficient: float = 1
     notes: list[NoteItem]
 
@@ -633,13 +671,24 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
 
     from datetime import date
 
-    type_eval_id = data.type_evaluation_id or 1
-    # Pondérations de l'établissement de la classe : le paramètre valait 1 par
-    # défaut et n'était pas passé, donc tous les enseignants héritaient des
-    # pondérations Écrit/Oral/Composition de l'école 1.
-    coefficient = _coefficient_pour_evaluation(
-        db, type_eval_id, data.matiere_id, data.classe_id, classe.etablissement_id
+    type_eval_id = data.type_evaluation_id or _type_eval_par_defaut(db, classe.etablissement_id)
+    # `classe` est garanti non nul (404 plus haut) : pas de repli sur l'école 1,
+    # qui appliquait à tous les enseignants les pondérations d'une autre école.
+    etablissement_id = classe.etablissement_id
+    cycle_key = get_cycle_key(data.classe_id, db)
+    coefficient = get_types_evaluation_coefficients(db, etablissement_id, cycle_key).get(type_eval_id, 1.0)
+    note_sur = data.note_sur or get_bareme_effectif(
+        db, data.classe_id, data.matiere_id, cycle_key, etablissement_id
     )
+
+    # Barème vérifié avant de créer quoi que ce soit : sinon une note hors
+    # barème laisse derrière elle une évaluation vide, à supprimer à la main.
+    valeurs = []
+    for n in data.notes:
+        try:
+            valeurs.append(None if n.est_absent else valider_note(n.valeur, note_sur))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     # 1. Créer l'évaluation
     evaluation = Evaluation(
@@ -650,7 +699,7 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
         type_eval_id=type_eval_id,
         libelle=data.libelle,
         date_evaluation=date.today(),
-        note_sur=data.note_sur,
+        note_sur=note_sur,
         coefficient=coefficient,
         statut="PUBLIEE",
     )
@@ -659,11 +708,11 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
 
     # 2. Sauvegarder les notes
     count = 0
-    for n in data.notes:
+    for n, valeur in zip(data.notes, valeurs):
         note = Note(
             evaluation_id=evaluation.evaluation_id,
             inscription_id=n.inscription_id,
-            valeur=n.valeur if not n.est_absent else None,
+            valeur=valeur,
             est_absent="O" if n.est_absent else "N",
         )
         db.add(note)
@@ -693,6 +742,10 @@ def get_detail_evaluation(enseignant_id: int, evaluation_id: int, _auth: dict = 
     mat = db.query(Matiere).filter(Matiere.matiere_id == ev.matiere_id).first()
     cls = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
     tri = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+    # Pas de filtre d'établissement ici, volontairement : `ev` est déjà borné à
+    # l'enseignant appelant, et son type appartient donc à la même école par
+    # construction. Ajouter un filtre ne fermerait rien et masquerait le libellé
+    # sur toute donnée héritée.
     type_ev = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == ev.type_eval_id).first()
 
     # Notes avec info élève
@@ -814,6 +867,13 @@ def update_notes_batch_enseignant(
     if trimestre and trimestre.statut == "CLOTURE":
         raise HTTPException(400, f"{trimestre.libelle} est clôturé — impossible de modifier des notes pour cette période.")
 
+    valeurs = {}
+    for item in data.notes:
+        try:
+            valeurs[item.note_id] = None if item.est_absent else valider_note(item.valeur, ev.note_sur)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
     updated = 0
     for item in data.notes:
         note = db.query(Note).filter(
@@ -821,7 +881,7 @@ def update_notes_batch_enseignant(
             Note.evaluation_id == evaluation_id
         ).first()
         if note:
-            note.valeur = item.valeur if not item.est_absent else None
+            note.valeur = valeurs[item.note_id]
             note.est_absent = "O" if item.est_absent else "N"
             note.observation = item.observation
             updated += 1

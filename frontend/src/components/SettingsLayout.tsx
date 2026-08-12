@@ -35,38 +35,37 @@ export default function SettingsLayout({ children, title, subtitle }: { children
                 </Link>
             </div>
 
-            <div className={styles.mainContent}>
-                {/* Sidebar Navigation */}
-                <aside className={styles.sidebar}>
-                    <nav className={styles.navMenu}>
-                        {SIDEBAR_LINKS.map(link => {
-                            const isActive = pathname.startsWith(link.href);
-                            return (
-                                <Link 
-                                    key={link.id} 
-                                    href={link.href}
-                                    className={`${styles.navItem} ${isActive ? styles.active : ''}`}
-                                >
-                                    <link.icon size={18} className={styles.navIcon} />
-                                    <span>{link.title}</span>
-                                </Link>
-                            );
-                        })}
-                    </nav>
-                </aside>
+            {/* Navigation horizontale en tête de page.
+                Elle occupait auparavant une colonne de 250 px à gauche : sur les
+                écrans étroits, le contenu d'un onglet — souvent des tableaux de
+                réglages — se retrouvait comprimé sur la moitié de la largeur
+                disponible. En haut, chaque section dispose de toute la page. */}
+            <nav className={styles.navMenu}>
+                {SIDEBAR_LINKS.map(link => {
+                    const isActive = pathname.startsWith(link.href);
+                    return (
+                        <Link
+                            key={link.id}
+                            href={link.href}
+                            className={`${styles.navItem} ${isActive ? styles.active : ''}`}
+                        >
+                            <link.icon size={16} className={styles.navIcon} />
+                            <span>{link.title}</span>
+                        </Link>
+                    );
+                })}
+            </nav>
 
-                {/* Content Area */}
-                <main className={styles.contentArea}>
-                    <div className={styles.pageHeader}>
-                        <h1 className={styles.pageTitle}>{title}</h1>
-                        <p className={styles.pageSubtitle}>{subtitle}</p>
-                    </div>
-                    
-                    <div className={styles.pageBody}>
-                        {children}
-                    </div>
-                </main>
-            </div>
+            <main className={styles.contentArea}>
+                <div className={styles.pageHeader}>
+                    <h1 className={styles.pageTitle}>{title}</h1>
+                    <p className={styles.pageSubtitle}>{subtitle}</p>
+                </div>
+
+                <div className={styles.pageBody}>
+                    {children}
+                </div>
+            </main>
         </div>
     );
 }

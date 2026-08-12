@@ -32,11 +32,23 @@ def _uid() -> int:
     return _COUNTER
 
 
-def _type_eval(db: Session) -> TypeEvaluation:
-    """TypeEvaluation est GLOBAL (décision produit) — partagé entre écoles."""
-    te = db.query(TypeEvaluation).filter(TypeEvaluation.code == "L9DEV").first()
+def _type_eval(db: Session, etablissement_id: int) -> TypeEvaluation:
+    """TypeEvaluation appartient desormais a UNE ecole.
+
+    Ce helper la partageait entre ecoles, du temps ou la table etait globale :
+    une ecole pouvait alors renommer les colonnes de bulletin des autres. Voir
+    migration 2026_08_notation_09_type_evaluation_etablissement.py et
+    tests/test_types_evaluation_isolation.py.
+    """
+    te = db.query(TypeEvaluation).filter(
+        TypeEvaluation.code == "L9DEV",
+        TypeEvaluation.etablissement_id == etablissement_id,
+    ).first()
     if not te:
-        te = TypeEvaluation(code="L9DEV", libelle="Devoir (test L9)", poids_pourcentage=100)
+        te = TypeEvaluation(
+            etablissement_id=etablissement_id,
+            code="L9DEV", libelle="Devoir (test L9)", poids_pourcentage=100,
+        )
         db.add(te); db.commit(); db.refresh(te)
     return te
 
@@ -114,7 +126,7 @@ class Ecole:
     def evaluation(self, db: Session) -> Evaluation:
         ev = Evaluation(
             matiere_id=self.matiere.matiere_id, classe_id=self.classe.classe_id,
-            trimestre_id=self.trimestre.trimestre_id, type_eval_id=_type_eval(db).type_eval_id,
+            trimestre_id=self.trimestre.trimestre_id, type_eval_id=_type_eval(db, self.etab.etablissement_id).type_eval_id,
             enseignant_id=self.enseignant.enseignant_id, libelle=f"Devoir {_uid()}",
             date_evaluation=date(2025, 10, 1), note_sur=20, coefficient=1, statut="CENTRALISEE",
         )
@@ -297,7 +309,10 @@ class TestEvaluationsIsolation:
             "/api/evaluations",
             json={
                 "matiere_id": b.matiere.matiere_id, "classe_id": b.classe.classe_id,
-                "trimestre_id": b.trimestre.trimestre_id, "type_eval_id": _type_eval(db).type_eval_id,
+                # Type de l'école B : tout le corps désigne B, c'est bien une
+                # tentative d'écrire chez le voisin depuis un compte de A.
+                "trimestre_id": b.trimestre.trimestre_id,
+                "type_eval_id": _type_eval(db, b.etab.etablissement_id).type_eval_id,
                 "enseignant_id": b.enseignant.enseignant_id, "libelle": "Injectée",
                 "date_evaluation": "2025-10-01",
             },

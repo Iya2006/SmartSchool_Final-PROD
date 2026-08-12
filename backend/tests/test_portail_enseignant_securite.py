@@ -133,8 +133,14 @@ class TestPortailEnseignantOwnershipSecurity:
         assert response.status_code == 200
 
     # ── Bypass admin ────────────────────────────────────────────────────
-    def test_admin_bypass_dashboard(self, client: TestClient):
-        """OK: Un admin peut accéder aux données de n'importe quel enseignant."""
+    # NOTE — ces tests affirmaient "un admin accede aux donnees de N IMPORTE
+    # QUEL enseignant". Vrai en mono-etablissement, faille en multi-ecoles :
+    # un administrateur de l'ecole A consultait les classes et les notes d'un
+    # enseignant de l'ecole B, et pouvait meme reinitialiser son mot de passe.
+    # Le perimetre de l'admin s'arrete desormais a son ecole.
+
+    def test_admin_sans_etablissement_est_refuse(self, client: TestClient):
+        """SUPER_ADMIN plateforme : doit choisir une ecole avant d'entrer."""
         with patch("app.core.auth.decode_token", return_value={
             "sub": "1", "role": "ADMIN", "type": "admin",
         }):
@@ -142,16 +148,27 @@ class TestPortailEnseignantOwnershipSecurity:
                 "/api/portail-enseignant/999/dashboard",
                 headers={"Authorization": "Bearer fake_admin"},
             )
-        assert response.status_code not in [401, 403]
+        assert response.status_code == 403
 
-    def test_admin_bypass_changer_mdp(self, client: TestClient):
-        """OK: Un admin peut réinitialiser le mot de passe de n'importe quel enseignant."""
+    def test_admin_ne_lit_pas_l_enseignant_d_une_autre_ecole(self, client: TestClient):
         with patch("app.core.auth.decode_token", return_value={
-            "sub": "1", "role": "ADMIN", "type": "admin",
+            "sub": "1", "role": "ADMIN", "type": "admin", "etablissement_id": 1,
+        }):
+            response = client.get(
+                "/api/portail-enseignant/999999/dashboard",
+                headers={"Authorization": "Bearer fake_admin"},
+            )
+        assert response.status_code == 404
+
+    def test_admin_ne_reinitialise_pas_le_mdp_d_une_autre_ecole(self, client: TestClient):
+        """Le plus grave des deux : reinitialiser un mot de passe, c'est
+        prendre le controle du compte."""
+        with patch("app.core.auth.decode_token", return_value={
+            "sub": "1", "role": "ADMIN", "type": "admin", "etablissement_id": 1,
         }):
             response = client.put(
-                "/api/portail-enseignant/999/changer-mot-de-passe",
+                "/api/portail-enseignant/999999/changer-mot-de-passe",
                 json={"nouveau_mdp": "resetParAdmin123"},
                 headers={"Authorization": "Bearer fake_admin"},
             )
-        assert response.status_code not in [401, 403]
+        assert response.status_code == 404

@@ -115,6 +115,8 @@ export interface AbsencesData {
 export interface BulletinMatiere {
     matiere: string;
     coefficient: number;
+    // Notation par lettres : null tant que l'école ne l'a pas activée.
+    lettre?: string | null;
     moyenne_eleve: number | null;
     moyenne_classe: number | null;
     note_min: number | null;
