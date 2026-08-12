@@ -368,6 +368,10 @@ class Enseignant(Base):
     # Nouveaux champs RH et Contrat
     salaire_base = Column(Numeric(10, 2), default=0)
     taux_horaire = Column(Numeric(10, 2), default=0)
+    # MENSUEL (primaire : salaire fixe) ou HORAIRE (college et lycee :
+    # paye a l'heure). Porte par l'enseignant et non deduit de ses classes :
+    # un instituteur peut assurer une heure au college sans changer de contrat.
+    mode_remuneration = Column(String(20), default="HORAIRE", nullable=False)
     prime_mensuelle = Column(Numeric(10, 2), default=0)
     heures_hebdo = Column(Integer, default=0)
     rib = Column(String(100), nullable=True)
@@ -450,6 +454,11 @@ class Affectation(Base):
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
     annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     nb_heures_semaine = Column(Numeric(3, 1), default=0)
+    # EXCEPTION de tarif pour cette affectation precise. Nullable : le taux
+    # de l'enseignant s'applique partout, on ne renseigne ici que la ou il
+    # differe (une heure de Terminale ne se paie pas comme une heure de 7e).
+    # Meme schema que coefficient_override sur les evaluations.
+    taux_horaire = Column(Numeric(10, 2), nullable=True)
     est_principal = Column(String(1), default="O")
     statut = Column(String(20), default="ACTIVE")
 

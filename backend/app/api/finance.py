@@ -16,7 +16,7 @@ from app.models.academique import (
     TypeFrais, TarifClasse, Facture, EcheanceFacture, Paiement, Depense,
     Inscription, Classe, Eleve, AnneeScolaire, Enseignant, Utilisateur,
     Employe, Avance, Prime, AbsencePersonnel, BulletinPaie, PresenceAgent,
-    Message, ParametreComptabilite,
+    Message, ParametreComptabilite, Affectation,
 )
 import calendar
 from app.schemas.schemas import (
@@ -1124,8 +1124,18 @@ def list_depenses(
         Depense.etablissement_id == etablissement_id,
         Depense.annee_id == annee_id
     )
+    # Les salaires sont enregistres comme des depenses de categorie SALAIRES,
+    # mais ils relevent du module Salaires et de ses ecrans. Les afficher ici
+    # doublerait les montants a l'oeil du comptable et rendrait illisibles les
+    # depenses de fonctionnement. Meme perimetre que `stats_depenses`, sans
+    # quoi le total affiche et la liste en dessous ne diraient pas la meme
+    # chose. `categorie=SALAIRES` reste possible pour qui les demande.
     if categorie:
         query = query.filter(Depense.categorie == categorie)
+    else:
+        query = query.filter(
+            func.upper(func.coalesce(Depense.categorie, "")) != "SALAIRES"
+        )
     if classe_id:
         query = query.filter(Depense.classe_id == classe_id)
     if statut:
@@ -1201,10 +1211,14 @@ def stats_depenses(annee_id: Optional[int] = None, db: Session = Depends(get_db)
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
+    # Meme perimetre que la liste : les salaires relevent du module Salaires.
+    # Sans cette exclusion, le total des depenses et la liste affichee en
+    # dessous ne diraient pas la meme chose.
     query_base = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
         Depense.annee_id == annee_id,
-        Depense.statut != "REJETEE"
+        Depense.statut != "REJETEE",
+        func.upper(func.coalesce(Depense.categorie, "")) != "SALAIRES",
     )
     total = query_base.with_entities(func.coalesce(func.sum(Depense.montant), 0)).scalar()
     par_categorie = query_base.with_entities(
@@ -4254,3 +4268,154 @@ def annuler_salaire(depense_id: int, db: Session = Depends(get_db), etablissemen
     return {"message": "Paiement annulé"}
 
 
+# ════════════════════════════════════════════════════════════════════════
+# RÉMUNÉRATION — au mois ou à l'heure
+# ════════════════════════════════════════════════════════════════════════
+# Un enseignant portait un seul taux horaire, le même partout : impossible
+# d'exprimer qu'une heure de Terminale ne se paie pas comme une heure de 7ᵉ.
+# Et rien ne distinguait l'instituteur du primaire, payé au mois, du vacataire
+# du collège payé à l'heure.
+#
+# Le calcul vit dans `app/services/paie.py` — jamais réécrit ici, sous peine de
+# voir deux chiffres différents pour le même salaire selon l'écran consulté.
+
+
+from pydantic import BaseModel as _BaseModel
+
+
+class TauxAffectation(_BaseModel):
+    """Exception de tarif sur une affectation précise.
+
+    `None` et `0` ne sont PAS équivalents : `None` remet le taux de
+    l'enseignant, `0` signifie que cette heure n'est pas rémunérée (bénévolat,
+    forfait déjà couvert).
+    """
+    taux_horaire: Optional[float] = None
+
+
+@router.get("/remuneration/enseignant/{enseignant_id}")
+def remuneration_enseignant(
+    enseignant_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Rémunération mensuelle d'un enseignant, avec le détail de ses heures.
+
+    Le détail est renvoyé même en mode MENSUEL : l'école doit pouvoir voir la
+    charge réelle d'un instituteur, même si elle ne détermine pas sa paie. Un
+    total sans son détail n'est pas contestable, donc pas vérifiable.
+    """
+    from app.services import paie as _paie
+
+    ens = db.query(Enseignant).filter(
+        Enseignant.enseignant_id == enseignant_id,
+        Enseignant.etablissement_id == etablissement_id,
+    ).first()
+    if not ens:
+        raise HTTPException(404, "Enseignant non trouvé")
+
+    resultat = _paie.salaire_enseignant(
+        db, enseignant_id, _paie.annee_courante_id(db, etablissement_id)
+    )
+    resultat["enseignant"] = f"{ens.prenom} {ens.nom}"
+    resultat["taux_reference"] = float(ens.taux_horaire or 0)
+    resultat["salaire_mensuel"] = float(ens.salaire_base or 0)
+    return resultat
+
+
+@router.put("/remuneration/affectation/{affectation_id}/taux")
+def definir_taux_affectation(
+    affectation_id: int,
+    data: TauxAffectation,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Fixe — ou retire — l'exception de tarif d'une affectation."""
+    aff = (
+        db.query(Affectation)
+        .join(Enseignant, Enseignant.enseignant_id == Affectation.enseignant_id)
+        .filter(
+            Affectation.affectation_id == affectation_id,
+            Enseignant.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not aff:
+        raise HTTPException(404, "Affectation non trouvée")
+    if data.taux_horaire is not None and data.taux_horaire < 0:
+        raise HTTPException(400, "Un taux horaire ne peut pas être négatif.")
+
+    aff.taux_horaire = data.taux_horaire
+    db.commit()
+    return {
+        "message": ("Tarif spécifique enregistré." if data.taux_horaire is not None
+                    else "Tarif spécifique retiré : le taux de l'enseignant s'applique."),
+        "affectation_id": affectation_id,
+        "taux_horaire": data.taux_horaire,
+    }
+
+
+@router.get("/remuneration/preparer")
+def preparer_la_paie(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """UNE seule préparation de paie : enseignants ET personnel.
+
+    Les deux populations étaient calculées par des chemins séparés, obligeant
+    le comptable à faire deux fois le travail sans jamais pouvoir recouper le
+    total. Ici, tout le monde figure dans la même liste, avec la raison de son
+    montant.
+    """
+    from app.services import paie as _paie
+
+    annee_id = _paie.annee_courante_id(db, etablissement_id)
+    lignes = []
+
+    for ens in db.query(Enseignant).filter(
+        Enseignant.etablissement_id == etablissement_id,
+        Enseignant.statut == "ACTIF",
+    ).order_by(Enseignant.nom, Enseignant.prenom).all():
+        r = _paie.salaire_enseignant(db, ens.enseignant_id, annee_id)
+        lignes.append({
+            "type": "ENSEIGNANT",
+            "id": ens.enseignant_id,
+            "nom": f"{ens.prenom} {ens.nom}",
+            "fonction": "Enseignant",
+            "mode": r["mode"],
+            "base": r["base"],
+            "total_heures": r["total_heures"],
+            "explication": r.get("explication", ""),
+            "nb_affectations": len(r["lignes"]),
+        })
+
+    # Le SUPER_ADMIN est l'editeur de la plateforme : il n'est pas salarie de
+    # l'ecole et n'a donc rien a faire dans sa paie.
+    for u in db.query(Utilisateur).filter(
+        Utilisateur.etablissement_id == etablissement_id,
+        Utilisateur.statut == "ACTIF",
+        Utilisateur.role != "SUPER_ADMIN",
+    ).order_by(Utilisateur.nom, Utilisateur.prenom).all():
+        r = _paie.salaire_personnel(db, u.utilisateur_id)
+        lignes.append({
+            "type": "PERSONNEL",
+            "id": u.utilisateur_id,
+            "nom": f"{u.prenom} {u.nom}",
+            "fonction": u.role,
+            "mode": r["mode"],
+            "base": r["base"],
+            "total_heures": 0.0,
+            "explication": r.get("explication", ""),
+            "nb_affectations": 0,
+        })
+
+    # Les salaires non renseignes sont comptes a part : les noyer dans le total
+    # laisserait croire que la paie est prete alors qu'il manque des montants.
+    a_completer = [l for l in lignes if l["base"] <= 0]
+    return {
+        "lignes": lignes,
+        "effectif": len(lignes),
+        "total_a_payer": round(sum(l["base"] for l in lignes), 2),
+        "a_completer": len(a_completer),
+        "noms_a_completer": [l["nom"] for l in a_completer][:20],
+    }
