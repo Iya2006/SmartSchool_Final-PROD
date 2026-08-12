@@ -32,6 +32,7 @@ from app.api.portail_enseignant import router as teacher_portal_router
 from app.api.sync import router as sync_router
 from app.api.portail_eleve import router as eleve_portal_router
 from app.api.auth import router as auth_router
+from app.api.inscription_etablissement import router as inscription_etablissement_router
 from app.api.devoirs import router as devoirs_router
 from app.api.photos import router as photos_router
 from app.api.fournitures import router as fournitures_router
@@ -227,6 +228,10 @@ app.include_router(monitoring_router, dependencies=[Depends(require_roles(*ADMIN
 
 # ── Routes PUBLIQUES (gèrent leur propre authentification) ──
 app.include_router(auth_router)           # Login admin → retourne le JWT
+# Inscription publique d'une ecole (POST) + validation SUPER_ADMIN (GET/PUT).
+# Pas de dependance globale : la route d'inscription est volontairement
+# ouverte, les routes de validation portent _require_super_admin chacune.
+app.include_router(inscription_etablissement_router)
 app.include_router(parent_portal_router)  # Login parent → son propre JWT
 app.include_router(teacher_portal_router) # Login enseignant → son propre JWT
 app.include_router(sync_router)           # Sync offline-first — auth via _enseignant_auth par route (même pattern que teacher_portal_router)

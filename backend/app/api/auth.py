@@ -12,9 +12,44 @@ from app.core.database import get_db
 from app.core.security import verify_password
 from app.core.auth import create_access_token, get_current_user
 from app.core.rate_limit import limiter, _DEFAULT_LIMIT
-from app.models.academique import Utilisateur, Enseignant, Parent, Eleve, EleveParent
+from app.models.academique import (
+    Eleve, EleveParent, Enseignant, Etablissement, Parent, Utilisateur,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["Authentification"])
+
+
+# Une ecole inscrite depuis le site public est creee EN_ATTENTE : ses comptes
+# existent mais ne doivent pas pouvoir entrer tant que la plateforme n'a pas
+# valide. Le controle est ici, au login, et non dans chaque route : c'est le
+# seul passage obligatoire.
+_STATUTS_ECOLE_BLOQUANTS = {
+    "EN_ATTENTE": ("Votre etablissement est en cours de validation par SmartSchool. "
+                   "Vous recevrez un e-mail des qu'il sera active."),
+    "REFUSE": "La demande d'inscription de cet etablissement n'a pas ete retenue.",
+    "SUSPENDU": "Cet etablissement est suspendu. Contactez SmartSchool.",
+}
+
+
+def _verifier_etablissement_actif(db: Session, etablissement_id: Optional[int]) -> None:
+    """Refuse la connexion si l'ecole n'est pas active.
+
+    `None` = compte plateforme (SUPER_ADMIN), qui n'appartient a aucune ecole :
+    rien a verifier. Une ecole introuvable n'est pas bloquante ici — le compte
+    serait de toute facon inutilisable, et inventer un message a ce stade
+    renseignerait un attaquant sur l'etat de la base.
+    """
+    if etablissement_id is None:
+        return
+    ecole = db.query(Etablissement.statut).filter(
+        Etablissement.etablissement_id == etablissement_id
+    ).first()
+    if not ecole:
+        return
+    message = _STATUTS_ECOLE_BLOQUANTS.get(ecole[0])
+    if message:
+        raise HTTPException(403, message)
+
 
 
 def _derive_parent_etablissement(db: Session, parent_id: int) -> Optional[int]:
@@ -75,7 +110,8 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             raise HTTPException(403, "Ce compte est désactivé")
         if not verify_password(mot_de_passe, user.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
-        
+        _verifier_etablissement_actif(db, user.etablissement_id)
+
         token_data = {
             "sub": str(user.utilisateur_id),
             "nom": user.nom,
@@ -120,6 +156,7 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             raise HTTPException(403, "Ce compte est désactivé")
         if not verify_password(mot_de_passe, ens.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
+        _verifier_etablissement_actif(db, ens.etablissement_id)
             
         token_data = {
             "sub": str(ens.enseignant_id),
@@ -154,6 +191,7 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             raise HTTPException(403, "Ce compte est désactivé")
         if not verify_password(mot_de_passe, parent.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
+        _verifier_etablissement_actif(db, _derive_parent_etablissement(db, parent.parent_id))
             
         token_data = {
             "sub": str(parent.parent_id),
@@ -193,6 +231,7 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             raise HTTPException(403, "Ce compte est désactivé")
         if not verify_password(mot_de_passe, eleve.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
+        _verifier_etablissement_actif(db, eleve.etablissement_id)
             
         token_data = {
             "sub": str(eleve.eleve_id),
