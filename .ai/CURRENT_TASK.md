@@ -1,6 +1,35 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active — Fusion `origin/main` (PR du collaborateur) dans `IYA` (12/08/2026)
+## Tâche active — Fluidité à grande échelle + Galerie paginée + Profil admin réel (12/08/2026)
+Voir `.ai/SCALABILITE_GALERIE_PROFIL_RAPPORT.md` pour le détail complet.
+Résumé : après la fusion du travail du collaborateur, l'utilisateur a
+demandé (1) une analyse + corrections de fluidité pour supporter jusqu'à
+1M élèves/école sans toucher au backend du collaborateur, (2) un correctif
+pour la page Galerie qui plantait à 5000 élèves (chargeait tout d'un
+coup), (3) une refonte de la page Profil admin, en grande partie factice
+(sauvegarde en `localStorage` seulement, changement de mot de passe faux,
+pas de vrai upload photo).
+
+Fait : 12 nouveaux index de performance (nouveau fichier de migration,
+même motif que celui du collaborateur, non modifié) ; pagination ajoutée
+partout où elle manquait réellement (personnel, classes, enseignants,
+galerie) avec correction au passage des cartes de statistiques qui
+auraient sinon silencieusement cessé de représenter toute l'école ; 4
+vrais bugs N+1 corrigés (règle déjà documentée dans
+`.ai/PROJECT_MEMORY.md`) ; galerie repensée en 50 photos par page (vérifié
+contre les vraies données à 5000 élèves — le scénario exact du
+signalement) ; page Profil entièrement reconnectée à des données réelles
+(fiche personnel, changement de mot de passe avec vérification de
+l'ancien, vrai upload de photo) et ses 3 onglets 100% factices (Annonces,
+Préférences Système, Journal d'Audit) retirés sur décision explicite de
+l'utilisateur.
+
+État vérifié : suite backend 667 passed/0 échec, `tsc` propre, 102/102
+frontend, migration exécutée sur la base locale (schéma confirmé aligné).
+Rendu visuel réel non vérifié (aucun outil d'automatisation navigateur
+disponible cette session).
+
+## Tâche précédente — Fusion `origin/main` (PR du collaborateur) dans `IYA` (12/08/2026)
 Voir `.ai/FUSION_MAIN_DANS_IYA_RAPPORT.md` pour le détail complet. Résumé :
 l'utilisateur a accepté une PR de son collaborateur sur `main`
 (comptabilité, moteur de notation, inscription en ligne des
