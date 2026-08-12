@@ -88,6 +88,8 @@ class Ecole:
     def parent_de(self, db: Session, eleve: Eleve) -> Parent:
         uid = _uid()
         p = Parent(
+            # Un parent releve d'UNE ecole (migration 2026_08_multi_01).
+            etablissement_id=self.etab.etablissement_id,
             nom="Camara", prenom=f"P{uid}", telephone_1=f"60300{uid:04d}",
             mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
         )

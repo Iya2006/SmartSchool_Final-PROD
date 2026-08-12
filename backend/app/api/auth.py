@@ -52,6 +52,41 @@ def _verifier_etablissement_actif(db: Session, etablissement_id: Optional[int]) 
 
 
 
+def _etablissement_du_code(db: Session, code: Optional[str]):
+    """Ecole designee par son code, ou None si aucun code n'est fourni.
+
+    Le code est celui de `ss_etablissements.code` — genere a l'inscription,
+    unique sur la plateforme, et communique par l'ecole a ses enseignants et
+    parents. Un code inconnu est refuse tout de suite : le laisser passer
+    ferait chercher dans TOUTES les ecoles, c'est-a-dire l'inverse du but.
+    """
+    if not code or not code.strip():
+        return None
+    ecole = db.query(Etablissement).filter(
+        Etablissement.code == code.strip().upper()
+    ).first()
+    if not ecole:
+        raise HTTPException(404, "Code d'etablissement inconnu. Verifiez auprès de votre école.")
+    return ecole
+
+
+def _exiger_un_seul(comptes: list, quoi: str):
+    """Un identifiant doit designer UNE personne.
+
+    Plusieurs ecoles peuvent inscrire le meme numero : la resolution par
+    `.first()` en choisirait une au hasard, et l'interesse se connecterait
+    tantot a l'une tantot a l'autre sans comprendre. On demande le code plutot
+    que de deviner.
+    """
+    if len(comptes) > 1:
+        raise HTTPException(
+            409,
+            f"Ce {quoi} est utilise dans plusieurs etablissements. "
+            "Indiquez le code de votre ecole pour continuer.",
+        )
+    return comptes[0] if comptes else None
+
+
 def _derive_parent_etablissement(db: Session, parent_id: int) -> Optional[int]:
     """Détermine l'établissement unique d'un parent via ses enfants réels.
 
@@ -77,6 +112,15 @@ def _derive_parent_etablissement(db: Session, parent_id: int) -> Optional[int]:
 class LoginRequest(BaseModel):
     identifiant: str  # nom_utilisateur, email, telephone, ou matricule
     mot_de_passe: str
+    # Code de l'école, saisi UNIQUEMENT quand c'est nécessaire.
+    #
+    # Un enseignant peut exercer dans plusieurs établissements, un parent avoir
+    # des enfants dans plusieurs écoles : une fiche par école, donc le même
+    # numéro de téléphone plusieurs fois sur la plateforme. Le code lève
+    # l'ambiguïté. Laissé vide quand l'identifiant ne désigne qu'une personne —
+    # inutile d'imposer un code aux écoles qui n'en ont pas besoin.
+    code_etablissement: Optional[str] = None
+
 
 class LoginResponse(BaseModel):
     token: str
@@ -97,6 +141,9 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
     """
     identifiant = data.identifiant.strip()
     mot_de_passe = data.mot_de_passe
+    # Ecole designee par le code, si l'utilisateur en a saisi un. Refuse tout
+    # de suite si le code est inconnu.
+    ecole_demandee = _etablissement_du_code(db, data.code_etablissement)
 
     # 1. Chercher dans Utilisateur
     user = db.query(Utilisateur).filter(
@@ -145,11 +192,19 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
         }
 
     # 2. Chercher dans Enseignant
-    ens = db.query(Enseignant).filter(
+    #    Le meme enseignant peut exister dans plusieurs ecoles (une fiche par
+    #    ecole). Le code, s'il est fourni, borne la recherche ; sinon on exige
+    #    que l'identifiant ne designe qu'une seule personne.
+    requete_ens = db.query(Enseignant).filter(
         (Enseignant.telephone == identifiant) |
         (Enseignant.email == identifiant) |
         (Enseignant.matricule == identifiant)
-    ).first()
+    )
+    if ecole_demandee:
+        requete_ens = requete_ens.filter(
+            Enseignant.etablissement_id == ecole_demandee.etablissement_id
+        )
+    ens = _exiger_un_seul(requete_ens.all(), "identifiant")
 
     if ens:
         if ens.statut != "ACTIF":
@@ -181,17 +236,25 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
         }
 
     # 3. Chercher dans Parent
-    parent = db.query(Parent).filter(
+    #    Un parent a une fiche par ecole ou l'un de ses enfants est scolarise.
+    #    Meme regle que pour l'enseignant : le code borne la recherche, sinon
+    #    l'identifiant doit ne designer qu'une seule personne.
+    requete_parent = db.query(Parent).filter(
         (Parent.telephone_1 == identifiant) |
         (Parent.email == identifiant)
-    ).first()
+    )
+    if ecole_demandee:
+        requete_parent = requete_parent.filter(
+            Parent.etablissement_id == ecole_demandee.etablissement_id
+        )
+    parent = _exiger_un_seul(requete_parent.all(), "identifiant")
 
     if parent:
         if parent.statut != "ACTIF":
             raise HTTPException(403, "Ce compte est désactivé")
         if not verify_password(mot_de_passe, parent.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
-        _verifier_etablissement_actif(db, _derive_parent_etablissement(db, parent.parent_id))
+        _verifier_etablissement_actif(db, parent.etablissement_id)
             
         token_data = {
             "sub": str(parent.parent_id),
@@ -203,7 +266,9 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             # arbitrairement) — voir _derive_parent_etablissement. Les routes
             # du portail parent vérifient l'ownership via EleveParent, pas ce
             # champ seul, donc None ici ne restreint ni n'élargit leur accès.
-            "etablissement_id": _derive_parent_etablissement(db, parent.parent_id),
+            # La fiche porte son ecole : plus de deduction par les enfants, qui
+            # renvoyait None des que le parent en avait dans plusieurs ecoles.
+            "etablissement_id": parent.etablissement_id,
         }
         return {
             "token": create_access_token(token_data),

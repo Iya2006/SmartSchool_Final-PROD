@@ -80,7 +80,10 @@ class Ecole:
             etablissement_id=e, matricule=f"PELV-{uid}", nom="Diallo", prenom="Aissata",
             date_naissance=date(2012, 5, 4), sexe="F", statut="ACTIF",
         )
-        self.parent = Parent(nom="Diallo", prenom="Mamadou", telephone_1=f"76000{uid:04d}")
+        self.parent = Parent(
+            etablissement_id=e, nom="Diallo", prenom="Mamadou",
+            telephone_1=f"76000{uid:04d}",
+        )
         db.add_all([self.classe, self.enseignant, self.eleve, self.parent])
         db.commit()
         for o in (self.classe, self.enseignant, self.eleve, self.parent):

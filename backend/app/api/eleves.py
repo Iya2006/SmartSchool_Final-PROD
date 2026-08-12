@@ -409,47 +409,45 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
         # 3. Traiter le parent si fourni
         parent_info = None
         if data.parent and data.parent.telephone_1:
-            # Un parent peut légitimement avoir des enfants dans plusieurs
-            # écoles : on réutilise donc bien la fiche existante. En revanche,
-            # on ne la MODIFIE que si ce parent relève déjà de CET
-            # établissement. Sans cette distinction, il suffisait à un
-            # administrateur de saisir le numéro d'un parent d'une autre école
-            # pour lui réécrire son mot de passe — donc prendre le contrôle de
-            # son compte et, à travers lui, accéder aux données de ses enfants
-            # dans l'autre école. La réponse renvoyait en prime son nom réel.
+            # Un parent a UNE FICHE PAR ÉCOLE (migration 2026_08_multi_01).
+            # La recherche est donc bornée à l'établissement appelant :
+            #
+            #   - même école, numéro déjà connu  -> c'est un frère ou une sœur,
+            #     on réutilise la fiche et on la met à jour ;
+            #   - autre école                    -> invisible ici, cette école
+            #     crée sa propre fiche.
+            #
+            # Ce filtre remplace un montage plus fragile : la fiche d'une autre
+            # école était réutilisée telle quelle, et il avait fallu un contrôle
+            # séparé pour empêcher qu'un administrateur ne réécrive le mot de
+            # passe d'un parent d'ailleurs — donc ne prenne son compte. Ici le
+            # cas ne peut plus se présenter : cette fiche n'est jamais chargée.
             existing_parent = db.query(Parent).filter(
-                (Parent.telephone_1 == data.parent.telephone_1)
+                Parent.telephone_1 == data.parent.telephone_1,
+                Parent.etablissement_id == etablissement_id,
             ).first()
-
-            parent_de_cet_etablissement = False
-            if existing_parent:
-                parent_de_cet_etablissement = bool(
-                    db.query(EleveParent.eleve_parent_id)
-                    .join(Eleve, Eleve.eleve_id == EleveParent.eleve_id)
-                    .filter(
-                        EleveParent.parent_id == existing_parent.parent_id,
-                        Eleve.etablissement_id == etablissement_id,
-                    )
-                    .first()
-                )
 
             if existing_parent:
                 parent = existing_parent
-                if parent_de_cet_etablissement:
-                    # Mettre à jour le mot de passe si fourni
-                    if data.parent.mot_de_passe:
-                        parent.mot_de_passe = hash_password(data.parent.mot_de_passe)
-                    # Mettre à jour les infos si elles étaient vides
-                    if data.parent.email and not parent.email:
-                        parent.email = data.parent.email
-                    if data.parent.profession and not parent.profession:
-                        parent.profession = data.parent.profession
+                # Mettre à jour le mot de passe si fourni
+                if data.parent.mot_de_passe:
+                    parent.mot_de_passe = hash_password(data.parent.mot_de_passe)
+                # Mettre à jour les infos si elles étaient vides
+                if data.parent.email and not parent.email:
+                    parent.email = data.parent.email
+                if data.parent.profession and not parent.profession:
+                    parent.profession = data.parent.profession
             else:
                 # Aucun parent ne porte ce téléphone : on en crée un. Son
                 # e-mail sert lui aussi à se connecter, il doit donc être libre
                 # (le téléphone, lui, vient d'être vérifié juste au-dessus).
-                exiger_identifiants_libres(db, [data.parent.email])
+                exiger_identifiants_libres(
+                    db, [data.parent.email], etablissement_id=etablissement_id
+                )
                 parent = Parent(
+                    # Le parent appartient a l'ecole de l'appelant. Une meme
+                    # personne ayant des enfants ailleurs a une fiche par ecole.
+                    etablissement_id=etablissement_id,
                     nom=data.parent.nom,
                     prenom=data.parent.prenom,
                     sexe=data.parent.sexe,
@@ -480,15 +478,15 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
                 )
                 db.add(link)
 
-            # Pour un parent venu d'une autre école, on renvoie ce que
-            # l'appelant a lui-même saisi, jamais l'identité stockée : sinon un
-            # simple numéro de téléphone permettait de découvrir le nom réel
-            # d'un parent d'un autre établissement.
-            expose_identite_stockee = parent_de_cet_etablissement or not existing_parent
+            # La fiche renvoyée relève forcément de l'établissement appelant :
+            # la recherche y est bornée, une fiche d'ailleurs n'est jamais
+            # chargée. Le détour qui masquait l'identité d'un parent d'une autre
+            # école n'a plus d'objet — il protégeait d'une fuite désormais
+            # impossible par construction.
             parent_info = {
                 "parent_id": parent.parent_id,
-                "nom": parent.nom if expose_identite_stockee else data.parent.nom,
-                "prenom": parent.prenom if expose_identite_stockee else data.parent.prenom,
+                "nom": parent.nom,
+                "prenom": parent.prenom,
                 "telephone": data.parent.telephone_1,
                 "is_new": not bool(existing_parent),
             }

@@ -304,8 +304,19 @@ class Eleve(Base):
 
 
 class Parent(Base):
+    """Parent d'élève, rattaché à UNE école.
+
+    Un parent dont les enfants sont scolarisés dans plusieurs établissements a
+    une fiche PAR école : c'est le code de l'établissement, saisi au login, qui
+    dit laquelle. Un compte unique supposerait un endroit central où les écoles
+    se croisent — exactement ce que le chantier multi-écoles a supprimé.
+
+    Son téléphone et son e-mail sont donc uniques PAR ÉCOLE et non globalement
+    (index uq_parents_etab_*, migration 2026_08_multi_01).
+    """
     __tablename__ = "ss_parents"
     parent_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
     sexe = Column(String(1))
