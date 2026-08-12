@@ -27,6 +27,18 @@ fichiers concernés restaurés à leur état d'avant ce chantier (aucun risque,
 `origin/main` ne les avait pas touchés). Suite backend 667 passed/0 échec,
 `tsc` propre, 102/102 frontend, toujours vrais après ce retrait.
 
+**Suite directe (même jour)** : l'utilisateur a signalé des erreurs
+réelles en testant (traceback backend collé dans la conversation). Cause
+trouvée : 13 migrations de la fusion `origin/main` n'avaient jamais été
+exécutées sur la base locale (fusionner du code ne migre pas la base).
+Toutes exécutées avec succès (2 nécessitaient une décision d'établissement
+— une seule école réelle ici, sans ambiguïté ; 1 bloquée par des emails
+vides au lieu de NULL sur 3 lignes, normalisés puis relancée). Vérifié
+au-delà : comparaison systématique de tous les modèles SQLAlchemy contre
+le schéma réel, aucun autre désalignement. Suite backend 667 passed/0
+échec reconfirmée. Détail complet dans
+`.ai/FUSION_MAIN_DANS_IYA_RAPPORT.md`.
+
 ## Tâche précédente — Séances pédagogiques + grille horaire configurable (branche `IYA`, 12/08/2026)
 Voir `.ai/IYA0_RAPPORT.md` pour le détail complet (fichiers, migration,
 corrections, tests, verdict GO). Résumé : `Presence` (appel de classe)
