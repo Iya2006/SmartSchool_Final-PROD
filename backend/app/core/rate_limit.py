@@ -38,9 +38,27 @@ _DEFAULT_LIMIT = "9999/minute" if not _RATELIMIT_ENABLED else "5/minute"
 _REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Limiter basé sur l'adresse IP du client
+#
+# `enabled=True` ici est INTENTIONNEL, pas un bug : slowapi 0.1.10 relit
+# lui-même la variable d'environnement RATELIMIT_ENABLED à la construction
+# (même nom que la nôtre — convention réservée par la librairie), via
+# `self.enabled = self.get_app_config(C.ENABLED, self.enabled)`. Cette relecture
+# ne CAST correctement la valeur en booléen QUE si le défaut fourni est
+# truthy (`get_app_config` saute le cast quand le défaut est falsy, et
+# `bool("0")` vaut `True` en Python — chaîne non vide). En passant
+# `enabled=_RATELIMIT_ENABLED` (donc `False` en mode test), le cast était
+# sauté et `limiter.enabled` finissait par valoir la chaîne brute `"0"`,
+# donc TOUJOURS vraie : le rate limiting restait actif pendant TOUS les
+# tests, y compris `RATELIMIT_ENABLED=0`. Confirmé en reproduisant
+# directement (3 requêtes passent, la 4e reçoit un vrai 429) — révélé par
+# les tests `test_inscription_etablissement.py`, premier endpoint testé
+# plus de 3 fois d'affilée dans un même fichier. En passant un défaut
+# TOUJOURS truthy (`True`), le cast s'applique et slowapi convertit
+# correctement `"0"` en `False` — `_RATELIMIT_ENABLED` (calculé ci-dessus en
+# Python pur) reste utilisé pour `_DEFAULT_LIMIT`, non affecté par ce piège.
 limiter = Limiter(
     key_func=get_remote_address,
-    enabled=_RATELIMIT_ENABLED,
+    enabled=True,
     storage_uri=_REDIS_URL,
     in_memory_fallback_enabled=True,
 )
