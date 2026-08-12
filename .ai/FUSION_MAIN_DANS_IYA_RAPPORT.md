@@ -112,37 +112,94 @@ le nouveau `test_inscription_etablissement.py` du collaborateur
 - Suite backend complète (Docker `python:3.12-slim`) : **667 passed, 11
   skipped, 0 échec**.
 
-## Trouvaille signalée, non résolue ici (décision produit à prendre)
+## 4. Trouvaille produit — tranchée par l'utilisateur
 
-`origin/main` introduit `frontend/src/lib/horaires.ts` +
-`frontend/src/app/parametres/horaires/page.tsx` : un **second mécanisme**
-de configuration des horaires d'établissement (début/fin de journée, durée
+`origin/main` avait introduit `frontend/src/lib/horaires.ts` +
+`frontend/src/app/parametres/horaires/page.tsx` : un second mécanisme de
+configuration des horaires d'établissement (début/fin de journée, durée
 UNIQUE de créneau, UNE pause, plus des seuils retard/absence et jours
-ouvrés — absents de notre grille horaire). Stocké dans la même
-`ParametreEtablissement`/`EMPLOI_DU_TEMPS`, mais avec des clés différentes
-de notre `grille_horaire` — **aucune collision de données**, mais deux
-écrans admin concurrents pour le même besoin. Vérifié : leur mécanisme
-n'est consommé que par leur propre écran de réglages (aucun autre fichier
-ne l'importe) — il n'entre donc pas en conflit *au runtime* avec notre
-grille horaire, qui reste la seule à piloter réellement la génération de
-l'emploi du temps. Décision à prendre avec l'utilisateur : garder les deux
-écrans, n'en garder qu'un, ou fusionner les deux modèles (le nôtre gère
-des créneaux de durée variable et plusieurs pauses ; le leur gère les
-seuils de retard/absence et les jours ouvrés, que nous n'avons pas).
+ouvrés — absents de notre grille horaire). Aucune collision de données
+(clés différentes dans la même `ParametreEtablissement`), mais deux écrans
+admin concurrents pour le même besoin. **Décision de l'utilisateur** :
+garder uniquement le système du collaborateur. La grille horaire de
+l'Addendum 4 (`.ai/IYA0_RAPPORT.md`) a été retirée (commit `2a578a5`) —
+voir Addendum 6 de ce rapport. Le système du collaborateur reste, pour
+l'instant, uniquement consommé par son propre écran (aucune route backend
+ne le branche encore sur la génération réelle de l'emploi du temps) —
+signalé, pas construit, hors périmètre de ce retrait.
+
+## 5. Migrations du collaborateur non appliquées localement — trouvé et corrigé
+
+Après la fusion et le retrait de la grille horaire, l'utilisateur a
+signalé une série d'erreurs serveur en testant l'application réelle
+(`Network Error` côté frontend, tracebacks backend collés dans la
+conversation). Diagnostic : ce n'était **ni un problème CORS ni un
+backend injoignable** (vérifié directement : `/health`, requête sans
+authentification, préflight CORS sur le vrai port du frontend — tout
+répondait correctement). Le vrai coupable, trouvé dans le traceback fourni
+par l'utilisateur : `column ss_classe_matieres.note_sur does not exist` —
+un **désalignement de schéma** entre les modèles SQLAlchemy (mis à jour
+par la fusion) et la vraie base Postgres locale (jamais migrée).
+
+`origin/main` apporte **13 nouveaux scripts de migration**
+(`backend/migrations/2026_08_*.py` — comptabilité, examens, multi-écoles
+parents/enseignants, 9 étapes du moteur de notation, index de
+performance). Fusionner du code ne migre pas la base : ces scripts
+n'avaient jamais été exécutés sur l'environnement local. Chacun vérifié
+non destructif avant exécution (aucun `DROP TABLE`/`TRUNCATE`/`DELETE`,
+uniquement des `ADD COLUMN`, `DROP CONSTRAINT` suivis de recréation, et
+des index) puis exécutés dans l'ordre :
+
+- **11/13 se sont appliqués proprement du premier coup.**
+- **2 migrations "à décision humaine"** (convention du projet : jamais de
+  rattachement arbitraire à un établissement) ont demandé de désigner
+  explicitement l'école propriétaire de données orphelines
+  (`ss_types_frais`, `ss_types_evaluation`). Un seul établissement réel
+  existant dans cette base (`#1 TRILLIONX`), le choix ne portait pas à
+  conséquence — relancées avec `--rattacher-a 1`.
+- **1 migration a échoué sur un vrai problème de qualité des données** :
+  création d'un index unique `(etablissement_id, email)` sur
+  `ss_parents`/`ss_enseignants`, en conflit avec des lignes ayant
+  `email = ''` (chaîne vide, pas `NULL`) — probablement un artefact du
+  générateur de données synthétiques (voir mémoire "DB reset
+  2026-2027"). Portée vérifiée avant toute correction : seulement 2
+  parents et 1 enseignant concernés (pas un problème systémique).
+  Normalisés en `NULL` (la vraie représentation d'« aucun email », déjà
+  utilisée partout ailleurs dans le schéma) puis la migration relancée
+  avec succès.
+
+**Vérification supplémentaire, au-delà des 13 migrations** : script de
+contrôle comparant chaque colonne de chaque modèle SQLAlchemy à la vraie
+base (`sqlalchemy.inspect`), pour s'assurer qu'aucun AUTRE désalignement
+ne restait caché — **aucun trouvé**, schéma et modèles parfaitement
+alignés après ces 13 migrations.
+
+**Vérification finale** : suite backend complète relancée — 667 passed, 0
+échec (inchangé — la suite tourne sur SQLite en mémoire, recréée à chaque
+lancement depuis les modèles actuels, donc ce type de désalignement ne
+peut structurellement pas y être détecté ; seule la vraie base Postgres
+locale pouvait le révéler, ce qui explique pourquoi la fusion elle-même
+avait semblé "verte").
 
 ## État git
 
-Fusion + 3 corrections locales sur `IYA`, **pas encore poussées** vers
-`origin/IYA` (33 commits d'avance sur le remote). Rien poussé sans
-confirmation explicite de l'utilisateur.
+Fusion + corrections locales sur `IYA`, **pas encore poussées** vers
+`origin/IYA`. Rien poussé sans confirmation explicite de l'utilisateur.
+Note : l'exécution des 13 migrations et la normalisation des emails vides
+touchent la **base de données locale**, pas l'historique git — rien à
+committer pour cette partie (les scripts de migration eux-mêmes viennent
+déjà d'`origin/main`, inchangés).
 
 ## Verdict
 
-**GO pour usage local / tests supplémentaires.** Fusion propre, aucune
-donnée ni fonctionnalité écrasée d'un côté ou de l'autre (vérifié fichier
-par fichier sur les 4 conflits réels), un bug préexistant et invisible
-(rate limiting jamais désactivé en test) trouvé et corrigé au passage. Un
-point produit reste ouvert (double écran horaires) et un point de rendu
-visuel reste non vérifié dans un vrai navigateur (comme pour tout le reste
-de cette session). Pousser vers `origin/IYA` — et *a fortiori* vers `main`
-— reste une décision de l'utilisateur, pas prise ici.
+**GO.** Fusion propre, aucune donnée ni fonctionnalité écrasée d'un côté
+ou de l'autre (vérifié fichier par fichier sur les 4 conflits réels), un
+bug préexistant et invisible trouvé et corrigé (rate limiting jamais
+désactivé en test), le point produit du double écran horaires tranché par
+l'utilisateur (Addendum 6), et le désalignement de schéma local (13
+migrations en attente) trouvé et corrigé — vérifié qu'aucun autre
+désalignement ne subsiste, colonne par colonne, sur tous les modèles.
+Reste seulement le rendu visuel, non vérifiable dans un vrai navigateur
+cette session — à confirmer par l'utilisateur maintenant que le backend
+répond correctement. Pousser vers `origin/IYA` — et *a fortiori* vers
+`main` — reste une décision de l'utilisateur, pas prise ici.
