@@ -192,3 +192,70 @@ class TestNetAPayer:
         r = paie.net_a_payer(base=500_000, avances=800_000)
         assert r["net"] == 0
         assert r["reliquat_reporte"] == 300_000
+
+
+class TestModeDeduitDesAffectations:
+    """RÈGLE DE L'ÉCOLE : affecté au primaire = payé au mois. Le mode se déduit
+    des affectations plutôt que d'être saisi — une case à cocher de plus serait
+    une case à oublier."""
+
+    def _cycle_primaire(self, db: Session, ecole):
+        uid = _uid()
+        cycle = Cycle(etablissement_id=ecole["etab"].etablissement_id,
+                      code="PRM", libelle="Primaire", ordre=1)
+        db.add(cycle); db.commit(); db.refresh(cycle)
+        niveau = Niveau(cycle_id=cycle.cycle_id, code=f"P{uid}", libelle="6ème année", ordre=1)
+        db.add(niveau); db.commit(); db.refresh(niveau)
+        classe = Classe(
+            etablissement_id=ecole["etab"].etablissement_id, annee_id=ecole["annee"].annee_id,
+            niveau_id=niveau.niveau_id, code=f"CP{uid}", libelle=f"6ème A {uid}", statut="ACTIVE",
+        )
+        matiere = Matiere(cycle_id=cycle.cycle_id, code=f"LE{uid}", libelle="Lecture")
+        db.add_all([classe, matiere]); db.commit()
+        db.refresh(classe); db.refresh(matiere)
+        return cycle, niveau, classe, matiere
+
+    def test_affectation_au_primaire_bascule_au_mensuel(self, db: Session, ecole):
+        from app.services.paie import synchroniser_mode_remuneration
+
+        _, _, classe_prm, matiere_prm = self._cycle_primaire(db, ecole)
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+
+        db.add(Affectation(
+            enseignant_id=ens.enseignant_id, matiere_id=matiere_prm.matiere_id,
+            classe_id=classe_prm.classe_id, annee_id=ecole["annee"].annee_id,
+            nb_heures_semaine=25, statut="ACTIVE",
+        ))
+        db.commit()
+
+        assert synchroniser_mode_remuneration(db, ens.enseignant_id) == "MENSUEL"
+        db.commit(); db.refresh(ens)
+        assert ens.mode_remuneration == "MENSUEL"
+
+    def test_affectation_au_college_reste_a_l_heure(self, db: Session, ecole):
+        from app.services.paie import synchroniser_mode_remuneration
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, ens, ecole["m1"], 6)
+        assert synchroniser_mode_remuneration(db, ens.enseignant_id) == "HORAIRE"
+
+    def test_perdre_sa_derniere_classe_de_primaire_ramene_a_l_heure(
+        self, db: Session, ecole
+    ):
+        """Le mode doit pouvoir REVENIR en arrière : sans recalcul à la
+        suppression, l'enseignant resterait au mensuel indéfiniment."""
+        from app.services.paie import synchroniser_mode_remuneration
+
+        _, _, classe_prm, matiere_prm = self._cycle_primaire(db, ecole)
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        aff = Affectation(
+            enseignant_id=ens.enseignant_id, matiere_id=matiere_prm.matiere_id,
+            classe_id=classe_prm.classe_id, annee_id=ecole["annee"].annee_id,
+            nb_heures_semaine=25, statut="ACTIVE",
+        )
+        db.add(aff); db.commit()
+        assert synchroniser_mode_remuneration(db, ens.enseignant_id) == "MENSUEL"
+        db.commit()
+
+        db.delete(aff); db.commit()
+        assert synchroniser_mode_remuneration(db, ens.enseignant_id) == "HORAIRE"

@@ -271,13 +271,24 @@ def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_
         statut="ACTIVE"
     )
     db.add(aff)
+    db.flush()
+
+    # Des qu'un enseignant est affecte a une classe de PRIMAIRE, il passe au
+    # salaire MENSUEL : un instituteur assure toutes les matieres d'une meme
+    # classe, le compter a l'heure n'aurait aucun sens. Au-dela, c'est
+    # l'HORAIRE. Le mode est donc deduit des affectations plutot que saisi —
+    # une case a cocher de plus serait une case a oublier.
+    from app.services.paie import synchroniser_mode_remuneration
+    mode = synchroniser_mode_remuneration(db, enseignant_id)
+
     db.commit()
     db.refresh(aff)
 
     return {
         "message": f"Affectation créée : {ens.prenom} {ens.nom} → {mat.libelle} en {cls.libelle}",
         "affectation_id": aff.affectation_id,
-        "heures": float(nb_heures)
+        "heures": float(nb_heures),
+        "mode_remuneration": mode,
     }
 
 
@@ -295,9 +306,18 @@ def supprimer_affectation(affectation_id: int, db: Session = Depends(get_db), et
     )
     if not aff:
         raise HTTPException(404, "Affectation non trouvée")
+    enseignant_id = aff.enseignant_id
     db.delete(aff)
+    db.flush()
+
+    # Le mode doit pouvoir REVENIR en arriere : un enseignant qui perd sa
+    # derniere classe de primaire repasse a l'horaire. Sans ce recalcul, il
+    # resterait au mensuel indefiniment.
+    from app.services.paie import synchroniser_mode_remuneration
+    mode = synchroniser_mode_remuneration(db, enseignant_id)
+
     db.commit()
-    return {"message": "Affectation supprimée"}
+    return {"message": "Affectation supprimée", "mode_remuneration": mode}
 
 
 @router.post("", response_model=EnseignantOut, status_code=201)

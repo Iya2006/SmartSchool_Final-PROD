@@ -211,3 +211,53 @@ def annee_courante_id(db: Session, etablissement_id: int) -> Optional[int]:
         .first()
     )
     return a[0] if a else None
+
+
+# Codes de cycle consideres comme primaire. Le libelle n'est pas fiable (une
+# ecole peut ecrire « Primaire », une autre « Elementaire ») : c'est le CODE du
+# cycle qui fait foi, et il est configure par l'ecole elle-meme.
+CODES_PRIMAIRE = {"PRM", "PRIMAIRE", "PRI", "ELEM", "ELEMENTAIRE"}
+
+
+def enseigne_au_primaire(db: Session, enseignant_id: int) -> bool:
+    """Cet enseignant a-t-il au moins une classe de primaire ?"""
+    from app.models.academique import Cycle, Niveau
+
+    codes = (
+        db.query(Cycle.code)
+        .join(Niveau, Niveau.cycle_id == Cycle.cycle_id)
+        .join(Classe, Classe.niveau_id == Niveau.niveau_id)
+        .join(Affectation, Affectation.classe_id == Classe.classe_id)
+        .filter(
+            Affectation.enseignant_id == enseignant_id,
+            Affectation.statut == "ACTIVE",
+        )
+        .distinct()
+        .all()
+    )
+    return any((c[0] or "").strip().upper() in CODES_PRIMAIRE for c in codes)
+
+
+def synchroniser_mode_remuneration(db: Session, enseignant_id: int) -> Optional[str]:
+    """Aligne le mode de remuneration sur les affectations reelles.
+
+    REGLE DE L'ECOLE : des qu'un enseignant est affecte a une classe de
+    PRIMAIRE, il est paye au MOIS. Un instituteur assure toutes les matieres
+    d'une meme classe ; le compter a l'heure n'aurait aucun sens.
+
+    Au-dela du primaire, c'est l'HORAIRE.
+
+    Appelee a chaque creation ou suppression d'affectation : le mode ne doit
+    pas dependre de l'ordre dans lequel l'ecole a saisi les choses. Ne commit
+    pas — l'appelant maitrise sa transaction.
+
+    Renvoie le mode retenu, ou None si l'enseignant est introuvable.
+    """
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    if not ens:
+        return None
+    mode = MODE_MENSUEL if enseigne_au_primaire(db, enseignant_id) else MODE_HORAIRE
+    if (ens.mode_remuneration or "").upper() != mode:
+        ens.mode_remuneration = mode
+        db.flush()
+    return mode
