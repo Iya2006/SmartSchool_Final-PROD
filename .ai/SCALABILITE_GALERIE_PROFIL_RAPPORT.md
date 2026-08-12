@@ -300,3 +300,73 @@ nettoyé après vérification manuelle.
 **Tests** : 676 passed, 2 skipped (1 erreur non liée — un test Redis qui
 dépend d'un conteneur Docker, échec d'infrastructure, aucun rapport avec
 ces 3 correctifs), `tsc --noEmit` propre, `vitest run` 102/102.
+
+---
+
+## Addendum 13/08/2026 — 3 nouveaux bugs suite à un second test utilisateur réel
+
+L'utilisateur a retesté après l'addendum ci-dessus et signalé que le
+problème persistait, plus un symptôme inédit : en modifiant la photo de
+son enfant depuis le portail parent, le statut "en attente" apparaissait
+à tort sur SA PROPRE fiche (parent), et inversement en essayant de
+modifier sa propre photo. Investigation par lecture de code (pas de
+navigateur disponible) jusqu'à la cause racine, sans reproduire à l'aveugle.
+
+**1. Mélange de statut "en attente" parent/enfant**
+(`frontend/src/app/portail-parent/page.tsx`) — `pendingPhotos` était un
+`useState<Set<number>>` et `photoUploading` un `useState<number | null>`,
+tous deux indexés par le seul id numérique brut. Or `Parent.parent_id` et
+`Eleve.eleve_id` sont deux séquences auto-incrémentées **indépendantes**
+(deux tables distinctes) qui se recoupent très facilement en pratique
+(ex. parent_id=12 et un eleve_id=12 sans aucun lien entre eux). Marquer
+l'enfant comme "en attente" après un upload marquait donc AUSSI le parent
+par pure coïncidence numérique, et réciproquement — exactement le
+symptôme décrit. Corrigé en remplaçant toutes les clés par un format
+`"type:id"` (ex. `"eleve:12"`, `"parent:12"`), sur les 4 sites qui
+lisaient/écrivaient ces deux states (effet de synchronisation avec
+`has_pending_photo` du serveur, upload "Ma Photo" dans l'onglet
+Paramètres, `handlePhotoUpload` de l'onglet Photos, et tous les affichages
+de statut/bouton dans les deux onglets).
+
+**2. "Rien ne se passe" après validation d'une photo déjà existante —
+cause racine trouvée : mise en cache navigateur, pas un bug de logique**
+(`backend/app/api/photos.py`). `validate_photo` (photo élève/parent
+validée par l'admin) ET la branche directe de `upload_photo`
+(enseignant/personnel, auto-upload sans validation) écrivaient toujours
+sur un nom de fichier **stable** : `f"{entity_type}_{entity_id}{ext}"`.
+Première fois qu'une entité a une photo → URL neuve → s'affiche
+normalement. Mais en MODIFIANT une photo déjà existante (exactement le
+scénario testé et re-testé par l'utilisateur, "je valide, rien ne
+change"), la nouvelle image porte EXACTEMENT la même URL que l'ancienne :
+le fichier sur disque et `photo_url` en base sont bel et bien mis à
+jour, mais le navigateur affiche la version qu'il a déjà en cache pour
+cette URL, donnant l'impression qu'aucun changement n'a eu lieu. C'est un
+bug silencieux : aucune erreur, aucun 403, tout "réussit" côté réseau —
+il fallait remonter jusqu'au nom de fichier pour le voir. Corrigé en
+ajoutant un suffixe aléatoire unique (`uuid.uuid4().hex[:8]`) au nom de
+fichier final, comme c'était déjà le cas pour les fichiers EN ATTENTE
+(la boucle de nettoyage des anciens fichiers finaux, qui reconnaissait
+déjà un motif `{type}_{id}_...`, anticipait d'ailleurs ce cas sans que le
+code de création l'exploite — signal qu'un suffixe unique était le motif
+prévu à l'origine).
+
+**3. Vérification d'appartenance établissement pour `parent` — motif
+obsolète depuis la migration multi-écoles**
+(`_entite_appartient_a_etablissement`, `backend/app/api/photos.py`).
+Cette fonction dérivait encore l'établissement d'un parent via une
+jointure indirecte `EleveParent -> Eleve` (motif hérité du Lot 5,
+antérieur à la migration `2026_08_multi_01` qui a donné à `Parent` sa
+propre colonne `etablissement_id` NOT NULL — la même colonne utilisée
+pour corriger le token de login au tour précédent). Un parent sans lien
+`EleveParent` exploitable pour CET établissement précis (lien manquant,
+enfant transféré...) aurait échoué à tort cette vérification pour SA
+PROPRE photo. Corrigée pour lire directement `Parent.etablissement_id` —
+plus simple, plus rapide (plus de jointure), et cohérent avec le reste du
+chantier multi-écoles.
+
+**Tests** : 3 nouveaux tests dans `TestPhotosIsolation`
+(`test_parent_envoie_sa_propre_photo_admin_valide`,
+`test_modifier_photo_deja_validee_produit_une_url_differente`, en plus du
+test de login déjà ajouté à l'addendum précédent), reproduisant les
+parcours réels de bout en bout. Suite complète : **678 passed, 2 skipped**
+(0 échec), `tsc --noEmit` propre, `vitest run` 102/102.

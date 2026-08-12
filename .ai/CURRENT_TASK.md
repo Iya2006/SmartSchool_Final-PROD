@@ -46,6 +46,28 @@ régression ajouté (aucune couverture n'existait avant pour cette route).
 Suite finale : 676 passed/2 skipped (1 erreur Docker/Redis non liée),
 `tsc` propre, 102/102 frontend.
 
+**Suite directe (13/08/2026) — 3 nouveaux bugs suite à un second test
+utilisateur réel** : le problème persistait, plus un symptôme inédit —
+en modifiant la photo de son enfant, le statut "en attente" apparaissait
+à tort sur la fiche du PARENT, et inversement. Voir l'addendum complet
+dans `.ai/SCALABILITE_GALERIE_PROFIL_RAPPORT.md`. Résumé : (1) mélange
+parent/enfant = `pendingPhotos`/`photoUploading` (portail-parent)
+indexés par id numérique brut sans distinguer le type d'entité —
+`Parent.parent_id` et `Eleve.eleve_id` sont deux séquences indépendantes
+qui se recoupent facilement (ex. les deux valent 12 sans lien entre
+elles) ; corrigé en indexant par clé `"type:id"`. (2) "Rien ne se passe"
+après validation = cause racine enfin trouvée : `validate_photo`/
+`upload_photo` écrivaient sur un nom de fichier STABLE
+(`{type}_{id}.ext`) — en modifiant une photo déjà existante, la nouvelle
+image portait la même URL que l'ancienne, le navigateur affichait donc
+la version mise en cache (le fichier et la base étaient pourtant bien
+mis à jour) ; corrigé avec un suffixe unique, comme pour les fichiers en
+attente. (3) `_entite_appartient_a_etablissement` pour `parent` utilisait
+encore l'ancienne dérivation via EleveParent->Eleve (motif Lot 5) au lieu
+de la colonne directe `Parent.etablissement_id` (migration multi-écoles) ;
+corrigée. 3 nouveaux tests de régression. Suite finale : 678 passed/2
+skipped (0 échec), `tsc` propre, 102/102 frontend.
+
 ## Tâche précédente — Fusion `origin/main` (PR du collaborateur) dans `IYA` (12/08/2026)
 Voir `.ai/FUSION_MAIN_DANS_IYA_RAPPORT.md` pour le détail complet. Résumé :
 l'utilisateur a accepté une PR de son collaborateur sur `main`
