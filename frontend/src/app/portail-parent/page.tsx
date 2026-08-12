@@ -13,6 +13,7 @@ import {
     UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil
 } from 'lucide-react';
 import api from '@/lib/api';
+import ClassementEpreuves from '@/components/ClassementEpreuves';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 
@@ -793,6 +794,19 @@ export default function PortailParent() {
                                                     </table>
                                                 )}
                                             </div>
+                                            {/* Classement par épreuve : le backend l'exposait
+                                                (/epreuves + /classement), aucun écran ne l'appelait.
+                                                Le parent peut désormais suivre le rang de son enfant
+                                                composition par composition. */}
+                                            {data?.parent?.parent_id && child?.eleve_id && (
+                                                <div style={{ padding: '4px 24px 24px' }}>
+                                                    <ClassementEpreuves
+                                                        baseUrl={`/api/portail-parent/${data.parent.parent_id}/enfant/${child.eleve_id}`}
+                                                        trimestreId={selectedTrimestre}
+                                                        couleur="#7c3aed"
+                                                    />
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
