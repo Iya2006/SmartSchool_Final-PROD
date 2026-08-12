@@ -1,6 +1,25 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active — Séances pédagogiques + grille horaire configurable (branche `IYA`, 12/08/2026)
+## Tâche active — Fusion `origin/main` (PR du collaborateur) dans `IYA` (12/08/2026)
+Voir `.ai/FUSION_MAIN_DANS_IYA_RAPPORT.md` pour le détail complet. Résumé :
+l'utilisateur a accepté une PR de son collaborateur sur `main`
+(comptabilité, moteur de notation, inscription en ligne des
+établissements) et craignait qu'une fusion vers `IYA` n'écrase son propre
+travail sur les mêmes zones (comptabilité notamment). Diagnostic par
+simulation en lecture seule AVANT tout geste (`git merge-tree`) : seuls 3
+fichiers auraient réellement conflictué, `comptabilite.py` n'en faisait
+PAS partie (modifications disjointes). Travail non commité de la session
+mis en ordre (3 commits distincts), puis fusion réelle (4 conflits
+résolus en combinant les deux côtés, jamais en écrasant), puis un bug
+latent de rate limiting trouvé et corrigé (slowapi ne désactivait jamais
+vraiment le rate limiting en test, invisible jusqu'ici). Suite finale :
+667 passed/0 échec, `tsc` propre, 102/102 frontend. Point produit encore
+ouvert, signalé mais pas tranché : deux écrans admin concurrents pour
+configurer les horaires d'établissement (notre grille horaire vs.
+`parametres/horaires` du collaborateur). Fusion locale uniquement, pas
+encore poussée vers `origin/IYA`.
+
+## Tâche précédente — Séances pédagogiques + grille horaire configurable (branche `IYA`, 12/08/2026)
 Voir `.ai/IYA0_RAPPORT.md` pour le détail complet (fichiers, migration,
 corrections, tests, verdict GO). Résumé : `Presence` (appel de classe)
 n'avait aucune notion de matière/enseignant/séance — un enseignant avec
