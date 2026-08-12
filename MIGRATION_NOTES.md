@@ -376,6 +376,66 @@ c'était une école qui décidait pour les autres.
 GLOBAL. Décision du fondateur : les écoles doivent être indépendantes. À
 signaler à Johnny.
 
+### Index de performance (12/08/2026)
+
+Migration `2026_08_perf_01_index_notation.py` (miroir SQL
+`database/migrations/2026_08_12_index_performance_notation.sql`).
+
+**Aucune** des colonnes que le moteur interroge en permanence n'était indexée —
+15 sur 19 manquaient. PostgreSQL relisait la table entière à chaque requête
+(`Seq Scan on ss_notes`). Invisible à 2 900 notes, fatal ensuite : le coût croît
+linéairement avec le volume.
+
+Mesuré sur une table de 5 000 000 de notes (≈ 25 000 élèves) :
+
+| | Plan | Durée |
+|---|---|---|
+| Sans index | `Gather` / parcours complet | **430 ms** |
+| Avec index | `Bitmap Heap Scan` | **2,1 ms** |
+
+**209× plus rapide** — et surtout 2 ms qui restent 2 ms quand le volume grandit.
+
+Le chantier multi-écoles avait aggravé le point sans le savoir : presque chaque
+requête passe désormais par `ss_classes.etablissement_id` ou
+`ss_eleves.etablissement_id`, devenues les colonnes les plus sollicitées de
+l'application et justement dépourvues d'index.
+
+- **25 index composites**, calqués sur les combinaisons de filtres relevées
+  automatiquement dans `app/services/` et `app/api/` — pas devinées. Un index
+  `(a, b, c)` sert aussi `(a)` et `(a, b)` : moins d'index à maintenir en
+  écriture.
+- **`CREATE INDEX CONCURRENTLY`** : la table reste lisible ET modifiable pendant
+  la construction. Un `CREATE INDEX` classique verrouille la table en écriture —
+  inacceptable pendant que des enseignants saisissent des notes.
+- La migration détecte et **refait** un index resté `INVALIDE` après un
+  CONCURRENTLY interrompu : sans cela il occupe de la place et n'est jamais
+  utilisé par le planificateur, silencieusement.
+- Les 25 index sont **aussi déclarés dans les modèles** (`__table_args__`, mêmes
+  noms) : `main.py` crée le schéma par `Base.metadata.create_all()`, une base
+  neuve serait donc née sans eux.
+- `--verifier` affiche l'état et le plan réel de PostgreSQL sur les requêtes
+  chaudes.
+
+Aucune donnée touchée, aucun comportement changé, réversible.
+
+**À savoir** : sur une petite table (19 classes, 45 inscriptions), PostgreSQL
+préfère sciemment le parcours complet — lire 19 lignes coûte moins cher que
+passer par l'index. Le plan bascule tout seul dès que le volume le justifie.
+Un `Seq Scan` sur ces tables n'est donc pas un défaut.
+
+### Plafonds de charge connus (non traités)
+
+Les index lèvent le premier plafond, pas les suivants :
+
+1. ~~Index manquants~~ — **fait**.
+2. **Volume brut** : au-delà de quelques milliers d'écoles, une seule base
+   demande du partitionnement par année et l'archivage des années closes.
+3. **Calculs groupés** : la file RQ absorbe déjà les calculs lourds, mais
+   plusieurs milliers d'écoles clôturant la même semaine demanderont plusieurs
+   travailleurs, pas un seul.
+
+À décider quand la courbe réelle sera connue, pas avant.
+
 ### Reste à faire
 
 - [ ] Recette fonctionnelle par l'établissement pilote sur une classe réelle
@@ -385,5 +445,6 @@ signaler à Johnny.
 - [ ] Trancher avec Johnny la divergence sur `TypeEvaluation` (GLOBAL vs par école)
 - [ ] Rôles personnalisés : créables mais non attribuables, donc sans effet
 - [ ] Page de connexion : affiche encore la marque de l'établissement 1 (choix produit)
+- [ ] Partitionnement / archivage des années closes (plafond 2 ci-dessus)
 - [ ] Sélection fine des matières à la création d'une session (l'API l'accepte via
       `matiere_ids`, l'écran crée pour toutes les matières actives)

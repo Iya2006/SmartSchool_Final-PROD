@@ -92,6 +92,12 @@ class AnneeScolaire(Base):
     app/api/annee_scolaire.py) -> ARCHIVEE (Phase 2 : archivage complet).
     """
     __tablename__ = "ss_annees_scolaires"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_annees_etab_courante", 'etablissement_id', 'est_courante'),
+    )
     annee_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(20), nullable=False)
@@ -111,6 +117,12 @@ class AnneeScolaire(Base):
 class ParametreEtablissement(Base):
     """Table clé/valeur pour tous les paramètres de l'établissement."""
     __tablename__ = "ss_parametres"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_parametres_etab_categorie_cle", 'etablissement_id', 'categorie', 'cle'),
+    )
     parametre_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     categorie = Column(String(50), nullable=False)  # IDENTITE, THEME, NOTATION, FINANCE
@@ -123,6 +135,12 @@ class ParametreEtablissement(Base):
 
 class Trimestre(Base):
     __tablename__ = "ss_trimestres"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_trimestres_annee_numero", 'annee_id', 'numero'),
+    )
     trimestre_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     code = Column(String(10), nullable=False)
@@ -211,6 +229,12 @@ class TicketInformatique(Base):
 
 class Classe(Base):
     __tablename__ = "ss_classes"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_classes_etab_annee_statut", 'etablissement_id', 'annee_id', 'statut'),
+    )
     classe_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
@@ -238,6 +262,12 @@ class Classe(Base):
 
 class Eleve(Base):
     __tablename__ = "ss_eleves"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_eleves_etablissement", 'etablissement_id'),
+    )
     eleve_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     matricule = Column(String(30), unique=True, nullable=False, index=True)
@@ -361,6 +391,13 @@ class Matiere(Base):
 class ClasseMatiere(Base):
     """Association entre une Classe et ses Matières enseignées (programme guinéen)"""
     __tablename__ = "ss_classe_matieres"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_classe_matieres_classe_active", 'classe_id', 'est_active'),
+        Index("ix_classe_matieres_matiere", 'matiere_id'),
+    )
     classe_matiere_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
@@ -388,6 +425,14 @@ class CreneauEmploi(Base):
 
 class Affectation(Base):
     __tablename__ = "ss_affectations"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_affectations_enseignant_statut", 'enseignant_id', 'statut'),
+        Index("ix_affectations_classe_matiere_statut", 'classe_id', 'matiere_id', 'statut'),
+        Index("ix_affectations_annee_statut", 'annee_id', 'statut'),
+    )
     affectation_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
@@ -402,6 +447,14 @@ class Affectation(Base):
 
 class Inscription(Base):
     __tablename__ = "ss_inscriptions"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_inscriptions_classe_statut", 'classe_id', 'statut'),
+        Index("ix_inscriptions_eleve_statut", 'eleve_id', 'statut'),
+        Index("ix_inscriptions_annee", 'annee_id'),
+    )
     inscription_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=False)
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
@@ -505,6 +558,15 @@ class EvaluationSession(Base):
 
 class Evaluation(Base):
     __tablename__ = "ss_evaluations"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_evaluations_classe_trimestre_statut", 'classe_id', 'trimestre_id', 'statut'),
+        Index("ix_evaluations_enseignant", 'enseignant_id'),
+        Index("ix_evaluations_matiere", 'matiere_id'),
+        Index("ix_evaluations_type_eval", 'type_eval_id'),
+    )
     evaluation_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
@@ -547,6 +609,13 @@ class PeriodeEpreuve(Base):
 
 class Note(Base):
     __tablename__ = "ss_notes"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_notes_evaluation_inscription", 'evaluation_id', 'inscription_id'),
+        Index("ix_notes_inscription", 'inscription_id'),
+    )
     note_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     evaluation_id = Column(Integer, ForeignKey("ss_evaluations.evaluation_id"), nullable=False)
     inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
@@ -561,6 +630,12 @@ class Note(Base):
 
 class Bulletin(Base):
     __tablename__ = "ss_bulletins"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_bulletins_inscription_type", 'inscription_id', 'type_bulletin'),
+    )
     bulletin_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
     trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"))
@@ -578,6 +653,13 @@ class Bulletin(Base):
 
 class BulletinLigne(Base):
     __tablename__ = "ss_bulletin_lignes"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_bulletin_lignes_bulletin", 'bulletin_id'),
+        Index("ix_bulletin_lignes_matiere", 'matiere_id'),
+    )
     ligne_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     bulletin_id = Column(Integer, ForeignKey("ss_bulletins.bulletin_id", ondelete="CASCADE"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
@@ -799,6 +881,14 @@ class Disponibilite(Base):
 class SujetExamen(Base):
     """Sujet d'examen téléversé par un enseignant."""
     __tablename__ = "ss_sujets_examen"
+    # Index de performance — memes noms que la migration
+    # 2026_08_perf_01_index_notation.py, pour qu'une base creee par
+    # create_all() et une base migree aient le meme schema.
+    __table_args__ = (
+        Index("ix_sujets_examen_enseignant", 'enseignant_id'),
+        Index("ix_sujets_examen_trimestre", 'trimestre_id'),
+        Index("ix_sujets_examen_demande", 'demande_id'),
+    )
     sujet_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
     enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
