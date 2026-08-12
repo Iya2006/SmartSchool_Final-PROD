@@ -496,20 +496,69 @@ DISTINCT` dédiée, jointe sur les mêmes filtres que le calcul du taux.
   séances (le taux de couverture doit alors monter, la légende disparaître
   du mode "alerte" une fois ≥50% des classes actives couvertes).
 
+## Addendum 6 — grille horaire (Addendum 4) retirée : un seul écran de configuration des horaires
+
+### Décision utilisateur
+Après la fusion `origin/main` (voir `.ai/FUSION_MAIN_DANS_IYA_RAPPORT.md`),
+signalement qu'un second mécanisme de configuration des horaires
+d'établissement existait déjà côté collaborateur
+(`frontend/src/lib/horaires.ts` + `frontend/src/app/parametres/horaires/
+page.tsx`, accessible depuis Paramètres, avec en plus des seuils
+retard/absence et les jours ouvrés). Décision explicite de l'utilisateur :
+garder UNIQUEMENT le système du collaborateur — « je préfère qu'il y ait un
+seul, et le seul là, c'est celui de mon ami. On garde pour lui, pour moi,
+s'il faut, on enlève dans le code pour ne pas que ça crée plus tard
+d'autres problèmes. »
+
+### Retrait effectué
+La grille horaire configurable de l'Addendum 4 est intégralement retirée :
+- `backend/app/api/emploi_du_temps.py` : `_get_grille_horaire()` et
+  `GRILLE_HORAIRE_DEFAUT` supprimées, `HEURES_SLOTS` (7 blocs fixes d'1h)
+  restauré tel qu'avant l'Addendum 4.
+- `frontend/src/app/emploi-du-temps/page.tsx` : constante `HEURES`
+  restaurée, bouton "Configurer les horaires" et sa modale complète
+  retirés (332 lignes).
+- `frontend/src/app/emploi-du-temps/generes/page.tsx` et
+  `frontend/src/app/classes/[id]/page.tsx` : même restauration (lecture
+  seule).
+
+Vérifié avant tout retrait : `origin/main` n'avait touché aucun de ces 4
+fichiers (`git diff --name-only` sur la base commune, vide) — le retrait a
+donc pu se faire par restauration directe de leur contenu d'avant
+l'Addendum 4 (`git show <commit parent>:<fichier>`), sans aucun risque de
+perdre du contenu fusionné. Aucune référence résiduelle au mécanisme
+retiré trouvée ailleurs dans le code (`grep` exhaustif sur
+`_get_grille_horaire`/`GRILLE_HORAIRE_DEFAUT`/`SegmentGrille`/
+`grilleHoraire`/`grille_horaire`, vide).
+
+### Ce qui reste ouvert (hors périmètre de ce retrait)
+Le système du collaborateur (`horaires.ts`) n'est aujourd'hui consommé que
+par son propre écran de réglages — aucune route backend ne lit encore les
+clés `horaires.*` pour construire réellement l'emploi du temps ou les
+créneaux de présence. La génération de l'emploi du temps reste donc
+pilotée par `HEURES_SLOTS` codé en dur, comme avant tout ce chantier
+grille horaire. Brancher réellement `horaires.ts` sur la génération est un
+chantier distinct, non demandé ici, à voir avec l'utilisateur/son
+collaborateur.
+
+### Vérification
+Import `main.py` (436 routes, inchangé), `npx tsc --noEmit` propre,
+`npx vitest run` 102/102 verts, suite backend complète relancée (voir
+verdict).
+
 ## Verdict
 
 **GO.** Le bug central (appel non isolé par matière) est corrigé et testé
 explicitement. Aucune donnée existante modifiée ou supprimée, aucun chemin
-d'écriture historique retiré. La grille horaire configurable (Addendum 4)
-remplace le dernier hardcode structurel de l'emploi du temps sans
-migration ni régression. Le KPI de présence (Addendum 5) reste basé sur les
-séances réelles (Addendum 3) mais expose désormais sa propre couverture,
-empêchant un échantillon partiel de se lire comme un signal global —
-vérifié à la fois par la suite automatisée et par des tests fonctionnels
-directs contre la base réelle à chaque étape. Reste à valider manuellement
-dans le navigateur (aucun outil d'automatisation navigateur disponible
-cette session — limite déjà documentée) : ouvrir "Mes Séances" côté
-portail enseignant avec un compte réel ayant plusieurs matières sur la
-même classe, la page `/vie-scolaire/seances` côté admin, la modale
-"Configurer les horaires" sur `/emploi-du-temps`, et la nouvelle légende de
-couverture sur la carte "Présence observée" du dashboard.
+d'écriture historique retiré. Le KPI de présence (Addendum 5) reste basé
+sur les séances réelles (Addendum 3) et expose sa propre couverture,
+empêchant un échantillon partiel de se lire comme un signal global. La
+grille horaire configurable (Addendum 4) a été retirée à la demande
+explicite de l'utilisateur (Addendum 6), au profit du système unique du
+collaborateur — retrait propre, vérifié sans aucune perte de contenu
+fusionné. Reste à valider manuellement dans le navigateur (aucun outil
+d'automatisation navigateur disponible cette session — limite déjà
+documentée) : ouvrir "Mes Séances" côté portail enseignant avec un compte
+réel ayant plusieurs matières sur la même classe, la page
+`/vie-scolaire/seances` côté admin, et la nouvelle légende de couverture
+sur la carte "Présence observée" du dashboard.

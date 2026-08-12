@@ -67,21 +67,11 @@ const JOURS_API = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
 const JOURS_LABEL: Record<string, string> = {
     LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi'
 };
-interface SegmentGrille {
-    type: 'COURS' | 'PAUSE';
-    heure_debut: string;
-    heure_fin: string;
-    libelle?: string;
-}
-const GRILLE_DEFAUT: SegmentGrille[] = [
-    { type: 'COURS', heure_debut: '08:00', heure_fin: '09:00' },
-    { type: 'COURS', heure_debut: '09:00', heure_fin: '10:00' },
-    { type: 'COURS', heure_debut: '10:00', heure_fin: '11:00' },
-    { type: 'COURS', heure_debut: '11:00', heure_fin: '12:00' },
-    { type: 'PAUSE', heure_debut: '12:00', heure_fin: '14:00', libelle: 'Pause déjeuner' },
-    { type: 'COURS', heure_debut: '14:00', heure_fin: '15:00' },
-    { type: 'COURS', heure_debut: '15:00', heure_fin: '16:00' },
-    { type: 'COURS', heure_debut: '16:00', heure_fin: '17:00' },
+const HEURES_SLOTS = [
+    { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
+    { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
+    { debut: '14:00', fin: '15:00' }, { debut: '15:00', fin: '16:00' },
+    { debut: '16:00', fin: '17:00' },
 ];
 
 interface RealCreneau {
@@ -96,7 +86,6 @@ export default function ClasseProfilPage() {
 
     const [profil, setProfil] = useState<ClasseProfil | null>(null);
     const [creneaux, setCreneaux] = useState<RealCreneau[]>([]);
-    const [grilleHoraire, setGrilleHoraire] = useState<SegmentGrille[]>(GRILLE_DEFAUT);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'eleves' | 'matieres' | 'emploi' | 'stats'>('eleves');
     const [elevesPage, setElevesPage] = useState(1);
@@ -111,9 +100,6 @@ export default function ClasseProfilPage() {
                 ]);
                 setProfil(profilRes.data);
                 setCreneaux(emploiRes.data.creneaux || []);
-                if (Array.isArray(emploiRes.data.heures_slots) && emploiRes.data.heures_slots.length > 0) {
-                    setGrilleHoraire(emploiRes.data.heures_slots);
-                }
             } catch (err) {
                 console.error(err);
             } finally {
@@ -605,33 +591,31 @@ export default function ClasseProfilPage() {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {grilleHoraire.map((seg) => {
-                                                if (seg.type === 'PAUSE') {
-                                                    return (
-                                                        <tr key={`pause-${seg.heure_debut}`}>
-                                                            <td colSpan={6} style={{
-                                                                padding: '8px', textAlign: 'center', background: '#fef3c7',
-                                                                borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
-                                                            }}>
-                                                                <Utensils size={12} style={{display:'inline', verticalAlign:'middle'}}/> {seg.heure_debut} — {seg.heure_fin} • {seg.libelle || 'Pause'}
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                }
-                                                const h = seg;
+                                            {HEURES_SLOTS.map((h, hi) => {
+                                                const isPause = h.debut === '14:00';
                                                 return (
-                                                    <React.Fragment key={`slot-${h.heure_debut}`}>
-                                                        <tr key={h.heure_debut}>
+                                                    <React.Fragment key={`slot-${h.debut}`}>
+                                                        {isPause && (
+                                                            <tr key="pause">
+                                                                <td colSpan={6} style={{
+                                                                    padding: '8px', textAlign: 'center', background: '#fef3c7',
+                                                                    borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
+                                                                }}>
+                                                                    <Utensils size={12} style={{display:'inline', verticalAlign:'middle'}}/> 12:00 — 14:00 • Pause Déjeuner
+                                                                </td>
+                                                            </tr>
+                                                        )}
+                                                        <tr key={h.debut}>
                                                             <td style={{
                                                                 padding: '10px 12px', fontWeight: 700, fontSize: '12px',
                                                                 color: '#0f766e', background: '#f0fdfa', borderRadius: '8px',
                                                                 textAlign: 'center', verticalAlign: 'middle'
                                                             }}>
-                                                                {h.heure_debut}<br />
-                                                                <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 500 }}>{h.heure_fin}</span>
+                                                                {h.debut}<br />
+                                                                <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 500 }}>{h.fin}</span>
                                                             </td>
                                                             {JOURS_API.map(j => {
-                                                                const cr = getCreneauFor(j, h.heure_debut);
+                                                                const cr = getCreneauFor(j, h.debut);
                                                                 const cat = cr?.matiere_categorie || '';
                                                                 const theme = CATEGORY_COLORS[cat] || { bg: '#f8fafc', text: '#475569', border: '#e2e8f0' };
                                                                 if (cr) {
