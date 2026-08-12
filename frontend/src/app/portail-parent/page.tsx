@@ -103,7 +103,12 @@ export default function PortailParent() {
     const [showNotifDrop, setShowNotifDrop] = useState(false);
     const [showUserMenu, setShowUserMenu] = useState(false);
     const [showProfileDropdown, setShowProfileDropdown] = useState(false);
-    const [pendingPhotos, setPendingPhotos] = useState<Set<number>>(new Set());
+    // Clé "type:id" (ex. "eleve:12") — jamais un id nu : Parent.parent_id et
+    // Eleve.eleve_id sont deux séquences auto-incrémentées indépendantes qui
+    // se recoupent facilement (ex. parent_id=12 et un eleve_id=12 sans lien
+    // entre eux), ce qui mélangeait le statut "en attente" entre le parent
+    // et son enfant quand seul l'id nu servait de clé.
+    const [pendingPhotos, setPendingPhotos] = useState<Set<string>>(new Set());
     const [selectedMsg, setSelectedMsg] = useState<MsgItem|null>(null);
     const [newMsgSujet, setNewMsgSujet] = useState('');
     const [newMsgContenu, setNewMsgContenu] = useState('');
@@ -154,7 +159,7 @@ export default function PortailParent() {
 
     // Photos state
     const [photoSuccess, setPhotoSuccess] = useState<string | null>(null);
-    const [photoUploading, setPhotoUploading] = useState<number | null>(null);
+    const [photoUploading, setPhotoUploading] = useState<string | null>(null);
 
     // Refs for carousel scrolling
     const childCarouselRef = useRef<HTMLDivElement>(null);
@@ -246,17 +251,19 @@ export default function PortailParent() {
         setPendingPhotos(prev => {
             const next = new Set(prev);
             // Check parent photo
+            const parentKey = `parent:${data.parent.parent_id}`;
             if (data.parent.has_pending_photo) {
-                next.add(data.parent.parent_id);
-            } else if (data.parent.photo_url && next.has(data.parent.parent_id)) {
-                next.delete(data.parent.parent_id);
+                next.add(parentKey);
+            } else if (data.parent.photo_url && next.has(parentKey)) {
+                next.delete(parentKey);
             }
             // Check children photos
             for (const enf of data.enfants || []) {
+                const eleveKey = `eleve:${enf.eleve_id}`;
                 if (enf.has_pending_photo) {
-                    next.add(enf.eleve_id);
-                } else if (enf.photo_url && next.has(enf.eleve_id)) {
-                    next.delete(enf.eleve_id);
+                    next.add(eleveKey);
+                } else if (enf.photo_url && next.has(eleveKey)) {
+                    next.delete(eleveKey);
                 }
             }
             return next;
@@ -1942,15 +1949,16 @@ export default function PortailParent() {
                                                             input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp';
                                                             input.onchange = async (e: any) => {
                                                                 const file = e.target.files?.[0]; if (!file) return;
-                                                                setPhotoUploading(data.parent.parent_id);
+                                                                const key = `parent:${data.parent.parent_id}`;
+                                                                setPhotoUploading(key);
                                                                 try {
                                                                     const fd = new FormData(); fd.append('fichier', file);
                                                                     await api.post(`/api/photos/parent-upload/parent/${data.parent.parent_id}?parent_id=${data.parent.parent_id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-                                                                    
+
                                                                       setPhotoSuccess('Photo envoyée et en attente de validation !');
                                                                       setTimeout(() => setPhotoSuccess(null), 4000);
                                                                       // Refresh pending
-                                                                      setPendingPhotos(prev => new Set(prev).add(data.parent.parent_id));
+                                                                      setPendingPhotos(prev => new Set(prev).add(key));
 
                                                                     const dash = await api.get(`/api/portail-parent/${data.parent.parent_id}/dashboard`);
                                                                     setData(dash.data);
@@ -1958,9 +1966,9 @@ export default function PortailParent() {
                                                                 finally { setPhotoUploading(null); }
                                                             };
                                                             input.click();
-                                                        }} disabled={photoUploading === data.parent.parent_id}
+                                                        }} disabled={photoUploading === `parent:${data.parent.parent_id}`}
                                                             style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 700, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                            {photoUploading === data.parent.parent_id ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={14} />}
+                                                            {photoUploading === `parent:${data.parent.parent_id}` ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={14} />}
                                                             {data.parent.photo_url ? 'Modifier ma photo' : 'Envoyer ma photo'}
                                                         </button>
                                                         {photoSuccess && <p style={{ margin: '8px 0 0', fontSize: '12px', color: primaryColor, fontWeight: 600 }}>{photoSuccess}</p>}
@@ -2036,7 +2044,8 @@ export default function PortailParent() {
                                             input.onchange = async (e: any) => {
                                                 const file = e.target.files?.[0];
                                                 if (!file) return;
-                                                setPhotoUploading(id);
+                                                const key = `${type}:${id}`;
+                                                setPhotoUploading(key);
                                                 try {
                                                     const fd = new FormData();
                                                     fd.append('fichier', file);
@@ -2047,7 +2056,7 @@ export default function PortailParent() {
                                                     );
                                                     setPhotoSuccess(`Photo de ${name} envoyée avec succès !`);
                                                     // Mark this entity as pending admin approval
-                                                    setPendingPhotos(prev => new Set(prev).add(id));
+                                                    setPendingPhotos(prev => new Set(prev).add(key));
                                                     setTimeout(() => setPhotoSuccess(null), 4000);
                                                     const dash = await api.get(`/api/portail-parent/${data.parent.parent_id}/dashboard`);
                                                     if (dash.data?.parent?.photo_url) dash.data.parent.photo_url += '?t=' + Date.now();
@@ -2057,14 +2066,14 @@ export default function PortailParent() {
                                                         const r = await api.get(`/api/portail-parent/${data.parent.parent_id}/profil`);
                                                         if (r.data?.photo_url) {
                                                             r.data.photo_url += '?t=' + Date.now();
-                                                            setPendingPhotos(prev => { const n = new Set(prev); n.delete(id); return n; });
+                                                            setPendingPhotos(prev => { const n = new Set(prev); n.delete(key); return n; });
                                                         }
                                                         setProfilData(r.data);
                                                     }
                                                     if (type === 'eleve') {
                                                         const updatedChild = dash.data.enfants.find((e: any) => e.eleve_id === id);
                                                         if (updatedChild?.photo_url) {
-                                                            setPendingPhotos(prev => { const n = new Set(prev); n.delete(id); return n; });
+                                                            setPendingPhotos(prev => { const n = new Set(prev); n.delete(key); return n; });
                                                         }
                                                     }
                                                 } catch {
@@ -2142,7 +2151,7 @@ export default function PortailParent() {
                                                     <div style={{ flex: 1 }}>
                                                         <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '15px' }}>{data.parent.prenom} {data.parent.nom}</p>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
-                                                            {pendingPhotos.has(data.parent.parent_id)
+                                                            {pendingPhotos.has(`parent:${data.parent.parent_id}`)
                                                                 ? <><Clock size={14} color="#d97706" /><span style={{ fontSize: '12px', color: '#d97706', fontWeight: 600 }}>En attente de validation</span></>
                                                                 : data.parent.photo_url
                                                                     ? <><CheckCircle size={14} color={accentColor} /><span style={{ fontSize: '12px', color: accentColor, fontWeight: 600 }}>Photo validée</span></>
@@ -2150,19 +2159,19 @@ export default function PortailParent() {
                                                             }
                                                         </div>
                                                         <button onClick={() => handlePhotoUpload('parent', data.parent.parent_id, `${data.parent.prenom} ${data.parent.nom}`)}
-                                                            disabled={photoUploading === data.parent.parent_id || pendingPhotos.has(data.parent.parent_id)}
+                                                            disabled={photoUploading === `parent:${data.parent.parent_id}` || pendingPhotos.has(`parent:${data.parent.parent_id}`)}
                                                             style={{
                                                                 display: 'inline-flex', alignItems: 'center', gap: '8px',
-                                                                padding: '10px 20px', borderRadius: '10px', border: 'none', cursor: pendingPhotos.has(data.parent.parent_id) ? 'not-allowed' : 'pointer',
-                                                                background: pendingPhotos.has(data.parent.parent_id)
+                                                                padding: '10px 20px', borderRadius: '10px', border: 'none', cursor: pendingPhotos.has(`parent:${data.parent.parent_id}`) ? 'not-allowed' : 'pointer',
+                                                                background: pendingPhotos.has(`parent:${data.parent.parent_id}`)
                                                                     ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                                                                     : data.parent.photo_url ? '#f1f5f9' : 'linear-gradient(135deg, #6366f1, #818cf8)',
-                                                                color: pendingPhotos.has(data.parent.parent_id) ? 'white' : data.parent.photo_url ? '#475569' : 'white',
+                                                                color: pendingPhotos.has(`parent:${data.parent.parent_id}`) ? 'white' : data.parent.photo_url ? '#475569' : 'white',
                                                                 fontSize: '13px', fontWeight: 700,
                                                             }}>
-                                                            {photoUploading === data.parent.parent_id
+                                                            {photoUploading === `parent:${data.parent.parent_id}`
                                                                 ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Envoi en cours...</>
-                                                                : pendingPhotos.has(data.parent.parent_id)
+                                                                : pendingPhotos.has(`parent:${data.parent.parent_id}`)
                                                                     ? <><Clock size={14} /> En attente de validation...</>
                                                                     : <><Camera size={14} /> {data.parent.photo_url ? 'Modifier ma photo' : 'Envoyer ma photo'}</>
                                                             }
@@ -2216,7 +2225,7 @@ export default function PortailParent() {
                                                                     {enf.classe} • {enf.matricule}
                                                                 </p>
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                                    {pendingPhotos.has(enf.eleve_id)
+                                                                    {pendingPhotos.has(`eleve:${enf.eleve_id}`)
                                                                         ? <><Clock size={12} color="#d97706" /><span style={{ fontSize: '11px', color: '#d97706', fontWeight: 600 }}>En attente de validation</span></>
                                                                         : enf.photo_url
                                                                             ? <><CheckCircle size={12} color={accentColor} /><span style={{ fontSize: '11px', color: accentColor, fontWeight: 600 }}>Photo validée</span></>
@@ -2225,20 +2234,20 @@ export default function PortailParent() {
                                                                 </div>
                                                             </div>
                                                             <button onClick={() => handlePhotoUpload('eleve', enf.eleve_id, enf.prenom)}
-                                                                disabled={photoUploading === enf.eleve_id || pendingPhotos.has(enf.eleve_id)}
+                                                                disabled={photoUploading === `eleve:${enf.eleve_id}` || pendingPhotos.has(`eleve:${enf.eleve_id}`)}
                                                                 style={{
                                                                     display: 'inline-flex', alignItems: 'center', gap: '6px',
                                                                     padding: '10px 16px', borderRadius: '10px', border: 'none',
-                                                                    cursor: pendingPhotos.has(enf.eleve_id) ? 'not-allowed' : 'pointer',
-                                                                    background: pendingPhotos.has(enf.eleve_id)
+                                                                    cursor: pendingPhotos.has(`eleve:${enf.eleve_id}`) ? 'not-allowed' : 'pointer',
+                                                                    background: pendingPhotos.has(`eleve:${enf.eleve_id}`)
                                                                         ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                                                                         : enf.photo_url ? '#f1f5f9' : `linear-gradient(135deg, ${primaryColor}, #34d399)`,
-                                                                    color: pendingPhotos.has(enf.eleve_id) ? 'white' : enf.photo_url ? '#475569' : 'white',
+                                                                    color: pendingPhotos.has(`eleve:${enf.eleve_id}`) ? 'white' : enf.photo_url ? '#475569' : 'white',
                                                                     fontSize: '12px', fontWeight: 700,
                                                                 }}>
-                                                                {photoUploading === enf.eleve_id
+                                                                {photoUploading === `eleve:${enf.eleve_id}`
                                                                     ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                                                                    : pendingPhotos.has(enf.eleve_id)
+                                                                    : pendingPhotos.has(`eleve:${enf.eleve_id}`)
                                                                         ? <><Clock size={14} /> En attente</>
                                                                         : <>{enf.photo_url ? <Camera size={14} /> : <Upload size={14} />} {enf.photo_url ? 'Modifier' : 'Envoyer'}</>
                                                                 }

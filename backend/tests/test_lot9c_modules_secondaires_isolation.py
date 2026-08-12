@@ -18,7 +18,8 @@ from app.core.security import hash_password
 from app.models.academique import (
     ActiviteJour, AnneeScolaire, Classe, Cycle, Devoir, Eleve, EleveParent,
     Enseignant, Etablissement, Evenement, FournitureScolaire, Incident,
-    Inscription, Matiere, Niveau, Parent, PointageEleve, Utilisateur,
+    Inscription, Matiere, Niveau, Parent, PhotoEnAttente, PointageEleve,
+    Utilisateur,
 )
 
 _COUNTER = 0
@@ -282,6 +283,73 @@ class TestPhotosIsolation:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["photo_url"]
+
+    def test_parent_envoie_sa_propre_photo_admin_valide(self, client: TestClient, db: Session):
+        """Régression : `_entite_appartient_a_etablissement` vérifiait
+        l'appartenance d'un `parent` à l'établissement via une jointure
+        indirecte EleveParent -> Eleve (motif du Lot 5, avant que `Parent`
+        n'ait sa propre colonne `etablissement_id` NOT NULL, migration
+        2026_08_multi_01). Reproduit le parcours réel signalé par
+        l'utilisateur : le parent envoie SA PROPRE photo (pas celle d'un
+        enfant), l'admin la valide — la colonne directe doit suffire, sans
+        dépendre d'un lien EleveParent particulier."""
+        a = Ecole(db, "PPP")
+        eleve, _ = a.eleve_inscrit(db)
+        parent = a.parent_de(db, eleve)
+        admin_headers = _headers(client, a.admin.nom_utilisateur)
+
+        login = client.post("/api/portail-parent/login", json={
+            "telephone": parent.telephone_1, "mot_de_passe": "motdepasse123",
+        })
+        assert login.status_code == 200, login.text
+        parent_headers = {"Authorization": f"Bearer {login.json()['token']}"}
+
+        fichier = {"fichier": ("moi.jpg", io.BytesIO(b"\xff\xd8\xff\xe0fake-jpeg-parent"), "image/jpeg")}
+        up = client.post(
+            f"/api/photos/parent-upload/parent/{parent.parent_id}?parent_id={parent.parent_id}",
+            files=fichier, headers=parent_headers,
+        )
+        assert up.status_code == 200, up.text
+
+        pending = db.query(PhotoEnAttente).filter_by(
+            entity_type="parent", entity_id=parent.parent_id, statut="EN_ATTENTE",
+        ).first()
+        assert pending is not None
+
+        val = client.post(f"/api/photos/validate/{pending.photo_id}", headers=admin_headers)
+        assert val.status_code == 200, val.text
+        db.refresh(parent)
+        assert parent.photo_url
+
+    def test_modifier_photo_deja_validee_produit_une_url_differente(self, client: TestClient, db: Session):
+        """Régression : le nom de fichier final était stable
+        (`{type}_{id}.ext`) — en modifiant une photo déjà validée, la
+        nouvelle image portait exactement la même URL que l'ancienne, et le
+        navigateur affichait la version mise en cache (l'ancienne),
+        donnant l'impression qu'aucune modification n'avait eu lieu
+        ("je valide mais rien ne se passe"). Vérifie que deux validations
+        successives du même élève produisent deux URLs distinctes."""
+        a = Ecole(db, "PMU")
+        eleve, _ = a.eleve_inscrit(db)
+        headers = _headers(client, a.admin.nom_utilisateur)
+
+        def _upload_et_valider(contenu: bytes) -> str:
+            fichier = {"fichier": ("photo.jpg", io.BytesIO(contenu), "image/jpeg")}
+            up = client.post(f"/api/photos/upload/eleve/{eleve.eleve_id}", files=fichier, headers=headers)
+            assert up.status_code == 200, up.text
+            pending = db.query(PhotoEnAttente).filter_by(
+                entity_type="eleve", entity_id=eleve.eleve_id, statut="EN_ATTENTE",
+            ).first()
+            assert pending is not None
+            val = client.post(f"/api/photos/validate/{pending.photo_id}", headers=headers)
+            assert val.status_code == 200, val.text
+            db.refresh(eleve)
+            return eleve.photo_url
+
+        url_1 = _upload_et_valider(b"\xff\xd8\xff\xe0fake-jpeg-bytes-v1")
+        url_2 = _upload_et_valider(b"\xff\xd8\xff\xe0fake-jpeg-bytes-v2")
+        assert url_1 and url_2
+        assert url_1 != url_2
 
 
 # ══════════════════════════════════════════════════════════════

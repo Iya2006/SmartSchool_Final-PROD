@@ -36,9 +36,7 @@ def _chemin_absolu(file_path: str) -> str:
 
 # ── Isolation par établissement (Lot 9) ───────────────────────────────────
 # Ce module s'appuie sur du SQL brut : les vérifications sont donc écrites en
-# SQL, au plus près de chaque requête. `parent` n'a pas de colonne
-# etablissement_id : il est rattaché via ses enfants (EleveParent -> Eleve),
-# comme au Lot 5.
+# SQL, au plus près de chaque requête.
 
 def _entite_appartient_a_etablissement(db: Session, entity_type: str, entity_id: int, etablissement_id: int) -> bool:
     if entity_type == "eleve":
@@ -50,10 +48,15 @@ def _entite_appartient_a_etablissement(db: Session, entity_type: str, entity_id:
             "SELECT 1 FROM ss_enseignants WHERE enseignant_id = :id AND etablissement_id = :etab"
         ), {"id": entity_id, "etab": etablissement_id}).fetchone()
     elif entity_type == "parent":
+        # `Parent.etablissement_id` est une colonne directe NOT NULL depuis la
+        # migration 2026_08_multi_01 (fiche parent = une par école) — ne pas
+        # la redériver via une jointure EleveParent -> Eleve (ancien motif du
+        # Lot 5, avant cette migration) : un parent sans lien EleveParent
+        # valide vers un élève de CET établissement précis (lien manquant,
+        # enfant transféré...) échouerait alors à tort cette vérification
+        # pour SA PROPRE photo, alors que la colonne directe est fiable.
         row = db.execute(text(
-            "SELECT 1 FROM ss_eleve_parent ep "
-            "JOIN ss_eleves e ON e.eleve_id = ep.eleve_id "
-            "WHERE ep.parent_id = :id AND e.etablissement_id = :etab LIMIT 1"
+            "SELECT 1 FROM ss_parents WHERE parent_id = :id AND etablissement_id = :etab"
         ), {"id": entity_id, "etab": etablissement_id}).fetchone()
     elif entity_type == "personnel":
         row = db.execute(text(
@@ -257,7 +260,11 @@ async def upload_photo(
         for old in os.listdir(folder):
             if old.startswith(f"{entity_type}_{entity_id}.") or old.startswith(f"{entity_type}_{entity_id}_"):
                 os.remove(os.path.join(folder, old))
-        filename = f"{entity_type}_{entity_id}{ext}"
+        # Suffixe unique — voir le même correctif dans validate_photo() :
+        # un nom stable garderait la même URL après une MODIFICATION de
+        # photo déjà existante, et le navigateur affiche alors l'ancienne
+        # image mise en cache au lieu de la nouvelle.
+        filename = f"{entity_type}_{entity_id}_{uuid.uuid4().hex[:8]}{ext}"
         filepath = os.path.join(folder, filename)
         with open(filepath, "wb") as f:
             shutil.copyfileobj(fichier.file, f)
@@ -597,8 +604,13 @@ def validate_photo(
     cfg = ENTITY_MAP[p.entity_type]
     ext = os.path.splitext(p.file_path)[1]
 
-    # New final filename
-    filename = f"{p.entity_type}_{p.entity_id}{ext}"
+    # Nom de fichier final avec suffixe unique — pas juste
+    # `{type}_{id}{ext}` : en cas de MODIFICATION d'une photo déjà validée,
+    # un nom stable produirait exactement la même URL qu'avant, et le
+    # navigateur affiche alors l'image mise en cache (l'ancienne), donnant
+    # l'impression qu'"il ne se passe rien" alors que le fichier a bien été
+    # remplacé sur le disque et en base.
+    filename = f"{p.entity_type}_{p.entity_id}_{uuid.uuid4().hex[:8]}{ext}"
     folder = os.path.join(UPLOAD_BASE, cfg["folder"])
 
     # Clean old final photos
