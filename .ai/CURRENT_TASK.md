@@ -19,6 +19,14 @@ configurer les horaires d'établissement (notre grille horaire vs.
 `parametres/horaires` du collaborateur). Fusion locale uniquement, pas
 encore poussée vers `origin/IYA`.
 
+**Suite directe (même jour)** : décision utilisateur sur le point ouvert
+ci-dessus — garder uniquement le système d'horaires du collaborateur
+(`parametres/horaires`), retirer la grille horaire configurable de cette
+session (Addendum 4 de `.ai/IYA0_RAPPORT.md`, voir Addendum 6). Les 4
+fichiers concernés restaurés à leur état d'avant ce chantier (aucun risque,
+`origin/main` ne les avait pas touchés). Suite backend 667 passed/0 échec,
+`tsc` propre, 102/102 frontend, toujours vrais après ce retrait.
+
 ## Tâche précédente — Séances pédagogiques + grille horaire configurable (branche `IYA`, 12/08/2026)
 Voir `.ai/IYA0_RAPPORT.md` pour le détail complet (fichiers, migration,
 corrections, tests, verdict GO). Résumé : `Presence` (appel de classe)
