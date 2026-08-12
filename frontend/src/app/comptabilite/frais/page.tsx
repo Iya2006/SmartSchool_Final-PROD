@@ -786,18 +786,48 @@ function FraisScolaritePage() {
                             <h3 style={{ margin: 0, fontSize: '18px', color: '#0f172a' }}>{editingTypeFrais ? 'Modifier' : 'Nouveau'} type de frais</h3>
                             <button onClick={() => setShowTypeFraisModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><X size={20} /></button>
                         </div>
+                        {/* Un type de frais dit CE QUE l'école fait payer, pas COMBIEN.
+                            Le montant dépend de la classe : la 6ᵉ ne coûte pas comme la
+                            Terminale. Le formulaire le disait mal — « Montant par défaut »
+                            laissait croire à un prix unique pour toute l'école. */}
                         <form onSubmit={submitTypeFrais} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Code *</label>
-                                    <input value={tfCode} onChange={e => setTfCode(e.target.value)} required placeholder="ex: SCOL" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box', textTransform: 'uppercase' }} />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Libellé *</label>
-                                    <input value={tfLibelle} onChange={e => setTfLibelle(e.target.value)} required placeholder="ex: Frais de scolarité" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
-                                </div>
+                            <div style={{ padding: '12px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '10px', fontSize: '12.5px', color: '#1e40af', lineHeight: 1.55 }}>
+                                Un type de frais désigne <strong>ce que l&apos;école fait payer</strong> —
+                                scolarité, inscription, cantine. Le <strong>montant réel se fixe
+                                ensuite par classe</strong> ; celui saisi ici sert de valeur de départ.
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>
+                                    Nom du frais <span style={{ color: '#dc2626' }}>*</span>
+                                </label>
+                                <input
+                                    value={tfLibelle}
+                                    onChange={e => {
+                                        setTfLibelle(e.target.value);
+                                        // Le code est technique : le faire saisir par l'école
+                                        // n'apporte rien et produit des « csfd ». On le
+                                        // dérive du nom, en le laissant modifiable.
+                                        if (!editingTypeFrais) {
+                                            setTfCode(
+                                                e.target.value
+                                                    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                                                    .toUpperCase().replace(/[^A-Z0-9]/g, '')
+                                                    .slice(0, 12)
+                                            );
+                                        }
+                                    }}
+                                    required
+                                    placeholder="Frais de scolarité"
+                                    autoFocus
+                                    style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }}
+                                />
+                                <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
+                                    C&apos;est ce nom qui apparaîtra sur les factures et les reçus des parents.
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
                                 <div>
                                     <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Catégorie</label>
                                     <select value={tfCategorie} onChange={e => setTfCategorie(e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
@@ -805,27 +835,70 @@ function FraisScolaritePage() {
                                     </select>
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Montant par défaut (GNF)</label>
-                                    <input type="number" value={tfMontantDefaut} onChange={e => setTfMontantDefaut(e.target.value)} placeholder="ex: 150000" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Fréquence</label>
+                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Payé</label>
                                     <select value={tfFrequence} onChange={e => setTfFrequence(e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
-                                        {FREQUENCES.map(f => <option key={f}>{f}</option>)}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Obligatoire ?</label>
-                                    <select value={tfObligatoire} onChange={e => setTfObligatoire(e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
-                                        <option value="O">Oui</option>
-                                        <option value="N">Non</option>
+                                        <option value="ANNUEL">Une fois par an</option>
+                                        <option value="TRIMESTRIEL">Chaque trimestre</option>
+                                        <option value="MENSUEL">Chaque mois</option>
+                                        <option value="UNIQUE">Une seule fois</option>
                                     </select>
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '8px' }}>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>
+                                    Montant de référence (GNF)
+                                </label>
+                                <input
+                                    type="number" min={0}
+                                    value={tfMontantDefaut}
+                                    onChange={e => setTfMontantDefaut(e.target.value)}
+                                    placeholder="150000"
+                                    style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }}
+                                />
+                                <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
+                                    Facultatif. Utilisé pour les classes dont le tarif n&apos;est pas encore fixé.
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '11px 13px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+                                <input
+                                    type="checkbox" id="tf-obligatoire"
+                                    checked={tfObligatoire === 'O'}
+                                    onChange={e => setTfObligatoire(e.target.checked ? 'O' : 'N')}
+                                    style={{ marginTop: 2, cursor: 'pointer' }}
+                                />
+                                <label htmlFor="tf-obligatoire" style={{ cursor: 'pointer', fontSize: '13px', color: '#334155', lineHeight: 1.5 }}>
+                                    <strong>Frais obligatoire</strong>
+                                    <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>
+                                        Facturé automatiquement à tous les élèves. Décochez pour un frais
+                                        optionnel — cantine, transport — facturé au cas par cas.
+                                    </span>
+                                </label>
+                            </div>
+
+                            {/* Le code reste visible mais discret : il sert au systeme, pas
+                                a l'ecole. L'imposer en premier champ produisait des « csfd ». */}
+                            <details>
+                                <summary style={{ fontSize: '12.5px', color: '#64748b', cursor: 'pointer' }}>
+                                    Code interne : <strong>{tfCode || '—'}</strong>
+                                </summary>
+                                <input
+                                    value={tfCode}
+                                    onChange={e => setTfCode(e.target.value.toUpperCase())}
+                                    required
+                                    placeholder="SCOL"
+                                    style={{ width: '100%', marginTop: '8px', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box', textTransform: 'uppercase' }}
+                                />
+                                <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
+                                    Généré depuis le nom. Ne le changez que si vous savez pourquoi.
+                                </span>
+                            </details>
+
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                                 <button type="button" onClick={() => setShowTypeFraisModal(false)} style={{ padding: '10px 20px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>Annuler</button>
                                 <button type="submit" style={{ padding: '10px 20px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>
-                                    {editingTypeFrais ? 'Mettre à jour' : 'Créer'}
+                                    {editingTypeFrais ? 'Enregistrer' : 'Créer'}
                                 </button>
                             </div>
                         </form>

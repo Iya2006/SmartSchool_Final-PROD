@@ -135,11 +135,33 @@ class TestModeHoraire:
         r = paie.salaire_enseignant(db, ens.enseignant_id, ecole["annee"].annee_id)
         assert r["base"] == 200_000  # seule la première affectation est payée
 
-    def test_sans_affectation_aucune_heure_a_remunerer(self, db: Session, ecole):
+    def test_sans_affectation_ni_salaire_saisi_il_ny_a_rien_a_verser(self, db: Session, ecole):
         ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
         r = paie.salaire_enseignant(db, ens.enseignant_id, ecole["annee"].annee_id)
         assert r["base"] == 0
-        assert "Aucune affectation" in r["explication"]
+        assert "Aucune heure affectée" in r["explication"]
+
+    def test_sans_affectation_le_montant_saisi_sur_la_fiche_fait_foi(self, db: Session, ecole):
+        """Un salaire mensuel écrit sur la fiche ne doit pas tomber à zéro.
+
+        Le mode par défaut est HORAIRE : tout enseignant saisi avant l'arrivée
+        du calcul horaire le porte, y compris ceux à qui l'école a négocié un
+        forfait mensuel. S'en tenir aux heures ferait disparaître leur paie
+        sans le moindre message.
+        """
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=0, salaire=1_500_000)
+        r = paie.salaire_enseignant(db, ens.enseignant_id, ecole["annee"].annee_id)
+        assert r["base"] == 1_500_000
+        assert r["mode"] == paie.MODE_MENSUEL
+        assert "fiche" in r["explication"]
+
+    def test_des_qu_il_a_des_heures_ce_sont_elles_qui_comptent(self, db: Session, ecole):
+        """Le repli sur la fiche ne s'applique QUE faute d'heures."""
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000, salaire=1_500_000)
+        _affecter(db, ecole, ens, ecole["m1"], 5)
+        r = paie.salaire_enseignant(db, ens.enseignant_id, ecole["annee"].annee_id)
+        assert r["base"] == 200_000
+        assert r["mode"] == paie.MODE_HORAIRE
 
 
 class TestModeMensuel:
@@ -259,3 +281,99 @@ class TestModeDeduitDesAffectations:
 
         db.delete(aff); db.commit()
         assert synchroniser_mode_remuneration(db, ens.enseignant_id) == "HORAIRE"
+
+
+class TestPersonneNeDisparaitDeLaPaie:
+    """La paie ne doit jamais faire disparaître quelqu'un en silence.
+
+    Trois mécanismes l'ont fait, chacun pour une raison différente :
+    un filtre `salaire_base > 0` qui écartait tout vacataire, un
+    `except: continue` qui supprimait la ligne dont le calcul échouait, et un
+    `except: pass` qui annonçait « 3 salaires payés » sans dire que deux
+    autres n'étaient pas passés. Dans les trois cas, un employé impayé
+    n'apparaissait nulle part — pas même comme impayé.
+    """
+
+    def test_un_vacataire_sans_montant_reste_dans_la_liste(self, db: Session, ecole):
+        from app.api.finance import _lister_employes_actifs
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=0, salaire=0)
+        refs = _lister_employes_actifs(db, ecole["etab"].etablissement_id)
+        assert f"ENS_{ens.enseignant_id}" in refs
+
+    def test_le_super_admin_nest_pas_un_salarie_de_lecole(self, db: Session, ecole):
+        from app.api.finance import _lister_employes_actifs
+
+        uid = _uid()
+        patron = Utilisateur(
+            nom="Editeur", prenom=f"Plateforme{uid}", nom_utilisateur=f"sa.paie.{uid}",
+            email=f"sa.paie.{uid}@smartschool.gn", telephone=f"63{uid:08d}",
+            mot_de_passe="x", role="SUPER_ADMIN", statut="ACTIF",
+            etablissement_id=ecole["etab"].etablissement_id, salaire_base=9_000_000,
+        )
+        db.add(patron); db.commit(); db.refresh(patron)
+
+        refs = _lister_employes_actifs(db, ecole["etab"].etablissement_id)
+        assert f"PERS_{patron.utilisateur_id}" not in refs
+
+    def test_le_calcul_du_mois_liste_tout_le_monde_avec_son_montant(
+        self, db: Session, ecole
+    ):
+        from app.api.finance import calculer_salaires_endpoint
+
+        paye_a_l_heure = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, paye_a_l_heure, ecole["m1"], 5)
+        sans_rien = _enseignant(db, ecole, mode="HORAIRE", taux=0, salaire=0)
+
+        lignes = calculer_salaires_endpoint(
+            mois_concerne="2026-01", db=db,
+            etablissement_id=ecole["etab"].etablissement_id,
+        )
+        par_ref = {l["employe_id"]: l for l in lignes}
+
+        # Le vacataire touche ses heures : 5 h × 10 000 × 4 semaines.
+        assert par_ref[f"ENS_{paye_a_l_heure.enseignant_id}"]["net_a_payer"] == 200_000
+        assert par_ref[f"ENS_{paye_a_l_heure.enseignant_id}"]["mode_remuneration"] == "HORAIRE"
+
+        # Celui dont rien n'est renseigné reste visible, à zéro : c'est un
+        # montant à compléter, pas un employé à effacer.
+        assert f"ENS_{sans_rien.enseignant_id}" in par_ref
+        assert par_ref[f"ENS_{sans_rien.enseignant_id}"]["net_a_payer"] == 0
+
+    def test_le_paiement_groupe_rend_compte_de_ce_qui_nest_pas_passe(
+        self, db: Session, ecole
+    ):
+        from app.api.finance import payer_group_endpoint
+
+        payable = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, payable, ecole["m1"], 5)
+        sans_rien = _enseignant(db, ecole, mode="HORAIRE", taux=0, salaire=0)
+
+        res = payer_group_endpoint(
+            mois_concerne="2026-01", mode_paiement="Cash", db=db,
+            etablissement_id=ecole["etab"].etablissement_id,
+        )
+        assert len(res["payes"]) == 1
+        assert res["total_verse"] == 200_000
+        # Celui sans montant n'est pas « payé », mais il est nommé et motivé.
+        assert any(sans_rien.nom in i["nom"] for i in res["ignores"])
+        assert "sans rien à verser" in res["message"] or "sans rien a verser" in res["message"]
+
+    def test_le_paiement_groupe_utilise_lannee_de_cette_ecole(self, db: Session, ecole):
+        """`annee_id=1` était codé en dur : l'école n°37 enregistrait ses
+        dépenses de salaires sur l'année scolaire de la première école."""
+        from app.api.finance import payer_group_endpoint
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, ens, ecole["m1"], 5)
+
+        payer_group_endpoint(
+            mois_concerne="2026-02", mode_paiement="Cash", db=db,
+            etablissement_id=ecole["etab"].etablissement_id,
+        )
+        depenses = db.query(Depense).filter(
+            Depense.etablissement_id == ecole["etab"].etablissement_id,
+            Depense.categorie == "SALAIRES",
+        ).all()
+        assert depenses
+        assert all(d.annee_id == ecole["annee"].annee_id for d in depenses)

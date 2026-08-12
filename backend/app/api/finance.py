@@ -3294,14 +3294,22 @@ def list_employes_salaires(
         db.query(Utilisateur)
         .filter(
             Utilisateur.etablissement_id == etablissement_id,
-            Utilisateur.statut == "ACTIF"
+            Utilisateur.statut == "ACTIF",
+            Utilisateur.role != "SUPER_ADMIN",
         )
         .all()
     )
 
+    from app.services import paie as _paie
+    _annee_paie = _paie.annee_courante_id(db, etablissement_id)
+
     result = []
     # --- Traitement des Enseignants ---
     for ens in enseignants:
+        # Le salaire affiche ici doit etre celui que la paie versera. Pour un
+        # vacataire il se calcule a partir des heures ; la colonne
+        # `ens.salaire_base` vaut 0 et ne veut rien dire.
+        _r = _paie.salaire_enseignant(db, ens.enseignant_id, _annee_paie)
         depenses = (
             db.query(Depense)
             .filter(
@@ -3349,7 +3357,10 @@ def list_employes_salaires(
             "nom": ens.nom,
             "prenom": ens.prenom,
             "role_label": "Enseignant",
-            "salaire_base": float(ens.salaire_base) if ens.salaire_base else 0,
+            "salaire_base": _r["base"],
+            "mode_remuneration": _r["mode"],
+            "total_heures": _r["total_heures"],
+            "explication_salaire": _r.get("explication", ""),
             "prime_mensuelle": float(ens.prime_mensuelle) if ens.prime_mensuelle else 0,
             "telephone": ens.telephone,
             "paye_ce_mois": paye_ce_mois,
@@ -3408,6 +3419,9 @@ def list_employes_salaires(
             "prenom": p.prenom,
             "role_label": p.role,
             "salaire_base": float(p.salaire_base) if p.salaire_base else 0,
+            "mode_remuneration": "MENSUEL",
+            "total_heures": 0.0,
+            "explication_salaire": "Salaire mensuel fixe.",
             "prime_mensuelle": float(p.prime_mensuelle) if p.prime_mensuelle else 0,
             "telephone": p.telephone,
             "paye_ce_mois": paye_ce_mois,
@@ -3484,12 +3498,28 @@ def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int)
         ).first()
         if not ens:
             raise HTTPException(status_code=404, detail="Enseignant introuvable")
+        # Au primaire, le salaire est un montant fixe inscrit sur la fiche.
+        # Au college et au lycee, il n'existe nulle part en base : il se CALCULE
+        # a partir des heures reellement affectees. Lire `ens.salaire_base` pour
+        # tout le monde renvoyait donc 0 pour chaque vacataire — un net a payer
+        # nul, une retenue d'absence nulle, et l'enseignant purement absent de la
+        # paie du mois. Le calcul vit dans services/paie.py et nulle part
+        # ailleurs : le passer ici garantit que la preparation, le paiement, les
+        # arrieres et le bulletin lisent tous le meme chiffre.
+        from app.services import paie as _paie
+
+        _r = _paie.salaire_enseignant(
+            db, emp_id, _paie.annee_courante_id(db, etablissement_id)
+        )
         return {
             "nom": ens.nom, "prenom": ens.prenom, "poste": "Enseignant",
-            "salaire_base": float(ens.salaire_base or 0),
+            "salaire_base": _r["base"],
             "prime_mensuelle": float(ens.prime_mensuelle or 0),
             "type_contrat": ens.type_contrat or "PERMANENT", "mobile_money": None,
             "type_agent": "ENSEIGNANT", "agent_id": emp_id,
+            "mode_remuneration": _r["mode"],
+            "total_heures": _r["total_heures"],
+            "explication_salaire": _r.get("explication", ""),
         }
     elif prefix == "PERS":
         pers = db.query(Utilisateur).filter(
@@ -3503,6 +3533,11 @@ def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int)
             "prime_mensuelle": float(pers.prime_mensuelle or 0),
             "type_contrat": pers.type_contrat or "PERMANENT", "mobile_money": None,
             "type_agent": "PERSONNEL", "agent_id": emp_id,
+            # Un comptable, un surveillant, un gardien ne sont pas payes a
+            # l'heure de cours : leur salaire est fixe, par mois.
+            "mode_remuneration": "MENSUEL",
+            "total_heures": 0.0,
+            "explication_salaire": "Salaire mensuel fixe.",
         }
     raise HTTPException(status_code=400, detail="Type d'employé inconnu")
 
@@ -3570,6 +3605,9 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
             "bulletin_id": bulletin_existant.bulletin_id,
             "nom_complet": f"{infos['prenom']} {infos['nom']}",
             "details_absences": bulletin_existant.details_absences,
+            "mode_remuneration": infos.get("mode_remuneration", "MENSUEL"),
+            "total_heures": infos.get("total_heures", 0.0),
+            "explication_salaire": infos.get("explication_salaire", ""),
         }
 
     primes_ponctuelles = (
@@ -3627,18 +3665,36 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
         "bulletin_id": None,
         "nom_complet": f"{infos['prenom']} {infos['nom']}",
         "details_absences": details_absences_texte,
+        "mode_remuneration": infos.get("mode_remuneration", "MENSUEL"),
+        "total_heures": infos.get("total_heures", 0.0),
+        "explication_salaire": infos.get("explication_salaire", ""),
     }
 
 
 def _lister_employes_actifs(db: Session, etablissement_id: int):
-    """Retourne la liste des références employés actifs ('ENS_x'/'PERS_x')."""
+    """Tout le personnel actif a payer ('ENS_x'/'PERS_x').
+
+    La liste filtrait sur `salaire_base > 0`. Un vacataire du college a
+    `salaire_base = 0` en base — son salaire se calcule a partir de ses heures
+    — donc il ne figurait dans AUCUNE liste de paie : ni preparation, ni
+    paiement groupe. Il n'apparaissait nulle part et personne ne pouvait s'en
+    apercevoir, puisqu'il ne s'affichait meme pas comme impaye.
+
+    On ne filtre donc plus sur le montant. Un employe sans salaire renseigne
+    reste visible et ressort comme « montant a completer » : un manque affiche
+    vaut mieux qu'un employe efface.
+
+    Le SUPER_ADMIN est l'editeur de la plateforme, pas un salarie de l'ecole.
+    """
     refs = []
     for ens in db.query(Enseignant).filter(
-        Enseignant.etablissement_id == etablissement_id, Enseignant.statut == "ACTIF", Enseignant.salaire_base > 0
+        Enseignant.etablissement_id == etablissement_id, Enseignant.statut == "ACTIF"
     ).all():
         refs.append(f"ENS_{ens.enseignant_id}")
     for pers in db.query(Utilisateur).filter(
-        Utilisateur.etablissement_id == etablissement_id, Utilisateur.statut == "ACTIF", Utilisateur.salaire_base > 0
+        Utilisateur.etablissement_id == etablissement_id,
+        Utilisateur.statut == "ACTIF",
+        Utilisateur.role != "SUPER_ADMIN",
     ).all():
         refs.append(f"PERS_{pers.utilisateur_id}")
     return refs
@@ -3731,12 +3787,30 @@ def calculer_salaires_endpoint(
                 "total_avances": calc["total_avances"],
                 "net_a_payer": calc["net_a_payer"],
                 "statut": calc["statut"],
-                "deja_paye": calc["statut"] == "PAYE"
+                "deja_paye": calc["statut"] == "PAYE",
+                "mode_remuneration": calc.get("mode_remuneration", "MENSUEL"),
+                "total_heures": calc.get("total_heures", 0.0),
+                "explication_salaire": calc.get("explication_salaire", ""),
+                "erreur": None,
             })
         except Exception as e:
-            # Skip invalid employees during bulk calculation
-            continue
-            
+            # Cette boucle faisait `continue` : l'employe dont le calcul echouait
+            # disparaissait purement et simplement du tableau. Le comptable payait
+            # cinq personnes sur six en croyant avoir tout paye, et rien a l'ecran
+            # ne le lui disait. On garde donc la ligne, avec sa raison.
+            db.rollback()
+            result.append({
+                "employe_id": ref,
+                "nom": ref, "prenom": "", "poste": "—",
+                "salaire_base": 0, "total_primes": 0,
+                "total_absences": 0, "total_avances": 0,
+                "net_a_payer": 0,
+                "statut": "ERREUR", "deja_paye": False,
+                "mode_remuneration": "", "total_heures": 0.0,
+                "explication_salaire": "",
+                "erreur": str(getattr(e, "detail", None) or e)[:200],
+            })
+
     return result
 
 @router.get("/salaires/date-paie")
@@ -3790,26 +3864,54 @@ def payer_group_endpoint(
     if not mois_concerne:
         mois_concerne = date_type.today().strftime("%Y-%m")
 
+    # `annee_id=1` etait code en dur : l'ecole n°37 enregistrait ses depenses de
+    # salaires sur l'annee scolaire n°1, qui appartient a la premiere ecole
+    # inscrite. C'est l'annee EN COURS DE CETTE ECOLE qui fait foi.
+    annee_id = resoudre_annee(db, etablissement_id, None)
+
     refs = _lister_employes_actifs(db, etablissement_id)
-    count = 0
+    payes, ignores, echecs = [], [], []
 
     for ref in refs:
         try:
             calc = _calculer_salaire(db, ref, mois_concerne, etablissement_id)
-            if calc["statut"] != "PAYE" and calc["net_a_payer"] > 0:
-                _executer_paiement_salaire(
-                    db=db,
-                    employe_id_str=ref,
-                    mois_concerne=mois_concerne,
-                    mode_paiement=mode_paiement,
-                    etablissement_id=etablissement_id,
-                    annee_id=1
-                )
-                count += 1
-        except Exception:
-            pass
-            
-    return {"message": f"{count} salaires payés avec succès"}
+            if calc["statut"] == "PAYE":
+                ignores.append({"nom": calc["nom_complet"], "raison": "deja paye ce mois"})
+                continue
+            if calc["net_a_payer"] <= 0:
+                ignores.append({"nom": calc["nom_complet"], "raison": "aucun montant a verser"})
+                continue
+            _executer_paiement_salaire(
+                db=db,
+                employe_id_str=ref,
+                mois_concerne=mois_concerne,
+                mode_paiement=mode_paiement,
+                etablissement_id=etablissement_id,
+                annee_id=annee_id,
+            )
+            payes.append({"nom": calc["nom_complet"], "montant": calc["net_a_payer"]})
+        except Exception as e:
+            # `except: pass` renvoyait « 3 salaires payes » sans jamais dire que
+            # deux autres avaient echoue. Un paiement qui ne passe pas doit se
+            # voir : c'est de l'argent que quelqu'un attend.
+            db.rollback()
+            echecs.append({
+                "employe_id": ref,
+                "raison": str(getattr(e, "detail", None) or e)[:200],
+            })
+
+    message = f"{len(payes)} salaire(s) paye(s)"
+    if ignores:
+        message += f", {len(ignores)} sans rien a verser"
+    if echecs:
+        message += f", {len(echecs)} EN ECHEC"
+    return {
+        "message": message + ".",
+        "payes": payes,
+        "ignores": ignores,
+        "echecs": echecs,
+        "total_verse": round(sum(p["montant"] for p in payes), 2),
+    }
 
 
 def _derniers_mois(n: int):

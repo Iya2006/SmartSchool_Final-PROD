@@ -138,6 +138,27 @@ def salaire_enseignant(
     lignes = detail_heures_enseignant(db, enseignant_id, annee_id)
     total = sum(_dec(l["montant_mensuel"]) for l in lignes)
     heures = sum(_dec(l["heures_semaine"]) for l in lignes)
+
+    # Aucune heure à facturer, mais un montant mensuel écrit noir sur blanc sur
+    # la fiche : c'est le cas de tout enseignant saisi avant que le mode
+    # horaire n'existe, et de toute école qui négocie un forfait plutôt qu'un
+    # tarif à l'heure. Le mode par défaut étant HORAIRE, s'en tenir au calcul
+    # des heures ferait tomber leur paie à zéro — sans erreur, sans alerte,
+    # juste un salaire disparu. Un montant explicitement saisi par l'école
+    # prime sur un calcul qui n'a rien à calculer.
+    fixe = _dec(ens.salaire_base)
+    if not lignes and fixe > 0:
+        return {
+            "base": float(fixe),
+            "mode": MODE_MENSUEL,
+            "lignes": [],
+            "total_heures": 0.0,
+            "explication": (
+                "Montant mensuel saisi sur la fiche — aucune heure affectée "
+                "pour le calculer autrement."
+            ),
+        }
+
     return {
         "base": float(total),
         "mode": MODE_HORAIRE,
@@ -146,7 +167,8 @@ def salaire_enseignant(
         "explication": (
             f"{heures} h/semaine × {SEMAINES_PAR_MOIS} semaines"
             if lignes else
-            "Aucune affectation active : aucune heure à rémunérer."
+            "Aucune heure affectée et aucun salaire mensuel saisi : "
+            "rien à verser tant que l'un des deux n'est pas renseigné."
         ),
     }
 
