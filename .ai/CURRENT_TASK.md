@@ -1,6 +1,54 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active — Service Worker Offline-First (Serwist, remplace next-pwa) (09/08/2026)
+## Tâche active — Séances pédagogiques + grille horaire configurable (branche `IYA`, 12/08/2026)
+Voir `.ai/IYA0_RAPPORT.md` pour le détail complet (fichiers, migration,
+corrections, tests, verdict GO). Résumé : `Presence` (appel de classe)
+n'avait aucune notion de matière/enseignant/séance — un enseignant avec
+plusieurs matières sur la même classe ne pouvait faire qu'un appel par
+demi-journée, le second écrasant silencieusement le premier. Corrigé par un
+nouveau modèle `Seance` (OWNERSHIP via `Classe`) + 13 routes
+(`backend/app/api/seances.py`) + UI "Mes Séances" côté portail enseignant +
+page admin `/vie-scolaire/seances`. Aucun chemin d'écriture historique
+retiré (`enregistrer_appel`/`sync_presences`/`saisie_presences_batch`
+inchangés). Développé et documenté sous le nom `IYA0` (convention demandée
+par l'utilisateur, distincte de la numérotation `LOT{0..12}` du chantier
+multi-écoles de son collaborateur) sur la branche `IYA`, pas encore
+mergée dans `main`.
+
+**Suite directe (même jour, Addendum 4)** : grille horaire configurable —
+les créneaux d'emploi du temps étaient codés en dur (blocs fixes d'1h,
+pause déjeuner 12h-14h figée) ; l'administrateur peut désormais configurer
+librement la durée de chaque créneau (cours de 2h possibles) et la
+position/durée/libellé de chaque pause, via une nouvelle modale
+"Configurer les horaires" sur `/emploi-du-temps`. Stocké dans
+`ParametreEtablissement` (categorie=`EMPLOI_DU_TEMPS`, réutilise les routes
+`/api/parametrage/settings` existantes, aucune migration). 4 fichiers
+touchés (1 backend, 3 frontend) — détail dans le rapport.
+
+**Suite directe (même jour, Addendum 5)** : signalement utilisateur — taux
+"Présence observée" du dashboard admin à 89% alors que testé avec un seul
+enseignant sur une seule classe (école de 19 classes), jugé trompeur.
+Reproduit sur la base réelle : calcul correct (89% pour CES 2 classes),
+mais couverture jamais affichée. Corrigé : `nb_classes_couvertes`/
+`nb_seances_comptabilisees` ajoutés au KPI, légende de couverture
+permanente sous le pourcentage (alerte visuelle si <50% des classes
+actives), et le taux ne pèse plus seul sur le badge "état global"/les
+alertes tant que la couverture est insuffisante (`couvertureSuffisante()`,
+seuil 50%). 3 fichiers touchés (`dashboard.py`, `schemas.py`,
+`dashboard/page.tsx`).
+
+**État vérifié à date** : suite backend **508 passed, 10 skipped, 0
+échec** (Docker Python 3.12), frontend `tsc --noEmit` propre + **102/102**
+Vitest, plus des vérifications fonctionnelles directes contre la base
+réelle locale : grille horaire (défaut + config personnalisée avec cours
+de 2h, confirmé un seul bloc) ET couverture KPI présence (2/19 classes, 2
+séances — mêmes chiffres que le signalement). Reste ouvert : validation
+manuelle navigateur (aucun outil d'automatisation disponible cette
+session), Phase 2 explicitement différée pour les séances (support offline
+de l'appel, dashboard/stats, workflow `REPORTEE` complet — voir le
+rapport).
+
+## Tâche précédente — Service Worker Offline-First (Serwist, remplace next-pwa) (09/08/2026) — TERMINÉE, voir historique ci-dessous
 Nouvelle spécification détaillée fournie par l'utilisateur pour étendre
 l'offline-first à ~10 modules (classification de risque Niveau A/B/C :
 paiements/comptabilité/utilisateurs traités à part, jamais un blocage

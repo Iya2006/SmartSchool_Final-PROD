@@ -398,6 +398,50 @@ class Affectation(Base):
     enseignant = relationship("Enseignant", back_populates="affectations")
 
 
+class Seance(Base):
+    """Séance de cours : classe + matière + enseignant + date + créneau,
+    ancre de l'appel pédagogique. Distincte de PresenceAgent (badge
+    physique) — un enseignant peut être PRESENT au badge et en retard sur
+    SA séance : deux faits jamais fusionnés. OWNERSHIP via Classe, même
+    convention que CreneauEmploi/Affectation/Evaluation (voir
+    docs/MULTI_ECOLES_REGLES_DEV.md §5) — pas de colonne etablissement_id
+    propre."""
+    __tablename__ = "ss_seances"
+    seance_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    creneau_id = Column(Integer, ForeignKey("ss_creneaux_emploi.creneau_id"), nullable=True)
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    # Enseignant PRÉVU (snapshot à la génération depuis le créneau, jamais
+    # réécrit après coup) vs RÉEL (posé à "Commencer" ; diffère du prévu
+    # seulement si un remplaçant a été affecté via PUT /remplacer).
+    enseignant_prevu_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    enseignant_reel_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    date_seance = Column(Date, nullable=False)
+    heure_debut_prevue = Column(String(5), nullable=False)  # "08:00"
+    heure_fin_prevue = Column(String(5), nullable=False)
+    heure_debut_reelle = Column(DateTime, nullable=True)
+    heure_fin_reelle = Column(DateTime, nullable=True)
+    salle = Column(String(50), nullable=True)
+    statut = Column(String(20), default="PREVUE", nullable=False)
+    # PREVUE, EN_COURS, EFFECTUEE, ANNULEE, REPORTEE, REMPLACEE, NON_EFFECTUEE
+    motif_statut = Column(String(300), nullable=True)
+    # Dénormalisé à "Terminer" (recalculé depuis Presence.seance_id) pour que
+    # l'historique et le dashboard admin n'aient pas à recompter à l'affichage.
+    appel_fait = Column(String(1), default="N", nullable=False)
+    appel_fait_le = Column(DateTime, nullable=True)
+    nb_presents = Column(Integer, nullable=True)
+    nb_absents = Column(Integer, nullable=True)
+    nb_retards = Column(Integer, nullable=True)
+    created_date = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_by = Column(String(100), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("creneau_id", "date_seance", name="uq_seance_creneau_date"),
+    )
+
+
 class Inscription(Base):
     __tablename__ = "ss_inscriptions"
     inscription_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -623,6 +667,10 @@ class Presence(Base):
     statut_presence = Column(String(20), nullable=False)
     est_justifie = Column(String(1), default="N")
     motif = Column(String(300))
+    # Séance pédagogique (matière + enseignant) dont cette présence relève —
+    # NULL = ligne historique/legacy (appel de classe, saisie admin en
+    # masse, sync offline) : jamais backfillée, jamais de matière inventée.
+    seance_id = Column(Integer, ForeignKey("ss_seances.seance_id"), nullable=True)
     # Module offline-first (sync.py) : détection de conflit à la resynchronisation
     # (Last-Write-Wins comparé à `base_updated_at` envoyé par le client).
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 import Pagination from '@/components/Pagination';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
+import MesSeances from './_components/MesSeances';
 import { startAutoSync } from '@/lib/syncEngine';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -108,7 +109,7 @@ export default function PortailEnseignant() {
     }, []);
 
     const [data, setData] = useState<DashData | null>(null);
-    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'seances'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
     const [edtLoading, setEdtLoading] = useState(false);
     const [selectedClass, setSelectedClass] = useState<AffectationData|null>(null);
@@ -856,7 +857,8 @@ export default function PortailEnseignant() {
                         { key: 'emploi' as const, label: 'Emploi du Temps', icon: Calendar },
                         { key: 'classes' as const, label: 'Mes Classes', icon: Users },
                         { key: 'notes' as const, label: 'Saisie Notes', icon: FileText },
-                        { key: 'appel' as const, label: 'Appel', icon: ClipboardList },
+                        { key: 'seances' as const, label: 'Mes Séances', icon: Clock },
+                        { key: 'appel' as const, label: 'Appel (classe)', icon: ClipboardList },
                         { key: 'messages' as const, label: 'Messages', icon: MailIcon },
                         { key: 'devoirs' as const, label: 'Devoirs', icon: BookOpen },
                         { key: 'documents' as const, label: 'Documents & Partages', icon: FileText },
@@ -2238,6 +2240,13 @@ export default function PortailEnseignant() {
                                     </div>
                                 )}
                             </div>
+                        </motion.div>
+                    )}
+
+                    {/* ──── MES SÉANCES TAB ──── */}
+                    {activeTab === 'seances' && (
+                        <motion.div key="seances" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <MesSeances enseignantId={ens.enseignant_id} primaryColor={primaryColor} accentColor={accentColor} affectations={affectations} />
                         </motion.div>
                     )}
 

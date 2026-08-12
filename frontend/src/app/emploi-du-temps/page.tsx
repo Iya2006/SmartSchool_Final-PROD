@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Calendar, ChevronRight, Loader2, Plus, Trash2, Edit3, X, Clock,
-    BookOpen, Wand2, CheckCircle2, AlertCircle, Users, MapPin, Search, Zap, Utensils, User
+    BookOpen, Wand2, CheckCircle2, AlertCircle, Users, MapPin, Search, Zap, Utensils, User, Settings, ArrowUp, ArrowDown
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -20,16 +20,26 @@ interface Creneau {
     enseignant: { enseignant_id: number; nom: string; prenom: string; specialite: string | null } | null;
     jour: string; heure_debut: string; heure_fin: string; salle: string;
 }
+interface SegmentGrille {
+    type: 'COURS' | 'PAUSE';
+    heure_debut: string;
+    heure_fin: string;
+    libelle?: string;
+}
 
 const JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
 const JOURS_LABEL: Record<string, string> = {
     LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi'
 };
-const HEURES = [
-    { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
-    { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
-    { debut: '14:00', fin: '15:00' }, { debut: '15:00', fin: '16:00' },
-    { debut: '16:00', fin: '17:00' },
+const GRILLE_DEFAUT: SegmentGrille[] = [
+    { type: 'COURS', heure_debut: '08:00', heure_fin: '09:00' },
+    { type: 'COURS', heure_debut: '09:00', heure_fin: '10:00' },
+    { type: 'COURS', heure_debut: '10:00', heure_fin: '11:00' },
+    { type: 'COURS', heure_debut: '11:00', heure_fin: '12:00' },
+    { type: 'PAUSE', heure_debut: '12:00', heure_fin: '14:00', libelle: 'Pause déjeuner' },
+    { type: 'COURS', heure_debut: '14:00', heure_fin: '15:00' },
+    { type: 'COURS', heure_debut: '15:00', heure_fin: '16:00' },
+    { type: 'COURS', heure_debut: '16:00', heure_fin: '17:00' },
 ];
 
 const CAT_COLORS: Record<string, { bg: string; text: string; border: string; light: string }> = {
@@ -50,6 +60,14 @@ export default function EmploiDuTempsPage() {
     const [loading, setLoading] = useState(true);
     const [loadingEmploi, setLoadingEmploi] = useState(false);
     const [generating, setGenerating] = useState(false);
+    const [grilleHoraire, setGrilleHoraire] = useState<SegmentGrille[]>(GRILLE_DEFAUT);
+
+    // Modale de configuration de la grille horaire
+    const [showGrilleModal, setShowGrilleModal] = useState(false);
+    const [grilleEnEdition, setGrilleEnEdition] = useState<SegmentGrille[]>([]);
+    const [grilleLoading, setGrilleLoading] = useState(false);
+    const [grilleSaving, setGrilleSaving] = useState(false);
+    const [grilleError, setGrilleError] = useState<string | null>(null);
 
     // Modal
     const [showModal, setShowModal] = useState(false);
@@ -97,6 +115,9 @@ export default function EmploiDuTempsPage() {
             ]);
             setCreneaux(emRes.data.creneaux);
             setMatieres(matRes.data.matieres || []);
+            if (Array.isArray(emRes.data.heures_slots) && emRes.data.heures_slots.length > 0) {
+                setGrilleHoraire(emRes.data.heures_slots);
+            }
         } catch (err) { console.error(err); }
         finally { setLoadingEmploi(false); }
     }, []);
@@ -137,21 +158,21 @@ export default function EmploiDuTempsPage() {
             showError("Veuillez sélectionner une matière.");
             return;
         }
-        const heureSlot = HEURES.find(h => h.debut === formHeure);
+        const heureSlot = grilleHoraire.find(h => h.type === 'COURS' && h.heure_debut === formHeure);
         if (!heureSlot) return;
 
         try {
             setSaving(true);
             if (editCreneau) {
                 await api.put(`/api/emploi-du-temps/${editCreneau.creneau_id}`, {
-                    jour: formJour, heure_debut: formHeure, heure_fin: heureSlot.fin,
+                    jour: formJour, heure_debut: formHeure, heure_fin: heureSlot.heure_fin,
                     matiere_id: formMatiereId, enseignant_id: formEnseignantId, salle: formSalle
                 });
                 showSuccess("Créneau modifié !");
             } else {
                 await api.post('/api/emploi-du-temps', {
                     classe_id: selectedClasseId, matiere_id: formMatiereId,
-                    jour: formJour, heure_debut: formHeure, heure_fin: heureSlot.fin,
+                    jour: formJour, heure_debut: formHeure, heure_fin: heureSlot.heure_fin,
                     enseignant_id: formEnseignantId, salle: formSalle
                 });
                 showSuccess("Créneau créé !");
@@ -183,6 +204,98 @@ export default function EmploiDuTempsPage() {
         } catch (err: any) {
             showError(err.response?.data?.detail || "Erreur génération.");
         } finally { setGenerating(false); }
+    };
+
+    // ── Configuration de la grille horaire (Paramètres > Emploi du temps) ──
+    // Réutilise le mécanisme générique existant (ParametreEtablissement via
+    // /api/parametrage/settings, déjà utilisé pour NOTATION/FINANCE/THEME) —
+    // aucune nouvelle route backend pour cette lecture/écriture.
+    const openGrilleModal = async () => {
+        setGrilleError(null);
+        setGrilleLoading(true);
+        setShowGrilleModal(true);
+        try {
+            const res = await api.get('/api/parametrage/settings?categorie=EMPLOI_DU_TEMPS');
+            const param = (res.data || []).find((p: any) => p.cle === 'grille_horaire');
+            if (param) {
+                try {
+                    const parsed = JSON.parse(param.valeur);
+                    setGrilleEnEdition(Array.isArray(parsed) && parsed.length > 0 ? parsed : GRILLE_DEFAUT);
+                } catch {
+                    setGrilleEnEdition(GRILLE_DEFAUT);
+                }
+            } else {
+                setGrilleEnEdition(grilleHoraire.length > 0 ? grilleHoraire : GRILLE_DEFAUT);
+            }
+        } catch (err) {
+            setGrilleEnEdition(grilleHoraire.length > 0 ? grilleHoraire : GRILLE_DEFAUT);
+        } finally {
+            setGrilleLoading(false);
+        }
+    };
+
+    const addSegment = (type: 'COURS' | 'PAUSE') => {
+        const dernier = grilleEnEdition[grilleEnEdition.length - 1];
+        const debut = dernier ? dernier.heure_fin : '08:00';
+        setGrilleEnEdition([...grilleEnEdition, {
+            type, heure_debut: debut, heure_fin: debut,
+            ...(type === 'PAUSE' ? { libelle: 'Pause' } : {}),
+        }]);
+    };
+    const removeSegment = (index: number) => {
+        setGrilleEnEdition(grilleEnEdition.filter((_, i) => i !== index));
+    };
+    const updateSegment = (index: number, patch: Partial<SegmentGrille>) => {
+        setGrilleEnEdition(grilleEnEdition.map((s, i) => i === index ? { ...s, ...patch } : s));
+    };
+    const moveSegment = (index: number, direction: -1 | 1) => {
+        const cible = index + direction;
+        if (cible < 0 || cible >= grilleEnEdition.length) return;
+        const copie = [...grilleEnEdition];
+        [copie[index], copie[cible]] = [copie[cible], copie[index]];
+        setGrilleEnEdition(copie);
+    };
+
+    const validerGrille = (): string | null => {
+        if (grilleEnEdition.length === 0) return "La grille doit contenir au moins un segment.";
+        const heureValide = /^([01]\d|2[0-3]):[0-5]\d$/;
+        for (const s of grilleEnEdition) {
+            if (!heureValide.test(s.heure_debut) || !heureValide.test(s.heure_fin)) {
+                return `Heure invalide (format HH:MM attendu) : ${s.heure_debut} - ${s.heure_fin}`;
+            }
+            if (s.heure_fin <= s.heure_debut) {
+                return `L'heure de fin doit être après l'heure de début (${s.heure_debut} - ${s.heure_fin}).`;
+            }
+        }
+        const tries = [...grilleEnEdition].sort((a, b) => a.heure_debut.localeCompare(b.heure_debut));
+        for (let i = 1; i < tries.length; i++) {
+            if (tries[i].heure_debut < tries[i - 1].heure_fin) {
+                return `Chevauchement détecté entre ${tries[i - 1].heure_debut}-${tries[i - 1].heure_fin} et ${tries[i].heure_debut}-${tries[i].heure_fin}.`;
+            }
+        }
+        return null;
+    };
+
+    const saveGrille = async () => {
+        const erreur = validerGrille();
+        if (erreur) { setGrilleError(erreur); return; }
+        setGrilleError(null);
+        setGrilleSaving(true);
+        try {
+            const tries = [...grilleEnEdition].sort((a, b) => a.heure_debut.localeCompare(b.heure_debut));
+            await api.put('/api/parametrage/settings', [{
+                categorie: 'EMPLOI_DU_TEMPS', cle: 'grille_horaire',
+                valeur: JSON.stringify(tries), type_valeur: 'JSON',
+            }]);
+            setGrilleHoraire(tries);
+            setShowGrilleModal(false);
+            showSuccess('Grille horaire mise à jour !');
+            if (selectedClasseId) loadEmploi(selectedClasseId);
+        } catch (err: any) {
+            setGrilleError(err.response?.data?.detail || "Erreur lors de l'enregistrement.");
+        } finally {
+            setGrilleSaving(false);
+        }
     };
 
     const selectedClasse = classes.find(c => c.classe_id === selectedClasseId);
@@ -271,6 +384,16 @@ export default function EmploiDuTempsPage() {
                         }}>
                             <Zap size={14} /> Emplois Générés
                         </Link>
+                        {/* Configuration de la grille horaire */}
+                        <button onClick={openGrilleModal}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '6px',
+                                padding: '10px 18px', borderRadius: '12px', fontSize: '13px', fontWeight: 700,
+                                background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)',
+                                cursor: 'pointer', backdropFilter: 'blur(4px)'
+                            }}>
+                            <Settings size={14} /> Configurer les horaires
+                        </button>
                     </div>
                 </div>
             </motion.div>
@@ -328,32 +451,36 @@ export default function EmploiDuTempsPage() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {/* PAUSE indicator before afternoon */}
-                                {HEURES.map((h, hi) => {
-                                    const isPause = h.debut === '14:00';
+                                {/* Lignes de créneaux + bandeaux de pause, construits à partir de
+                                    la grille horaire configurée par l'établissement (Paramètres >
+                                    Emploi du temps) — plus de pause codée en dur à 12h-14h. */}
+                                {grilleHoraire.map((seg) => {
+                                    if (seg.type === 'PAUSE') {
+                                        return (
+                                            <tr key={`pause-${seg.heure_debut}`}>
+                                                <td colSpan={6} style={{
+                                                    padding: '8px', textAlign: 'center', background: '#fef3c7',
+                                                    borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
+                                                }}>
+                                                    <Utensils size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> {seg.heure_debut} — {seg.heure_fin} • {seg.libelle || 'Pause'}
+                                                </td>
+                                            </tr>
+                                        );
+                                    }
+                                    const h = seg;
                                     return (
-                                        <React.Fragment key={`slot-${h.debut}`}>
-                                            {isPause && (
-                                                <tr key="pause">
-                                                    <td colSpan={6} style={{
-                                                        padding: '8px', textAlign: 'center', background: '#fef3c7',
-                                                        borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
-                                                    }}>
-                                                        <Utensils size={12} style={{display:'inline',verticalAlign:'middle',marginRight:'4px'}}/> 12:00 — 14:00 • Pause Déjeuner
-                                                    </td>
-                                                </tr>
-                                            )}
-                                            <tr key={h.debut}>
+                                        <React.Fragment key={`slot-${h.heure_debut}`}>
+                                            <tr key={h.heure_debut}>
                                                 <td style={{
                                                     padding: '10px 12px', fontWeight: 700, fontSize: '12px',
                                                     color: '#0f766e', background: '#f0fdfa', borderRadius: '8px',
                                                     textAlign: 'center', verticalAlign: 'middle'
                                                 }}>
-                                                    {h.debut}<br />
-                                                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 500 }}>{h.fin}</span>
+                                                    {h.heure_debut}<br />
+                                                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 500 }}>{h.heure_fin}</span>
                                                 </td>
                                                 {JOURS.map(j => {
-                                                    const creneau = getCreneau(j, h.debut);
+                                                    const creneau = getCreneau(j, h.heure_debut);
                                                     const cat = creneau?.matiere_categorie || '';
                                                     const theme = CAT_COLORS[cat] || DEFAULT_CAT;
 
@@ -367,7 +494,7 @@ export default function EmploiDuTempsPage() {
                                                                         cursor: 'pointer', transition: 'all 0.15s', position: 'relative',
                                                                         minHeight: '58px', display: 'flex', flexDirection: 'column', justifyContent: 'center'
                                                                     }}
-                                                                    onClick={() => openModal(j, h.debut, creneau)}
+                                                                    onClick={() => openModal(j, h.heure_debut, creneau)}
                                                                     onMouseOver={(e) => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.boxShadow = `0 4px 12px ${theme.text}20`; }}
                                                                     onMouseOut={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = 'none'; }}
                                                                 >
@@ -409,7 +536,7 @@ export default function EmploiDuTempsPage() {
                                                     return (
                                                         <td key={j} style={{ padding: '3px', verticalAlign: 'middle' }}>
                                                             <div
-                                                                onClick={() => openModal(j, h.debut)}
+                                                                onClick={() => openModal(j, h.heure_debut)}
                                                                 style={{
                                                                     padding: '10px', borderRadius: '10px', minHeight: '58px',
                                                                     border: '1.5px dashed #e2e8f0', cursor: 'pointer',
@@ -503,7 +630,7 @@ export default function EmploiDuTempsPage() {
                                         <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Heure</label>
                                         <select value={formHeure} onChange={(e) => setFormHeure(e.target.value)}
                                             style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', outline: 'none' }}>
-                                            {HEURES.map(h => <option key={h.debut} value={h.debut}>{h.debut} - {h.fin}</option>)}
+                                            {grilleHoraire.filter(h => h.type === 'COURS').map(h => <option key={h.heure_debut} value={h.heure_debut}>{h.heure_debut} - {h.heure_fin}</option>)}
                                         </select>
                                     </div>
                                 </div>
@@ -571,6 +698,151 @@ export default function EmploiDuTempsPage() {
                                         {editCreneau ? 'Modifier' : 'Créer'}
                                     </button>
                                 </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ═══════════════════════ MODALE GRILLE HORAIRE ═══════════════════════ */}
+            <AnimatePresence>
+                {showGrilleModal && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{
+                            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                            background: 'rgba(15, 23, 42, 0.5)', backdropFilter: 'blur(4px)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            zIndex: 1000, padding: '24px'
+                        }}
+                        onClick={() => setShowGrilleModal(false)}>
+                        <motion.div
+                            initial={{ y: 30, opacity: 0, scale: 0.95 }}
+                            animate={{ y: 0, opacity: 1, scale: 1 }}
+                            exit={{ y: 20, opacity: 0, scale: 0.95 }}
+                            transition={{ type: 'spring', damping: 25 }}
+                            style={{
+                                background: 'white', borderRadius: '20px', width: '100%', maxWidth: '620px',
+                                maxHeight: '85vh', display: 'flex', flexDirection: 'column',
+                                boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden'
+                            }}
+                            onClick={(e) => e.stopPropagation()}>
+                            <div style={{
+                                padding: '20px 24px', background: 'linear-gradient(135deg, #0f766e, #14b8a6)',
+                                color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0
+                            }}>
+                                <div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                        <Settings size={18} />
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Configurer la grille horaire</h3>
+                                    </div>
+                                    <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>
+                                        Valable pour toutes les classes de l&apos;établissement
+                                    </p>
+                                </div>
+                                <button onClick={() => setShowGrilleModal(false)} style={{
+                                    background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '8px',
+                                    width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    cursor: 'pointer', color: 'white'
+                                }}>
+                                    <X size={16} />
+                                </button>
+                            </div>
+
+                            <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
+                                {grilleLoading ? (
+                                    <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+                                        <Loader2 size={28} className="animate-spin" color="#0f766e" />
+                                    </div>
+                                ) : (
+                                    <>
+                                        {grilleError && (
+                                            <div style={{
+                                                display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px',
+                                                background: '#fef2f2', color: '#b91c1c', borderRadius: '10px', fontSize: '12px',
+                                                fontWeight: 600, marginBottom: '14px', border: '1px solid #fecaca'
+                                            }}>
+                                                <AlertCircle size={14} /> {grilleError}
+                                            </div>
+                                        )}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+                                            {grilleEnEdition.map((seg, index) => (
+                                                <div key={index} style={{
+                                                    display: 'flex', alignItems: 'center', gap: '8px', padding: '10px',
+                                                    borderRadius: '12px', background: seg.type === 'PAUSE' ? '#fffbeb' : '#f0fdfa',
+                                                    border: `1px solid ${seg.type === 'PAUSE' ? '#fde68a' : '#99f6e4'}`,
+                                                }}>
+                                                    <select value={seg.type} onChange={(e) => updateSegment(index, { type: e.target.value as 'COURS' | 'PAUSE' })}
+                                                        style={{ padding: '7px 8px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '12px', fontWeight: 700, width: '90px' }}>
+                                                        <option value="COURS">Cours</option>
+                                                        <option value="PAUSE">Pause</option>
+                                                    </select>
+                                                    <input type="time" value={seg.heure_debut} onChange={(e) => updateSegment(index, { heure_debut: e.target.value })}
+                                                        style={{ padding: '7px 8px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '12px', width: '100px' }} />
+                                                    <span style={{ color: '#94a3b8', fontSize: '12px' }}>à</span>
+                                                    <input type="time" value={seg.heure_fin} onChange={(e) => updateSegment(index, { heure_fin: e.target.value })}
+                                                        style={{ padding: '7px 8px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '12px', width: '100px' }} />
+                                                    {seg.type === 'PAUSE' && (
+                                                        <input type="text" value={seg.libelle || ''} onChange={(e) => updateSegment(index, { libelle: e.target.value })}
+                                                            placeholder="Libellé (ex: Récréation)"
+                                                            style={{ padding: '7px 8px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '12px', flex: 1, minWidth: '100px' }} />
+                                                    )}
+                                                    <div style={{ display: 'flex', gap: '3px', marginLeft: seg.type === 'PAUSE' ? 0 : 'auto' }}>
+                                                        <button onClick={() => moveSegment(index, -1)} disabled={index === 0}
+                                                            style={{ width: '26px', height: '26px', borderRadius: '7px', border: 'none', background: '#f1f5f9', cursor: index === 0 ? 'default' : 'pointer', opacity: index === 0 ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                            <ArrowUp size={12} />
+                                                        </button>
+                                                        <button onClick={() => moveSegment(index, 1)} disabled={index === grilleEnEdition.length - 1}
+                                                            style={{ width: '26px', height: '26px', borderRadius: '7px', border: 'none', background: '#f1f5f9', cursor: index === grilleEnEdition.length - 1 ? 'default' : 'pointer', opacity: index === grilleEnEdition.length - 1 ? 0.4 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                            <ArrowDown size={12} />
+                                                        </button>
+                                                        <button onClick={() => removeSegment(index)}
+                                                            style={{ width: '26px', height: '26px', borderRadius: '7px', border: 'none', background: '#fee2e2', color: '#ef4444', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                            <Trash2 size={12} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button onClick={() => addSegment('COURS')} style={{
+                                                display: 'flex', alignItems: 'center', gap: '5px', padding: '8px 14px', borderRadius: '10px',
+                                                fontSize: '12px', fontWeight: 700, background: '#f0fdfa', color: '#0f766e', border: '1px solid #99f6e4', cursor: 'pointer'
+                                            }}>
+                                                <Plus size={13} /> Segment de cours
+                                            </button>
+                                            <button onClick={() => addSegment('PAUSE')} style={{
+                                                display: 'flex', alignItems: 'center', gap: '5px', padding: '8px 14px', borderRadius: '10px',
+                                                fontSize: '12px', fontWeight: 700, background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a', cursor: 'pointer'
+                                            }}>
+                                                <Utensils size={13} /> Pause
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+
+                            <div style={{
+                                padding: '16px 24px', borderTop: '1px solid var(--border-light)',
+                                display: 'flex', justifyContent: 'flex-end', gap: '10px', flexShrink: 0
+                            }}>
+                                <button onClick={() => setShowGrilleModal(false)}
+                                    style={{
+                                        padding: '10px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 600,
+                                        background: 'white', color: 'var(--text-secondary)', border: '1px solid var(--border-light)', cursor: 'pointer'
+                                    }}>
+                                    Annuler
+                                </button>
+                                <button onClick={saveGrille} disabled={grilleSaving || grilleLoading}
+                                    style={{
+                                        display: 'flex', alignItems: 'center', gap: '6px',
+                                        padding: '10px 24px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                                        background: 'linear-gradient(135deg, #0f766e, #14b8a6)', color: 'white',
+                                        border: 'none', cursor: grilleSaving ? 'not-allowed' : 'pointer',
+                                        boxShadow: '0 4px 12px rgba(15,118,110,0.25)'
+                                    }}>
+                                    {grilleSaving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                                    Enregistrer
+                                </button>
                             </div>
                         </motion.div>
                     </motion.div>

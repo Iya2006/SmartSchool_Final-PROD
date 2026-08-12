@@ -18,33 +18,22 @@ router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
 @router.get("", response_model=DashboardResponse)
 def get_dashboard(
-    annee_id: int = 1,
+    annee_id: int,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Lot 11 — `etablissement_id` vient désormais du compte authentifié.
-    `annee_id` doit appartenir à cette école. Si non fourni ou introuvable,
-    on bascule sur l'année courante de l'établissement.
+    """`etablissement_id` vient du compte authentifié (JWT). `annee_id` est
+    obligatoire et doit appartenir à cet établissement — pas de substitution
+    silencieuse vers l'année courante d'une autre école (voir
+    docs/MULTI_ECOLES_REGLES_DEV.md §4 : une ressource d'une autre école
+    renvoie 404, jamais une réponse 200 sur des données de repli).
     """
-    # Résolution dynamique : si l'année fournie n'appartient pas à cet établissement,
-    # on cherche l'année courante ou la plus récente de l'établissement.
     annee_valide = db.query(AnneeScolaire.annee_id).filter(
         AnneeScolaire.annee_id == annee_id,
         AnneeScolaire.etablissement_id == etablissement_id,
     ).first()
     if not annee_valide:
-        fallback = (
-            db.query(AnneeScolaire)
-            .filter(AnneeScolaire.etablissement_id == etablissement_id, AnneeScolaire.est_courante == "O")
-            .first()
-            or db.query(AnneeScolaire)
-            .filter(AnneeScolaire.etablissement_id == etablissement_id)
-            .order_by(AnneeScolaire.annee_id.desc())
-            .first()
-        )
-        if not fallback:
-            raise HTTPException(404, "Année scolaire non trouvée pour cet établissement")
-        annee_id = fallback.annee_id
+        raise HTTPException(404, "Année scolaire non trouvée pour cet établissement")
 
     # KPI 1: Élèves inscrits (actifs)
     nb_eleves = db.query(func.count(Inscription.inscription_id)).join(
@@ -88,27 +77,54 @@ def get_dashboard(
         Depense.statut != "REJETEE"
     ).scalar() or 0
 
-    # KPI 5: Taux de présence (30 derniers jours)
-    total_presences = db.query(func.count(Presence.presence_id)).join(
-        Inscription, Presence.inscription_id == Inscription.inscription_id
-    ).join(
-        Classe, Inscription.classe_id == Classe.classe_id
-    ).filter(
-        Classe.etablissement_id == etablissement_id,
-        Presence.date_presence >= func.current_date() - 30
-    ).scalar() or 0
+    # KPI 5: Taux de présence (30 derniers jours) — UNIQUEMENT les présences
+    # rattachées à une séance (IYA0 : classe + matière + enseignant réels),
+    # jamais l'ancien "appel de classe" brut (classe + demi-journée, aucune
+    # granularité par cours). Avant ce filtre, une seule classe faisant
+    # l'ancien appel pouvait faire grimper le taux de tout l'établissement
+    # (19 classes) à 90-99% — trompeur. Désormais le taux ne reflète que les
+    # séances réellement tenues, école par école, et se construit au fur et
+    # à mesure que les enseignants font leurs appels dans la journée.
+    compteurs_presence = dict(
+        db.query(Presence.statut_presence, func.count(Presence.presence_id))
+        .join(Inscription, Presence.inscription_id == Inscription.inscription_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            Presence.date_presence >= func.current_date() - 30,
+            Presence.seance_id.isnot(None),
+        )
+        .group_by(Presence.statut_presence)
+        .all()
+    )
+    total_presences_seance = sum(compteurs_presence.values())
+    nb_present = compteurs_presence.get("PRESENT", 0)
+    nb_absent = compteurs_presence.get("ABSENT", 0) + compteurs_presence.get("ABSENT_JUSTIFIE", 0)
+    nb_retard = compteurs_presence.get("RETARD", 0)
 
-    presences_ok = db.query(func.count(Presence.presence_id)).join(
+    taux = round((nb_present / total_presences_seance * 100), 1) if total_presences_seance > 0 else 0
+    taux_absence = round((nb_absent / total_presences_seance * 100), 1) if total_presences_seance > 0 else 0
+    taux_retard = round((nb_retard / total_presences_seance * 100), 1) if total_presences_seance > 0 else 0
+
+    # Couverture du taux ci-dessus : un taux calculé sur 1 classe/quelques
+    # séances est mathématiquement correct mais trompeur s'il est présenté
+    # sans contexte (l'admin peut le lire comme un taux "toute l'école").
+    # On expose donc le nombre de classes/séances réellement à l'origine du
+    # calcul, pour que le frontend affiche la couverture à côté du taux.
+    couverture_row = db.query(
+        func.count(func.distinct(Classe.classe_id)),
+        func.count(func.distinct(Presence.seance_id)),
+    ).join(
         Inscription, Presence.inscription_id == Inscription.inscription_id
     ).join(
         Classe, Inscription.classe_id == Classe.classe_id
     ).filter(
         Classe.etablissement_id == etablissement_id,
         Presence.date_presence >= func.current_date() - 30,
-        Presence.statut_presence == "PRESENT"
-    ).scalar() or 0
-
-    taux = round((presences_ok / total_presences * 100), 1) if total_presences > 0 else 0
+        Presence.seance_id.isnot(None),
+    ).first()
+    nb_classes_couvertes = (couverture_row[0] or 0) if couverture_row else 0
+    nb_seances_comptabilisees = (couverture_row[1] or 0) if couverture_row else 0
 
     # KPI 6: Incidents du mois
     incidents_mois = db.query(func.count(Incident.incident_id)).filter(
@@ -430,6 +446,10 @@ def get_dashboard(
             total_recettes=float(total_recettes),
             total_depenses=float(total_depenses),
             taux_presence=taux,
+            taux_absence=taux_absence,
+            taux_retard=taux_retard,
+            nb_classes_couvertes=nb_classes_couvertes,
+            nb_seances_comptabilisees=nb_seances_comptabilisees,
             incidents_mois=incidents_mois,
             evaluations_prevues=evaluations_prevues
         ),

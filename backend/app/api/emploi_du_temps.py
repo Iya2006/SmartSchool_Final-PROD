@@ -2,6 +2,7 @@
 SMARTSCHOOL API — Emploi du Temps
 CRUD complet + Génération intelligente basée sur les matières attribuées
 """
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -9,7 +10,8 @@ from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import require_etablissement
 from app.models.academique import (
-    CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Affectation, Cycle
+    CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Affectation, Cycle,
+    ParametreEtablissement,
 )
 
 router = APIRouter(prefix="/api/emploi-du-temps", tags=["Emploi du Temps"])
@@ -59,10 +61,45 @@ def _verifier_matiere_et_enseignant(db: Session, matiere_id, enseignant_id, etab
             raise HTTPException(404, "Enseignant non trouvé")
 
 JOURS = ["LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI"]
-HEURES_SLOTS = [
-    ("08:00", "09:00"), ("09:00", "10:00"), ("10:00", "11:00"), ("11:00", "12:00"),
-    ("14:00", "15:00"), ("15:00", "16:00"), ("16:00", "17:00"),
+
+# Grille horaire par défaut — utilisée tant que l'établissement n'a rien
+# configuré (voir _get_grille_horaire ci-dessous). Reproduit exactement
+# l'ancien HEURES_SLOTS codé en dur + la pause déjeuner explicitée comme un
+# segment PAUSE : comportement identique pour toute école n'ayant jamais
+# ouvert la configuration, aucune régression visuelle.
+GRILLE_HORAIRE_DEFAUT = [
+    {"type": "COURS", "heure_debut": "08:00", "heure_fin": "09:00"},
+    {"type": "COURS", "heure_debut": "09:00", "heure_fin": "10:00"},
+    {"type": "COURS", "heure_debut": "10:00", "heure_fin": "11:00"},
+    {"type": "COURS", "heure_debut": "11:00", "heure_fin": "12:00"},
+    {"type": "PAUSE", "heure_debut": "12:00", "heure_fin": "14:00", "libelle": "Pause déjeuner"},
+    {"type": "COURS", "heure_debut": "14:00", "heure_fin": "15:00"},
+    {"type": "COURS", "heure_debut": "15:00", "heure_fin": "16:00"},
+    {"type": "COURS", "heure_debut": "16:00", "heure_fin": "17:00"},
 ]
+
+
+def _get_grille_horaire(db: Session, etablissement_id: int) -> list[dict]:
+    """Grille horaire configurée par l'établissement (Paramètres > Emploi du
+    temps), ou la grille par défaut si rien n'a encore été configuré.
+    Stockée via le mécanisme générique existant (ParametreEtablissement,
+    déjà utilisé pour NOTATION/FINANCE/CALENDRIER/THEME) — pas de nouvelle
+    table, pas de nouvelle route d'écriture : la configuration se fait via
+    PUT /api/parametrage/settings (categorie=EMPLOI_DU_TEMPS)."""
+    p = db.query(ParametreEtablissement).filter(
+        ParametreEtablissement.etablissement_id == etablissement_id,
+        ParametreEtablissement.categorie == "EMPLOI_DU_TEMPS",
+        ParametreEtablissement.cle == "grille_horaire",
+    ).first()
+    if not p:
+        return GRILLE_HORAIRE_DEFAUT
+    try:
+        segments = json.loads(p.valeur)
+        if not isinstance(segments, list) or not segments:
+            return GRILLE_HORAIRE_DEFAUT
+        return segments
+    except (ValueError, TypeError):
+        return GRILLE_HORAIRE_DEFAUT
 
 
 # ============================================================================
@@ -111,7 +148,10 @@ def get_emploi_du_temps(classe_id: int, db: Session = Depends(get_db), etablisse
         "nb_creneaux": len(result),
         "creneaux": result,
         "jours": JOURS,
-        "heures_slots": HEURES_SLOTS,
+        # Tous les segments (COURS + PAUSE) de la grille configurée par
+        # l'établissement — le frontend construit les lignes de créneaux ET
+        # les bandeaux de pause à partir de cette seule liste.
+        "heures_slots": _get_grille_horaire(db, etablissement_id),
     }
 
 
@@ -271,11 +311,16 @@ def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db), etablisse
                 "enseignant_id": ens_id,
             })
 
-    # Créneaux disponibles
+    # Créneaux disponibles — uniquement les segments COURS de la grille
+    # configurée par l'établissement (les segments PAUSE ne reçoivent
+    # jamais de créneau). Respecte donc les durées personnalisées définies
+    # par l'admin (ex. un segment de 2h reste un seul créneau de 2h).
+    grille = _get_grille_horaire(db, etablissement_id)
     available_slots = []
     for jour in JOURS:
-        for (hd, hf) in HEURES_SLOTS:
-            available_slots.append((jour, hd, hf))
+        for segment in grille:
+            if segment.get("type") == "COURS":
+                available_slots.append((jour, segment["heure_debut"], segment["heure_fin"]))
 
     # Répartir les matières
     created = 0

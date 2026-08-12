@@ -21,14 +21,24 @@ interface EmploiClasse {
     classe_id: number; classe_libelle: string; creneaux: Creneau[];
     nb_creneaux: number;
 }
+interface SegmentGrille {
+    type: 'COURS' | 'PAUSE';
+    heure_debut: string;
+    heure_fin: string;
+    libelle?: string;
+}
 
 const JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
 const JOURS_L: Record<string, string> = { LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi' };
-const HEURES = [
-    { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
-    { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
-    { debut: '14:00', fin: '15:00' }, { debut: '15:00', fin: '16:00' },
-    { debut: '16:00', fin: '17:00' },
+const GRILLE_DEFAUT: SegmentGrille[] = [
+    { type: 'COURS', heure_debut: '08:00', heure_fin: '09:00' },
+    { type: 'COURS', heure_debut: '09:00', heure_fin: '10:00' },
+    { type: 'COURS', heure_debut: '10:00', heure_fin: '11:00' },
+    { type: 'COURS', heure_debut: '11:00', heure_fin: '12:00' },
+    { type: 'PAUSE', heure_debut: '12:00', heure_fin: '14:00', libelle: 'Pause déjeuner' },
+    { type: 'COURS', heure_debut: '14:00', heure_fin: '15:00' },
+    { type: 'COURS', heure_debut: '15:00', heure_fin: '16:00' },
+    { type: 'COURS', heure_debut: '16:00', heure_fin: '17:00' },
 ];
 const MATIERE_COLORS: Record<string, string> = {
     FRA: '#3b82f6', MAT: '#10b981', PHY: '#f59e0b', SVT: '#8b5cf6', HGE: '#ef4444',
@@ -43,6 +53,7 @@ export default function EmploisGeneresPage() {
     const [selectedEmploi, setSelectedEmploi] = useState<EmploiClasse | null>(null);
     const [showPreview, setShowPreview] = useState(false);
     const [publishing, setPublishing] = useState<number | null>(null);
+    const [grilleHoraire, setGrilleHoraire] = useState<SegmentGrille[]>(GRILLE_DEFAUT);
 
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -55,9 +66,17 @@ export default function EmploisGeneresPage() {
             setClasses(clR.data);
 
             const emploiList: EmploiClasse[] = [];
+            let grilleRecue = false;
             for (const cls of clR.data) {
                 try {
                     const r = await api.get(`/api/emploi-du-temps/classe/${cls.classe_id}`);
+                    // La grille horaire est propre à l'établissement (pas à la
+                    // classe) — on la récupère une seule fois, depuis la
+                    // première réponse reçue.
+                    if (!grilleRecue && Array.isArray(r.data.heures_slots) && r.data.heures_slots.length > 0) {
+                        setGrilleHoraire(r.data.heures_slots);
+                        grilleRecue = true;
+                    }
                     if (r.data.nb_creneaux > 0) {
                         emploiList.push({
                             classe_id: cls.classe_id,
@@ -234,17 +253,19 @@ export default function EmploisGeneresPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {HEURES.map(h => {
-                                            const isPause = h.debut === '14:00';
+                                        {grilleHoraire.map(seg => {
+                                            if (seg.type === 'PAUSE') {
+                                                return (
+                                                    <tr key={`pause-${seg.heure_debut}`}><td colSpan={6} style={{ padding: '6px', textAlign: 'center', fontSize: '11px', color: '#f59e0b', fontWeight: 700, background: '#fffbeb', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}><Utensils size={11}/> {seg.libelle || 'Pause'} — {seg.heure_debut} - {seg.heure_fin}</td></tr>
+                                                );
+                                            }
+                                            const h = seg;
                                             return (
-                                                <React.Fragment key={h.debut}>
-                                                    {isPause && (
-                                                        <tr><td colSpan={6} style={{ padding: '6px', textAlign: 'center', fontSize: '11px', color: '#f59e0b', fontWeight: 700, background: '#fffbeb', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}><Utensils size={11}/> Pause déjeuner — 12h00 - 14h00</td></tr>
-                                                    )}
+                                                <React.Fragment key={h.heure_debut}>
                                                     <tr>
-                                                        <td style={{ padding: '8px', fontWeight: 600, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h.debut}-{h.fin}</td>
+                                                        <td style={{ padding: '8px', fontWeight: 600, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h.heure_debut}-{h.heure_fin}</td>
                                                         {JOURS.map(j => {
-                                                            const slot = selectedEmploi.creneaux.find(c => c.jour === j && c.heure_debut === h.debut);
+                                                            const slot = selectedEmploi.creneaux.find(c => c.jour === j && c.heure_debut === h.heure_debut);
                                                             if (!slot) return <td key={j} style={{ padding: '8px', background: '#f8fafc', borderRadius: '8px', textAlign: 'center', color: '#cbd5e1' }}>—</td>;
                                                             const color = getColor(slot.matiere_code);
                                                             return (

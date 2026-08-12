@@ -11,7 +11,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, LogOut } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, LogOut, Clock } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useUI } from '@/context/UIContext';
@@ -146,6 +146,12 @@ export default function Sidebar() {
                         <Link href="/emploi-du-temps">
                             <Calendar size={18} className={styles.menuIcon} />
                             <span className={styles.menuText}>Emploi du Temps</span>
+                        </Link>
+                    </li>
+                    <li className={pathname.startsWith('/vie-scolaire/seances') ? styles.currentPage : ''}>
+                        <Link href="/vie-scolaire/seances">
+                            <Clock size={18} className={styles.menuIcon} />
+                            <span className={styles.menuText}>Séances (Appel)</span>
                         </Link>
                     </li>
                     <li className={pathname.startsWith('/evenements') ? styles.currentPage : ''}>
