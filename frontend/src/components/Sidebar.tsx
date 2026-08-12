@@ -3,15 +3,17 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, Trophy } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, Trophy, Building2 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
 import { useUI } from '@/context/UIContext';
 import styles from './Sidebar.module.css';
 
 export default function Sidebar() {
     const pathname = usePathname();
     const { etablissementNom, etablissementLogo } = useApp();
+    const { user } = useAuth();
     const { sidebarCollapsed } = useUI();
     const [unreadCount, setUnreadCount] = useState(0);
 
@@ -224,6 +226,17 @@ export default function Sidebar() {
                             <span className={styles.menuText}>Comptabilité</span>
                         </Link>
                     </li>
+                    {/* Gestion des ecoles : c'est l'ecran de l'editeur de la
+                        plateforme, pas d'une ecole. Masque pour tous les autres
+                        roles — le controle reel reste backend. */}
+                    {user?.role === 'SUPER_ADMIN' && (
+                        <li className={pathname.startsWith('/administration') ? styles.currentPage : ''}>
+                            <Link href="/administration/etablissements">
+                                <Building2 size={18} className={styles.menuIcon} />
+                                <span className={styles.menuText}>Établissements</span>
+                            </Link>
+                        </li>
+                    )}
 
                     <li className={styles.sidebarTitle}>
                         <h6 className={styles.titleText}>PORTAILS</h6>
