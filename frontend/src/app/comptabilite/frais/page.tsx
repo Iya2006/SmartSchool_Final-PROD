@@ -301,6 +301,55 @@ function FraisScolaritePage() {
         await queryClient.invalidateQueries({ queryKey: ['frais-all'] });
     }, [queryClient]);
 
+    /* ─── Grille des tarifs : le coût de l'année, classe par classe ──────────
+       Le réglage vivait derrière un petit bouton sur une ligne de liste, et
+       s'ouvrait un type de frais à la fois. Impossible de répondre à « la 6ᵉ,
+       ça coûte combien à l'année ? » sans additionner de tête. */
+    const { data: grille } = useQuery({
+        queryKey: ['grille-tarifs', filterAnnee],
+        queryFn: async () =>
+            (await api.get(`/api/finance/tarifs-classe/grille?annee_id=${filterAnnee}`)).data,
+        enabled: !!filterAnnee,
+        staleTime: 1000 * 60 * 3,
+    });
+    // Saisie en cours, par (classe, type de frais). Tant qu'elle n'est pas
+    // enregistrée elle vit ici : un rechargement ne doit pas laisser croire
+    // qu'un tarif est posé alors qu'il n'a jamais quitté l'écran.
+    const [grilleSaisie, setGrilleSaisie] = useState<Record<string, string>>({});
+    const [grilleEnCours, setGrilleEnCours] = useState(false);
+
+    const cleGrille = (classeId: number, typeId: number) => `${classeId}:${typeId}`;
+    const valeurGrille = (classeId: number, typeId: number, montant: number | null) => {
+        const k = cleGrille(classeId, typeId);
+        if (k in grilleSaisie) return grilleSaisie[k];
+        return montant ? String(montant) : '';
+    };
+    const majGrille = (classeId: number, typeId: number, v: string) =>
+        setGrilleSaisie(prev => ({ ...prev, [cleGrille(classeId, typeId)]: v }));
+    const caseModifiee = (classeId: number, typeId: number) => cleGrille(classeId, typeId) in grilleSaisie;
+    const grilleModifiee = Object.keys(grilleSaisie).length > 0;
+
+    const enregistrerGrille = async () => {
+        if (!grille || !grilleModifiee) return;
+        // On n'envoie que ce qui a changé : réécrire la grille entière
+        // répercuterait un tarif inchangé sur des factures impayées sans raison.
+        const entries = Object.entries(grilleSaisie).map(([k, v]) => {
+            const [classeId, typeId] = k.split(':').map(Number);
+            return { classe_id: classeId, type_frais_id: typeId, montant: parseFloat(v) || 0 };
+        });
+        setGrilleEnCours(true);
+        try {
+            const res = await api.put('/api/finance/tarifs-classe', entries);
+            showMsg(res.data?.message || 'Tarifs enregistrés', 'success');
+            setGrilleSaisie({});
+            await queryClient.invalidateQueries({ queryKey: ['grille-tarifs'] });
+            await loadAll();
+        } catch (err: any) {
+            showMsg(err?.response?.data?.detail || "Erreur lors de l'enregistrement", 'error');
+        }
+        setGrilleEnCours(false);
+    };
+
     /* ─── Factures rattachées à aucun type de frais ──────────────────────────
        Une facture sans type n'apparaît sous aucun intitulé dans les rapports :
        le total « recettes par type de frais » l'ignore, alors que l'argent a
@@ -675,6 +724,158 @@ function FraisScolaritePage() {
                     )}
                 </div>
               </>
+            )}
+
+            {/* =========== TAB: TARIFS PAR CLASSE =========== */}
+            {/* La question d'un fondateur est « la 6ᵉ, ça coûte combien à
+                l'année ? ». Avant, il fallait ouvrir chaque type de frais l'un
+                après l'autre et additionner de tête. */}
+            {tabParam === 'tarifs' && (
+                <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px', gap: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                            <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', color: '#0f172a' }}>Ce que coûte l&apos;année, classe par classe</h3>
+                            <p style={{ margin: 0, color: '#64748b', fontSize: '13px' }}>
+                                Chaque école fixe ses propres montants. La scolarité de la 7ᵉ n&apos;est pas
+                                celle de la Terminale.
+                            </p>
+                        </div>
+                        {grilleModifiee && (
+                            <button onClick={enregistrerGrille} disabled={grilleEnCours}
+                                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>
+                                {grilleEnCours ? 'Enregistrement…' : 'Enregistrer les tarifs'}
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Un écran vide qui dit « allez ailleurs » sans y emmener est un
+                        cul-de-sac. Et il manque parfois DEUX choses : les frais et les
+                        classes. On dit lesquelles, dans l'ordre où il faut les faire. */}
+                    {!grille ? (
+                        <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>Chargement…</div>
+                    ) : grille.types_frais.length === 0 || grille.classes.length === 0 ? (
+                        <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                            <Coins size={40} color="#cbd5e1" style={{ margin: '0 auto 12px auto' }} />
+                            <p style={{ fontWeight: 700, color: '#0f172a', fontSize: '16px', margin: '0 0 6px' }}>
+                                Il manque {grille.types_frais.length === 0 && grille.classes.length === 0
+                                    ? 'deux choses' : 'une chose'} avant de pouvoir fixer les tarifs
+                            </p>
+                            <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 22px' }}>
+                                Un tarif, c&apos;est un montant pour <strong>une classe</strong> et
+                                <strong> un type de frais</strong>. Il faut les deux.
+                            </p>
+
+                            <div style={{ display: 'flex', gap: '14px', justifyContent: 'center', flexWrap: 'wrap', maxWidth: '620px', margin: '0 auto' }}>
+                                <div style={{ flex: '1 1 260px', border: `1px solid ${grille.classes.length === 0 ? '#fde68a' : '#dcfce7'}`, background: grille.classes.length === 0 ? '#fffbeb' : '#f0fdf4', borderRadius: '12px', padding: '18px', textAlign: 'left' }}>
+                                    <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '14px', color: grille.classes.length === 0 ? '#92400e' : '#15803d' }}>
+                                        {grille.classes.length === 0 ? '1. Vos classes' : '✓ Vos classes'}
+                                    </p>
+                                    <p style={{ margin: '0 0 12px', fontSize: '12.5px', color: '#64748b', lineHeight: 1.55 }}>
+                                        {grille.classes.length === 0
+                                            ? "Aucune classe active pour cette année scolaire. Créez-les d'abord : ce sont les lignes du tableau des tarifs."
+                                            : `${grille.classes.length} classe(s) active(s) pour cette année.`}
+                                    </p>
+                                    {grille.classes.length === 0 && (
+                                        <button onClick={() => router.push('/classes')}
+                                            style={{ padding: '9px 16px', background: '#b45309', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+                                            Créer mes classes
+                                        </button>
+                                    )}
+                                </div>
+
+                                <div style={{ flex: '1 1 260px', border: `1px solid ${grille.types_frais.length === 0 ? '#fde68a' : '#dcfce7'}`, background: grille.types_frais.length === 0 ? '#fffbeb' : '#f0fdf4', borderRadius: '12px', padding: '18px', textAlign: 'left' }}>
+                                    <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '14px', color: grille.types_frais.length === 0 ? '#92400e' : '#15803d' }}>
+                                        {grille.types_frais.length === 0 ? '2. Ce que vous faites payer' : '✓ Ce que vous faites payer'}
+                                    </p>
+                                    <p style={{ margin: '0 0 12px', fontSize: '12.5px', color: '#64748b', lineHeight: 1.55 }}>
+                                        {grille.types_frais.length === 0
+                                            ? 'Scolarité, inscription, cantine… Ce sont les colonnes du tableau des tarifs.'
+                                            : `${grille.types_frais.length} type(s) de frais défini(s).`}
+                                    </p>
+                                    {grille.types_frais.length === 0 && (
+                                        <button onClick={() => { router.push('/comptabilite/frais?tab=types'); openNewTypeFrais(); }}
+                                            style={{ padding: '9px 16px', background: '#b45309', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+                                            Créer un type de frais
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            {grille.nb_classes_incompletes > 0 && (
+                                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '10px', padding: '12px 16px', marginBottom: '16px', fontSize: '13px', color: '#92400e', lineHeight: 1.6 }}>
+                                    <strong>{grille.nb_classes_incompletes} classe{grille.nb_classes_incompletes > 1 ? 's' : ''}</strong> sur {grille.classes.length} n&apos;{grille.nb_classes_incompletes > 1 ? 'ont' : 'a'} pas
+                                    de tarif pour tous les frais obligatoires. Tant qu&apos;une case reste vide, la
+                                    facture se fait au montant tapé à la main — c&apos;est ainsi que deux élèves
+                                    d&apos;une même classe finissent facturés différemment.
+                                </div>
+                            )}
+
+                            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                    <thead>
+                                        <tr style={{ backgroundColor: '#f8fafc' }}>
+                                            <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', position: 'sticky', left: 0, background: '#f8fafc', minWidth: '170px' }}>Classe</th>
+                                            {grille.types_frais.map((tf: any) => (
+                                                <th key={tf.type_frais_id} style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 600, color: '#475569', minWidth: '140px' }}>
+                                                    {tf.libelle}
+                                                    <div style={{ fontSize: '11px', fontWeight: 400, color: '#94a3b8' }}>
+                                                        {tf.est_obligatoire === 'O' ? 'obligatoire' : 'facultatif'}
+                                                    </div>
+                                                </th>
+                                            ))}
+                                            <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 700, color: '#0f172a', minWidth: '150px' }}>
+                                                Total pour l&apos;année
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {grille.classes.map((ligne: any) => {
+                                            const total = grille.types_frais.reduce((t: number, tf: any) => {
+                                                const v = valeurGrille(ligne.classe_id, tf.type_frais_id, ligne.montants[tf.type_frais_id]);
+                                                return t + (parseFloat(v) || 0);
+                                            }, 0);
+                                            return (
+                                                <tr key={ligne.classe_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                                    <td style={{ padding: '10px 14px', fontWeight: 600, color: '#0f172a', position: 'sticky', left: 0, background: '#fff' }}>
+                                                        {ligne.classe_libelle}
+                                                        <div style={{ fontSize: '11.5px', fontWeight: 400, color: '#94a3b8' }}>
+                                                            {ligne.effectif} élève{ligne.effectif > 1 ? 's' : ''}
+                                                        </div>
+                                                    </td>
+                                                    {grille.types_frais.map((tf: any) => (
+                                                        <td key={tf.type_frais_id} style={{ padding: '8px 14px', textAlign: 'right' }}>
+                                                            <input type="number" min={0}
+                                                                value={valeurGrille(ligne.classe_id, tf.type_frais_id, ligne.montants[tf.type_frais_id])}
+                                                                onChange={e => majGrille(ligne.classe_id, tf.type_frais_id, e.target.value)}
+                                                                placeholder="—"
+                                                                style={{
+                                                                    width: '125px', padding: '7px 9px', textAlign: 'right',
+                                                                    border: `1px solid ${caseModifiee(ligne.classe_id, tf.type_frais_id) ? '#f59e0b' : '#e2e8f0'}`,
+                                                                    borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box',
+                                                                }} />
+                                                        </td>
+                                                    ))}
+                                                    <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, color: total > 0 ? '#059669' : '#b45309' }}>
+                                                        {total > 0 ? fmtMoney(total) : 'à fixer'}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <p style={{ margin: '14px 0 0', fontSize: '12.5px', color: '#64748b', lineHeight: 1.6 }}>
+                                Laissez une case <strong>vide ou à 0</strong> pour une classe non concernée par ce
+                                frais. Modifier un tarif met à jour les factures <strong>encore impayées</strong> de
+                                cette classe — celles déjà réglées ne bougent pas, une recette encaissée ne se
+                                réécrit pas.
+                            </p>
+                        </>
+                    )}
+                </div>
             )}
 
             {/* =========== TAB: FACTURES =========== */}

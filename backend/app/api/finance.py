@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel
 from datetime import date as date_type
 from app.core.annee_courante import resoudre_annee
+from app.core.numerotation import generer_numero_facture, generer_numero_recu
 from app.core.database import get_db
 from app.core.auth import require_etablissement
 from app.models.academique import (
@@ -446,6 +447,97 @@ def get_tarifs_classe(
     ]
 
 
+@router.get("/tarifs-classe/grille")
+def grille_tarifs(
+    annee_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Ce que coûte l'année, classe par classe.
+
+    Le réglage le plus important du module vivait derrière un petit bouton, sur
+    une ligne de la liste des types de frais : il fallait savoir qu'il existait
+    pour le trouver, et l'ouvrir type de frais par type de frais pour voir le
+    tarif d'une classe. Impossible de répondre à la seule question que se pose
+    un fondateur — « la 6ᵉ, ça coûte combien à l'année ? » — sans ouvrir tous
+    les types de frais les uns après les autres et additionner de tête.
+
+    Ici, une lecture : chaque classe, ce qu'elle paie par type de frais, et son
+    total annuel. Les manques sont comptés, pas masqués : une classe sans tarif
+    sera facturée au montant tapé à la main, ce qui est exactement la façon dont
+    une école se retrouve avec deux élèves de la même classe facturés
+    différemment.
+    """
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+
+    classes = (
+        db.query(Classe)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            Classe.annee_id == annee_id,
+            Classe.statut == "ACTIVE",
+        )
+        .order_by(Classe.code)
+        .all()
+    )
+    types = (
+        db.query(TypeFrais)
+        .filter(TypeFrais.etablissement_id == etablissement_id)
+        .order_by(TypeFrais.categorie, TypeFrais.libelle)
+        .all()
+    )
+
+    # Un seul aller-retour pour tous les tarifs : la grille fait
+    # classes x types de frais, la remplir case par case serait un N+1 garanti.
+    tarifs = {}
+    if classes and types:
+        for t in (
+            db.query(TarifClasse)
+            .filter(
+                TarifClasse.classe_id.in_([c.classe_id for c in classes]),
+                TarifClasse.type_frais_id.in_([tf.type_frais_id for tf in types]),
+            )
+            .all()
+        ):
+            tarifs[(t.classe_id, t.type_frais_id)] = float(t.montant or 0)
+
+    lignes = []
+    for c in classes:
+        montants = {
+            tf.type_frais_id: tarifs.get((c.classe_id, tf.type_frais_id))
+            for tf in types
+        }
+        obligatoires_manquants = [
+            tf.libelle for tf in types
+            if tf.est_obligatoire == "O" and not montants.get(tf.type_frais_id)
+        ]
+        lignes.append({
+            "classe_id": c.classe_id,
+            "classe_code": c.code,
+            "classe_libelle": c.libelle,
+            "effectif": c.effectif_actuel or 0,
+            "montants": montants,
+            "total_annuel": round(sum(v for v in montants.values() if v), 2),
+            "manquants": obligatoires_manquants,
+        })
+
+    return {
+        "types_frais": [
+            {
+                "type_frais_id": tf.type_frais_id,
+                "libelle": tf.libelle,
+                "categorie": tf.categorie,
+                "est_obligatoire": tf.est_obligatoire,
+                "frequence": tf.frequence,
+            }
+            for tf in types
+        ],
+        "classes": lignes,
+        "nb_classes_completes": sum(1 for l in lignes if not l["manquants"]),
+        "nb_classes_incompletes": sum(1 for l in lignes if l["manquants"]),
+    }
+
+
 def _repercuter_tarif_sur_factures(db: Session, type_frais_id: int, classe_id: int, nouveau_montant: float) -> int:
     """
     Répercute un nouveau tarif de classe sur les factures déjà générées mais
@@ -532,6 +624,18 @@ def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get
         ).all()}
         if trouvees != classe_ids:
             raise HTTPException(status_code=403, detail="Classe(s) invalide(s) pour cet établissement")
+
+    # Les classes etaient verifiees, le type de frais non — alors qu'il
+    # appartient lui aussi a une ecole depuis la migration 2026_08_compta_01.
+    # Une ecole pouvait donc poser un tarif sur le type de frais d'une autre.
+    types_ids = {e.type_frais_id for e in entries}
+    if types_ids:
+        types_ok = {t[0] for t in db.query(TypeFrais.type_frais_id).filter(
+            TypeFrais.type_frais_id.in_(types_ids),
+            TypeFrais.etablissement_id == etablissement_id,
+        ).all()}
+        if types_ok != types_ids:
+            raise HTTPException(status_code=404, detail="Type de frais non trouvé")
 
     upserted, deleted, factures_maj = 0, 0, 0
     for entry in entries:
@@ -792,16 +896,11 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db), etablisse
                 detail=f"La somme des échéances ({total_echeances:,.0f}) doit être égale au montant total ({data.montant_total:,.0f})"
             )
 
-    # Générer numéro de facture en se basant sur le numéro le plus élevé existant (évite les doublons)
-    last_facture = db.query(Facture).order_by(Facture.numero_facture.desc()).first()
-    if last_facture and last_facture.numero_facture.startswith("FAC-"):
-        try:
-            max_num = int(last_facture.numero_facture.split("-")[1])
-        except ValueError:
-            max_num = 0
-    else:
-        max_num = 0
-    numero_facture = f"FAC-{max_num + 1:06d}"
+    # « Lire le dernier numéro, ajouter 1 » : deux saisies simultanées lisaient
+    # le même dernier numéro et fabriquaient le même — la seconde tombait en
+    # erreur 500 sur l'index unique. Et la séquence était commune à toutes les
+    # écoles. Le compteur persistant règle les deux (app/core/numerotation.py).
+    numero_facture = generer_numero_facture(db, etablissement_id, inscription.annee_id)
 
     facture = Facture(
         inscription_id=data.inscription_id,
@@ -937,16 +1036,10 @@ def generer_factures_classe(
     created_count = 0
     skipped_count = 0
 
-    # Récupérer le plus grand numéro de facture existant UNE SEULE FOIS avant la boucle
-    # pour garantir que chaque nouveau numéro est unique
-    last_facture = db.query(Facture).order_by(Facture.numero_facture.desc()).first()
-    if last_facture and last_facture.numero_facture.startswith("FAC-"):
-        try:
-            max_num = int(last_facture.numero_facture.split("-")[1])
-        except ValueError:
-            max_num = 0
-    else:
-        max_num = 0
+    # Le numéro se tire dans la boucle, une pièce à la fois : le calculer une
+    # fois puis ajouter un décalage supposait qu'aucune autre facture n'était
+    # créée pendant la génération — ce qui est précisément le cas où deux
+    # secrétariats facturent deux classes en même temps.
 
     finance_settings = get_finance_settings(db, etablissement_id) if data.appliquer_reductions else None
 
@@ -960,8 +1053,9 @@ def generer_factures_classe(
             skipped_count += 1
             continue
 
-        # Numéro unique basé sur le max_num + offset courant
-        numero_facture = f"FAC-{max_num + created_count + 1:06d}"
+        numero_facture = generer_numero_facture(
+            db, etablissement_id, inscription.annee_id
+        )
 
         # Réduction fratrie (optionnelle, configurée dans /parametres/finance)
         montant_remise = 0.0
@@ -1147,11 +1241,14 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         else:
             echeance.statut = "PARTIELLEMENT_PAYEE"
 
-    # Générer numéro de reçu (préfixe configurable via /parametres/finance)
+    # Le numéro de reçu venait d'un COUNT global : il régressait dès qu'un
+    # paiement était annulé, et réattribuait alors un numéro figurant sur un
+    # reçu déjà remis à un parent. Deux pièces portant le même numéro, c'est un
+    # litige que la comptabilité ne peut pas trancher.
     settings = get_finance_settings(db, etablissement_id)
-    prefixe_recu = settings.get("recu_prefixe") or "REC"
-    count = db.query(func.count(Paiement.paiement_id)).scalar() or 0
-    numero_recu = f"{prefixe_recu}-{count + 1:06d}"
+    numero_recu = generer_numero_recu(
+        db, etablissement_id, facture.annee_id, settings.get("recu_prefixe") or "REC"
+    )
 
     paiement = Paiement(
         facture_id=data.facture_id,
@@ -2113,15 +2210,57 @@ def rapport_annuel(
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Rapport financier annuel : recettes, dépenses, masse salariale et résultat net."""
+    """Rapport financier annuel : recettes, dépenses, masse salariale et résultat net.
+
+    L'ANNÉE D'UNE ÉCOLE N'EST PAS L'ANNÉE DU CALENDRIER
+    Ce rapport bornait sa période sur `extract("year", date_paiement) == 2025`,
+    c'est-à-dire janvier à décembre. Or l'année scolaire va de septembre à
+    juillet. Pour l'école qui clôturait son année 2025-2026, le « rapport
+    annuel » additionnait donc septembre–décembre 2025 avec janvier–juillet
+    2025 : la moitié de l'année en cours manquait, et la moitié affichée
+    appartenait à l'année précédente. Le paramètre `annee_id` était bien résolu,
+    puis jamais utilisé.
+
+    La période suit désormais les dates de l'année scolaire de cette école.
+    `annee` (millésime civil) reste accepté pour qui veut expressément un
+    janvier–décembre : la période retenue est renvoyée dans la réponse, pour
+    que l'écran affiche sur quoi porte le total.
+    """
+    from datetime import date as today_type
+
+    from sqlalchemy import extract
+
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
-    from datetime import date as today_type
-    from sqlalchemy import extract
+
+    debut = fin = None
+    libelle_periode = None
+    if annee is None and annee_id:
+        scolaire = (
+            db.query(AnneeScolaire)
+            .filter(
+                AnneeScolaire.annee_id == annee_id,
+                AnneeScolaire.etablissement_id == etablissement_id,
+            )
+            .first()
+        )
+        if scolaire and scolaire.date_debut and scolaire.date_fin:
+            debut, fin = scolaire.date_debut, scolaire.date_fin
+            libelle_periode = scolaire.libelle
 
     today = today_type.today()
-    annee_cible = annee or today.year
+    annee_cible = annee or (debut.year if debut else today.year)
+
+    if debut and fin:
+        borne_paiement = (Paiement.date_paiement >= debut, Paiement.date_paiement <= fin)
+        borne_depense = (Depense.date_depense >= debut, Depense.date_depense <= fin)
+    else:
+        # Repli : millésime civil demandé explicitement, ou année scolaire sans
+        # dates renseignées.
+        borne_paiement = (extract("year", Paiement.date_paiement) == annee_cible,)
+        borne_depense = (extract("year", Depense.date_depense) == annee_cible,)
+        libelle_periode = f"Année civile {annee_cible}"
 
     total_encaisse = float((
         db.query(func.coalesce(func.sum(Paiement.montant), 0))
@@ -2130,7 +2269,7 @@ def rapport_annuel(
         .join(Classe, Inscription.classe_id == Classe.classe_id)
         .filter(
             Classe.etablissement_id == etablissement_id,
-            extract("year", Paiement.date_paiement) == annee_cible,
+            *borne_paiement,
             Paiement.statut == "VALIDE"
         )
         .scalar() or 0
@@ -2138,7 +2277,7 @@ def rapport_annuel(
 
     query_dep = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
-        extract("year", Depense.date_depense) == annee_cible,
+        *borne_depense,
         Depense.statut == "VALIDE"
     )
     total_depenses = float(
@@ -2151,6 +2290,11 @@ def rapport_annuel(
 
     return {
         "annee": annee_cible,
+        # Sur quoi porte réellement ce total — un rapport dont on ignore la
+        # période n'est pas vérifiable.
+        "periode_libelle": libelle_periode or f"Année civile {annee_cible}",
+        "periode_debut": debut.isoformat() if debut else None,
+        "periode_fin": fin.isoformat() if fin else None,
         "total_encaisse": total_encaisse,
         "total_depenses": total_depenses,
         "masse_salariale": masse_salariale,

@@ -18,6 +18,7 @@ from app.models.academique import (
 from app.schemas.schemas import EleveCreate, EleveUpdate, EleveOut, EleveListOut
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
 from app.core.annee_courante import resoudre_annee
+from app.core.numerotation import generer_numero_facture
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
@@ -525,7 +526,6 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
         # qu'un montant incohérent soit facturé à l'inscription.
         factures_generees = 0
         if inscription and data.frais_scolaires:
-            f_count = db.query(func.count(Facture.facture_id)).scalar() or 0
             # Le type de frais appartient a une ecole depuis la migration
             # 2026_08_compta_01. Sans ce controle, un client pouvait envoyer
             # l'identifiant du type de frais d'un autre etablissement : la
@@ -551,7 +551,11 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
                         f"pour cette classe ({float(tarif.montant):,.0f} GNF).",
                     )
 
-                numero_facture = f"FAC-{f_count + factures_generees + 1:06d}"
+                # Ce numéro venait d'un COMPTAGE de factures : supprimez-en
+                # une, et la suivante réutilisait un numéro déjà attribué.
+                numero_facture = generer_numero_facture(
+                    db, etablissement_id, inscription.annee_id
+                )
                 facture = Facture(
                     inscription_id=inscription.inscription_id,
                     annee_id=inscription.annee_id,
