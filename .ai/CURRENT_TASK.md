@@ -1,6 +1,48 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active — Fluidité à grande échelle + Galerie paginée + Profil admin réel (12/08/2026)
+## Tâche active — Refonte commerciale de la page de connexion + PWA installable (13/08/2026)
+Demande de l'utilisateur : transformer `/login` (fonctionnelle mais
+technique, pas "vitrine") en page commerciale premium, plus rendre le PWA
+réellement installable (manifest jamais lié, icônes fausses). Périmètre
+explicitement limité au front (aucune touche backend/JWT/rôles/routes).
+
+Audit (2 agents Explore) avant tout code : `/login` avait déjà une
+structure deux-zones (hero + formulaire) mais un seul breakpoint fragile
+(media query sur le contenu littéral d'un attribut `style`) ; le manifest
+existait mais n'était lié nulle part (`app is probably not installable at
+all`) ; ses icônes pointaient vers `guinea_coat_of_arms.png` (emblème
+national, en réalité un JPEG mal étiqueté `.png`) ; aucun logo statique
+"SmartSchool" n'existe (chaque école a le sien, repli `ShieldCheck`) ;
+aucune fonctionnalité "mot de passe oublié" n'existe (front ou back).
+2 décisions posées à l'utilisateur avant le plan (AskUserQuestion) :
+garder le repli `ShieldCheck` affiné (pas de nouvel asset), lien "mot de
+passe oublié" → message informatif (pas d'appel serveur). Plan Mode
+approuvé avant tout code.
+
+Fait : contenu commercial imposé (titre/sous-titre/signature/3 bénéfices)
+remplace l'ancien ton technique ; vrai système responsive mobile-first
+(`login.module.css`, 5 paliers, `100dvh`, safe-area iOS, cibles tactiles
+≥44px, `:focus-visible`) remplace le hack ; manifest enfin lié
+(`metadata.manifest` + `viewport.themeColor`, ce dernier déplacé hors de
+`Metadata` — déprécié sur Next 16) ; icônes réellement générées (script
+`generate-icons.mjs` + `sharp`, déjà présent en dépendance transitive —
+aucune install) à partir du path SVG exact de `ShieldCheck` (licence ISC,
+déjà utilisée dans l'app) pour rester visuellement identique ; variante
+maskable dédiée ; `icon.png`/`apple-icon.png` (convention Next) remplacent
+le favicon générique du template ; `start_url` `/dashboard` → `/login` ;
+hook `useInstallPrompt` (vrai `beforeinstallprompt`, jamais simulé) +
+bouton conditionnel. Alignement léger sur `/login/ecole` (pas de refonte
+marketing, redondant juste après l'écran précédent).
+
+Vérifié : `tsc --noEmit` propre, vitest 102/102, `next build --webpack`
+réussi (confirme la génération Serwist + les nouvelles routes
+icon.png/apple-icon.png), eslint 0 erreur, HTML généré inspecté
+directement (`rel=manifest`, icon, apple-touch-icon, theme-color tous
+présents). Rendu visuel réel non vérifié (aucun outil d'automatisation
+navigateur disponible). Détail complet dans
+`.ai/LOGIN_PWA_REFONTE_RAPPORT.md`.
+
+## Tâche précédente — Fluidité à grande échelle + Galerie paginée + Profil admin réel (12/08/2026)
 Voir `.ai/SCALABILITE_GALERIE_PROFIL_RAPPORT.md` pour le détail complet.
 Résumé : après la fusion du travail du collaborateur, l'utilisateur a
 demandé (1) une analyse + corrections de fluidité pour supporter jusqu'à
