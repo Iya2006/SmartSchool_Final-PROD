@@ -24,8 +24,9 @@ from app.models.academique import (
 
 router = APIRouter(prefix="/api/portail-eleve", tags=["Portail Élève"])
 
-# Mot de passe par défaut — configurable via variable d'environnement
-DEFAULT_PASSWORD = os.getenv("ELEVE_DEFAULT_PASSWORD", "smartschool")
+# Un mot de passe par défaut commun à toute la plateforme vivait ici. Il a été
+# retiré : voir le commentaire de `login_eleve`. Un compte sans mot de passe ne
+# s'ouvre plus, l'administration doit lui en attribuer un.
 
 
 # Rôles qui peuvent consulter le portail d'un autre — dans leur école.
@@ -90,15 +91,26 @@ def login_eleve(request: Request, data: LoginEleveRequest, db: Session = Depends
     if not eleve:
         raise HTTPException(404, "Aucun élève trouvé avec ce matricule")
 
+    # UN MATRICULE N'EST PAS UN SECRET
+    # Cette entrée acceptait un mot de passe par défaut — le même pour toute la
+    # plateforme — dès qu'un élève n'en avait pas encore choisi un. Or le
+    # matricule est imprimé sur les bulletins, appelé en classe et connu de
+    # tous les camarades : il suffisait de le lire et de taper ce mot commun
+    # pour entrer dans l'espace de n'importe quel élève. Sur la base réelle,
+    # 45 élèves étaient dans ce cas.
+    #
+    # Tant que l'administration n'a pas attribué un mot de passe, le compte ne
+    # s'ouvre pas. Le message le dit, pour que l'élève cesse de chercher et
+    # que l'école sache quoi faire.
     mdp_saisi = data.mot_de_passe or ""
-    if eleve.mot_de_passe:
-        # Mot de passe personnalisé — vérification bcrypt
-        if not verify_password(mdp_saisi, eleve.mot_de_passe):
-            raise HTTPException(401, "Mot de passe incorrect")
-    else:
-        # Aucun MDP défini → mot de passe par défaut
-        if mdp_saisi != DEFAULT_PASSWORD:
-            raise HTTPException(401, "Mot de passe incorrect")
+    if not eleve.mot_de_passe:
+        raise HTTPException(
+            403,
+            "Ce compte n'a pas encore de mot de passe. "
+            "L'administration de l'école doit lui en attribuer un.",
+        )
+    if not verify_password(mdp_saisi, eleve.mot_de_passe):
+        raise HTTPException(401, "Mot de passe incorrect")
 
     token = create_access_token({
         "sub": str(eleve.eleve_id),

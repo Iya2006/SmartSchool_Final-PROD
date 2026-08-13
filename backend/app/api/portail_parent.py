@@ -119,12 +119,22 @@ def login_parent(request: Request, data: LoginParentRequest, db: Session = Depen
     if not parent:
         raise HTTPException(404, "Aucun parent trouvé avec ce numéro")
 
-    # Vérifier mot de passe si le parent en a un
-    if parent.mot_de_passe:
-        if not data.mot_de_passe:
-            raise HTTPException(401, "Mot de passe requis")
-        if not verify_password(data.mot_de_passe, parent.mot_de_passe):
-            raise HTTPException(401, "Mot de passe incorrect")
+    # UN NUMÉRO DE TÉLÉPHONE N'EST PAS UNE PREUVE D'IDENTITÉ
+    # Le mot de passe n'était vérifié QUE si le parent en avait un. Un parent
+    # sans mot de passe entrait donc avec son seul numéro — que l'école
+    # possède, que les autres parents connaissent, et qui circule dans les
+    # groupes de classe. Notes des enfants, factures, messages avec l'école :
+    # tout s'ouvrait à qui composait le bon numéro.
+    if not parent.mot_de_passe:
+        raise HTTPException(
+            403,
+            "Ce compte n'a pas encore de mot de passe. "
+            "L'administration de l'école doit lui en attribuer un.",
+        )
+    if not data.mot_de_passe:
+        raise HTTPException(401, "Mot de passe requis")
+    if not verify_password(data.mot_de_passe, parent.mot_de_passe):
+        raise HTTPException(401, "Mot de passe incorrect")
 
     # Générer un token JWT pour le portail parent
     token = create_access_token({

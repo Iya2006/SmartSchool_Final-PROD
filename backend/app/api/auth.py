@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.database import get_db
-from app.core.security import verify_password
+from app.core.security import compte_sans_mot_de_passe, verify_password
 from app.core.auth import create_access_token, get_current_user
 from app.core.rate_limit import limiter, _DEFAULT_LIMIT
 from app.models.academique import (
@@ -155,6 +155,11 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
     if user:
         if user.statut != "ACTIF":
             raise HTTPException(403, "Ce compte est désactivé")
+        # Distinguer « pas de mot de passe » de « mauvais mot de passe » :
+        # sans ce message, la personne cherche indefiniment un mot qui
+        # n'existe pas, et l'ecole conclut a une panne.
+        if compte_sans_mot_de_passe(user.mot_de_passe):
+            raise HTTPException(403, "Ce compte n'a pas encore de mot de passe. L'administration de l'ecole doit lui en attribuer un.")
         if not verify_password(mot_de_passe, user.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
         _verifier_etablissement_actif(db, user.etablissement_id)
@@ -209,6 +214,11 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
     if ens:
         if ens.statut != "ACTIF":
             raise HTTPException(403, "Ce compte est désactivé")
+        # Distinguer « pas de mot de passe » de « mauvais mot de passe » :
+        # sans ce message, la personne cherche indefiniment un mot qui
+        # n'existe pas, et l'ecole conclut a une panne.
+        if compte_sans_mot_de_passe(ens.mot_de_passe):
+            raise HTTPException(403, "Ce compte n'a pas encore de mot de passe. L'administration de l'ecole doit lui en attribuer un.")
         if not verify_password(mot_de_passe, ens.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
         _verifier_etablissement_actif(db, ens.etablissement_id)
@@ -252,6 +262,11 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
     if parent:
         if parent.statut != "ACTIF":
             raise HTTPException(403, "Ce compte est désactivé")
+        # Distinguer « pas de mot de passe » de « mauvais mot de passe » :
+        # sans ce message, la personne cherche indefiniment un mot qui
+        # n'existe pas, et l'ecole conclut a une panne.
+        if compte_sans_mot_de_passe(parent.mot_de_passe):
+            raise HTTPException(403, "Ce compte n'a pas encore de mot de passe. L'administration de l'ecole doit lui en attribuer un.")
         if not verify_password(mot_de_passe, parent.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
         _verifier_etablissement_actif(db, parent.etablissement_id)
@@ -294,6 +309,11 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
     if eleve:
         if eleve.statut != "ACTIF":
             raise HTTPException(403, "Ce compte est désactivé")
+        # Distinguer « pas de mot de passe » de « mauvais mot de passe » :
+        # sans ce message, la personne cherche indefiniment un mot qui
+        # n'existe pas, et l'ecole conclut a une panne.
+        if compte_sans_mot_de_passe(eleve.mot_de_passe):
+            raise HTTPException(403, "Ce compte n'a pas encore de mot de passe. L'administration de l'ecole doit lui en attribuer un.")
         if not verify_password(mot_de_passe, eleve.mot_de_passe):
             raise HTTPException(401, "Identifiant ou mot de passe incorrect")
         _verifier_etablissement_actif(db, eleve.etablissement_id)
