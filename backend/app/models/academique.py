@@ -1341,7 +1341,13 @@ class BulletinPaie(Base):
     date_paiement = Column(Date, nullable=True)
     mode_paiement = Column(String(50), nullable=True) # Cash / Mobile Money
     statut = Column(String(20), default="BROUILLON") # BROUILLON / PAYE
-    details_absences = Column(String(500), nullable=True) # Explication textuelle des absences QR et manuelles
+    # TEXT et non VARCHAR(500) : ce champ porte la justification ligne par
+    # ligne d'une retenue — date, horaire, matière, classe, taux de chaque
+    # heure non assurée. Un professeur absent une journée chargée dépassait la
+    # limite, et le paiement de son salaire échouait en erreur serveur. Une
+    # retenue se conteste : son justificatif ne se tronque pas.
+    # Voir migrations/2026_08_paie_01_details_absences_texte.py
+    details_absences = Column(Text, nullable=True)
 
 
 

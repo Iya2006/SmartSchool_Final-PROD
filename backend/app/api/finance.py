@@ -3730,8 +3730,13 @@ def payer_salaire_employe(data: dict, db: Session = Depends(get_db), etablisseme
     """
     employe_id_str = data.get("enseignant_id")
     mois = data.get("mois", "")
-    mode_paiement = data.get("mode_paiement", "Cash")
-    annee_id = data.get("annee_id", 1)
+    # Les deux mêmes défauts que le paiement groupé, corrigés là-bas mais pas
+    # ici : « Cash » n'appartient à aucune liste de référence (la dépense
+    # disparaissait du rapprochement de caisse) et `annee_id = 1` faisait
+    # enregistrer la charge sur l'année scolaire d'une AUTRE école.
+    mode_paiement = exiger_mode_paiement(data.get("mode_paiement") or "ESPECES")
+    annee_id = resoudre_annee(db, etablissement_id, data.get("annee_id"))
+    date_versement = _lire_date(data.get("date_versement"))
 
     if not employe_id_str or not mois:
         raise HTTPException(status_code=400, detail="Identifiant employé et mois obligatoires")
@@ -3743,7 +3748,8 @@ def payer_salaire_employe(data: dict, db: Session = Depends(get_db), etablisseme
             mois_concerne=mois,
             mode_paiement=mode_paiement,
             etablissement_id=etablissement_id,
-            annee_id=annee_id
+            annee_id=annee_id,
+            date_versement=date_versement,
         )
         return result
     except HTTPException:
@@ -4035,7 +4041,52 @@ def _lister_employes_actifs(db: Session, etablissement_id: int):
     return refs
 
 
-def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: str, mode_paiement: str, etablissement_id: int, annee_id: int) -> dict:
+def _lire_date(valeur) -> Optional[date_type]:
+    """« 2025-10-31 » -> date. Vide ou absent -> None. Illisible -> 400.
+
+    Ces endpoints reçoivent un `dict` brut, pas un schéma Pydantic : sans cette
+    lecture explicite, une date mal formée arriverait telle quelle en base ou
+    passerait silencieusement à la trappe.
+    """
+    if not valeur:
+        return None
+    if isinstance(valeur, date_type):
+        return valeur
+    try:
+        return date_type.fromisoformat(str(valeur)[:10])
+    except ValueError:
+        raise HTTPException(400, f"Date illisible : « {valeur} ». Format attendu : AAAA-MM-JJ.")
+
+
+def _jour_de_versement(mois_concerne: str, date_versement: Optional[date_type] = None) -> date_type:
+    """Date à porter sur la dépense, l'écriture et le bulletin de paie.
+
+    UN SALAIRE D'OCTOBRE SE DATE EN OCTOBRE
+    Ces trois dates étaient figées à `date.today()`. Payer en retard la paie
+    d'octobre — cas ordinaire dans une école qui attend les scolarités — la
+    faisait tomber dans le mois de la saisie. La courbe de trésorerie montrait
+    alors neuf mois de salaires versés le même jour, et le compte de résultat
+    chargeait un seul mois de toute l'année.
+
+    Règle : la date fournie si l'école la précise ; sinon le dernier jour du
+    mois concerné, qui est la pratique — on paie en fin de mois. Jamais une
+    date postérieure à aujourd'hui : on n'enregistre pas un versement qui
+    n'a pas encore eu lieu.
+    """
+    if date_versement:
+        if date_versement > date_type.today():
+            raise HTTPException(400, "Date de versement dans le futur : "
+                                     "un salaire ne s'enregistre pas à l'avance.")
+        return date_versement
+    try:
+        annee, mois = (int(x) for x in mois_concerne.split("-")[:2])
+    except (ValueError, AttributeError):
+        return date_type.today()
+    dernier = calendar.monthrange(annee, mois)[1]
+    return min(date_type(annee, mois, dernier), date_type.today())
+
+
+def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: str, mode_paiement: str, etablissement_id: int, annee_id: int, date_versement: Optional[date_type] = None) -> dict:
     """Exécute réellement le paiement calculé (Dépense + Bulletin + écriture comptable + avances soldées).
 
     `etablissement_id` provient toujours de l'établissement authentifié de
@@ -4047,10 +4098,11 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
     if calc["net_a_payer"] <= 0:
         raise HTTPException(status_code=400, detail="Le net à payer calculé est nul ou négatif")
 
+    jour = _jour_de_versement(mois_concerne, date_versement)
     libelle = f"Salaire {calc['nom_complet']} — {mois_concerne}"
     dep = Depense(
         etablissement_id=etablissement_id, annee_id=annee_id, categorie="SALAIRES",
-        libelle=libelle[:300], montant=calc["net_a_payer"], date_depense=date_type.today(),
+        libelle=libelle[:300], montant=calc["net_a_payer"], date_depense=jour,
         fournisseur=employe_id_str, statut="VALIDE",
     )
     db.add(dep)
@@ -4071,7 +4123,7 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
         employe_id=calc["employe_pk"], mois_concerne=mois_concerne,
         salaire_base=calc["salaire_base"], total_primes=calc["total_primes"],
         total_absences=calc["total_absences"], total_avances=calc["total_avances"],
-        net_a_payer=calc["net_a_payer"], date_paiement=date_type.today(),
+        net_a_payer=calc["net_a_payer"], date_paiement=jour,
         mode_paiement=mode_paiement, statut="PAYE",
         details_absences=calc.get("details_absences")
     )
@@ -4196,6 +4248,9 @@ def payer_group_endpoint(
     # mode que les totaux par mode ne savaient pas classer, et la depense
     # salariale disparaissait du rapprochement de caisse.
     mode_paiement: str = "ESPECES",
+    # Jour réel du versement. Sans lui, la paie d'un mois passé se datait du
+    # jour de la saisie : voir `_jour_de_versement`.
+    date_versement: Optional[date_type] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -4227,6 +4282,7 @@ def payer_group_endpoint(
                 mode_paiement=mode_paiement,
                 etablissement_id=etablissement_id,
                 annee_id=annee_id,
+                date_versement=date_versement,
             )
             payes.append({"nom": calc["nom_complet"], "montant": calc["net_a_payer"]})
         except Exception as e:
@@ -4347,8 +4403,11 @@ def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db), eta
     """
     employe_id_str = data.get("enseignant_id") or data.get("employe_id")
     mois_list = data.get("mois_list") or []
-    mode_paiement = data.get("mode_paiement", "Cash")
-    annee_id = data.get("annee_id", 1)
+    # Mêmes corrections que sur le paiement individuel : mode normalisé et
+    # année scolaire de CETTE école.
+    mode_paiement = exiger_mode_paiement(data.get("mode_paiement") or "ESPECES")
+    annee_id = resoudre_annee(db, etablissement_id, data.get("annee_id"))
+    date_versement = _lire_date(data.get("date_versement"))
 
     if not employe_id_str or not mois_list:
         raise HTTPException(status_code=400, detail="employe_id et mois_list requis")
@@ -4359,7 +4418,8 @@ def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db), eta
         try:
             result = _executer_paiement_salaire(
                 db=db, employe_id_str=employe_id_str, mois_concerne=mois,
-                mode_paiement=mode_paiement, etablissement_id=etablissement_id, annee_id=annee_id
+                mode_paiement=mode_paiement, etablissement_id=etablissement_id,
+                annee_id=annee_id, date_versement=date_versement,
             )
             payes.append({"mois": mois, "net_a_payer": result.get("net_a_payer")})
             total_paye += float(result.get("net_a_payer") or 0)

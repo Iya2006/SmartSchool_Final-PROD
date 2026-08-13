@@ -2481,6 +2481,141 @@ def _recap_personnel(db: Session, eid: int) -> None:
             print(f"     {qui} ({role})")
 
 
+# ── étape 13 : la paie, mois par mois ───────────────────────────────────
+#
+# NEUF MOIS, PAS UN VERSEMENT UNIQUE
+# L'école paie fin octobre, fin novembre, et ainsi de suite jusqu'en juin.
+# Chaque mois porte sa propre dépense, sa propre écriture comptable et son
+# propre bulletin de paie. Regrouper les neuf mois en un seul versement
+# donnerait une trésorerie fausse : neuf mois de charges sur un jour.
+#
+# Le scénario ne calcule aucun salaire lui-même : il appelle la fonction de
+# l'application, celle que le comptable déclenche depuis « Centre de
+# décaissement ». C'est la seule façon de vérifier que la retenue d'absence
+# horaire du collège et du lycée arrive bien jusqu'au bulletin.
+MOIS_DE_PAIE = [
+    "2025-10", "2025-11", "2025-12",
+    "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06",
+]
+
+
+def etape_13_paie(db: Session) -> None:
+    """Les neuf mois de paie, enseignants et personnel."""
+    from app.api.finance import (
+        _calculer_salaire, _executer_paiement_salaire, _lister_employes_actifs,
+    )
+    from app.core.annee_courante import resoudre_annee
+
+    _titre(13, "Paie mensuelle d'octobre a juin")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+    annee_id = resoudre_annee(db, eid, None)
+
+    deja = db.execute(text("""
+        SELECT count(*) FROM ss_bulletins_paie b
+        JOIN ss_employes e ON e.employe_id = b.employe_id
+        WHERE e.etablissement_id = :eid
+    """), {"eid": eid}).scalar()
+    if deja:
+        print(f"  {deja} bulletin(s) de paie deja emis — etape deja jouee.")
+        _recap_paie(db, eid)
+        return
+
+    refs = _lister_employes_actifs(db, eid)
+    print(f"  {len(refs)} agents a payer, sur {len(MOIS_DE_PAIE)} mois.\n")
+
+    total_general = 0.0
+    for mois in MOIS_DE_PAIE:
+        payes = ignores = echecs = 0
+        verse = 0.0
+        for ref in refs:
+            try:
+                calc = _calculer_salaire(db, ref, mois, eid)
+                if calc["statut"] == "PAYE" or calc["net_a_payer"] <= 0:
+                    ignores += 1
+                    continue
+                _executer_paiement_salaire(
+                    db=db, employe_id_str=ref, mois_concerne=mois,
+                    mode_paiement="ESPECES", etablissement_id=eid,
+                    annee_id=annee_id,
+                    # Pas de date forcée : l'application prend la fin du mois
+                    # concerné, ce qui est la pratique — on paie fin de mois.
+                )
+                payes += 1
+                verse += calc["net_a_payer"]
+            except Exception as exc:
+                db.rollback()
+                echecs += 1
+                if echecs <= 2:
+                    print(f"     [!!] {ref} {mois} : {str(getattr(exc, 'detail', exc))[:90]}")
+        total_general += verse
+        marque = "[OK]" if echecs == 0 else "[!!]"
+        print(f"  {marque} {mois}  {payes:>3} payes, {ignores:>3} sans montant, "
+              f"{echecs:>2} echecs — {verse:>14,.0f} GNF")
+
+    print(f"\n  Masse salariale de l'annee : {total_general:,.0f} GNF")
+    _recap_paie(db, eid)
+
+
+def _recap_paie(db: Session, eid: int) -> None:
+    # LA VERIFICATION QUI COMPTE : chaque mois porte sa propre depense, datee
+    # DANS ce mois. Neuf mois verses le meme jour signeraient le retour du
+    # `date.today()` code en dur.
+    lignes = db.execute(text("""
+        SELECT b.mois_concerne, count(*) AS bulletins,
+               sum(b.net_a_payer) AS net,
+               sum(b.total_absences) AS retenues,
+               min(b.date_paiement) AS premier, max(b.date_paiement) AS dernier
+        FROM ss_bulletins_paie b
+        JOIN ss_employes e ON e.employe_id = b.employe_id
+        WHERE e.etablissement_id = :eid
+        GROUP BY b.mois_concerne ORDER BY b.mois_concerne
+    """), {"eid": eid}).fetchall()
+    print(f"\n  {'MOIS':<10}{'AGENTS':>8}{'NET VERSE':>16}{'RETENUES':>12}   VERSE LE")
+    total = 0.0
+    for mois, nb, net, retenues, premier, dernier in lignes:
+        total += float(net or 0)
+        quand = f"{premier}" if premier == dernier else f"{premier} au {dernier}"
+        print(f"  {mois:<10}{nb:>8}{float(net or 0):>16,.0f}"
+              f"{float(retenues or 0):>12,.0f}   {quand}")
+    print(f"  {'TOTAL':<10}{'':>8}{total:>16,.0f}")
+
+    # Les retenues d'absence doivent se voir, et sur les bons agents : ce sont
+    # les professeurs du secondaire payes a l'heure.
+    retenus = db.execute(text("""
+        SELECT e.prenom || ' ' || e.nom AS qui, e.mode_remuneration,
+               count(*) AS mois_touches, sum(b.total_absences) AS retenu
+        FROM ss_bulletins_paie b
+        JOIN ss_employes emp ON emp.employe_id = b.employe_id
+        JOIN ss_enseignants e ON 'ENS_' || e.enseignant_id = emp.source_ref
+        WHERE emp.etablissement_id = :eid AND b.total_absences > 0
+        GROUP BY e.prenom, e.nom, e.mode_remuneration
+        ORDER BY sum(b.total_absences) DESC LIMIT 6
+    """), {"eid": eid}).fetchall()
+    if retenus:
+        print(f"\n  Retenues d'absence — les heures de cours non assurees :")
+        print(f"     {'ENSEIGNANT':<26}{'PAIE':<10}{'MOIS':>6}{'RETENU':>14}")
+        for qui, mode, mois_touches, retenu in retenus:
+            print(f"     {qui[:25]:<26}{mode:<10}{mois_touches:>6}{float(retenu):>14,.0f}")
+
+    # La comptabilite doit refleter exactement la paie : une depense par
+    # bulletin, ni plus ni moins.
+    controle = db.execute(text("""
+        SELECT
+          (SELECT count(*) FROM ss_bulletins_paie b
+             JOIN ss_employes e ON e.employe_id = b.employe_id
+             WHERE e.etablissement_id = :eid) AS bulletins,
+          (SELECT count(*) FROM ss_depenses d
+             WHERE d.etablissement_id = :eid AND d.categorie = 'SALAIRES') AS depenses,
+          (SELECT sum(d.montant) FROM ss_depenses d
+             WHERE d.etablissement_id = :eid AND d.categorie = 'SALAIRES') AS total_depenses
+    """), {"eid": eid}).first()
+    bulletins, depenses, total_dep = controle
+    accord = "[OK]" if bulletins == depenses else "[!!]"
+    print(f"\n  {accord} {bulletins} bulletins de paie / {depenses} depenses SALAIRES "
+          f"— {float(total_dep or 0):,.0f} GNF en charges")
+
+
 ETAPES = {
     1: ("Referentiel (cycles, niveaux, matieres, annee, semestres)", etape_1_referentiel),
     2: ("Classes et grille horaire", etape_2_classes),
@@ -2494,6 +2629,7 @@ ETAPES = {
     10: ("Notes de l'annee et centralisation des epreuves", etape_10_notes),
     11: ("Bulletins de periode et bulletins annuels", etape_11_bulletins),
     12: ("Personnel non enseignant : comptes, espaces et salaires", etape_12_personnel),
+    13: ("Paie mensuelle d'octobre a juin", etape_13_paie),
 }
 
 
