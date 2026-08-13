@@ -4,9 +4,10 @@ import React, { useState, useEffect } from 'react';
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
+import Link from 'next/link';
 import {
   Shield, Key, Clock, FileText, Save, Loader2, Plus, Trash2, CheckCircle, Lock, Users,
-  AlertTriangle
+  AlertTriangle, UserPlus
 } from 'lucide-react';
 import styles from './Securite.module.css';
 
@@ -41,12 +42,34 @@ const TABS = [
 
 type TabId = typeof TABS[number]['id'];
 
+interface Titulaire {
+  utilisateur_id: number;
+  nom: string;
+  prenom: string;
+  nom_utilisateur: string | null;
+  telephone: string | null;
+  email: string | null;
+  statut: string;
+  salaire_base: number;
+  peut_se_connecter: boolean;
+}
+
 interface RoleItem {
   role_id: number;
   code: string;
   libelle: string;
   description: string;
   est_systeme: boolean;
+  /** Espace de travail dont ce rôle hérite ses accès. */
+  role_base?: string | null;
+  /** Salaire de référence du poste : pré-remplit la fiche à l'embauche. */
+  salaire_mensuel?: number | null;
+  prime_mensuelle?: number | null;
+  /** Les personnes qui occupent ce poste, avec leur identifiant de connexion. */
+  titulaires?: Titulaire[];
+  nb_titulaires?: number;
+  nb_actifs?: number;
+  attribuable?: boolean;
   permissions: Array<{ module: string; action: string; est_autorise: boolean }>;
 }
 
@@ -94,6 +117,11 @@ export default function SecuritePage() {
   // aucun écran : la matrice de permissions ne fait que RETIRER des accès,
   // elle n'en ouvre jamais. Une école obtenait un rôle décoratif.
   const [newRoleBase, setNewRoleBase] = useState('DIRECTEUR_NIVEAU');
+  // Salaire de RÉFÉRENCE du poste : « un surveillant, c'est 1 400 000 ». Il
+  // pré-remplit la fiche à l'embauche et ne fait pas foi pour la paie — deux
+  // surveillants ne sont pas payés pareil (ancienneté, temps partiel).
+  const [newRoleSalaire, setNewRoleSalaire] = useState('');
+  const [newRolePrime, setNewRolePrime] = useState('');
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -109,9 +137,9 @@ export default function SecuritePage() {
     try {
       const [modulesRes, rolesRes, settingsRes, auditRes] = await Promise.all([
         api.get('/api/securite/modules').catch(() => ({ data: { modules: [], actions: [] } })),
-        api.get('/api/securite/roles?etablissement_id=1').catch(() => ({ data: [] })),
-        api.get('/api/parametrage/settings?etablissement_id=1&categorie=SECURITE').catch(() => ({ data: [] })),
-        api.get('/api/securite/audit-log?etablissement_id=1&limit=50').catch(() => ({ data: { items: [] } })),
+        api.get('/api/securite/roles').catch(() => ({ data: [] })),
+        api.get('/api/parametrage/settings?categorie=SECURITE').catch(() => ({ data: [] })),
+        api.get('/api/securite/audit-log?limit=50').catch(() => ({ data: { items: [] } })),
       ]);
 
       setModules(modulesRes.data.modules || []);
@@ -154,6 +182,8 @@ export default function SecuritePage() {
         libelle: newRoleLibelle,
         description: newRoleDesc,
         role_base: newRoleBase,
+        salaire_mensuel: newRoleSalaire === '' ? null : Number(newRoleSalaire),
+        prime_mensuelle: newRolePrime === '' ? null : Number(newRolePrime),
       });
       showToast('Rôle créé avec succès');
       setShowRoleModal(false);
@@ -161,6 +191,8 @@ export default function SecuritePage() {
       setNewRoleLibelle('');
       setNewRoleDesc('');
       setNewRoleBase('DIRECTEUR_NIVEAU');
+      setNewRoleSalaire('');
+      setNewRolePrime('');
       loadAllData();
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Erreur lors de la création du rôle', 'error');
@@ -218,7 +250,7 @@ export default function SecuritePage() {
         { etablissement_id: 1, categorie: 'SECURITE', cle: 'securite.session_single_login', valeur: String(singleSession), type_valeur: 'BOOLEAN' },
         { etablissement_id: 1, categorie: 'SECURITE', cle: 'securite.audit_log_active', valeur: String(auditActive), type_valeur: 'BOOLEAN' },
       ];
-      await api.put('/api/parametrage/settings?etablissement_id=1', payload);
+      await api.put('/api/parametrage/settings', payload);
       showToast('Paramètres de sécurité enregistrés avec succès');
       setHasChanges(false);
     } catch (e) {
@@ -305,6 +337,64 @@ export default function SecuritePage() {
                       {role.est_systeme && <span className={styles.badgeSystem}>Système</span>}
                     </div>
                     <p className={styles.roleDesc}>{role.description || role.code}</p>
+
+                    {/* L'espace où travaille ce rôle, et ce que le poste coûte.
+                        Sans ça, la carte ne dit ni ce que la personne pourra
+                        faire, ni combien elle sera payée. */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                      {role.role_base && (
+                        <span style={{ padding: '2px 9px', borderRadius: 999, background: '#eef2ff', color: '#4338ca', fontSize: '0.7rem', fontWeight: 700 }}>
+                          Espace : {ESPACES_DISPONIBLES.find(e => e.code === role.role_base)?.libelle || role.role_base}
+                        </span>
+                      )}
+                      {role.salaire_mensuel ? (
+                        <span style={{ padding: '2px 9px', borderRadius: 999, background: '#ecfdf5', color: '#047857', fontSize: '0.7rem', fontWeight: 700 }}>
+                          {Number(role.salaire_mensuel).toLocaleString('fr-FR')} GNF / mois
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {/* QUI OCCUPE CE POSTE
+                        Un rôle sans personne derrière est une ligne de
+                        configuration ; avec ses titulaires, c'est un poste.
+                        Chaque nom porte son identifiant de connexion — celui
+                        avec lequel la personne entre réellement. */}
+                    <div style={{ marginTop: 10, borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
+                      {(role.titulaires || []).length === 0 ? (
+                        <p style={{ margin: 0, fontSize: '0.75rem', color: '#94a3b8' }}>
+                          Personne n’occupe encore ce poste.
+                        </p>
+                      ) : (
+                        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {(role.titulaires || []).slice(0, 4).map((t: any) => (
+                            <li key={t.utilisateur_id} style={{ fontSize: '0.75rem', color: '#334155', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                              <span style={{ fontWeight: 600 }}>
+                                {t.prenom} {t.nom}
+                                {t.statut !== 'ACTIF' && (
+                                  <span style={{ color: '#b45309', fontWeight: 500 }}> — {t.statut.toLowerCase()}</span>
+                                )}
+                              </span>
+                              <span style={{ color: t.peut_se_connecter ? '#64748b' : '#b45309', fontFamily: 'monospace' }}>
+                                {t.nom_utilisateur || 'sans compte'}
+                              </span>
+                            </li>
+                          ))}
+                          {(role.titulaires || []).length > 4 && (
+                            <li style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                              + {(role.titulaires || []).length - 4} autre(s)
+                            </li>
+                          )}
+                        </ul>
+                      )}
+                      <Link
+                        href={`/personnel/nouveau?role=${encodeURIComponent(role.code)}`}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8, fontSize: '0.75rem', fontWeight: 700, color: '#4f46e5', textDecoration: 'none' }}
+                      >
+                        <UserPlus size={13} /> Enregistrer une personne à ce poste
+                      </Link>
+                    </div>
+
                     {!role.est_systeme && (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleDeleteRole(role.role_id); }}
@@ -651,6 +741,39 @@ export default function SecuritePage() {
                       </strong>
                     </p>
                   </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>
+                        Salaire mensuel (GNF)
+                      </label>
+                      <input
+                        type="number" min={0} step={10000}
+                        className={styles.inputFancy}
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={newRoleSalaire}
+                        onChange={(e) => setNewRoleSalaire(e.target.value)}
+                        placeholder="1 400 000"
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>
+                        Prime mensuelle (GNF)
+                      </label>
+                      <input
+                        type="number" min={0} step={10000}
+                        className={styles.inputFancy}
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={newRolePrime}
+                        onChange={(e) => setNewRolePrime(e.target.value)}
+                        placeholder="100 000"
+                      />
+                    </div>
+                  </div>
+                  <p style={{ margin: '-4px 0 0', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.5 }}>
+                    Montant de référence du poste. Il remplit la fiche à l’embauche ;
+                    c’est la fiche de la personne qui fait foi pour la paie — deux
+                    surveillants ne sont pas toujours payés pareil.
+                  </p>
                   <div>
                     <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Description</label>
                     <textarea

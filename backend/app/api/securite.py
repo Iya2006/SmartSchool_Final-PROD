@@ -51,11 +51,17 @@ class RoleCreate(BaseModel):
     # Le rôle standard dont celui-ci hérite son espace. Obligatoire : sans lui
     # le rôle créé n'ouvre aucun écran, ce qui était le cas avant.
     role_base: str
+    # Salaire de référence du poste : pré-remplit la fiche à l'embauche.
+    # Ne fait pas foi pour la paie — voir le modèle `Role`.
+    salaire_mensuel: Optional[float] = None
+    prime_mensuelle: Optional[float] = None
 
 class RoleUpdate(BaseModel):
     libelle: str
     description: Optional[str] = None
     role_base: Optional[str] = None
+    salaire_mensuel: Optional[float] = None
+    prime_mensuelle: Optional[float] = None
 
 class PermissionItem(BaseModel):
     module: str
@@ -96,16 +102,47 @@ def list_roles(
     etablissement_id: int = Depends(require_etablissement),
 ):
     roles = db.query(Role).filter(Role.etablissement_id == etablissement_id).all()
+
+    # QUI OCCUPE CE POSTE, AUJOURD'HUI
+    # Un rôle sans personne derrière est une ligne de configuration ; avec ses
+    # titulaires, c'est un poste. La direction doit voir d'un coup d'œil qui
+    # est censeur, avec quel identifiant il se connecte et s'il est encore en
+    # activité — sans quitter l'écran pour aller fouiller la liste du personnel.
+    # Une seule requête pour tous les rôles, jamais une par rôle.
+    titulaires: dict = {}
+    for u in db.query(Utilisateur).filter(
+        Utilisateur.etablissement_id == etablissement_id
+    ).order_by(Utilisateur.nom, Utilisateur.prenom).all():
+        titulaires.setdefault(u.role, []).append({
+            "utilisateur_id": u.utilisateur_id,
+            "nom": u.nom,
+            "prenom": u.prenom,
+            "nom_utilisateur": u.nom_utilisateur,
+            "telephone": u.telephone,
+            "email": u.email,
+            "statut": u.statut,
+            "salaire_base": float(u.salaire_base) if u.salaire_base else 0,
+            # Un compte sans identifiant n'ouvre aucun écran : c'est le cas
+            # normal d'un gardien, une anomalie pour un censeur.
+            "peut_se_connecter": bool(u.nom_utilisateur and u.mot_de_passe),
+        })
+
     res = []
     for r in roles:
         perms = db.query(Permission).filter(Permission.role_id == r.role_id).all()
+        gens = titulaires.get(r.code, [])
         res.append({
+            "titulaires": gens,
+            "nb_titulaires": len(gens),
+            "nb_actifs": sum(1 for g in gens if g["statut"] == "ACTIF"),
             "role_id": r.role_id,
             "code": r.code,
             "libelle": r.libelle,
             "description": r.description,
             "est_systeme": r.est_systeme == "O",
             "role_base": r.role_base,
+            "salaire_mensuel": float(r.salaire_mensuel) if r.salaire_mensuel is not None else None,
+            "prime_mensuelle": float(r.prime_mensuelle) if r.prime_mensuelle is not None else None,
             # Un rôle sans base n'ouvre aucun écran : l'interface doit le dire
             # au lieu de le proposer comme s'il fonctionnait.
             "attribuable": bool(r.role_base),
@@ -144,6 +181,8 @@ def create_role(
         libelle=data.libelle,
         description=data.description,
         role_base=base,
+        salaire_mensuel=data.salaire_mensuel,
+        prime_mensuelle=data.prime_mensuelle,
         est_systeme="N"
     )
     db.add(role)
@@ -191,6 +230,10 @@ def update_role(
             # donner la comptabilité à tous les surveillants d'un coup.
             raise HTTPException(400, "Un rôle système ne change pas d'espace.")
         role.role_base = base
+    if data.salaire_mensuel is not None:
+        role.salaire_mensuel = data.salaire_mensuel
+    if data.prime_mensuelle is not None:
+        role.prime_mensuelle = data.prime_mensuelle
     db.commit()
     return {"message": "Rôle mis à jour", "role_base": role.role_base}
 

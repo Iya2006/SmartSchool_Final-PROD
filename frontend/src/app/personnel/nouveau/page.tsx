@@ -111,10 +111,40 @@ export default function NouveauPersonnel() {
     const [rolesEcole, setRolesEcole] = useState<any[]>([]);
     useEffect(() => {
         api.get('/api/securite/roles')
-            .then(res => setRolesEcole((res.data || []).filter(
-                (r: any) => !r.est_systeme && r.attribuable)))
+            .then(res => {
+                const perso = (res.data || []).filter((r: any) => !r.est_systeme && r.attribuable);
+                setRolesEcole(perso);
+
+                // Arrivé depuis « Enregistrer une personne à ce poste » : le
+                // rôle est déjà choisi, et son salaire de référence remplit la
+                // fiche. La direction n'a plus à se souvenir du montant du
+                // poste — elle le corrige si le contrat dit autre chose.
+                const voulu = new URLSearchParams(window.location.search).get('role');
+                if (!voulu) return;
+                const grille = perso.find((r: any) => r.code === voulu);
+                setForm(prev => ({
+                    ...prev,
+                    role: voulu,
+                    salaire_base: grille?.salaire_mensuel ?? prev.salaire_base,
+                    prime_mensuelle: grille?.prime_mensuelle ?? prev.prime_mensuelle,
+                }));
+            })
             .catch(() => setRolesEcole([]));
     }, []);
+
+    // Changer de rôle en cours de saisie propose le salaire de ce poste-là,
+    // tant que la direction n'a pas encore inscrit de montant à la main.
+    const choisirRole = (code: string) => {
+        const grille = rolesEcole.find((r: any) => r.code === code);
+        setForm(prev => ({
+            ...prev,
+            role: code,
+            salaire_base: (!prev.salaire_base && grille?.salaire_mensuel)
+                ? grille.salaire_mensuel : prev.salaire_base,
+            prime_mensuelle: (!prev.prime_mensuelle && grille?.prime_mensuelle)
+                ? grille.prime_mensuelle : prev.prime_mensuelle,
+        }));
+    };
 
     // Les deux listes réunies, chacune sachant dans quel espace elle travaille.
     const tousLesRoles = useMemo(() => ([
@@ -491,7 +521,7 @@ export default function NouveauPersonnel() {
                                                         key={r.value}
                                                         whileHover={{ y: -4 }}
                                                         whileTap={{ scale: 0.99 }}
-                                                        onClick={() => ch('role', r.value)}
+                                                        onClick={() => choisirRole(r.value)}
                                                         style={{ padding: '18px', borderRadius: '22px', border: '1.5px solid', borderColor: isSelected ? r.color : '#e2e8f0', background: isSelected ? `linear-gradient(135deg, ${r.bg}, white)` : 'white', cursor: 'pointer', textAlign: 'left', boxShadow: isSelected ? `0 16px 30px ${r.color}22` : '0 8px 18px rgba(15,23,42,0.04)' }}
                                                     >
                                                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', marginBottom: '12px' }}>

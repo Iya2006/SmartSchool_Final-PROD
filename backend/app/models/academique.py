@@ -1381,6 +1381,15 @@ class Role(Base):
     # qu'une case cochée en base donne la finance à un enseignant.
     # Voir migrations/2026_08_roles_01_role_base.py
     role_base = Column(String(30), nullable=True)
+    # Salaire de REFERENCE du poste : « un surveillant, c'est 1 400 000 ».
+    # Il pré-remplit la fiche à l'embauche et ne fait PAS foi pour la paie —
+    # deux surveillants ne sont pas payés pareil (ancienneté, temps partiel).
+    # Le montant réel vit sur `Utilisateur.salaire_base`, et lui seul est lu
+    # au moment de payer. Sinon modifier la grille réécrirait en silence la
+    # paie de gens dont le contrat dit autre chose.
+    # Voir migrations/2026_08_roles_02_grille_salariale.py
+    salaire_mensuel = Column(Numeric(15, 2), nullable=True)
+    prime_mensuelle = Column(Numeric(15, 2), nullable=True)
     created_date = Column(DateTime, server_default=func.now())
 
 class Permission(Base):
