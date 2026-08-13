@@ -1628,6 +1628,7 @@ def etape_8_epreuves_et_sujets(db: Session) -> None:
     if deja:
         print(f"  {deja} epreuve(s) deja creee(s) — etape deja jouee.")
         _regrouper_en_sessions(db, eid, annee)
+        _deposer_les_fichiers_de_sujets(db, eid)
         _recap_epreuves(db, eid, annee)
         return
 
@@ -1732,7 +1733,102 @@ def etape_8_epreuves_et_sujets(db: Session) -> None:
     print(f"  dont     : {nb_epreuves} lignes matiere a noter")
     print(f"  sujets   : {nb_sujets} deposes et valides, dont {nb_retards} "
           f"deposes en retard (relance necessaire)")
+    _deposer_les_fichiers_de_sujets(db, eid)
     _recap_epreuves(db, eid, annee)
+
+
+def _pdf_minimal(titre: str) -> bytes:
+    """Un vrai PDF, lisible par un navigateur, en quelques centaines d'octets.
+
+    Le scénario écrivait un `fichier_path` sans jamais déposer de fichier :
+    cliquer « Télécharger » sur un sujet répondait « Fichier non trouvé sur le
+    serveur ». Une donnée de recette qui n'existe qu'en base ne permet pas de
+    tester l'écran qui la consomme.
+    """
+    texte = titre.replace("(", "[").replace(")", "]")[:90]
+    contenu = f"BT /F1 14 Tf 60 760 Td ({texte}) Tj ET".encode("latin-1", "replace")
+    objets = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length " + str(len(contenu)).encode() + b" >>\nstream\n" + contenu + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    sortie = bytearray(b"%PDF-1.4\n")
+    positions = []
+    for numero, corps in enumerate(objets, start=1):
+        positions.append(len(sortie))
+        sortie += f"{numero} 0 obj\n".encode() + corps + b"\nendobj\n"
+    debut_xref = len(sortie)
+    sortie += f"xref\n0 {len(objets) + 1}\n".encode()
+    sortie += b"0000000000 65535 f \n"
+    for pos in positions:
+        sortie += f"{pos:010d} 00000 n \n".encode()
+    sortie += (f"trailer\n<< /Size {len(objets) + 1} /Root 1 0 R >>\n"
+               f"startxref\n{debut_xref}\n%%EOF\n").encode()
+    return bytes(sortie)
+
+
+def _deposer_les_fichiers_de_sujets(db: Session, eid: int) -> None:
+    """Écrit sur le disque le PDF de chaque sujet, et corrige les chemins.
+
+    DEUX ERREURS DANS LA PREMIERE VERSION
+    1. `fichier_path` portait un chemin imbriqué (« uploads/sujets/S1/... »)
+       alors que l'application y attend un simple NOM de fichier, relatif à
+       son dossier de dépôt. Le chemin se résolvait donc en
+       `uploads/sujets/uploads/sujets/...` — introuvable.
+    2. Aucun fichier n'était réellement écrit. Le bouton « Télécharger »
+       répondait « Fichier non trouvé sur le serveur ».
+
+    On aligne les deux sur ce que fait le vrai dépôt d'un enseignant
+    (`examens.py::deposer_sujet_portail`) : un nom plat, et un fichier
+    derrière.
+    """
+    import os as _os
+
+    from app.api.examens import UPLOAD_DIR
+
+    _os.makedirs(UPLOAD_DIR, exist_ok=True)
+    sujets = db.execute(text("""
+        SELECT s.sujet_id, s.enseignant_id, s.matiere_id, s.trimestre,
+               s.titre, s.fichier_path, s.fichier_nom
+        FROM ss_sujets_examen s
+        JOIN ss_classes cl ON cl.classe_id = s.classe_id
+        WHERE cl.etablissement_id = :eid
+        ORDER BY s.sujet_id
+    """), {"eid": eid}).fetchall()
+    if not sujets:
+        return
+
+    ecrits = corriges = 0
+    for s in sujets:
+        nom_plat = (
+            f"sujet_{s.enseignant_id}_{s.matiere_id}_P{s.trimestre}_{s.sujet_id}.pdf"
+        )
+        chemin = _os.path.join(UPLOAD_DIR, nom_plat)
+        if not _os.path.exists(chemin):
+            with open(chemin, "wb") as f:
+                f.write(_pdf_minimal(s.titre or "Sujet d'examen"))
+            ecrits += 1
+        if s.fichier_path != nom_plat:
+            # Le nom affiché ne doit pas contenir de « / » : « Éducation
+            # artistique / Arts » donnait « sujet_education_artistique_/_arts.pdf »,
+            # que le navigateur refuse comme nom de téléchargement.
+            propre = _sans_accent(s.titre or "sujet").lower()
+            propre = "".join(c if c.isalnum() else "_" for c in propre)[:60]
+            db.execute(text("""
+                UPDATE ss_sujets_examen
+                   SET fichier_path = :p, fichier_nom = :n,
+                       fichier_taille = :t, fichier_type = 'pdf'
+                 WHERE sujet_id = :id
+            """), {"p": nom_plat, "n": f"{propre}.pdf",
+                   "t": _os.path.getsize(chemin), "id": s.sujet_id})
+            corriges += 1
+    db.commit()
+    if ecrits or corriges:
+        print(f"  [FICHIERS] {ecrits} PDF deposes, {corriges} chemin(s) corrige(s) "
+              f"dans {UPLOAD_DIR}")
 
 
 def _regrouper_en_sessions(db: Session, eid: int, annee) -> None:

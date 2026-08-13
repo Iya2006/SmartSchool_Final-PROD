@@ -11,12 +11,12 @@ echo  ============================================================
 echo.
 
 :: ---------------------------------------------------------------
-:: ETAPE 1 : Liberer les ports 8000 et 3300
+:: ETAPE 1 : Liberer les ports 8300 et 3300
 :: ---------------------------------------------------------------
 echo  [1/4] Liberation des ports en cours...
 
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000" ^| findstr "LISTENING" 2^>nul') do (
-    echo        - Fermeture du processus PID %%a sur port 8000
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8300" ^| findstr "LISTENING" 2^>nul') do (
+    echo        - Fermeture du processus PID %%a sur port 8300
     taskkill /F /PID %%a >nul 2>&1
 )
 
@@ -26,7 +26,7 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3300" ^| findstr "LISTENING
 )
 
 timeout /t 2 /nobreak >nul
-echo        OK - Ports 8000 et 3300 liberes.
+echo        OK - Ports 8300 et 3300 liberes.
 
 :: ---------------------------------------------------------------
 :: ETAPE 2 : Verifier que les fichiers existent
@@ -34,11 +34,13 @@ echo        OK - Ports 8000 et 3300 liberes.
 echo.
 echo  [2/4] Verification des fichiers...
 
-if not exist "%~dp0backend\venv\Scripts\python.exe" (
-    echo        ERREUR: backend\venv\Scripts\python.exe introuvable !
-    echo        Executez: cd backend ^&^& python -m venv venv ^&^& venv\Scripts\pip install -r requirements.txt
-    pause
-    exit /b 1
+:: Python : celui de l'environnement virtuel s'il existe, sinon celui du
+:: systeme. Refuser de demarrer faute de venv bloquait une machine ou les
+:: dependances sont installees globalement — c'est le cas ici.
+set "PYEXE=%~dp0backend\venv\Scripts\python.exe"
+if not exist "%PYEXE%" (
+    set "PYEXE=python"
+    echo        Pas de venv : utilisation du Python du systeme.
 )
 
 if not exist "%~dp0backend\main.py" (
@@ -88,22 +90,22 @@ timeout /t 3 /nobreak >nul
 echo        OK - PostgreSQL et Redis demarres.
 
 :: ---------------------------------------------------------------
-:: ETAPE 4 : Demarrage du Backend (port 8000)
+:: ETAPE 4 : Demarrage du Backend (port 8300)
 :: ---------------------------------------------------------------
 echo.
-echo  [4/5] Demarrage du Backend Python (API sur port 8000)...
-start "SMARTSCHOOL-Backend" /D "%~dp0backend" cmd /c "title SMARTSCHOOL Backend && color 0A && echo. && echo  === SMARTSCHOOL BACKEND === && echo. && "%~dp0backend\venv\Scripts\python.exe" -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 || (echo. && echo ERREUR: Le backend a plante! && pause)"
+echo  [4/5] Demarrage du Backend Python (API sur port 8300 - voir backend\.env)...
+start "SMARTSCHOOL-Backend" /D "%~dp0backend" cmd /c "title SMARTSCHOOL Backend && color 0A && echo. && echo  === SMARTSCHOOL BACKEND === && echo. && "%PYEXE%" -m uvicorn main:app --reload --host 0.0.0.0 --port 8300 || (echo. && echo ERREUR: Le backend a plante! && pause)"
 
 :: Attendre que le backend demarre
 echo        Attente du backend...
 timeout /t 5 /nobreak >nul
 
 :: Verifier que le backend tourne
-netstat -ano | findstr ":8000" | findstr "LISTENING" >nul 2>&1
+netstat -ano | findstr ":8300" | findstr "LISTENING" >nul 2>&1
 if %errorlevel%==0 (
-    echo        OK - Backend demarre sur http://localhost:8000
+    echo        OK - Backend demarre sur http://localhost:8300
 ) else (
-    echo        ATTENTION: Le backend ne semble pas ecouter sur le port 8000.
+    echo        ATTENTION: Le backend ne semble pas ecouter sur le port 8300.
     echo        Verifiez la fenetre "SMARTSCHOOL Backend" pour les erreurs.
 )
 
@@ -112,7 +114,7 @@ if %errorlevel%==0 (
 :: ---------------------------------------------------------------
 echo.
 echo  [5/5] Demarrage du Frontend Next.js (port 3300)...
-start "SMARTSCHOOL-Frontend" /D "%~dp0frontend" cmd /c "title SMARTSCHOOL Frontend && color 0E && echo. && echo  === SMARTSCHOOL FRONTEND === && echo. && set NEXT_PUBLIC_API_URL=http://localhost:8000&& npm run dev -- -p 3300 || (echo. && echo ERREUR: Le frontend a plante! && pause)"
+start "SMARTSCHOOL-Frontend" /D "%~dp0frontend" cmd /c "title SMARTSCHOOL Frontend && color 0E && echo. && echo  === SMARTSCHOOL FRONTEND === && echo. && npm run dev -- -p 3300 || (echo. && echo ERREUR: Le frontend a plante! && pause)"
 
 :: Attendre que le frontend demarre
 echo        Attente du frontend...
@@ -127,7 +129,7 @@ echo        SMARTSCHOOL - TOUT EST LANCE !
 echo  ============================================================
 echo.
 echo   Application     : http://localhost:3300
-echo   API Swagger      : http://localhost:8000/docs
+echo   API Swagger      : http://localhost:8300/docs
 echo.
 echo   --- LIENS RAPIDES ---
 echo   Admin (Login)      : http://localhost:3300/login

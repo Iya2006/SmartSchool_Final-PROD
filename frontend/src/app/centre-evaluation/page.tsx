@@ -93,8 +93,24 @@ export default function CentreEvaluationPage() {
             link.click();
             link.remove();
             window.URL.revokeObjectURL(url);
-        } catch {
-            alert('Erreur lors du téléchargement du fichier.');
+        } catch (err: any) {
+            // « Erreur lors du téléchargement » ne disait pas si le fichier
+            // manquait, si l'accès était refusé ou si le serveur était
+            // injoignable — trois causes, trois gestes différents.
+            // La réponse est un blob (responseType: 'blob') : il faut le lire
+            // en texte pour retrouver le message du serveur.
+            let raison = '';
+            const statut = err?.response?.status;
+            try {
+                const corps = err?.response?.data;
+                if (corps instanceof Blob) raison = JSON.parse(await corps.text())?.detail || '';
+                else raison = corps?.detail || '';
+            } catch { /* réponse illisible : on retombe sur le statut */ }
+
+            if (!statut) showError("Serveur injoignable — le sujet n'a pas pu être demandé.");
+            else if (statut === 404) showError(raison || "Ce sujet n'a aucun fichier sur le serveur.");
+            else if (statut === 403) showError(raison || "Vous n'avez pas accès à ce sujet.");
+            else showError(raison || `Téléchargement refusé (erreur ${statut}).`);
         }
     };
 
