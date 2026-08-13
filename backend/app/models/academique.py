@@ -48,6 +48,10 @@ class Utilisateur(Base):
     numero_cni = Column(String(50), nullable=True)
     created_date = Column(DateTime, server_default=func.now())
 
+    __table_args__ = (
+        Index("ix_utilisateurs_etablissement", 'etablissement_id'),
+    )
+
 
 # ============================================================================
 # MODULE 1 : STRUCTURE INSTITUTIONNELLE
@@ -389,6 +393,10 @@ class Enseignant(Base):
     etablissement = relationship("Etablissement", back_populates="enseignants")
     affectations = relationship("Affectation", back_populates="enseignant")
 
+    __table_args__ = (
+        Index("ix_enseignants_etab_statut", 'etablissement_id', 'statut'),
+    )
+
 
 class Matiere(Base):
     __tablename__ = "ss_matieres"
@@ -463,6 +471,50 @@ class Affectation(Base):
     statut = Column(String(20), default="ACTIVE")
 
     enseignant = relationship("Enseignant", back_populates="affectations")
+
+
+class Seance(Base):
+    """Séance de cours : classe + matière + enseignant + date + créneau,
+    ancre de l'appel pédagogique. Distincte de PresenceAgent (badge
+    physique) — un enseignant peut être PRESENT au badge et en retard sur
+    SA séance : deux faits jamais fusionnés. OWNERSHIP via Classe, même
+    convention que CreneauEmploi/Affectation/Evaluation (voir
+    docs/MULTI_ECOLES_REGLES_DEV.md §5) — pas de colonne etablissement_id
+    propre."""
+    __tablename__ = "ss_seances"
+    seance_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    creneau_id = Column(Integer, ForeignKey("ss_creneaux_emploi.creneau_id"), nullable=True)
+    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    # Enseignant PRÉVU (snapshot à la génération depuis le créneau, jamais
+    # réécrit après coup) vs RÉEL (posé à "Commencer" ; diffère du prévu
+    # seulement si un remplaçant a été affecté via PUT /remplacer).
+    enseignant_prevu_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    enseignant_reel_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    date_seance = Column(Date, nullable=False)
+    heure_debut_prevue = Column(String(5), nullable=False)  # "08:00"
+    heure_fin_prevue = Column(String(5), nullable=False)
+    heure_debut_reelle = Column(DateTime, nullable=True)
+    heure_fin_reelle = Column(DateTime, nullable=True)
+    salle = Column(String(50), nullable=True)
+    statut = Column(String(20), default="PREVUE", nullable=False)
+    # PREVUE, EN_COURS, EFFECTUEE, ANNULEE, REPORTEE, REMPLACEE, NON_EFFECTUEE
+    motif_statut = Column(String(300), nullable=True)
+    # Dénormalisé à "Terminer" (recalculé depuis Presence.seance_id) pour que
+    # l'historique et le dashboard admin n'aient pas à recompter à l'affichage.
+    appel_fait = Column(String(1), default="N", nullable=False)
+    appel_fait_le = Column(DateTime, nullable=True)
+    nb_presents = Column(Integer, nullable=True)
+    nb_absents = Column(Integer, nullable=True)
+    nb_retards = Column(Integer, nullable=True)
+    created_date = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_by = Column(String(100), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("creneau_id", "date_seance", name="uq_seance_creneau_date"),
+    )
 
 
 class Inscription(Base):
@@ -758,6 +810,11 @@ class Facture(Base):
 
     echeances = relationship("EcheanceFacture", backref="facture", cascade="all, delete-orphan")
 
+    __table_args__ = (
+        Index("ix_factures_inscription", 'inscription_id'),
+        Index("ix_factures_annee_statut", 'annee_id', 'statut'),
+    )
+
 
 class EcheanceFacture(Base):
     __tablename__ = "ss_echeances_factures"
@@ -768,6 +825,11 @@ class EcheanceFacture(Base):
     montant_attendu = Column(Numeric(12, 2), nullable=False)
     montant_paye = Column(Numeric(12, 2), default=0)
     statut = Column(String(20), default="EN_ATTENTE") # EN_ATTENTE, PARTIELLEMENT_PAYEE, PAYEE, EN_RETARD
+
+    __table_args__ = (
+        Index("ix_echeances_facture_statut", 'facture_id', 'statut'),
+        Index("ix_echeances_statut_date_limite", 'statut', 'date_limite'),
+    )
 
 
 class Paiement(Base):
@@ -787,6 +849,11 @@ class Paiement(Base):
     motif_annulation = Column(String(500), nullable=True)
     created_by = Column(String(100))
     created_date = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_paiements_facture", 'facture_id'),
+        Index("ix_paiements_annee_date", 'annee_id', 'date_paiement'),
+    )
 
 
 class Depense(Base):
@@ -808,6 +875,10 @@ class Depense(Base):
     eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=True)
     departement = Column(String(100), nullable=True)
 
+    __table_args__ = (
+        Index("ix_depenses_etab_annee", 'etablissement_id', 'annee_id'),
+    )
+
 
 # ============================================================================
 # MODULE 5 : VIE SCOLAIRE
@@ -822,10 +893,18 @@ class Presence(Base):
     statut_presence = Column(String(20), nullable=False)
     est_justifie = Column(String(1), default="N")
     motif = Column(String(300))
+    # Séance pédagogique (matière + enseignant) dont cette présence relève —
+    # NULL = ligne historique/legacy (appel de classe, saisie admin en
+    # masse, sync offline) : jamais backfillée, jamais de matière inventée.
+    seance_id = Column(Integer, ForeignKey("ss_seances.seance_id"), nullable=True)
     # Module offline-first (sync.py) : détection de conflit à la resynchronisation
     # (Last-Write-Wins comparé à `base_updated_at` envoyé par le client).
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     updated_by = Column(String(100), nullable=True)
+
+    __table_args__ = (
+        Index("ix_presences_inscription_date", 'inscription_id', 'date_presence'),
+    )
 
 
 class Incident(Base):
@@ -839,6 +918,11 @@ class Incident(Base):
     description = Column(Text, nullable=False)
     signale_par = Column(String(100), nullable=False)
     statut = Column(String(20), default="SIGNALE")
+
+    __table_args__ = (
+        Index("ix_incidents_etablissement", 'etablissement_id'),
+        Index("ix_incidents_eleve", 'eleve_id'),
+    )
 
 
 # ============================================================================

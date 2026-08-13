@@ -1,12 +1,13 @@
 """
 SMARTSCHOOL API — Routes Enseignants (CRUD complet + Emploi du Temps + Affectations)
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
 from typing import List, Optional
 from app.core.database import get_db
 from app.core.auth import require_etablissement
+from app.core.annee_lock import resolve_annee_id
 from app.core.security import hash_password
 from app.core.matricules import PREFIXE_ENSEIGNANT, generer_matricule
 from app.core.identifiants import exiger_identifiants_libres
@@ -34,6 +35,7 @@ def _enseignant_ou_404(db: Session, enseignant_id: int, etablissement_id: int) -
 
 @router.get("", response_model=List[EnseignantOut])
 def list_enseignants(
+    response: Response,
     statut: Optional[str] = None,
     search: Optional[str] = None,
     skip: int = 0,
@@ -52,6 +54,11 @@ def list_enseignants(
             (Enseignant.prenom.ilike(f"%{search}%")) |
             (Enseignant.matricule.ilike(f"%{search}%"))
         )
+    # X-Total-Count : le frontend enseignants/page.tsx paginait avant sur un
+    # lot fixe de 50 (sans jamais connaître le vrai total), rendant tout ce
+    # qui dépasse la 5e page invisible malgré un pagineur qui laissait croire
+    # le contraire.
+    response.headers["X-Total-Count"] = str(query.count())
     return query.order_by(Enseignant.nom).offset(skip).limit(limit).all()
 
 
@@ -79,7 +86,7 @@ def get_enseignant(enseignant_id: int, db: Session = Depends(get_db), etablissem
 
 
 @router.get("/{enseignant_id}/affectations")
-def get_affectations(enseignant_id: int, annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def get_affectations(enseignant_id: int, annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     _enseignant_ou_404(db, enseignant_id, etablissement_id)
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
     results = db.query(
@@ -129,7 +136,7 @@ def get_affectations(enseignant_id: int, annee_id: Optional[int] = None, db: Ses
 # ================================================================
 
 @router.get("/{enseignant_id}/emploi-du-temps")
-def get_emploi_enseignant(enseignant_id: int, annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def get_emploi_enseignant(enseignant_id: int, annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Retourne l'emploi du temps personnel d'un enseignant (grille semaine)."""
     _enseignant_ou_404(db, enseignant_id, etablissement_id)
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
@@ -166,7 +173,7 @@ def get_emploi_enseignant(enseignant_id: int, annee_id: Optional[int] = None, db
 # ================================================================
 
 @router.get("/{enseignant_id}/dashboard-stats")
-def get_enseignant_stats(enseignant_id: int, annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def get_enseignant_stats(enseignant_id: int, annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Statistiques agrégées de l'enseignant pour son profil/dashboard."""
     _enseignant_ou_404(db, enseignant_id, etablissement_id)
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
@@ -455,7 +462,7 @@ def delete_enseignant(enseignant_id: int, db: Session = Depends(get_db), etablis
 # ================================================================
 
 @router.get("/salle-des-profs/affectations-globales")
-def get_affectations_globales(annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def get_affectations_globales(annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Retourne toutes les affectations de l'année POUR CET ÉTABLISSEMENT —
     format tableau avec enseignant, classe, matière.
 
@@ -595,7 +602,7 @@ def get_classes_avec_matieres(db: Session = Depends(get_db), etablissement_id: i
 
 
 @router.get("/salle-des-profs/stats")
-def get_salle_des_profs_stats(annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def get_salle_des_profs_stats(annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Statistiques de la Salle des Profs POUR CET ÉTABLISSEMENT.
 
     Avant le Lot 8, tous ces agrégats (nombre d'enseignants, affectations,

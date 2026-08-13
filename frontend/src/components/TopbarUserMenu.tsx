@@ -41,34 +41,27 @@ export default function TopbarUserMenu() {
                 id="topbar-user-menu-btn"
                 onClick={() => setDropdownOpen(!dropdownOpen)}
                 style={{
-                    display: 'flex', alignItems: 'center', gap: '10px',
+                    display: 'flex', alignItems: 'center', gap: '8px',
                     background: 'none', border: 'none', cursor: 'pointer',
-                    padding: '6px 10px', borderRadius: '12px',
+                    padding: '6px 8px', borderRadius: '12px',
                     transition: 'background 0.2s ease',
                 }}
                 onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.04)'}
                 onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                title={displayName}
             >
-                {/* Avatar initiales */}
+                {/* Avatar initiales uniquement */}
                 <div style={{
-                    width: '38px', height: '38px', borderRadius: '12px',
+                    width: '36px', height: '36px', borderRadius: '10px',
                     background: 'linear-gradient(135deg, var(--brand-primary), var(--brand-secondary))',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'white', fontSize: '14px', fontWeight: 700,
+                    color: 'white', fontSize: '13px', fontWeight: 800,
                     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)',
+                    flexShrink: 0,
                 }}>
                     {initials}
                 </div>
-                {/* Nom + rôle */}
-                <div style={{ textAlign: 'left' }}>
-                    <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
-                        {displayName}
-                    </p>
-                    <p style={{ margin: 0, fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-                        {displayRole}
-                    </p>
-                </div>
-                <ChevronDown size={14} color="var(--text-muted)" style={{
+                <ChevronDown size={13} color="var(--text-muted)" style={{
                     transition: 'transform 0.2s ease',
                     transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0)',
                 }} />

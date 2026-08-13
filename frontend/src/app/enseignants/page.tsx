@@ -113,31 +113,55 @@ export default function EnseignantsPage() {
     const [previewEns, setPreviewEns] = useState<Enseignant | null>(null);
     const [badgeEns, setBadgeEns] = useState<Enseignant | null>(null);
     const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+    const [total, setTotal] = useState(0);
+    const [counts, setCounts] = useState({ total: 0, actifs: 0, vacataires: 0 });
     const pageSize = 10;
 
+    // Paginée + recherchée côté serveur (le backend le supportait déjà,
+    // seule cette page ne l'utilisait pas) — avant, un seul lot de 50
+    // enseignants était chargé une fois, puis re-tranché par 10 côté client :
+    // au-delà du 50e enseignant, aucune page suivante n'affichait quoi que
+    // ce soit malgré un pagineur qui laissait croire le contraire.
     const fetchData = () => {
-        api.get(`/api/enseignants?etablissement_id=${etablissementId}`)
-            .then(res => { setEnseignants(res.data); setLoading(false); })
+        setLoading(true);
+        const skip = (currentPage - 1) * pageSize;
+        api.get('/api/enseignants', {
+            params: { etablissement_id: etablissementId, search: search || undefined, skip, limit: pageSize },
+        })
+            .then(res => {
+                setEnseignants(res.data);
+                const totalCount = res.headers?.['x-total-count'];
+                setTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
+                setLoading(false);
+            })
             .catch(() => setLoading(false));
     };
 
-    useEffect(() => { fetchData(); }, []);
+    useEffect(() => { fetchData(); }, [etablissementId, currentPage, search]);
+
+    // Agrégats globaux (toute l'école, pas seulement la page affichée) —
+    // rechargés au montage et après une suppression, pas à chaque page.
+    const fetchCounts = () => {
+        if (!etablissementId) return;
+        api.get('/api/enseignants/count', { params: { etablissement_id: etablissementId } })
+            .then(res => setCounts(res.data))
+            .catch(() => {});
+    };
+    useEffect(() => { fetchCounts(); }, [etablissementId]);
+
+    // Recherche : revenir à la page 1 pour éviter une page vide après filtrage
+    useEffect(() => { setCurrentPage(1); }, [search]);
 
     const handleDelete = async (id: number) => {
         if (!window.confirm('Supprimer cet enseignant ?')) return;
-        try { await api.delete(`/api/enseignants/${id}`); fetchData(); }
+        try { await api.delete(`/api/enseignants/${id}`); fetchData(); fetchCounts(); }
         catch { alert('Erreur lors de la suppression'); }
     };
 
-    const filtered = enseignants.filter(e =>
-        e.nom.toLowerCase().includes(search.toLowerCase()) ||
-        e.prenom.toLowerCase().includes(search.toLowerCase()) ||
-        e.matricule.toLowerCase().includes(search.toLowerCase())
-    );
-    const totalPages = Math.ceil(filtered.length / pageSize);
-    const paginatedList = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-    const totalTeachers = enseignants.length;
-    const activeTeachers = enseignants.filter(e => e.statut === 'ACTIF').length;
+    const paginatedList = enseignants;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const totalTeachers = counts.total;
+    const activeTeachers = counts.actifs;
     const onLeave = totalTeachers - activeTeachers;
 
     const kpis = [

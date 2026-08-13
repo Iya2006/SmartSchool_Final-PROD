@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
 import html2canvas from 'html2canvas';
@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 import Pagination from '@/components/Pagination';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
+import MesSeances from './_components/MesSeances';
 import { startAutoSync } from '@/lib/syncEngine';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -108,7 +109,7 @@ export default function PortailEnseignant() {
     }, []);
 
     const [data, setData] = useState<DashData | null>(null);
-    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'seances'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
     const [edtLoading, setEdtLoading] = useState(false);
     const [selectedClass, setSelectedClass] = useState<AffectationData|null>(null);
@@ -133,6 +134,9 @@ export default function PortailEnseignant() {
     const [selectedTrimestre, setSelectedTrimestre] = useState<number | null>(null);
     const [selectedTypeEval, setSelectedTypeEval] = useState<number | null>(null);
     const [evalHistory, setEvalHistory] = useState<any[]>([]);
+    const [expandedNotesClasse, setExpandedNotesClasse] = useState<number | null>(null);
+    const [expandedPerfClasse, setExpandedPerfClasse] = useState<number | null>(null);
+    const [expandedNotesAff, setExpandedNotesAff] = useState<number | null>(null); // for Mes Affectations
     const [showEvalHistory, setShowEvalHistory] = useState(false);
 
     // ── Eval Detail Modal state ──
@@ -863,7 +867,8 @@ export default function PortailEnseignant() {
                         { key: 'emploi' as const, label: 'Emploi du Temps', icon: Calendar },
                         { key: 'classes' as const, label: 'Mes Classes', icon: Users },
                         { key: 'notes' as const, label: 'Saisie Notes', icon: FileText },
-                        { key: 'appel' as const, label: 'Appel', icon: ClipboardList },
+                        { key: 'seances' as const, label: 'Mes Séances', icon: Clock },
+                        { key: 'appel' as const, label: 'Appel (classe)', icon: ClipboardList },
                         { key: 'messages' as const, label: 'Messages', icon: MailIcon },
                         { key: 'devoirs' as const, label: 'Devoirs', icon: BookOpen },
                         { key: 'documents' as const, label: 'Documents & Partages', icon: FileText },
@@ -1099,27 +1104,45 @@ export default function PortailEnseignant() {
                                     </div>
                                     <div style={{ padding: '16px 20px' }}>
                                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '12px' }}>
-                                            {affectations.map((a, i) => {
+                                            {uniqueClasses.map((uCls, i) => {
                                                 const c = getSlotColor(i);
+                                                const classAffs = affectations.filter(a => a.classe_id === uCls.classe_id);
+                                                const isExpanded = expandedNotesAff === uCls.classe_id;
                                                 return (
-                                                    <div key={a.affectation_id} style={{
-                                                        padding: '18px', borderRadius: '16px', background: c.bg,
-                                                        borderLeft: `4px solid ${c.border}`, transition: 'all 0.2s',
-                                                    }}
-                                                    onMouseOver={e => e.currentTarget.style.transform = 'translateY(-2px)'}
-                                                    onMouseOut={e => e.currentTarget.style.transform = ''}>
-                                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                    <div key={uCls.classe_id} style={{ borderRadius: '16px', overflow: 'hidden', border: `1px solid ${c.border}30`, background: 'white', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                                                        <div onClick={() => setExpandedNotesAff(isExpanded ? null : uCls.classe_id)}
+                                                            style={{ padding: '16px 20px', background: `linear-gradient(135deg, ${c.border}18, ${c.bg})`, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: isExpanded ? `1px solid ${c.border}30` : 'none' }}>
                                                             <div>
-                                                                <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: c.text }}>{a.matiere}</p>
-                                                                <p style={{ margin: '4px 0 0', fontSize: '12px', color: c.text, opacity: 0.7, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                                    <MapPin size={11} /> {a.classe} • {a.heures_semaine}h/sem • Coeff {a.coefficient}
-                                                                </p>
+                                                                <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: c.text }}>{uCls.classe}</p>
+                                                                <p style={{ margin: '3px 0 0', fontSize: '11px', color: '#64748b' }}>{classAffs.length} matière{classAffs.length > 1 ? 's' : ''} • {uCls.effectif} élèves</p>
                                                             </div>
-                                                            <div style={{ textAlign: 'right' }}>
-                                                                <p style={{ margin: 0, fontSize: '22px', fontWeight: 900, color: c.text }}>{a.effectif}</p>
-                                                                <p style={{ margin: 0, fontSize: '10px', color: c.text, opacity: 0.6 }}>élèves</p>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                {classAffs.map((a, ai) => {
+                                                                    const ac = getSlotColor(affectations.indexOf(a));
+                                                                    return <span key={a.affectation_id} style={{ padding: '2px 7px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, background: ac.bg, color: ac.text }}>{a.matiere}</span>;
+                                                                })}
+                                                                <ChevronRight size={16} color={c.text} style={{ transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
                                                             </div>
                                                         </div>
+                                                        {isExpanded && (
+                                                            <div style={{ padding: '12px 20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                                {classAffs.map((a, ai) => {
+                                                                    const ac = getSlotColor(affectations.indexOf(a));
+                                                                    return (
+                                                                        <div key={a.affectation_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderRadius: '10px', background: ac.bg }}>
+                                                                            <div>
+                                                                                <p style={{ margin: 0, fontWeight: 700, fontSize: '13px', color: ac.text }}>{a.matiere}</p>
+                                                                                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#64748b' }}>{a.heures_semaine}h/sem • Coeff {a.coefficient}</p>
+                                                                            </div>
+                                                                            <div style={{ textAlign: 'right' }}>
+                                                                                <p style={{ margin: 0, fontSize: '20px', fontWeight: 900, color: ac.text }}>{a.effectif}</p>
+                                                                                <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>élèves</p>
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 );
                                             })}
@@ -1210,14 +1233,17 @@ export default function PortailEnseignant() {
                                         </div>
                                         <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Répartition par Classe</h3>
                                     </div>
-                                    {affectations.map((a, i) => {
+                                    {uniqueClasses.map((uCls, i) => {
                                         const c = getSlotColor(i);
-                                        const pct = stats.total_heures > 0 ? Math.round((a.heures_semaine / stats.total_heures) * 100) : 0;
+                                        const classAffs = affectations.filter(a => a.classe_id === uCls.classe_id);
+                                        const classHeures = classAffs.reduce((sum, a) => sum + a.heures_semaine, 0);
+                                        const pct = stats.total_heures > 0 ? Math.round((classHeures / stats.total_heures) * 100) : 0;
+                                        const matieresList = classAffs.map(a => a.matiere).join(', ');
                                         return (
-                                            <div key={a.affectation_id} style={{ marginBottom: '14px' }}>
+                                            <div key={uCls.classe_id} style={{ marginBottom: '14px' }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                                                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{a.classe} — {a.matiere}</span>
-                                                    <span style={{ fontSize: '12px', fontWeight: 700, color: c.border }}>{a.heures_semaine}h ({pct}%)</span>
+                                                    <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{uCls.classe} <span style={{fontSize: '11px', color: '#94a3b8', fontWeight: 400}}>({matieresList})</span></span>
+                                                    <span style={{ fontSize: '12px', fontWeight: 700, color: c.border }}>{classHeures}h ({pct}%)</span>
                                                 </div>
                                                 <div style={{ height: '8px', borderRadius: '4px', background: '#f1f5f9', overflow: 'hidden' }}>
                                                     <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8, delay: i * 0.1 }}
@@ -1236,22 +1262,50 @@ export default function PortailEnseignant() {
                                         </div>
                                         <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Notes Saisies</h3>
                                     </div>
-                                    {affectations.map((a, i) => {
+                                    {uniqueClasses.map((uCls, i) => {
                                         const c = getSlotColor(i);
+                                        const classAffs = affectations.filter(a => a.classe_id === uCls.classe_id);
+                                        const totalNotes = classAffs.reduce((sum, a) => sum + a.nb_notes, 0);
+                                        const matieresList = classAffs.map(a => a.matiere).join(', ');
+                                        const isExpanded = expandedNotesClasse === uCls.classe_id;
                                         return (
-                                            <div key={a.affectation_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 0', borderBottom: i < affectations.length - 1 ? '1px solid #f8fafc' : 'none' }}>
-                                                <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: c.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.border, fontWeight: 800, fontSize: '14px' }}>
-                                                    {a.nb_notes}
+                                            <div key={uCls.classe_id} style={{ borderBottom: i < uniqueClasses.length - 1 ? '1px solid #f8fafc' : 'none' }}>
+                                                <div onClick={() => setExpandedNotesClasse(isExpanded ? null : uCls.classe_id)}
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 0', cursor: 'pointer' }}
+                                                    onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'}
+                                                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                                                    <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: c.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', color: c.border, fontWeight: 800, fontSize: '14px' }}>
+                                                        {totalNotes}
+                                                    </div>
+                                                    <div style={{ flex: 1 }}>
+                                                        <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{uCls.classe}</p>
+                                                        <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#94a3b8' }}>{matieresList} • {uCls.effectif} élèves</p>
+                                                    </div>
+                                                    <span style={{
+                                                        padding: '4px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                                                        background: totalNotes > 0 ? '#d1fae5' : '#fee2e2',
+                                                        color: totalNotes > 0 ? '#059669' : '#dc2626',
+                                                    }}>{totalNotes > 0 ? `${totalNotes} notes` : 'Aucune'}</span>
+                                                    <ChevronRight size={14} color='#94a3b8' style={{ transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s', flexShrink: 0 }} />
                                                 </div>
-                                                <div style={{ flex: 1 }}>
-                                                    <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{a.classe}</p>
-                                                    <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#94a3b8' }}>{a.matiere} • {a.effectif} élèves</p>
-                                                </div>
-                                                <span style={{
-                                                    padding: '4px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
-                                                    background: a.nb_notes > 0 ? '#d1fae5' : '#fee2e2',
-                                                    color: a.nb_notes > 0 ? '#059669' : '#dc2626',
-                                                }}>{a.nb_notes > 0 ? `${a.nb_notes} notes` : 'Aucune'}</span>
+                                                {isExpanded && (
+                                                    <div style={{ paddingLeft: '54px', paddingBottom: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                        {classAffs.map(a => (
+                                                            <div key={a.affectation_id} 
+                                                                onClick={() => { loadClassForNotes(a); setActiveTab('notes'); }}
+                                                                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: '8px', background: '#f8fafc', cursor: 'pointer', transition: 'background 0.2s' }}
+                                                                onMouseEnter={e => e.currentTarget.style.background = '#f1f5f9'}
+                                                                onMouseLeave={e => e.currentTarget.style.background = '#f8fafc'}>
+                                                                <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>{a.matiere}</span>
+                                                                <span style={{
+                                                                    padding: '2px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                                                                    background: a.nb_notes > 0 ? '#d1fae5' : '#fef2f2',
+                                                                    color: a.nb_notes > 0 ? '#059669' : '#dc2626'
+                                                                }}>{a.nb_notes > 0 ? `${a.nb_notes} note${a.nb_notes > 1 ? 's' : ''}` : 'Aucune'}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </div>
                                         );
                                     })}
@@ -1282,32 +1336,64 @@ export default function PortailEnseignant() {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {affectations.map((a, i) => {
+                                            {uniqueClasses.map((uCls, i) => {
                                                 const c = getSlotColor(i);
+                                                const classAffs = affectations.filter(a => a.classe_id === uCls.classe_id);
+                                                const isExpanded = expandedPerfClasse === uCls.classe_id;
                                                 return (
-                                                    <tr key={a.affectation_id} style={{ borderBottom: '1px solid #f1f5f9' }}
-                                                        onMouseEnter={ev => ev.currentTarget.style.background = '#fafaff'}
-                                                        onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}>
-                                                        <td style={{ padding: '14px 20px' }}>
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: c.border, flexShrink: 0 }} />
-                                                                <span style={{ fontWeight: 700, color: '#1e293b' }}>{a.classe}</span>
-                                                            </div>
-                                                        </td>
-                                                        <td style={{ padding: '14px 20px' }}>
-                                                            <span style={{ padding: '4px 12px', borderRadius: '8px', background: c.bg, color: c.text, fontSize: '12px', fontWeight: 600 }}>{a.matiere}</span>
-                                                        </td>
-                                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#3b82f6' }}>{a.effectif}</td>
-                                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 600 }}>{a.heures_semaine}h</td>
-                                                        <td style={{ padding: '14px 16px', textAlign: 'center' }}>
-                                                            <span style={{
-                                                                padding: '4px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                                                                background: a.nb_notes > 0 ? '#f0fdf4' : '#fef2f2',
-                                                                color: a.nb_notes > 0 ? '#10b981' : '#ef4444',
-                                                            }}>{a.nb_notes}</span>
-                                                        </td>
-                                                        <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 600 }}>{a.coefficient}</td>
-                                                    </tr>
+                                                    <React.Fragment key={uCls.classe_id}>
+                                                        <tr onClick={() => setExpandedPerfClasse(isExpanded ? null : uCls.classe_id)}
+                                                            style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: isExpanded ? '#f8faff' : 'transparent' }}
+                                                            onMouseEnter={ev => !isExpanded && (ev.currentTarget.style.background = '#fafaff')}
+                                                            onMouseLeave={ev => !isExpanded && (ev.currentTarget.style.background = 'transparent')}>
+                                                            <td style={{ padding: '14px 20px' }}>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                                                    <ChevronRight size={14} color={c.border} style={{ transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s', flexShrink: 0 }} />
+                                                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: c.border, flexShrink: 0 }} />
+                                                                    <span style={{ fontWeight: 700, color: '#1e293b' }}>{uCls.classe}</span>
+                                                                </div>
+                                                            </td>
+                                                            <td style={{ padding: '14px 20px' }}>
+                                                                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                                                    {classAffs.map(a => (
+                                                                        <span key={a.affectation_id} style={{ padding: '2px 8px', borderRadius: '6px', background: c.bg, color: c.text, fontSize: '11px', fontWeight: 600 }}>{a.matiere}</span>
+                                                                    ))}
+                                                                </div>
+                                                            </td>
+                                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 700, color: '#3b82f6' }}>{uCls.effectif}</td>
+                                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 600 }}>{classAffs.reduce((s,a) => s+a.heures_semaine,0)}h</td>
+                                                            <td style={{ padding: '14px 16px', textAlign: 'center' }}>
+                                                                <span style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: classAffs.reduce((s,a) => s+a.nb_notes,0) > 0 ? '#f0fdf4' : '#fef2f2', color: classAffs.reduce((s,a) => s+a.nb_notes,0) > 0 ? '#10b981' : '#ef4444' }}>{classAffs.reduce((s,a) => s+a.nb_notes,0)}</span>
+                                                            </td>
+                                                            <td style={{ padding: '14px 16px', textAlign: 'center', fontWeight: 600 }}>{classAffs.reduce((s,a) => s+(Number(a.coefficient)||0),0)}</td>
+                                                        </tr>
+                                                        {isExpanded && classAffs.map((a, ai) => {
+                                                            const ac = getSlotColor(affectations.indexOf(a));
+                                                            return (
+                                                                <tr key={a.affectation_id} 
+                                                                    onClick={() => { loadClassForNotes(a); setActiveTab('notes'); }}
+                                                                    style={{ background: '#fafafa', borderBottom: '1px solid #f1f5f9', cursor: 'pointer', transition: 'background 0.2s' }}
+                                                                    onMouseEnter={ev => ev.currentTarget.style.background = '#f1f5f9'}
+                                                                    onMouseLeave={ev => ev.currentTarget.style.background = '#fafafa'}>
+                                                                    <td style={{ padding: '10px 20px 10px 44px', fontSize: '12px', color: '#64748b' }}>
+                                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                                            <div style={{ width: '4px', height: '4px', borderRadius: '50%', background: ac.border, flexShrink: 0 }} />
+                                                                            <span style={{ fontWeight: 600, color: '#475569' }}></span>
+                                                                        </div>
+                                                                    </td>
+                                                                    <td style={{ padding: '10px 16px' }}>
+                                                                        <span style={{ padding: '3px 10px', borderRadius: '6px', background: ac.bg, color: ac.text, fontSize: '12px', fontWeight: 700 }}>{a.matiere}</span>
+                                                                    </td>
+                                                                    <td style={{ padding: '10px 16px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>{uCls.effectif}</td>
+                                                                    <td style={{ padding: '10px 16px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>{a.heures_semaine}h</td>
+                                                                    <td style={{ padding: '10px 16px', textAlign: 'center' }}>
+                                                                        <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: a.nb_notes > 0 ? '#d1fae5' : '#fef2f2', color: a.nb_notes > 0 ? '#059669' : '#dc2626' }}>{a.nb_notes}</span>
+                                                                    </td>
+                                                                    <td style={{ padding: '10px 16px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>{a.coefficient}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </React.Fragment>
                                                 );
                                             })}
                                         </tbody>
@@ -1384,7 +1470,7 @@ export default function PortailEnseignant() {
                                                             {h}<br /><span style={{ fontSize: '10px' }}>{endH}</span>
                                                         </td>
                                                         {JOURS.map(j => {
-                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut === h);
+                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut.startsWith(h));
                                                             if (!slot) return <td key={j} style={{ padding: '4px' }} />;
                                                             const ci = Math.max(0, affectations.findIndex(a => a.classe === slot.classe && a.matiere === slot.matiere));
                                                             const colors = getSlotColor(ci);
@@ -1417,28 +1503,33 @@ export default function PortailEnseignant() {
                             {!selectedClass ? (
                                 /* Class selection grid */
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '16px' }}>
-                                    {affectations.map((a, i) => {
+                                    {uniqueClasses.map((uCls, i) => {
                                         const c = getSlotColor(i);
+                                        const classAffs = affectations.filter(x => x.classe_id === uCls.classe_id);
+                                        const matieresList = classAffs.map(x => x.matiere).join(', ');
+                                        const totalHeures = classAffs.reduce((sum, x) => sum + x.heures_semaine, 0);
+                                        const totalCoeff = classAffs.reduce((sum, x) => sum + (Number(x.coefficient) || 0), 0);
+
                                         return (
-                                            <motion.div key={a.affectation_id} whileHover={{ scale: 1.02, y: -3 }}
-                                                onClick={() => loadClassEleves(a)}
+                                            <motion.div key={uCls.affectation_id} whileHover={{ scale: 1.02, y: -3 }}
+                                                onClick={() => loadClassEleves(uCls)}
                                                 style={{ background: 'white', borderRadius: '18px', overflow: 'hidden', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', border: '1px solid #f1f5f9', transition: 'all 0.2s' }}>
                                                 <div style={{ background: `linear-gradient(135deg, ${c.border}, ${c.text})`, padding: '20px', color: 'white' }}>
-                                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>{a.classe}</h3>
-                                                    <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.8 }}>{a.matiere}</p>
+                                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>{uCls.classe}</h3>
+                                                    <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.8 }}>{matieresList}</p>
                                                 </div>
                                                 <div style={{ padding: '16px 20px' }}>
                                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center' }}>
                                                         <div>
-                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{a.effectif}</p>
+                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{uCls.effectif}</p>
                                                             <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>Élèves</p>
                                                         </div>
                                                         <div>
-                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{a.heures_semaine}</p>
+                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{totalHeures}</p>
                                                             <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>h/sem</p>
                                                         </div>
                                                         <div>
-                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{a.coefficient}</p>
+                                                            <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{totalCoeff}</p>
                                                             <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>Coeff</p>
                                                         </div>
                                                     </div>
@@ -1544,24 +1635,51 @@ export default function PortailEnseignant() {
                                     <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Sélectionnez une classe, nommez l&apos;évaluation, puis saisissez les notes</p>
                                 </div>
                                 <div style={{ padding: '20px 24px' }}>
-                                    {/* Choix de la classe */}
-                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '20px' }}>
-                                        {affectations.map((a, i) => {
-                                            const c = getSlotColor(i);
-                                            const isSelected = selectedClass?.affectation_id === a.affectation_id;
-                                            return (
-                                                <button key={a.affectation_id} onClick={() => loadClassForNotes(a)}
-                                                    style={{
-                                                        padding: '10px 20px', borderRadius: '12px', border: 'none', cursor: 'pointer',
-                                                        background: isSelected ? `linear-gradient(135deg, ${c.border}, ${c.text})` : c.bg,
-                                                        color: isSelected ? 'white' : c.text, fontWeight: 700, fontSize: '13px',
-                                                        boxShadow: isSelected ? `0 4px 12px ${c.border}40` : 'none', transition: 'all 0.2s',
-                                                    }}>
-                                                    {a.classe} — {a.matiere}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
+                                    {/* Choix de la classe / matière — card grid */}
+                                    {!selectedClass ? (
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+                                            {uniqueClasses.map((uCls, i) => {
+                                                const c = getSlotColor(i);
+                                                const classAffs = affectations.filter(a => a.classe_id === uCls.classe_id);
+                                                const totalNotes = classAffs.reduce((s, a) => s + a.nb_notes, 0);
+                                                const totalHeures = classAffs.reduce((s, a) => s + a.heures_semaine, 0);
+                                                return (
+                                                    <div key={uCls.classe_id} style={{ background: 'white', borderRadius: '18px', overflow: 'hidden', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', border: '1px solid #f1f5f9', transition: 'all 0.2s' }}
+                                                        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)'; }}
+                                                        onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)'; }}>
+                                                        <div style={{ background: `linear-gradient(135deg, ${c.border}, ${c.text})`, padding: '18px 20px' }}>
+                                                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: 'white' }}>{uCls.classe}</h3>
+                                                            <p style={{ margin: '4px 0 0', fontSize: '12px', color: 'rgba(255,255,255,0.8)' }}>{classAffs.length} matière{classAffs.length > 1 ? 's' : ''} • {uCls.effectif} élèves</p>
+                                                        </div>
+                                                        <div style={{ padding: '14px 20px' }}>
+                                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '12px' }}>
+                                                                {classAffs.map(a => {
+                                                                    const ac = getSlotColor(affectations.indexOf(a));
+                                                                    return (
+                                                                        <button key={a.affectation_id} onClick={() => loadClassForNotes(a)}
+                                                                            style={{ padding: '6px 14px', borderRadius: '20px', border: `1.5px solid ${ac.border}`, background: ac.bg, color: ac.text, fontWeight: 700, fontSize: '12px', cursor: 'pointer', transition: 'all 0.15s' }}
+                                                                            onMouseEnter={e => { e.currentTarget.style.background = ac.border; e.currentTarget.style.color = 'white'; }}
+                                                                            onMouseLeave={e => { e.currentTarget.style.background = ac.bg; e.currentTarget.style.color = ac.text; }}>
+                                                                            {a.matiere}
+                                                                        </button>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8' }}>
+                                                                <span>{totalNotes} note{totalNotes > 1 ? 's' : ''} saisie{totalNotes > 1 ? 's' : ''}</span>
+                                                                <span>{totalHeures}h/sem</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (<div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <button onClick={() => setSelectedClass(null)} style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#475569', fontWeight: 600, fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                            ← Toutes les classes
+                                        </button>
+                                        <span style={{ fontWeight: 700, fontSize: '14px', color: '#1e293b' }}>{selectedClass.classe} — {selectedClass.matiere}</span>
+                                    </div>)}
 
                                     {selectedClass ? (
                                         <div>
@@ -1923,24 +2041,55 @@ export default function PortailEnseignant() {
                                     </div>
                                 </div>
                                 <div style={{ padding: '20px 24px' }}>
-                                    {/* Choix de la classe */}
-                                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '20px' }}>
-                                        {affectations.map((a, i) => {
-                                            const c = getSlotColor(i);
-                                            const isSelected = selectedClass?.affectation_id === a.affectation_id;
-                                            return (
-                                                <button key={a.affectation_id} onClick={() => loadClassForAppel(a)}
-                                                    style={{
-                                                        padding: '10px 20px', borderRadius: '12px', border: 'none', cursor: 'pointer',
-                                                        background: isSelected ? `linear-gradient(135deg, ${c.border}, ${c.text})` : c.bg,
-                                                        color: isSelected ? 'white' : c.text, fontWeight: 700, fontSize: '13px',
-                                                        boxShadow: isSelected ? `0 4px 12px ${c.border}40` : 'none', transition: 'all 0.2s',
-                                                    }}>
-                                                    {a.classe}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
+                                    {/* Class selection — card grid like Mes Classes */}
+                                    {!selectedClass ? (
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+                                            {uniqueClasses.map((uCls, i) => {
+                                                const c = getSlotColor(i);
+                                                const classAffs = affectations.filter(a => a.classe_id === uCls.classe_id);
+                                                const matieresList = classAffs.map(a => a.matiere).join(', ');
+                                                const totalHeures = classAffs.reduce((s, a) => s + a.heures_semaine, 0);
+                                                return (
+                                                    <div key={uCls.classe_id}
+                                                        onClick={() => loadClassForAppel(uCls)}
+                                                        style={{ background: 'white', borderRadius: '18px', overflow: 'hidden', cursor: 'pointer', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', border: '1px solid #f1f5f9', transition: 'all 0.2s' }}
+                                                        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)'; }}
+                                                        onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)'; }}>
+                                                        <div style={{ background: `linear-gradient(135deg, ${c.border}, ${c.text})`, padding: '18px 20px', color: 'white' }}>
+                                                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>{uCls.classe}</h3>
+                                                            <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>{matieresList}</p>
+                                                        </div>
+                                                        <div style={{ padding: '14px 20px' }}>
+                                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center', marginBottom: '12px' }}>
+                                                                <div>
+                                                                    <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{uCls.effectif}</p>
+                                                                    <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>Élèves</p>
+                                                                </div>
+                                                                <div>
+                                                                    <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{totalHeures}</p>
+                                                                    <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>h/sem</p>
+                                                                </div>
+                                                                <div>
+                                                                    <p style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: c.border }}>{classAffs.length}</p>
+                                                                    <p style={{ margin: 0, fontSize: '10px', color: '#94a3b8' }}>matières</p>
+                                                                </div>
+                                                            </div>
+                                                            <button style={{ width: '100%', padding: '8px', borderRadius: '10px', border: `1px solid ${c.border}`, background: c.bg, color: c.text, fontWeight: 700, fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                                                                Faire l’appel →
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <button onClick={() => setSelectedClass(null)} style={{ padding: '6px 14px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#475569', fontWeight: 600, fontSize: '12px', cursor: 'pointer' }}>
+                                                ← Toutes les classes
+                                            </button>
+                                            <span style={{ fontWeight: 700, fontSize: '14px', color: '#1e293b' }}>{selectedClass.classe}</span>
+                                        </div>
+                                    )}
 
                                     {selectedClass ? (
                                         <div>
@@ -2101,6 +2250,13 @@ export default function PortailEnseignant() {
                                     </div>
                                 )}
                             </div>
+                        </motion.div>
+                    )}
+
+                    {/* ──── MES SÉANCES TAB ──── */}
+                    {activeTab === 'seances' && (
+                        <motion.div key="seances" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                            <MesSeances enseignantId={ens.enseignant_id} primaryColor={primaryColor} accentColor={accentColor} affectations={affectations} />
                         </motion.div>
                     )}
 

@@ -4,7 +4,7 @@ Dashboard: emploi du temps, classes, eleves, notes, absences
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, or_
 from typing import Optional
 from pydantic import BaseModel
 from app.core.database import get_db

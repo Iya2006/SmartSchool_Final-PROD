@@ -9,7 +9,7 @@ from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import require_etablissement
 from app.models.academique import (
-    CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Cycle
+    CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Affectation, Cycle
 )
 
 router = APIRouter(prefix="/api/emploi-du-temps", tags=["Emploi du Temps"])
@@ -253,6 +253,14 @@ def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db), etablisse
         mat = db.query(Matiere).filter(Matiere.matiere_id == assoc.matiere_id).first()
         if not mat:
             continue
+        
+        aff = db.query(Affectation).filter(
+            Affectation.classe_id == classe_id,
+            Affectation.matiere_id == mat.matiere_id,
+            Affectation.statut == "ACTIVE"
+        ).first()
+        ens_id = aff.enseignant_id if aff else None
+
         nb = assoc.nb_heures_semaine or 1
         for _ in range(nb):
             slots_needed.append({
@@ -260,6 +268,7 @@ def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db), etablisse
                 "code": mat.code,
                 "libelle": mat.libelle,
                 "categorie": mat.categorie,
+                "enseignant_id": ens_id,
             })
 
     # Créneaux disponibles
@@ -279,6 +288,7 @@ def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db), etablisse
         creneau = CreneauEmploi(
             classe_id=classe_id,
             matiere_id=mat_info["matiere_id"],
+            enseignant_id=mat_info["enseignant_id"],
             jour=jour,
             heure_debut=hd,
             heure_fin=hf,

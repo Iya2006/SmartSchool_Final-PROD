@@ -1,9 +1,17 @@
 'use client';
 
+/**
+ * Sidebar — Navigation latérale principale de l'ERP SmartSchool.
+ *
+ * Modifications :
+ *  - Section "PORTAILS" supprimée (liens bloqués côté admin)
+ *  - Icônes profil/settings bas remplacés par une carte utilisateur moderne
+ */
+
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, Settings, User, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, Trophy, Building2, AlertTriangle } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
@@ -13,7 +21,7 @@ import styles from './Sidebar.module.css';
 export default function Sidebar() {
     const pathname = usePathname();
     const { etablissementNom, etablissementLogo } = useApp();
-    const { user } = useAuth();
+    const { user, logout } = useAuth();
     const { sidebarCollapsed } = useUI();
     const [unreadCount, setUnreadCount] = useState(0);
 
@@ -43,6 +51,10 @@ export default function Sidebar() {
         return () => document.removeEventListener('visibilitychange', handleVisibility);
     }, []);
 
+    const displayName = user ? `${user.prenom} ${user.nom}` : 'Administrateur';
+    const displayRole = user?.role || 'Superviseur ERP';
+    const initials = user ? `${user.prenom.charAt(0)}${user.nom.charAt(0)}` : 'AD';
+
     return (
         <nav id="sidebar" className={`${styles.sidebarWrapper} ${sidebarCollapsed ? styles.sidebarCollapsed : ''}`}>
 
@@ -62,7 +74,6 @@ export default function Sidebar() {
                         {etablissementNom}
                     </span>
                 </Link>
-
             </div>
 
             {/* Sidebar menu starts */}
@@ -135,6 +146,12 @@ export default function Sidebar() {
                         <Link href="/emploi-du-temps">
                             <Calendar size={18} className={styles.menuIcon} />
                             <span className={styles.menuText}>Emploi du Temps</span>
+                        </Link>
+                    </li>
+                    <li className={pathname.startsWith('/vie-scolaire/seances') ? styles.currentPage : ''}>
+                        <Link href="/vie-scolaire/seances">
+                            <Clock size={18} className={styles.menuIcon} />
+                            <span className={styles.menuText}>Séances (Appel)</span>
                         </Link>
                     </li>
                     <li className={pathname.startsWith('/evenements') ? styles.currentPage : ''}>
@@ -218,7 +235,7 @@ export default function Sidebar() {
                     </li>
 
                     <li className={styles.sidebarTitle}>
-                        <h6 className={styles.titleText}>FINANCE & ADMIN</h6>
+                        <h6 className={styles.titleText}>FINANCE &amp; ADMIN</h6>
                     </li>
                     <li className={pathname.startsWith('/comptabilite') ? styles.currentPage : ''}>
                         <Link href="/comptabilite">
@@ -260,17 +277,31 @@ export default function Sidebar() {
             </div>
             {/* Sidebar menu ends */}
 
-            {/* Sidebar settings starts */}
-            <div className={styles.sidebarSettings}>
-                <Link href="/profil" className={styles.settingsIcon} title="Profile">
-                    <User size={18} />
+            {/* ── Carte utilisateur moderne en bas ── */}
+            <div className={styles.sidebarUserCard}>
+                {/* Avatar + Infos — cliquables vers /profil */}
+                <Link href="/profil" style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, textDecoration: 'none' }}>
+                    {/* Avatar */}
+                    <div className={styles.userCardAvatar}>
+                        {initials}
+                    </div>
+                    {/* Infos nom + rôle */}
+                    <div className={styles.userCardInfo}>
+                        <p className={styles.userCardName}>{displayName}</p>
+                        <p className={styles.userCardRole}>{displayRole}</p>
+                    </div>
                 </Link>
-                <Link href="/parametres" className={styles.settingsIcon} title="Settings">
-                    <Settings size={18} />
-                </Link>
+                {/* Actions rapides */}
+                <div className={styles.userCardActions}>
+                    <button
+                        className={`${styles.userCardActionBtn} ${styles.userCardLogout}`}
+                        title="Se déconnecter"
+                        onClick={() => logout()}
+                    >
+                        <LogOut size={15} />
+                    </button>
+                </div>
             </div>
-            {/* Sidebar settings ends */}
-
         </nav>
     );
 }

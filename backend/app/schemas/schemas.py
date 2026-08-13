@@ -738,6 +738,10 @@ class DashboardKPI(BaseModel):
     total_recettes: float = 0
     total_depenses: float = 0
     taux_presence: float = 0
+    taux_absence: float = 0
+    taux_retard: float = 0
+    nb_classes_couvertes: int = 0
+    nb_seances_comptabilisees: int = 0
     incidents_mois: int = 0
     evaluations_prevues: int = 0
 

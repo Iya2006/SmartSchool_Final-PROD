@@ -4,6 +4,7 @@ import { useApp } from '@/context/AppContext';
 
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import Pagination from '@/components/Pagination';
 import {
     MessageCircle, ChevronRight, Loader2, Plus, Send, Eye, X, Calendar,
     CheckCircle2, AlertCircle, Users, Clock, BookOpen, Wand2, Check, XCircle,
@@ -138,6 +139,17 @@ function CommunicationAdminPageInner() {
             alert('Erreur lors du téléchargement du fichier.');
         }
     };
+
+    const [parentPage, setParentPage] = useState(1);
+    const PARENT_PAGE_SIZE = 50;
+
+    // Filter states for modal selects to prevent DOM crash with 4000+ items
+    const [modalParentSearch, setModalParentSearch] = useState('');
+    const [modalEleveSearch, setModalEleveSearch] = useState('');
+    const [modalParentPage, setModalParentPage] = useState(1);
+    const [modalElevePage, setModalElevePage] = useState(1);
+    const [isParentDropdownOpen, setIsParentDropdownOpen] = useState(false);
+    const [isEleveDropdownOpen, setIsEleveDropdownOpen] = useState(false);
 
     const loadAll = useCallback(async () => {
         try {
@@ -550,10 +562,10 @@ function CommunicationAdminPageInner() {
                         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
                             <div style={{ position: 'relative' }}>
                                 <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                                <input value={pmSearch} onChange={e => setPmSearch(e.target.value)} placeholder="Rechercher un parent..."
+                                <input value={pmSearch} onChange={e => { setPmSearch(e.target.value); setParentPage(1); }} placeholder="Rechercher un parent..."
                                     style={{ padding: '8px 12px 8px 32px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '12px', outline: 'none', width: '260px' }} />
                             </div>
-                            <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{parentsList.length} parent(s)</span>
+                            <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{parentsList.filter(p => `${p.prenom} ${p.nom} ${p.telephone}`.toLowerCase().includes(pmSearch.toLowerCase())).length} parent(s){pmSearch && ` sur ${parentsList.length}`}</span>
                         </div>
                         <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}>{parentMessages.length} message(s)</span>
                     </div>
@@ -566,7 +578,10 @@ function CommunicationAdminPageInner() {
                                 <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}><Users size={16} color="#059669" /> Répertoire Parents</h4>
                             </div>
                             <div style={{ overflowY: 'auto', flex: 1, padding: '8px' }}>
-                                {parentsList.filter(p => `${p.prenom} ${p.nom} ${p.telephone}`.toLowerCase().includes(pmSearch.toLowerCase())).map(p => (
+                                {parentsList
+                                    .filter(p => `${p.prenom} ${p.nom} ${p.telephone}`.toLowerCase().includes(pmSearch.toLowerCase()))
+                                    .slice((parentPage - 1) * PARENT_PAGE_SIZE, parentPage * PARENT_PAGE_SIZE)
+                                    .map(p => (
                                     <div key={p.parent_id} style={{
                                         padding: '12px', borderRadius: '12px', marginBottom: '6px', border: '1px solid var(--border-light)',
                                         cursor: 'pointer', transition: 'all 0.15s'
@@ -594,6 +609,9 @@ function CommunicationAdminPageInner() {
                                         )}
                                     </div>
                                 ))}
+                            </div>
+                            <div style={{ padding: '8px', borderTop: '1px solid var(--border-light)' }}>
+                                <Pagination page={parentPage} pageSize={PARENT_PAGE_SIZE} total={parentsList.filter(p => `${p.prenom} ${p.nom} ${p.telephone}`.toLowerCase().includes(pmSearch.toLowerCase())).length} onPageChange={setParentPage} />
                             </div>
                         </div>
 
@@ -787,11 +805,47 @@ function CommunicationAdminPageInner() {
                                     </select>
                                 )}
                                 {pmDestType === 'PARENT' && (
-                                    <select value={pmDestId || ''} onChange={e => setPmDestId(Number(e.target.value) || null)}
-                                        style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px' }}>
-                                        <option value="">— Choisir un parent —</option>
-                                        {parentsList.map(p => <option key={p.parent_id} value={p.parent_id}>{p.prenom} {p.nom} ({p.enfants.map(e => e.prenom).join(', ')})</option>)}
-                                    </select>
+                                    <div style={{ position: 'relative' }}>
+                                        <div onClick={() => setIsParentDropdownOpen(!isParentDropdownOpen)}
+                                            style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', cursor: 'pointer', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span>{pmDestId ? (() => {
+                                                const p = parentsList.find(x => x.parent_id === pmDestId);
+                                                return p ? `${p.prenom} ${p.nom}` : 'Parent sélectionné';
+                                            })() : '— Choisir un parent —'}</span>
+                                            <ChevronRight size={14} style={{ transform: isParentDropdownOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: '0.2s' }} />
+                                        </div>
+                                        {isParentDropdownOpen && (
+                                            <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid var(--border-light)', borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ padding: '8px', borderBottom: '1px solid var(--border-light)' }}>
+                                                    <input value={modalParentSearch} onChange={e => { setModalParentSearch(e.target.value); setModalParentPage(1); }} placeholder="Rechercher un parent..." autoFocus
+                                                        style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '12px', outline: 'none', boxSizing: 'border-box' }} />
+                                                </div>
+                                                <div style={{ maxHeight: '200px', overflowY: 'auto', padding: '4px' }}>
+                                                    {(() => {
+                                                        const filtered = parentsList.filter(p => `${p.prenom} ${p.nom}`.toLowerCase().includes(modalParentSearch.toLowerCase()));
+                                                        const paged = filtered.slice((modalParentPage - 1) * 50, modalParentPage * 50);
+                                                        if (paged.length === 0) return <div style={{ padding: '8px 12px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>Aucun résultat</div>;
+                                                        return paged.map(p => (
+                                                            <div key={p.parent_id} onClick={() => { setPmDestId(p.parent_id); setIsParentDropdownOpen(false); }}
+                                                                style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '6px' }}
+                                                                onMouseOver={e => e.currentTarget.style.background = '#f1f5f9'} onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
+                                                                <span style={{ fontWeight: 600 }}>{p.prenom} {p.nom}</span> <span style={{ fontSize: '11px', color: '#64748b' }}>({p.enfants.map(e => e.prenom).join(', ')})</span>
+                                                            </div>
+                                                        ));
+                                                    })()}
+                                                </div>
+                                                {parentsList.filter(p => `${p.prenom} ${p.nom}`.toLowerCase().includes(modalParentSearch.toLowerCase())).length > 50 && (
+                                                    <div style={{ padding: '8px', borderTop: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+                                                        <button onClick={() => setModalParentPage(Math.max(1, modalParentPage - 1))} disabled={modalParentPage === 1}
+                                                            style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: '1px solid #e2e8f0', background: modalParentPage === 1 ? '#f1f5f9' : '#fff', cursor: modalParentPage === 1 ? 'not-allowed' : 'pointer', color: modalParentPage === 1 ? '#94a3b8' : '#0f172a' }}>Précédent</button>
+                                                        <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Page {modalParentPage}</span>
+                                                        <button onClick={() => setModalParentPage(modalParentPage + 1)} disabled={modalParentPage * 50 >= parentsList.filter(p => `${p.prenom} ${p.nom}`.toLowerCase().includes(modalParentSearch.toLowerCase())).length}
+                                                            style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: '1px solid #e2e8f0', background: modalParentPage * 50 >= parentsList.filter(p => `${p.prenom} ${p.nom}`.toLowerCase().includes(modalParentSearch.toLowerCase())).length ? '#f1f5f9' : '#fff', cursor: modalParentPage * 50 >= parentsList.filter(p => `${p.prenom} ${p.nom}`.toLowerCase().includes(modalParentSearch.toLowerCase())).length ? 'not-allowed' : 'pointer', color: modalParentPage * 50 >= parentsList.filter(p => `${p.prenom} ${p.nom}`.toLowerCase().includes(modalParentSearch.toLowerCase())).length ? '#94a3b8' : '#0f172a' }}>Suivant</button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
                                 {pmDestType === 'ENSEIGNANT' && (
                                     <select value={pmDestId || ''} onChange={e => setPmDestId(Number(e.target.value) || null)}
@@ -801,11 +855,47 @@ function CommunicationAdminPageInner() {
                                     </select>
                                 )}
                                 {pmDestType === 'ELEVE' && (
-                                    <select value={pmDestId || ''} onChange={e => setPmDestId(Number(e.target.value) || null)}
-                                        style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px' }}>
-                                        <option value="">— Choisir un élève —</option>
-                                        {elevesList.map((el: any) => <option key={el.eleve_id} value={el.eleve_id}>{el.prenom} {el.nom} — {el.matricule} ({el.classe_code || 'N/A'})</option>)}
-                                    </select>
+                                    <div style={{ position: 'relative' }}>
+                                        <div onClick={() => setIsEleveDropdownOpen(!isEleveDropdownOpen)}
+                                            style={{ padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', cursor: 'pointer', background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span>{pmDestId ? (() => {
+                                                const el = elevesList.find((x: any) => x.eleve_id === pmDestId);
+                                                return el ? `${el.prenom} ${el.nom} — ${el.matricule}` : 'Élève sélectionné';
+                                            })() : '— Choisir un élève —'}</span>
+                                            <ChevronRight size={14} style={{ transform: isEleveDropdownOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: '0.2s' }} />
+                                        </div>
+                                        {isEleveDropdownOpen && (
+                                            <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 50, background: '#fff', border: '1px solid var(--border-light)', borderRadius: '10px', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                                                <div style={{ padding: '8px', borderBottom: '1px solid var(--border-light)' }}>
+                                                    <input value={modalEleveSearch} onChange={e => { setModalEleveSearch(e.target.value); setModalElevePage(1); }} placeholder="Rechercher un élève..." autoFocus
+                                                        style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '12px', outline: 'none', boxSizing: 'border-box' }} />
+                                                </div>
+                                                <div style={{ maxHeight: '200px', overflowY: 'auto', padding: '4px' }}>
+                                                    {(() => {
+                                                        const filtered = elevesList.filter((el: any) => `${el.prenom} ${el.nom} ${el.matricule}`.toLowerCase().includes(modalEleveSearch.toLowerCase()));
+                                                        const paged = filtered.slice((modalElevePage - 1) * 50, modalElevePage * 50);
+                                                        if (paged.length === 0) return <div style={{ padding: '8px 12px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>Aucun résultat</div>;
+                                                        return paged.map((el: any) => (
+                                                            <div key={el.eleve_id} onClick={() => { setPmDestId(el.eleve_id); setIsEleveDropdownOpen(false); }}
+                                                                style={{ padding: '8px 12px', fontSize: '13px', cursor: 'pointer', borderRadius: '6px' }}
+                                                                onMouseOver={e => e.currentTarget.style.background = '#f1f5f9'} onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
+                                                                <span style={{ fontWeight: 600 }}>{el.prenom} {el.nom}</span> <span style={{ fontSize: '11px', color: '#64748b' }}>— {el.matricule} ({el.classe_code || 'N/A'})</span>
+                                                            </div>
+                                                        ));
+                                                    })()}
+                                                </div>
+                                                {elevesList.filter((el: any) => `${el.prenom} ${el.nom} ${el.matricule}`.toLowerCase().includes(modalEleveSearch.toLowerCase())).length > 50 && (
+                                                    <div style={{ padding: '8px', borderTop: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+                                                        <button onClick={() => setModalElevePage(Math.max(1, modalElevePage - 1))} disabled={modalElevePage === 1}
+                                                            style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: '1px solid #e2e8f0', background: modalElevePage === 1 ? '#f1f5f9' : '#fff', cursor: modalElevePage === 1 ? 'not-allowed' : 'pointer', color: modalElevePage === 1 ? '#94a3b8' : '#0f172a' }}>Précédent</button>
+                                                        <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 600 }}>Page {modalElevePage}</span>
+                                                        <button onClick={() => setModalElevePage(modalElevePage + 1)} disabled={modalElevePage * 50 >= elevesList.filter((el: any) => `${el.prenom} ${el.nom} ${el.matricule}`.toLowerCase().includes(modalEleveSearch.toLowerCase())).length}
+                                                            style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: '1px solid #e2e8f0', background: modalElevePage * 50 >= elevesList.filter((el: any) => `${el.prenom} ${el.nom} ${el.matricule}`.toLowerCase().includes(modalEleveSearch.toLowerCase())).length ? '#f1f5f9' : '#fff', cursor: modalElevePage * 50 >= elevesList.filter((el: any) => `${el.prenom} ${el.nom} ${el.matricule}`.toLowerCase().includes(modalEleveSearch.toLowerCase())).length ? 'not-allowed' : 'pointer', color: modalElevePage * 50 >= elevesList.filter((el: any) => `${el.prenom} ${el.nom} ${el.matricule}`.toLowerCase().includes(modalEleveSearch.toLowerCase())).length ? '#94a3b8' : '#0f172a' }}>Suivant</button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
                                 {/* Type objet */}
                                 <div>

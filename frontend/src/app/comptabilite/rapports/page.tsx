@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '@/context/AppContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    Calendar, Printer, Download, ChevronRight, Loader2,
+    Calendar, Printer, Download, ChevronRight, ChevronDown, Loader2,
     FileText, CheckCircle2, TrendingUp, TrendingDown, Coins,
     Search, User, Landmark, BookOpen, AlertTriangle, ShieldCheck
 } from 'lucide-react';
@@ -47,6 +47,7 @@ export default function RapportsPage() {
     const [dataAnnuel, setDataAnnuel] = useState<any>(null);
     const [verifCloture, setVerifCloture] = useState<any>(null);
     const [clotureLoading, setClotureLoading] = useState(false);
+    const [expandedPaiementEleve, setExpandedPaiementEleve] = useState<string | null>(null);
 
     const fetchVerificationCloture = useCallback(async () => {
         try {
@@ -182,7 +183,6 @@ export default function RapportsPage() {
                 {[
                     { id: 'mensuel' as const, label: 'Rapport Mensuel' },
                     { id: 'annuel' as const, label: 'Rapport Annuel' },
-                    { id: 'eleve' as const, label: 'Fiche Élève' },
                     { id: 'cloture' as const, label: 'Clôture Annuelle' }
                 ].map(t => (
                     <button key={t.id} onClick={() => setTab(t.id)}
@@ -215,15 +215,7 @@ export default function RapportsPage() {
                                 {ANNEES.map(a => <option key={a} value={a}>Année civile {a}</option>)}
                             </select>
                         )}
-                        {tab === 'eleve' && (
-                            <div style={{ display: 'flex', gap: 8 }}>
-                                <input value={searchEleve} onChange={e => setSearchEleve(e.target.value)} placeholder="Nom ou matricule de l'élève"
-                                    style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, outline: 'none' }} />
-                                <button onClick={searchElevesData} style={{ padding: '8px 16px', borderRadius: 8, background: '#10b981', color: '#fff', border: 'none', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}>
-                                    Rechercher
-                                </button>
-                            </div>
-                        )}
+
                     </div>
                     
                     <div style={{ display: 'flex', gap: 10 }}>
@@ -302,35 +294,90 @@ export default function RapportsPage() {
                                     </table>
 
                                     <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: '#1e293b' }}>Historique chronologique des transactions</h3>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                                        <thead>
-                                            <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                                                <th style={{ padding: 10, textAlign: 'left' }}>Reçu</th>
-                                                <th style={{ padding: 10, textAlign: 'left' }}>Date</th>
-                                                <th style={{ padding: 10, textAlign: 'left' }}>Élève</th>
-                                                <th style={{ padding: 10, textAlign: 'left' }}>Classe</th>
-                                                <th style={{ padding: 10, textAlign: 'left' }}>Mode</th>
-                                                <th style={{ padding: 10, textAlign: 'right' }}>Montant</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {dataMois.paiements.map((p: any, i: number) => (
-                                                <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                                    <td style={{ padding: 10, fontFamily: 'monospace' }}>{p.numero_recu}</td>
-                                                    <td style={{ padding: 10 }}>{p.date_paiement}</td>
-                                                    <td style={{ padding: 10, fontWeight: 600 }}>{p.eleve_nom}</td>
-                                                    <td style={{ padding: 10 }}>{p.classe}</td>
-                                                    <td style={{ padding: 10 }}>{p.mode_paiement}</td>
-                                                    <td style={{ padding: 10, textAlign: 'right', fontWeight: 700, color: '#10b981' }}>{fmt(p.montant)}</td>
-                                                </tr>
-                                            ))}
-                                            {dataMois.paiements.length === 0 && (
-                                                <tr>
-                                                    <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#94a3b8' }}>Aucune transaction enregistrée</td>
-                                                </tr>
-                                            )}
-                                        </tbody>
-                                    </table>
+                                    {(() => {
+                                        if (!dataMois.paiements || dataMois.paiements.length === 0) {
+                                            return (
+                                                <div style={{ padding: 20, textAlign: 'center', color: '#94a3b8', background: 'white', borderRadius: 12, border: '1px solid #e2e8f0' }}>Aucune transaction enregistrée</div>
+                                            );
+                                        }
+
+                                        const grouped = dataMois.paiements.reduce((acc: any, p: any) => {
+                                            const key = p.eleve_nom + '|' + p.classe;
+                                            if (!acc[key]) acc[key] = [];
+                                            acc[key].push(p);
+                                            return acc;
+                                        }, {});
+
+                                        return (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                                {Object.entries(grouped).map(([key, paiementsGroup]: [string, any]) => {
+                                                    const isExpanded = expandedPaiementEleve === key;
+                                                    const mainP = paiementsGroup[0];
+                                                    const totalEleve = paiementsGroup.reduce((s: number, pt: any) => s + pt.montant, 0);
+
+                                                    return (
+                                                        <div key={key} style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', overflow: 'hidden' }}>
+                                                            <div 
+                                                                onClick={() => setExpandedPaiementEleve(isExpanded ? null : key)}
+                                                                style={{ padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', background: isExpanded ? '#f8fafc' : 'transparent', transition: 'background 0.2s' }}
+                                                            >
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                                    <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, color: '#475569' }}>
+                                                                        {mainP.eleve_nom.substring(0, 2).toUpperCase()}
+                                                                    </div>
+                                                                    <div>
+                                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                            <span style={{ fontWeight: 700, fontSize: '15px', color: '#1e293b' }}>{mainP.eleve_nom}</span>
+                                                                            <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '6px', background: '#e0f2fe', color: '#0369a1' }}>{mainP.classe}</span>
+                                                                        </div>
+                                                                        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#64748b' }}>
+                                                                            Dernier paiement : {mainP.date_paiement} ({mainP.mode_paiement})
+                                                                        </p>
+                                                                    </div>
+                                                                </div>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                                                                    <div style={{ textAlign: 'right' }}>
+                                                                        <span style={{ fontSize: '12px', color: '#94a3b8', display: 'block' }}>Total sur le mois</span>
+                                                                        <span style={{ fontWeight: 800, fontSize: '16px', color: '#10b981' }}>{fmt(totalEleve)}</span>
+                                                                    </div>
+                                                                    {paiementsGroup.length > 1 && (
+                                                                        <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '13px' }}>
+                                                                            {paiementsGroup.length} paiements {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+
+                                                            {(isExpanded || paiementsGroup.length === 1) && (
+                                                                <div style={{ background: '#f8fafc', padding: '16px 20px', borderTop: '1px solid #e2e8f0' }}>
+                                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                                                        <thead>
+                                                                            <tr style={{ borderBottom: '1px solid #cbd5e1' }}>
+                                                                                <th style={{ padding: '8px 0', textAlign: 'left', color: '#64748b', fontWeight: 600 }}>Reçu</th>
+                                                                                <th style={{ padding: '8px 0', textAlign: 'left', color: '#64748b', fontWeight: 600 }}>Date</th>
+                                                                                <th style={{ padding: '8px 0', textAlign: 'left', color: '#64748b', fontWeight: 600 }}>Mode</th>
+                                                                                <th style={{ padding: '8px 0', textAlign: 'right', color: '#64748b', fontWeight: 600 }}>Montant</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody>
+                                                                            {paiementsGroup.map((pt: any, i: number) => (
+                                                                                <tr key={i} style={{ borderBottom: i < paiementsGroup.length - 1 ? '1px solid #e2e8f0' : 'none' }}>
+                                                                                    <td style={{ padding: '10px 0', fontFamily: 'monospace', color: '#334155' }}>{pt.numero_recu}</td>
+                                                                                    <td style={{ padding: '10px 0', color: '#475569' }}>{pt.date_paiement}</td>
+                                                                                    <td style={{ padding: '10px 0', color: '#475569' }}>{pt.mode_paiement}</td>
+                                                                                    <td style={{ padding: '10px 0', textAlign: 'right', fontWeight: 700, color: '#059669' }}>{fmt(pt.montant)}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                             )}
 
@@ -371,79 +418,7 @@ export default function RapportsPage() {
                                 </div>
                             )}
 
-                            {/* 3. STUDENT REPORT VIEW */}
-                            {tab === 'eleve' && (
-                                <div>
-                                    <h2 className="no-print" style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: '#1e293b' }}>Résultats de recherche</h2>
-                                    
-                                    {/* Selection list */}
-                                    <div className="no-print" style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 20 }}>
-                                        {elevesList.map((e: any) => (
-                                            <div key={e.eleve_id} onClick={() => { setSelectedEleveId(e.eleve_id.toString()); fetchEleveHistory(e.eleve_id.toString()); }}
-                                                style={{ padding: 12, background: selectedEleveId === e.eleve_id.toString() ? '#ecfdf5' : '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                                                <span style={{ fontWeight: 600 }}>{e.prenom} {e.nom}</span>
-                                                <span style={{ fontFamily: 'monospace', color: '#64748b' }}>Matricule : {e.matricule}</span>
-                                            </div>
-                                        ))}
-                                        {elevesList.length === 0 && hasSearched && !eleveLoading && (
-                                            <p style={{ color: '#94a3b8', fontSize: 13 }}>Aucun élève trouvé</p>
-                                        )}
-                                    </div>
-
-                                    {/* History result */}
-                                    {eleveLoading ? (
-                                        <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}><Loader2 size={24} className="animate-spin" color="#10b981" /></div>
-                                    ) : eleveDetail ? (
-                                        <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 24 }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '2px solid #1e293b', paddingBottom: 16, marginBottom: 20 }}>
-                                                <div>
-                                                    <p style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>FICHE HISTORIQUE ÉLÈVE</p>
-                                                    <h3 style={{ fontSize: 18, fontWeight: 800, marginTop: 4 }}>{eleveDetail.eleve_prenom} {eleveDetail.eleve_nom}</h3>
-                                                    <p style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Matricule : {eleveDetail.eleve_matricule}</p>
-                                                </div>
-                                                <div style={{ textAlign: 'right' }}>
-                                                    <p style={{ fontSize: 12, color: '#64748b' }}>Total facturé : <strong>{fmt(eleveDetail.total_facture)}</strong></p>
-                                                    <p style={{ fontSize: 12, color: '#10b981', marginTop: 2 }}>Total payé : <strong>{fmt(eleveDetail.total_paye)}</strong></p>
-                                                    <p style={{ fontSize: 13, color: '#ef4444', fontWeight: 700, marginTop: 2 }}>Reste à payer : {fmt(eleveDetail.total_restant)}</p>
-                                                </div>
-                                            </div>
-
-                                            <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 10, color: '#475569' }}>Historique des paiements effectués</h4>
-                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                                                <thead>
-                                                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                                                        <th style={{ padding: 10, textAlign: 'left' }}>N° Reçu</th>
-                                                        <th style={{ padding: 10, textAlign: 'left' }}>Date</th>
-                                                        <th style={{ padding: 10, textAlign: 'left' }}>Mode</th>
-                                                        <th style={{ padding: 10, textAlign: 'right' }}>Montant</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {eleveDetail.factures.flatMap((f: any) => f.paiements).map((p: any, i: number) => (
-                                                        <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                                            <td style={{ padding: 10, fontFamily: 'monospace' }}>{p.numero_recu}</td>
-                                                            <td style={{ padding: 10 }}>{p.date_paiement}</td>
-                                                            <td style={{ padding: 10 }}>{p.mode_paiement}</td>
-                                                            <td style={{ padding: 10, textAlign: 'right', fontWeight: 700, color: '#10b981' }}>{fmt(p.montant)}</td>
-                                                        </tr>
-                                                    ))}
-                                                    {eleveDetail.factures.flatMap((f: any) => f.paiements).length === 0 && (
-                                                        <tr>
-                                                            <td colSpan={4} style={{ padding: 20, textAlign: 'center', color: '#94a3b8' }}>Aucun versement n'a encore été effectué.</td>
-                                                        </tr>
-                                                    )}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    ) : (
-                                        <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
-                                            Veuillez rechercher et sélectionner un élève ci-dessus
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-
-                            {/* 4. YEAR END CLOSURE */}
+                            {/* 3. YEAR END CLOSURE */}
                             {tab === 'cloture' && (
                                 <div style={{ padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 16 }}>
                                     {!verifCloture ? (

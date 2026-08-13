@@ -15,7 +15,8 @@
 
 import { useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Search, Calendar, PanelLeftClose, PanelLeftOpen, Command } from 'lucide-react';
+import { Search, Calendar, PanelLeftClose, PanelLeftOpen, Command, Settings, User } from 'lucide-react';
+import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
 import { useUI } from '@/context/UIContext';
 import { useAuth } from '@/context/AuthContext';
@@ -121,7 +122,8 @@ export default function Topbar() {
                                     key={item.href}
                                     type="button"
                                     className={`${styles.searchItem} ${pathname.startsWith(item.href) ? styles.searchItemActive : ''}`}
-                                    onClick={() => {
+                                    onMouseDown={(e) => {
+                                        e.preventDefault(); // Prevent onBlur from firing before navigation
                                         router.push(item.href);
                                         setQuery('');
                                         setIsFocused(false);
@@ -149,6 +151,58 @@ export default function Topbar() {
             <div className={styles.actions}>
                 {/* Notifications */}
                 <TopbarNotifications />
+
+                {/* Profil */}
+                <Link
+                    href="/profil"
+                    id="topbar-profil-link"
+                    title="Mon profil"
+                    style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: '38px', height: '38px', borderRadius: '10px',
+                        color: 'var(--text-muted)', background: 'transparent',
+                        border: '1px solid transparent', transition: 'all 0.2s ease',
+                        textDecoration: 'none',
+                    }}
+                    onMouseEnter={e => {
+                        (e.currentTarget as HTMLElement).style.background = '#f1f5f9';
+                        (e.currentTarget as HTMLElement).style.borderColor = '#e2e8f0';
+                        (e.currentTarget as HTMLElement).style.color = 'var(--brand-primary)';
+                    }}
+                    onMouseLeave={e => {
+                        (e.currentTarget as HTMLElement).style.background = 'transparent';
+                        (e.currentTarget as HTMLElement).style.borderColor = 'transparent';
+                        (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)';
+                    }}
+                >
+                    <User size={17} strokeWidth={2} />
+                </Link>
+
+                {/* Paramètres */}
+                <Link
+                    href="/parametres"
+                    id="topbar-settings-link"
+                    title="Paramètres"
+                    style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: '38px', height: '38px', borderRadius: '10px',
+                        color: 'var(--text-muted)', background: 'transparent',
+                        border: '1px solid transparent', transition: 'all 0.2s ease',
+                        textDecoration: 'none',
+                    }}
+                    onMouseEnter={e => {
+                        (e.currentTarget as HTMLElement).style.background = '#f1f5f9';
+                        (e.currentTarget as HTMLElement).style.borderColor = '#e2e8f0';
+                        (e.currentTarget as HTMLElement).style.color = 'var(--brand-primary)';
+                    }}
+                    onMouseLeave={e => {
+                        (e.currentTarget as HTMLElement).style.background = 'transparent';
+                        (e.currentTarget as HTMLElement).style.borderColor = 'transparent';
+                        (e.currentTarget as HTMLElement).style.color = 'var(--text-muted)';
+                    }}
+                >
+                    <Settings size={17} strokeWidth={2} />
+                </Link>
 
                 {/* Séparateur visuel */}
                 <div className={styles.divider} />

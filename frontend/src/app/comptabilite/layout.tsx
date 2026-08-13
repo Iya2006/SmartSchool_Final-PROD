@@ -98,9 +98,12 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
         setOpenMenus(prev => ({ ...prev, [id]: !prev[id] }));
     };
 
+    const collapsed = !isSidebarOpen;
+
     return (
         <aside style={{
-            width: isSidebarOpen ? '320px' : '0px',
+            width: collapsed ? '64px' : '280px',
+            minWidth: collapsed ? '64px' : '280px',
             backgroundColor: '#ffffff',
             borderRight: '1px solid #e2e8f0',
             transition: 'all 0.3s ease',
@@ -110,30 +113,33 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
         }}>
             {/* Logo Area */}
             <div style={{
-                padding: '20px',
+                padding: collapsed ? '16px 12px' : '16px 20px',
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: collapsed ? 'center' : 'flex-start',
                 gap: '12px',
                 borderBottom: '1px solid #e2e8f0',
-                minWidth: '320px'
             }}>
                 <div style={{
-                    width: '40px', height: '40px',
+                    width: '36px', height: '36px',
                     background: 'linear-gradient(135deg, #10b981, #059669)',
                     borderRadius: '10px',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'white', fontWeight: 'bold', fontSize: '18px'
+                    color: 'white', fontWeight: 'bold', fontSize: '14px',
+                    flexShrink: 0,
                 }}>
                     CP
                 </div>
-                <div>
-                    <h1 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: '#0f172a' }}>Comptabilité</h1>
-                    <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>Portail Financier</p>
-                </div>
+                {!collapsed && (
+                    <div>
+                        <h1 style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#0f172a' }}>Comptabilité</h1>
+                        <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>Portail Financier</p>
+                    </div>
+                )}
             </div>
 
             {/* Menu Items */}
-            <div className="sidebar-scroll" style={{ flex: 1, overflowY: 'auto', padding: '16px 12px', minWidth: '320px' }}>
+            <div className="sidebar-scroll" style={{ flex: 1, overflowY: 'auto', padding: collapsed ? '12px 8px' : '12px 10px' }}>
                 {MODULES.map((mod) => {
                     const Icon = mod.icon;
                     const isActive = pathname.startsWith(mod.path);
@@ -141,55 +147,58 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
                     const hasSubItems = mod.subItems && mod.subItems.length > 0;
 
                     return (
-                        <div key={mod.id} style={{ marginBottom: '4px' }}>
+                        <div key={mod.id} style={{ marginBottom: '2px' }}>
                             <div 
-                                onClick={() => hasSubItems ? toggleMenu(mod.id) : router.push(mod.path)}
+                                onClick={() => hasSubItems && !collapsed ? toggleMenu(mod.id) : router.push(mod.path)}
+                                title={collapsed ? mod.label : undefined}
                                 style={{
                                     display: 'flex',
                                     alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    padding: '12px',
+                                    justifyContent: collapsed ? 'center' : 'space-between',
+                                    padding: collapsed ? '10px' : '10px 12px',
                                     borderRadius: '8px',
-                                    backgroundColor: isActive && !hasSubItems ? '#ecfdf5' : 'transparent',
-                                    color: isActive && !hasSubItems ? '#059669' : '#475569',
+                                    backgroundColor: isActive ? '#ecfdf5' : 'transparent',
+                                    color: isActive ? '#059669' : '#475569',
                                     transition: 'all 0.2s ease',
                                     fontWeight: isActive ? '600' : '500',
-                                    fontSize: '14px',
-                                    cursor: 'pointer'
+                                    fontSize: '13.5px',
+                                    cursor: 'pointer',
                                 }}
+                                onMouseEnter={e => { if (!isActive) { e.currentTarget.style.backgroundColor = '#f8fafc'; e.currentTarget.style.color = '#0f172a'; } }}
+                                onMouseLeave={e => { if (!isActive) { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = '#475569'; } }}
                             >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    {Icon === Banknote ? (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    {mod.id === 'encaissement' ? (
                                         <span style={{ 
-                                            fontSize: '9px', 
+                                            fontSize: '8px', 
                                             fontWeight: '800', 
                                             backgroundColor: '#10b981', 
                                             color: '#ffffff', 
-                                            padding: '3px 5px', 
+                                            padding: '2px 4px', 
                                             borderRadius: '4px',
                                             display: 'inline-flex',
                                             alignItems: 'center',
                                             justifyContent: 'center',
                                             lineHeight: '1',
-                                            width: '24px',
-                                            height: '18px',
-                                            boxSizing: 'border-box'
+                                            width: '22px',
+                                            height: '16px',
+                                            flexShrink: 0,
                                         }}>
                                             GNF
                                         </span>
                                     ) : (
-                                        <Icon size={18} />
+                                        <Icon size={17} style={{ flexShrink: 0 }} />
                                     )}
-                                    <span>{mod.label}</span>
+                                    {!collapsed && <span>{mod.label}</span>}
                                 </div>
-                                {hasSubItems && (
-                                    isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />
+                                {hasSubItems && !collapsed && (
+                                    isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />
                                 )}
                             </div>
                             
-                            {/* SubItems */}
-                            {hasSubItems && isOpen && (
-                                <div style={{ marginLeft: '14px', paddingLeft: '14px', borderLeft: '1px solid #e2e8f0', marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            {/* SubItems — hidden in collapsed mode */}
+                            {hasSubItems && isOpen && !collapsed && (
+                                <div style={{ marginLeft: '12px', paddingLeft: '12px', borderLeft: '1px solid #e2e8f0', marginTop: '2px', display: 'flex', flexDirection: 'column', gap: '1px' }}>
                                     {mod.subItems?.map(sub => {
                                         // Un sous-menu sans `tab` mene a une page entiere :
                                         // il est actif quand on est SUR cette page.
@@ -200,9 +209,9 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
                                         return (
                                             <Link key={sub.id} href={sub.path} style={{ textDecoration: 'none' }}>
                                                 <div style={{
-                                                    padding: '8px 12px',
+                                                    padding: '7px 10px',
                                                     borderRadius: '6px',
-                                                    fontSize: '13px',
+                                                    fontSize: '12.5px',
                                                     color: isSubActive ? '#059669' : '#64748b',
                                                     backgroundColor: isSubActive ? '#ecfdf5' : 'transparent',
                                                     fontWeight: isSubActive ? '600' : '500',

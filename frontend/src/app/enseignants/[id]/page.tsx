@@ -616,6 +616,7 @@ export default function ProfilEnseignant() {
                                         </tbody>
                                     </table>
                                 </>
+
                             )}
                         </div>
                     </motion.div>

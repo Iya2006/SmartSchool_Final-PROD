@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.security import verify_password
 from app.core.auth import create_access_token, get_current_user
 from app.core.rate_limit import limiter
+from app.core.annee_lock import get_active_trimestre_id
 from app.models.academique import (
     Parent, EleveParent, Eleve, Inscription, Classe, Matiere,
     Note, Evaluation, Bulletin, BulletinLigne, Facture, Paiement, Presence,
@@ -126,12 +127,21 @@ def login_parent(request: Request, data: LoginParentRequest, db: Session = Depen
         if not verify_password(data.mot_de_passe, parent.mot_de_passe):
             raise HTTPException(401, "Mot de passe incorrect")
 
-    # Générer un token JWT pour le portail parent
+    # Générer un token JWT pour le portail parent — etablissement_id est
+    # OBLIGATOIRE ici : `require_etablissement` (utilisé par exemple par
+    # POST /api/photos/parent-upload/...) exige ce champ et rejette sinon
+    # tout appel en 403 "Établissement non déterminé", quel que soit le
+    # compte. `Parent` est désormais une fiche PAR école (migration
+    # 2026_08_multi_01) : `parent.etablissement_id` est la source directe
+    # et fiable, pas besoin de la redériver depuis les enfants comme le
+    # fait `_etablissement_du_parent` (réservée au routage des messages,
+    # cas différent où plusieurs écoles peuvent légitimement être visées).
     token = create_access_token({
         "sub": str(parent.parent_id),
         "type": "parent",
         "nom": parent.nom,
         "prenom": parent.prenom,
+        "etablissement_id": parent.etablissement_id,
     })
 
     return {
@@ -450,7 +460,7 @@ def get_edt_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_parent_
 # BULLETIN D'UN ENFANT (pour le parent)
 # ================================================================
 @router.get("/{parent_id}/enfant/{eleve_id}/bulletin")
-def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
+def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
     """Bulletin complet d'un enfant, avec lignes par matière."""
     link = db.query(EleveParent).filter(
         EleveParent.parent_id == parent_id,
@@ -464,6 +474,19 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
     ).first()
     if not inscription:
         return None
+
+    # Info classe — récupérée avant la requête Bulletin : un parent peut
+    # avoir des enfants dans des écoles différentes, donc `trimestre_id` par
+    # défaut se résout via l'école RÉELLE de CET enfant (jamais un `1` codé
+    # en dur, ni le JWT du parent qui n'en porte pas de façon fiable).
+    cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
+    if not cl:
+        # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
+        # appliquait les réglages d'affichage d'une autre école au bulletin.
+        raise HTTPException(404, "Classe introuvable pour cette inscription")
+
+    if trimestre_id is None:
+        trimestre_id = get_active_trimestre_id(db, cl.etablissement_id)
 
     bulletin = db.query(Bulletin).filter(
         Bulletin.inscription_id == inscription.inscription_id,
@@ -480,16 +503,10 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: int = 1, _a
     matiere_ids = {l.matiere_id for l in lignes}
     matieres_by_id = {m.matiere_id: m for m in db.query(Matiere).filter(Matiere.matiere_id.in_(matiere_ids)).all()}
 
-    # Info classe
-    cl = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
     from app.api.evaluations import get_bulletin_display_flags
     from app.services.notation import (
         get_bareme_defaut_cycle, get_cycle_key, get_lettres_config, lettre_pour_note,
     )
-    if not cl:
-        # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
-        # appliquait les réglages d'affichage d'une autre école au bulletin.
-        raise HTTPException(404, "Classe introuvable pour cette inscription")
     _etab = cl.etablissement_id
     flags = get_bulletin_display_flags(db, _etab)
     # Notation par lettres : la famille doit lire la même chose que le bulletin
@@ -981,3 +998,328 @@ def fournitures_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db: 
             ]
         })
     return result
+
+# ── Téléchargement du reçu PDF pour un parent ─────────────────────────────
+# Le router /api/finance est protégé par FINANCE_ROLES : un token parent ne
+# peut pas l'appeler. On expose donc le même reçu ici, dans un endpoint dont
+# le seul prérequis est d'être authentifié comme parent (ou admin) ET que le
+# paiement concerne un enfant de ce parent.
+@router.get("/paiements/{paiement_id}/recu-pdf")
+def recu_pdf_parent(
+    paiement_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Génère et retourne le reçu PDF d'un paiement. Accessible au parent concerné et aux admins."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas as pdf_canvas
+    from reportlab.lib.units import cm
+    from fastapi.responses import StreamingResponse
+    import io
+
+    # Récupérer le paiement + facture + inscription + élève + classe
+    result = (
+        db.query(Paiement, Facture, Inscription, Eleve, Classe)
+        .join(Facture, Paiement.facture_id == Facture.facture_id)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(Paiement.paiement_id == paiement_id)
+        .first()
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Paiement non trouvé")
+
+    paiement, facture, inscription, eleve, classe = result
+
+    # Vérification ownership : si le rôle est PARENT, s'assurer que cet élève
+    # est bien rattaché au parent connecté. Les admins/comptables passent librement.
+    role = current_user.get("role", "")
+    if role not in ("ADMIN", "DIRECTEUR", "COMPTABLE", "SECRETAIRE"):
+        parent_id = current_user.get("id") or current_user.get("sub")
+        if not parent_id:
+            raise HTTPException(status_code=403, detail="Accès refusé")
+        lien = db.query(EleveParent).filter(
+            EleveParent.eleve_id == eleve.eleve_id,
+            EleveParent.parent_id == int(parent_id),
+        ).first()
+        if not lien:
+            raise HTTPException(status_code=403, detail="Accès refusé")
+
+    # Récupérer l'établissement
+    from app.models.academique import Etablissement
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == classe.etablissement_id
+    ).first()
+    nom_ecole = etablissement.nom if etablissement else "SmartSchool"
+    adresse_ecole = getattr(etablissement, "adresse", "") or ""
+    tel_ecole = getattr(etablissement, "telephone", "") or ""
+
+    # Type de frais
+    type_frais_obj = None
+    if facture.type_frais_id:
+        type_frais_obj = db.query(TypeFrais).filter(TypeFrais.type_frais_id == facture.type_frais_id).first()
+    libelle_type_frais = type_frais_obj.libelle if type_frais_obj else "Frais Scolaires"
+
+    # Date du paiement formatée
+    date_str = "—"
+    if paiement.date_paiement:
+        try:
+            date_str = paiement.date_paiement.strftime("%d/%m/%Y")
+        except Exception:
+            date_str = str(paiement.date_paiement)
+
+    # Générer le PDF
+    buffer = io.BytesIO()
+    largeur, hauteur = A4
+    pdf = pdf_canvas.Canvas(buffer, pagesize=A4)
+    y = hauteur - 4.0 * cm
+
+    # En-tête école
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawCentredString(largeur / 2, y, nom_ecole)
+    y -= 0.6 * cm
+    if adresse_ecole:
+        pdf.setFont("Helvetica", 9)
+        pdf.drawCentredString(largeur / 2, y, adresse_ecole)
+        y -= 0.5 * cm
+    if tel_ecole:
+        pdf.setFont("Helvetica", 9)
+        pdf.drawCentredString(largeur / 2, y, f"Tél : {tel_ecole}")
+        y -= 0.5 * cm
+
+    # Ligne de séparation
+    pdf.setLineWidth(1.5)
+    pdf.setStrokeColorRGB(0.2, 0.4, 0.8)
+    pdf.line(2 * cm, y, largeur - 2 * cm, y)
+    y -= 0.6 * cm
+
+    # Titre
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawCentredString(largeur / 2, y, "REÇU DE PAIEMENT")
+    y -= 0.5 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawCentredString(largeur / 2, y, f"N° {paiement.numero_recu}")
+    y -= 0.8 * cm
+
+    # Section Élève
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(2 * cm, y, "INFORMATIONS DE L'ÉLÈVE")
+    y -= 0.15 * cm
+    pdf.setLineWidth(0.5)
+    pdf.setStrokeColorRGB(0.5, 0.5, 0.5)
+    pdf.line(2 * cm, y, largeur - 2 * cm, y)
+    y -= 0.45 * cm
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(2.5 * cm, y, f"Nom complet :  {eleve.prenom} {eleve.nom}")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Matricule :  {eleve.matricule or 'N/A'}")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Classe :  {classe.libelle}")
+    y -= 0.8 * cm
+
+    # Section Paiement
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(2 * cm, y, "DÉTAILS DU PAIEMENT")
+    y -= 0.15 * cm
+    pdf.line(2 * cm, y, largeur - 2 * cm, y)
+    y -= 0.45 * cm
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(2.5 * cm, y, f"Motif :  {libelle_type_frais}")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Montant payé :  {float(paiement.montant):,.0f} GNF")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Mode de paiement :  {paiement.mode_paiement or 'N/A'}")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Date du paiement :  {date_str}")
+    y -= 0.5 * cm
+    if paiement.reference_externe:
+        pdf.drawString(2.5 * cm, y, f"Référence :  {paiement.reference_externe}")
+        y -= 0.5 * cm
+    y -= 0.3 * cm
+
+    # Section Facture
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(2 * cm, y, "RÉCAPITULATIF")
+    y -= 0.15 * cm
+    pdf.line(2 * cm, y, largeur - 2 * cm, y)
+    y -= 0.45 * cm
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(2.5 * cm, y, f"N° Facture :  {facture.numero_facture}")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Total facturé :  {float(facture.montant_total):,.0f} GNF")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Total payé :  {float(facture.montant_paye):,.0f} GNF")
+    y -= 0.5 * cm
+    restant = float(facture.montant_restant or 0)
+    pdf.drawString(2.5 * cm, y, f"Reste à payer :  {restant:,.0f} GNF")
+    y -= 1.0 * cm
+
+    # Pied de page
+    pdf.setFont("Helvetica-Oblique", 8)
+    pdf.setFillColorRGB(0.5, 0.5, 0.5)
+    pdf.drawCentredString(largeur / 2, 1.5 * cm, "Ce reçu est un document officiel émis par le système de gestion SmartSchool.")
+
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+
+    filename = f"recu_{paiement.numero_recu}.pdf"
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+# ── Téléchargement de la Facture PDF pour un parent ───────────────────────
+@router.get("/factures/{facture_id}/pdf")
+def facture_pdf_parent(
+    facture_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Génère et retourne la facture PDF. Accessible au parent concerné et aux admins."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas as pdf_canvas
+    from reportlab.lib.units import cm
+    from fastapi.responses import StreamingResponse
+    import io
+
+    # Récupérer la facture + inscription + élève + classe
+    result = (
+        db.query(Facture, Inscription, Eleve, Classe, TypeFrais)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .outerjoin(TypeFrais, Facture.type_frais_id == TypeFrais.type_frais_id)
+        .filter(Facture.facture_id == facture_id)
+        .first()
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Facture non trouvée")
+
+    facture, inscription, eleve, classe, type_frais = result
+
+    # Vérification ownership
+    role = current_user.get("role", "")
+    if role not in ("ADMIN", "DIRECTEUR", "COMPTABLE", "SECRETAIRE"):
+        parent_id = current_user.get("id") or current_user.get("sub")
+        if not parent_id:
+            raise HTTPException(status_code=403, detail="Accès refusé")
+        lien = db.query(EleveParent).filter(
+            EleveParent.eleve_id == eleve.eleve_id,
+            EleveParent.parent_id == int(parent_id),
+        ).first()
+        if not lien:
+            raise HTTPException(status_code=403, detail="Accès refusé")
+
+    # Récupérer l'établissement
+    from app.models.academique import Etablissement
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == classe.etablissement_id
+    ).first()
+    nom_ecole = etablissement.nom if etablissement else "SmartSchool"
+    adresse_ecole = getattr(etablissement, "adresse", "") or ""
+    tel_ecole = getattr(etablissement, "telephone", "") or ""
+    email_ecole = getattr(etablissement, "email", "") or ""
+
+    # Générer le PDF
+    buffer = io.BytesIO()
+    largeur, hauteur = A4
+    pdf = pdf_canvas.Canvas(buffer, pagesize=A4)
+    y = hauteur - 2 * cm
+
+    # En-tête école
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawCentredString(largeur / 2, y, nom_ecole)
+    y -= 0.6 * cm
+    pdf.setFont("Helvetica", 9)
+    if adresse_ecole:
+        pdf.drawCentredString(largeur / 2, y, adresse_ecole)
+        y -= 0.4 * cm
+    if tel_ecole or email_ecole:
+        contact = f"Tél: {tel_ecole}" if tel_ecole else ""
+        if email_ecole:
+            contact += f"  |  Email: {email_ecole}" if contact else f"Email: {email_ecole}"
+        pdf.drawCentredString(largeur / 2, y, contact)
+        y -= 0.4 * cm
+
+    y -= 0.5 * cm
+    pdf.setLineWidth(1.5)
+    pdf.setStrokeColorRGB(0.2, 0.4, 0.8)
+    pdf.line(2 * cm, y, largeur - 2 * cm, y)
+
+    # Titre Facture
+    y -= 1.2 * cm
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawCentredString(largeur / 2, y, "FACTURE")
+    y -= 0.8 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawCentredString(largeur / 2, y, f"N° {facture.numero_facture}")
+    y -= 0.6 * cm
+    pdf.setFont("Helvetica", 10)
+    pdf.drawCentredString(largeur / 2, y, f"Date: {facture.date_facture}")
+
+    # Section Élève
+    y -= 1.5 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(2 * cm, y, "INFORMATIONS DE L'ÉLÈVE")
+    y -= 0.2 * cm
+    pdf.setLineWidth(0.5)
+    pdf.setStrokeColorRGB(0.5, 0.5, 0.5)
+    pdf.line(2 * cm, y, largeur - 2 * cm, y)
+    y -= 0.6 * cm
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(2.5 * cm, y, f"Nom complet :  {eleve.prenom} {eleve.nom}")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Matricule :  {eleve.matricule or 'N/A'}")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Classe :  {classe.libelle}")
+
+    # Section Détails Facture
+    y -= 1.5 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(2 * cm, y, "DÉTAILS DE LA FACTURE")
+    y -= 0.2 * cm
+    pdf.setLineWidth(0.5)
+    pdf.line(2 * cm, y, largeur - 2 * cm, y)
+    
+    y -= 0.6 * cm
+    pdf.setFont("Helvetica", 10)
+    libelle_frais = type_frais.libelle if type_frais else "Frais Scolaires"
+    pdf.drawString(2.5 * cm, y, f"Motif :  {libelle_frais}")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Statut :  {facture.statut}")
+
+    y -= 1.0 * cm
+    pdf.setFont("Helvetica-Bold", 11)
+    pdf.drawString(2.5 * cm, y, f"Montant Total : {float(facture.montant_total or 0):,.0f} GNF")
+    y -= 0.5 * cm
+    if float(facture.montant_remise or 0) > 0:
+        pdf.drawString(2.5 * cm, y, f"Remise : -{float(facture.montant_remise):,.0f} GNF")
+        y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Montant Net : {float(facture.montant_net or 0):,.0f} GNF")
+    y -= 0.5 * cm
+    pdf.drawString(2.5 * cm, y, f"Montant Payé : {float(facture.montant_paye or 0):,.0f} GNF")
+    y -= 0.7 * cm
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.setFillColorRGB(0.8, 0.1, 0.1)
+    pdf.drawString(2.5 * cm, y, f"Reste à payer : {float(facture.montant_restant or 0):,.0f} GNF")
+    
+    pdf.setFillColorRGB(0, 0, 0)
+
+    # Pied de page
+    y -= 3 * cm
+    pdf.setFont("Helvetica", 9)
+    pdf.drawCentredString(largeur / 2, y, "Merci de votre confiance.")
+    
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=facture_{facture.numero_facture}.pdf"}
+    )

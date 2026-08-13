@@ -105,6 +105,7 @@ function EncaissementContent() {
     const [selectedEleve, setSelectedEleve] = useState<EleveSearch | null>(null);
     const [soldeData, setSoldeData] = useState<SoldeData | null>(null);
     const [soldeLoading, setSoldeLoading] = useState(false);
+    const [expandedFacture, setExpandedFacture] = useState<number | null>(null);
 
     // Modes de paiement configurés (Paramètres > Finance & Comptabilité) — source
     // unique de vérité pour ce sélecteur, avant quoi la liste était codée en dur
@@ -535,22 +536,32 @@ function EncaissementContent() {
                             ) : soldeData.factures.map((f) => (
                                 <motion.div key={f.facture_id} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                                     style={{ background: '#fff', borderRadius: 14, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                                    {/* Facture Header */}
-                                    <div style={{ padding: '16px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                                    {/* Facture Header (Accordion Trigger) */}
+                                    <div 
+                                        onClick={() => setExpandedFacture(expandedFacture === f.facture_id ? null : f.facture_id)}
+                                        style={{ padding: '16px 22px', borderBottom: expandedFacture === f.facture_id ? '1px solid #e2e8f0' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, cursor: 'pointer', background: expandedFacture === f.facture_id ? '#f8fafc' : 'transparent', transition: 'background 0.2s' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                                             <span style={{ fontWeight: 700, color: '#3b82f6', fontSize: 14 }}>{f.numero_facture}</span>
                                             <Badge statut={f.statut} />
                                             <span style={{ fontSize: 12, color: '#94a3b8' }}>{f.type_frais_libelle}</span>
                                         </div>
-                                        <div style={{ display: 'flex', gap: 8 }}>
+                                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                                             {f.statut !== 'PAYEE' && (
-                                                <button className="no-print" onClick={() => openPayer(f)}
+                                                <button className="no-print" onClick={(e) => { e.stopPropagation(); openPayer(f); }}
                                                     style={{ padding: '8px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                                                     <Banknote size={15} /> Encaisser
                                                 </button>
                                             )}
+                                            <motion.div animate={{ rotate: expandedFacture === f.facture_id ? 180 : 0 }}>
+                                                <ChevronRight size={18} color="#94a3b8" />
+                                            </motion.div>
                                         </div>
                                     </div>
+
+                                    {/* Accordion Content */}
+                                    <AnimatePresence>
+                                        {expandedFacture === f.facture_id && (
+                                            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ overflow: 'hidden' }}>
 
                                     {/* Amounts */}
                                     <div style={{ padding: '14px 22px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, fontSize: 13 }}>
@@ -581,6 +592,9 @@ function EncaissementContent() {
                                             ))}
                                         </div>
                                     )}
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
                                 </motion.div>
                             ))}
                         </div>
@@ -874,22 +888,19 @@ function EncaissementContent() {
                                 )}
 
                                 {/* Footer */}
-                                <div style={{ padding: '20px 32px', textAlign: 'center', background: '#f8fafc' }}>
+                                <div style={{ padding: '14px 32px 18px', textAlign: 'center', background: '#f8fafc' }}>
                                     <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
                                         Ce reçu fait foi de paiement. Conservez-le précieusement.
                                     </p>
-                                    <div style={{ marginTop: 30, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', padding: '0 10px' }}>
-                                        <div style={{ width: 150, height: 80 }}>
-                                            {/* Espace vide pour le cachet physique, sans mention textuelle */}
-                                        </div>
+                                    <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-end', padding: '0 10px' }}>
                                         <div style={{ textAlign: 'center', minWidth: 180 }}>
-                                            <p style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', margin: '0 0 65px 0' }}>Le Comptable</p>
+                                            <p style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', margin: '0 0 28px 0' }}>Le Comptable</p>
                                             <div style={{ borderTop: '1.5px solid #94a3b8', paddingTop: 6, fontSize: 11, fontWeight: 600, color: '#64748b' }}>
-                                                Signature & Date
+                                                Signature &amp; Date
                                             </div>
                                         </div>
                                     </div>
-                                    <p style={{ fontSize: 10, color: '#cbd5e1', marginTop: 16 }}>
+                                    <p style={{ fontSize: 10, color: '#cbd5e1', marginTop: 12 }}>
                                         {recuData.etablissement.nom} — Document généré le {new Date().toLocaleDateString('fr-FR')} à {new Date().toLocaleTimeString('fr-FR')}
                                     </p>
                                 </div>
@@ -907,13 +918,75 @@ function EncaissementContent() {
                 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
                 @media print {
-                    body * { visibility: hidden; }
-                    #print-area, #print-area * { visibility: visible !important; }
-                    #print-area {
-                        position: absolute; left: 0; top: 0; width: 100%;
-                        padding: 0 !important; border: none !important;
-                        box-shadow: none !important;
+                    @page {
+                        size: A4 portrait;
+                        margin: 10mm 12mm;
                     }
+
+                    html, body {
+                        margin: 0 !important;
+                        padding: 0 !important;
+                        height: auto !important;
+                        overflow: visible !important;
+                    }
+
+                    body * {
+                        visibility: hidden !important;
+                    }
+
+                    #print-area,
+                    #print-area * {
+                        visibility: visible !important;
+                    }
+
+                    #print-area {
+                        position: fixed !important;
+                        top: 0 !important;
+                        left: 0 !important;
+                        right: 0 !important;
+                        margin: 0 auto !important;
+                        padding: 0 !important;
+                        width: 186mm !important;
+                        max-width: 186mm !important;
+                        box-shadow: none !important;
+                        border: none !important;
+                        page-break-inside: avoid !important;
+                    }
+
+                    /* Compact the receipt for single-page fit */
+                    #print-area > div {
+                        border-radius: 0 !important;
+                        box-shadow: none !important;
+                        border: none !important;
+                    }
+
+                    /* Reduce header padding */
+                    #print-area [style*="padding: '28px 32px'"] {
+                        padding: 14px 24px !important;
+                    }
+
+                    /* Reduce section padding */
+                    #print-area [style*="padding: '18px 32px'"],
+                    #print-area [style*="padding: '22px 32px'"],
+                    #print-area [style*="padding: '16px 32px'"],
+                    #print-area [style*="padding: '20px 32px'"] {
+                        padding: 10px 24px !important;
+                    }
+
+                    /* Reduce font sizes slightly */
+                    #print-area h2 { font-size: 18px !important; }
+                    #print-area [style*="font-size: 22"] { font-size: 18px !important; }
+                    #print-area [style*="font-size: 20"] { font-size: 16px !important; }
+                    #print-area [style*="font-size: 18"] { font-size: 15px !important; }
+
+                    /* Compress footer signature space */
+                    #print-area [style*="margin: '0 0 65px'"] {
+                        margin-bottom: 30px !important;
+                    }
+
+                    /* Hide the blank stamp box */
+                    #print-area [style*="width: 150"] { display: none !important; }
+
                     .no-print { display: none !important; }
                 }
             `}</style>

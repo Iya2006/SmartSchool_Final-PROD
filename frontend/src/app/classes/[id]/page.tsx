@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
     Users, BookOpen, ChevronRight, Loader2, Eye, Settings, UserCheck,
-    Clock, Hash, ArrowLeft, Phone, Crown, Calendar, TrendingUp, Award, Star, AlertTriangle, Utensils, User, RotateCcw
+    Clock, Hash, ArrowLeft, Phone, Crown, Calendar, TrendingUp, Award, Star, AlertTriangle, Utensils, User, RotateCcw, UserRound
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -151,73 +151,120 @@ export default function ClasseProfilPage() {
                     </Link>
                     <Link href={`/classes/configurer/${profil.classe_id}`} style={{
                         display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px',
-                        background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', color: 'white', textDecoration: 'none',
-                        fontSize: '13px', fontWeight: 600, boxShadow: '0 4px 12px rgba(79,70,229,0.25)'
+                        background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white', textDecoration: 'none',
+                        fontSize: '13px', fontWeight: 600, boxShadow: '0 4px 12px rgba(37,99,235,0.25)'
                     }}>
                         <Settings size={15} /> Configurer
                     </Link>
                 </div>
             </div>
 
-            {/* Hero Header */}
+            {/* Hero Header — Royal Blue Premium */}
             <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                 style={{
-                    background: 'linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #a855f7 100%)',
-                    borderRadius: '24px', padding: '32px 36px', color: 'white', position: 'relative', overflow: 'hidden'
+                    background: 'linear-gradient(135deg, #1d4ed8 0%, #2563eb 55%, #3b82f6 100%)',
+                    borderRadius: '20px', padding: '28px 32px', color: 'white', position: 'relative', overflow: 'hidden',
+                    boxShadow: '0 12px 36px -8px rgba(37,99,235,0.35)'
                 }}>
-                <div style={{ position: 'absolute', top: '-40px', right: '-20px', width: '200px', height: '200px', borderRadius: '50%', background: 'rgba(255,255,255,0.08)' }}></div>
-                <div style={{ position: 'absolute', bottom: '-60px', right: '100px', width: '150px', height: '150px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }}></div>
+
+                {/* Subtle decorative blurs */}
+                <div style={{ position: 'absolute', top: '-30px', right: '60px', width: '160px', height: '160px', borderRadius: '50%', background: 'rgba(255,255,255,0.07)', pointerEvents: 'none' }} />
+                <div style={{ position: 'absolute', bottom: '-40px', right: '-20px', width: '120px', height: '120px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '24px', position: 'relative', zIndex: 1 }}>
                     <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '8px' }}>
                             <div style={{
-                                width: '64px', height: '64px', borderRadius: '18px',
+                                width: '56px', height: '56px', borderRadius: '16px',
                                 background: 'rgba(255,255,255,0.2)', backdropFilter: 'blur(8px)',
+                                border: '1px solid rgba(255,255,255,0.3)',
                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                fontSize: '20px', fontWeight: 800
+                                fontSize: '17px', fontWeight: 800, color: 'white',
+                                letterSpacing: '-0.5px'
                             }}>
                                 {profil.code}
                             </div>
                             <div>
-                                <h1 style={{ fontSize: '28px', fontWeight: 800, margin: 0 }}>{profil.libelle}</h1>
-                                <p style={{ margin: '4px 0 0', opacity: 0.85, fontSize: '15px' }}>
-                                    {profil.niveau?.libelle || '—'} • {profil.statut}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <h1 style={{ fontSize: '26px', fontWeight: 800, margin: 0, letterSpacing: '-0.5px' }}>{profil.libelle}</h1>
+                                    <span style={{
+                                        padding: '3px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: 700,
+                                        background: 'rgba(255,255,255,0.18)', color: 'white',
+                                        border: '1px solid rgba(255,255,255,0.3)', letterSpacing: '0.5px'
+                                    }}>
+                                        {profil.statut}
+                                    </span>
+                                </div>
+                                <p style={{ margin: '4px 0 0', opacity: 0.8, fontSize: '14px', fontWeight: 500 }}>
+                                    {profil.niveau?.libelle || 'Niveau non spécifié'}
                                 </p>
                             </div>
                         </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-                        {[
-                            { label: 'Effectif', value: profil.eleves.length, icon: <Users size={16} /> },
-                            { label: 'Garçons', value: profil.nb_garcons, icon: <span style={{ fontSize: '14px' }}>👦</span> },
-                            { label: 'Filles', value: profil.nb_filles, icon: <span style={{ fontSize: '14px' }}>👧</span> },
-                            { label: 'Matières', value: profil.nb_matieres, icon: <BookOpen size={16} /> },
-                        ].map((s, i) => (
-                            <div key={i} style={{
-                                background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(8px)',
-                                borderRadius: '14px', padding: '12px 18px', textAlign: 'center', minWidth: '70px'
-                            }}>
-                                <div style={{ fontSize: '22px', fontWeight: 800 }}>{s.value}</div>
-                                <div style={{ fontSize: '11px', opacity: 0.8, fontWeight: 600, marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
-                                    {s.icon} {s.label}
-                                </div>
+
+                    {/* Stat badges */}
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        {/* Effectif */}
+                        <div style={{
+                            background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(10px)',
+                            border: '1px solid rgba(255,255,255,0.25)',
+                            borderRadius: '14px', padding: '10px 18px', textAlign: 'center', minWidth: '78px'
+                        }}>
+                            <div style={{ fontSize: '21px', fontWeight: 800, color: 'white' }}>{profil.eleves.length}</div>
+                            <div style={{ fontSize: '11px', opacity: 0.85, fontWeight: 600, marginTop: '3px', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
+                                <Users size={13} /> Effectif
                             </div>
-                        ))}
+                        </div>
+
+                        {/* Garçons */}
+                        <div style={{
+                            background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(10px)',
+                            border: '1px solid rgba(255,255,255,0.25)',
+                            borderRadius: '14px', padding: '10px 18px', textAlign: 'center', minWidth: '78px'
+                        }}>
+                            <div style={{ fontSize: '21px', fontWeight: 800, color: 'white' }}>{profil.nb_garcons}</div>
+                            <div style={{ fontSize: '11px', opacity: 0.85, fontWeight: 600, marginTop: '3px', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
+                                <UserRound size={13} color="#93c5fd" /> Garçons
+                            </div>
+                        </div>
+
+                        {/* Filles */}
+                        <div style={{
+                            background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(10px)',
+                            border: '1px solid rgba(255,255,255,0.25)',
+                            borderRadius: '14px', padding: '10px 18px', textAlign: 'center', minWidth: '78px'
+                        }}>
+                            <div style={{ fontSize: '21px', fontWeight: 800, color: 'white' }}>{profil.nb_filles}</div>
+                            <div style={{ fontSize: '11px', opacity: 0.85, fontWeight: 600, marginTop: '3px', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
+                                <UserRound size={13} color="#f9a8d4" /> Filles
+                            </div>
+                        </div>
+
+                        {/* Matières */}
+                        <div style={{
+                            background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(10px)',
+                            border: '1px solid rgba(255,255,255,0.25)',
+                            borderRadius: '14px', padding: '10px 18px', textAlign: 'center', minWidth: '78px'
+                        }}>
+                            <div style={{ fontSize: '21px', fontWeight: 800, color: 'white' }}>{profil.nb_matieres}</div>
+                            <div style={{ fontSize: '11px', opacity: 0.85, fontWeight: 600, marginTop: '3px', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
+                                <BookOpen size={13} /> Matières
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 {/* Occupation Bar */}
                 <div style={{ marginTop: '20px', position: 'relative', zIndex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '5px', opacity: 0.8, fontWeight: 600 }}>
-                        <span>Taux d&apos;occupation</span>
-                        <span>{occupancy}% ({profil.eleves.length}/{profil.capacite_max})</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px', opacity: 0.8, fontWeight: 600 }}>
+                        <span>Capacité & Taux d&apos;occupation</span>
+                        <span>{occupancy}% ({profil.eleves.length}/{profil.capacite_max} élèves)</span>
                     </div>
-                    <div style={{ height: '7px', borderRadius: '4px', background: 'rgba(255,255,255,0.2)' }}>
+                    <div style={{ height: '6px', borderRadius: '4px', background: 'rgba(255,255,255,0.2)' }}>
                         <div style={{
                             height: '100%', borderRadius: '4px', width: `${Math.min(occupancy, 100)}%`,
-                            background: occupancy > 90 ? '#ef4444' : occupancy > 70 ? '#f59e0b' : '#10b981',
-                            transition: 'width 0.6s ease'
+                            background: occupancy > 90 ? '#fca5a5' : occupancy > 70 ? '#fde68a' : 'rgba(255,255,255,0.85)',
+                            transition: 'width 0.7s ease'
                         }}></div>
                     </div>
                 </div>

@@ -72,9 +72,10 @@ export default function ConnexionEcolePage() {
         && (!codeRequis || code.trim().length > 0) && !chargement;
 
     return (
-        <div style={{
-            minHeight: '100vh', background: 'linear-gradient(135deg,#0f172a 0%,#111827 52%,#1e3a8a 100%)',
-            display: 'grid', placeItems: 'center', padding: 'clamp(16px, 4vw, 48px)',
+        <div className="login-ecole-page" style={{
+            background: 'linear-gradient(135deg,#0f172a 0%,#111827 52%,#1e3a8a 100%)',
+            display: 'grid', placeItems: 'center',
+            padding: 'max(16px, env(safe-area-inset-top)) clamp(16px, 4vw, 48px) max(16px, env(safe-area-inset-bottom))',
         }}>
             <motion.div
                 initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
@@ -131,7 +132,7 @@ export default function ConnexionEcolePage() {
                             />
                             <button type="button" onClick={() => setVoirMdp(v => !v)}
                                 aria-label={voirMdp ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
-                                style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 4 }}>
+                                style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 10, minWidth: '40px', minHeight: '40px', display: 'grid', placeItems: 'center' }}>
                                 {voirMdp ? <EyeOff size={16} /> : <Eye size={16} />}
                             </button>
                         </div>
@@ -162,7 +163,7 @@ export default function ConnexionEcolePage() {
 
                     <button type="submit" disabled={!pretAEnvoyer} style={{
                         display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
-                        padding: '13px 20px', borderRadius: '11px', border: 'none',
+                        padding: '13px 20px', minHeight: '48px', borderRadius: '11px', border: 'none',
                         background: 'linear-gradient(135deg,#1e3a8a,#2563eb)', color: '#fff',
                         fontSize: '14px', fontWeight: 700,
                         cursor: pretAEnvoyer ? 'pointer' : 'not-allowed',
@@ -190,7 +191,7 @@ export default function ConnexionEcolePage() {
                 </p>
             </motion.div>
 
-            <style dangerouslySetInnerHTML={{ __html: '@keyframes spin { to { transform: rotate(360deg); } } .animate-spin { animation: spin 1s linear infinite; }' }} />
+            <style dangerouslySetInnerHTML={{ __html: '.login-ecole-page { min-height: 100vh; min-height: 100dvh; } @keyframes spin { to { transform: rotate(360deg); } } .animate-spin { animation: spin 1s linear infinite; }' }} />
         </div>
     );
 }
@@ -209,6 +210,6 @@ function Champ({ label, icone, requis, children }: {
 }
 
 const champStyle: React.CSSProperties = {
-    width: '100%', padding: '11px 13px', borderRadius: '10px', border: '1px solid #cbd5e1',
-    fontSize: '14px', color: '#0f172a', background: '#fff', outline: 'none',
+    width: '100%', padding: '13px', minHeight: '44px', borderRadius: '10px', border: '1px solid #cbd5e1',
+    fontSize: '14px', color: '#0f172a', background: '#fff', outline: 'none', boxSizing: 'border-box',
 };
