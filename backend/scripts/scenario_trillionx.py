@@ -1595,10 +1595,23 @@ PART_DEPOT_EN_RETARD = 0.22
 
 
 def etape_8_epreuves_et_sujets(db: Session) -> None:
-    """Les 7 épreuves de chaque classe et matière, avec leur sujet validé."""
+    """Les 7 épreuves de chaque classe, avec leur sujet validé matière par matière.
+
+    UNE COMPOSITION EST UN ÉVÉNEMENT, PAS ONZE
+    Une composition couvre toutes les matières de la classe le même jour.
+    L'école en parle comme d'UNE épreuve — « la composition du 1er semestre » —
+    et c'est comme ça qu'elle doit apparaître : une ligne, onze matières
+    dedans. Créer onze évaluations indépendantes donnait onze lignes
+    identiques à la date près, impossibles à distinguer et impossibles à
+    saisir d'un seul geste.
+
+    Chaque épreuve est donc une SESSION (`ss_evaluation_sessions`), qui porte
+    ses évaluations — exactement ce que fait `POST /api/evaluations/sessions`
+    quand l'école la crée à la main.
+    """
     from datetime import timedelta
 
-    from app.models.academique import Evaluation, SujetExamen
+    from app.models.academique import Evaluation, EvaluationSession, SujetExamen
 
     _titre(8, "Epreuves de l'annee et depot des sujets")
     etab = _ecole(db)
@@ -1614,6 +1627,7 @@ def etape_8_epreuves_et_sujets(db: Session) -> None:
     """), {"eid": eid}).scalar()
     if deja:
         print(f"  {deja} epreuve(s) deja creee(s) — etape deja jouee.")
+        _regrouper_en_sessions(db, eid, annee)
         _recap_epreuves(db, eid, annee)
         return
 
@@ -1642,23 +1656,42 @@ def etape_8_epreuves_et_sujets(db: Session) -> None:
         ORDER BY cl.code, m.libelle
     """), {"eid": eid, "aid": annee.annee_id}).fetchall()
 
-    nb_epreuves = nb_sujets = nb_retards = 0
+    # Les postes regroupés par classe : une session par classe et par épreuve.
+    postes_par_classe = {}
+    for p in postes:
+        postes_par_classe.setdefault(p.classe_id, []).append(p)
+
+    nb_epreuves = nb_sujets = nb_retards = nb_sessions = 0
     for numero_sem, code_type, libelle, jour in EPREUVES:
         semestre = semestres.get(numero_sem)
         type_eval = types.get(code_type)
         if not semestre or not type_eval:
             continue
-        for p in postes:
-            evaluation = Evaluation(
-                matiere_id=p.matiere_id, classe_id=p.classe_id,
-                trimestre_id=semestre.trimestre_id, type_eval_id=type_eval.type_eval_id,
-                enseignant_id=p.enseignant_id,
-                libelle=f"{libelle} — {p.matiere}",
-                date_evaluation=jour, note_sur=float(p.note_sur or 20),
-                statut="PUBLIEE", est_coefficientee="O",
+        for classe_id, postes_classe in postes_par_classe.items():
+            session = EvaluationSession(
+                classe_id=classe_id, trimestre_id=semestre.trimestre_id,
+                type_eval_id=type_eval.type_eval_id, etablissement_id=eid,
+                libelle=libelle, date_evaluation=jour, note_sur=20,
+                est_coefficientee="O", statut="PUBLIEE",
             )
-            db.add(evaluation)
-            nb_epreuves += 1
+            db.add(session)
+            db.flush()
+            nb_sessions += 1
+            for p in postes_classe:
+                evaluation = Evaluation(
+                    matiere_id=p.matiere_id, classe_id=p.classe_id,
+                    trimestre_id=semestre.trimestre_id, type_eval_id=type_eval.type_eval_id,
+                    enseignant_id=p.enseignant_id,
+                    # Le libellé ne répète PAS la matière : elle est déjà une
+                    # colonne, et la répéter empêche l'école de reconnaître
+                    # l'épreuve dont tout le monde parle.
+                    libelle=libelle,
+                    date_evaluation=jour, note_sur=float(p.note_sur or 20),
+                    statut="PUBLIEE", est_coefficientee="O",
+                    session_id=session.session_id,
+                )
+                db.add(evaluation)
+                nb_epreuves += 1
 
             # Le sujet, déposé par le même enseignant, validé avant l'épreuve.
             en_retard = random.random() < PART_DEPOT_EN_RETARD
@@ -1695,10 +1728,65 @@ def etape_8_epreuves_et_sujets(db: Session) -> None:
                 db.flush()
 
     db.commit()
-    print(f"  epreuves : {nb_epreuves}")
+    print(f"  epreuves : {nb_sessions} (composition ou evaluation, toutes matieres)")
+    print(f"  dont     : {nb_epreuves} lignes matiere a noter")
     print(f"  sujets   : {nb_sujets} deposes et valides, dont {nb_retards} "
           f"deposes en retard (relance necessaire)")
     _recap_epreuves(db, eid, annee)
+
+
+def _regrouper_en_sessions(db: Session, eid: int, annee) -> None:
+    """Rattache à une session les évaluations créées isolément.
+
+    Les premières exécutions du scénario créaient une évaluation par matière
+    sans session : l'écran affichait alors 2 674 lignes « Composition de fin
+    d'année — Histoire », « — Géographie », « — Anglais »... une par matière,
+    au lieu des 238 épreuves réelles.
+
+    On ne recrée rien : les notes sont accrochées aux évaluations existantes.
+    On les regroupe, et on retire de leur libellé le nom de matière qui n'avait
+    rien à y faire.
+    """
+    from app.models.academique import Evaluation, EvaluationSession
+
+    orphelines = db.execute(text("""
+        SELECT e.classe_id, e.trimestre_id, e.type_eval_id, e.date_evaluation,
+               count(*) AS nb, min(e.libelle) AS libelle,
+               bool_and(e.statut = 'CENTRALISEE') AS toutes_centralisees
+        FROM ss_evaluations e
+        JOIN ss_classes cl ON cl.classe_id = e.classe_id
+        JOIN ss_trimestres t ON t.trimestre_id = e.trimestre_id
+        WHERE cl.etablissement_id = :eid AND t.annee_id = :aid AND e.session_id IS NULL
+        GROUP BY e.classe_id, e.trimestre_id, e.type_eval_id, e.date_evaluation
+    """), {"eid": eid, "aid": annee.annee_id}).fetchall()
+    if not orphelines:
+        return
+
+    nb_sessions = nb_rattachees = 0
+    for o in orphelines:
+        # Le libellé de l'épreuve, sans le « — Matière » ajouté à tort.
+        libelle = (o.libelle or "Épreuve").split(" — ")[0].strip()
+        session = EvaluationSession(
+            classe_id=o.classe_id, trimestre_id=o.trimestre_id,
+            type_eval_id=o.type_eval_id, etablissement_id=eid,
+            libelle=libelle, date_evaluation=o.date_evaluation, note_sur=20,
+            est_coefficientee="O",
+            statut="CENTRALISEE" if o.toutes_centralisees else "PUBLIEE",
+        )
+        db.add(session)
+        db.flush()
+        nb_sessions += 1
+        nb_rattachees += db.query(Evaluation).filter(
+            Evaluation.classe_id == o.classe_id,
+            Evaluation.trimestre_id == o.trimestre_id,
+            Evaluation.type_eval_id == o.type_eval_id,
+            Evaluation.date_evaluation == o.date_evaluation,
+            Evaluation.session_id.is_(None),
+        ).update({"session_id": session.session_id, "libelle": libelle},
+                 synchronize_session=False)
+    db.commit()
+    print(f"  [REGROUPE] {nb_rattachees} lignes matiere rassemblees en "
+          f"{nb_sessions} epreuves")
 
 
 def _recap_epreuves(db: Session, eid: int, annee) -> None:

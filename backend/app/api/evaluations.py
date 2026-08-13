@@ -336,8 +336,33 @@ def get_evaluations_centralisees(
             ]))
         )
 
-    response.headers["X-Total-Count"] = str(query.count())
-    evals = query.order_by(desc(Evaluation.date_evaluation)).offset(skip).limit(limit).all()
+    # ── ON PAGINE DES ÉPREUVES, PAS DES LIGNES DE MATIÈRE ────────────────────
+    # Une composition couvre les onze matières d'une classe : elle compte pour
+    # UNE épreuve à l'écran, et l'école la compte comme une. Paginer les
+    # évaluations donnait « 2 674 » sous une liste qui n'affichait que 238
+    # lignes, et une page de 50 se réduisait à 4 ou 5 lignes selon le nombre de
+    # matières — donc des pages de taille imprévisible.
+    #
+    # La clé de regroupement est un entier : la session quand il y en a une,
+    # sinon l'opposé de l'identifiant de l'évaluation. Les identifiants étant
+    # strictement positifs, les deux espaces ne peuvent pas se recouvrir.
+    groupe = func.coalesce(Evaluation.session_id, -Evaluation.evaluation_id)
+    epreuves = query.with_entities(
+        groupe.label("groupe"),
+        func.max(Evaluation.date_evaluation).label("jour"),
+    ).group_by(groupe)
+
+    response.headers["X-Total-Count"] = str(
+        db.query(func.count()).select_from(epreuves.subquery()).scalar() or 0
+    )
+    page = [
+        r.groupe for r in epreuves.order_by(desc("jour")).offset(skip).limit(limit).all()
+    ]
+    if not page:
+        return []
+    # Toutes les matières des épreuves de la page : une composition arrive
+    # entière, jamais coupée en deux pages.
+    evals = query.filter(groupe.in_(page)).order_by(desc(Evaluation.date_evaluation)).all()
     if not evals:
         return []
 
