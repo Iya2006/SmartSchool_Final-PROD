@@ -39,6 +39,20 @@
         radial-gradient(circle at bottom right, rgba(16, 185, 129, 0.18), transparent 28%);
 }
 
+/* Filigrane — logo de l'agence, discret derriere le contenu marketing,
+   jamais interactif ni annonce aux lecteurs d'ecran (purement decoratif). */
+.heroWatermark {
+    position: absolute;
+    right: clamp(-40px, -4vw, 10px);
+    bottom: clamp(-30px, -3vw, 20px);
+    width: clamp(220px, 34vw, 460px);
+    height: auto;
+    opacity: 0.28;
+    pointer-events: none;
+    user-select: none;
+    filter: saturate(1.15);
+}
+
 .heroBrand {
     position: relative;
     z-index: 1;
