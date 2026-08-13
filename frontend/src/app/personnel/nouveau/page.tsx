@@ -44,7 +44,7 @@ import {
 const ROLES_CONFIG = [
     { value: 'FONDATEUR', label: 'Fondateur', icon: Crown, color: '#7c3aed', bg: '#f5f3ff', hasAccess: true, desc: 'Propriétaire et fondateur de l\'établissement' },
     { value: 'DG', label: 'Directeur Général', icon: Building2, color: '#1d4ed8', bg: '#eff6ff', hasAccess: true, desc: 'Direction générale de l\'établissement' },
-    { value: 'DIRECTEUR_NIVEAU', label: 'Directeur de Niveau', icon: GraduationCap, color: '#0369a1', bg: '#f0f9ff', hasAccess: true, desc: 'Responsable d\'un cycle ou niveau scolaire' },
+    { value: 'DIRECTEUR_NIVEAU', label: 'Directeur des Études', icon: GraduationCap, color: '#0369a1', bg: '#f0f9ff', hasAccess: true, desc: 'Délégué pédagogique de la direction : évaluations, notes, bulletins, résultats de fin d\'année, examens, archive. Pas la comptabilité.' },
     { value: 'ADMIN', label: 'Administrateur', icon: Shield, color: '#0f766e', bg: '#f0fdfa', hasAccess: true, desc: 'Accès complet à l\'administration' },
     { value: 'COMPTABLE', label: 'Comptable', icon: DollarSign, color: '#b45309', bg: '#fffbeb', hasAccess: true, desc: 'Gestion financière et comptabilité' },
     { value: 'BIBLIOTHECAIRE', label: 'Bibliothécaire', icon: BookOpen, color: '#7e22ce', bg: '#faf5ff', hasAccess: true, desc: 'Gestion de la bibliothèque scolaire' },

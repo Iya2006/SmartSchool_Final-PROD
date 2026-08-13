@@ -48,14 +48,23 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         description: 'Conduite opérationnelle et pilotage de la performance de l\'école.',
         interfaceLabel: 'Centre de pilotage exécutif',
     },
+    // LE DÉLÉGUÉ PÉDAGOGIQUE DE LA DIRECTION
+    // L'administrateur ne peut pas tout tenir seul : il confie à un membre du
+    // personnel déjà en poste les évaluations, la centralisation des notes, les
+    // bulletins, les résultats de fin d'année, le centre des examens et
+    // l'archive scolaire. Ce rôle a donc les mêmes droits que l'administrateur,
+    // À UNE EXCEPTION PRÈS : la comptabilité, qui reste à l'administrateur, à
+    // la direction générale et au comptable. Cette exception est appliquée
+    // côté serveur (`main.py::FINANCE_ROLES`), pas seulement ici — un blocage
+    // qui n'existe que dans le navigateur n'est pas un blocage.
     DIRECTEUR_NIVEAU: {
         role: 'DIRECTEUR_NIVEAU',
-        label: 'Directeur de Niveau',
+        label: 'Directeur des Études',
         redirectPath: '/dashboard',
-        allowedPrefixes: ['/dashboard', '/personnel', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/salle-des-profs', '/monitoring'],
+        allowedPrefixes: ['/dashboard', '/personnel', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/monitoring'],
         tier: 'full-admin',
         hasSystemAccess: true,
-        description: 'Coordination pédagogique et suivi d\'un niveau ou cycle scolaire.',
+        description: 'Délégué pédagogique de la direction : évaluations, notes, bulletins, résultats de fin d\'année, examens et archive. Pas d\'accès à la comptabilité.',
         interfaceLabel: 'Dashboard de coordination académique',
     },
     ADMIN: {

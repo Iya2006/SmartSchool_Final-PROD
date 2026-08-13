@@ -180,10 +180,21 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 from fastapi import Depends
 from app.core.auth import get_current_user, require_module, require_roles, ADMIN_TIER_ROLES
 
-# Rôles autorisés sur les modules Finance / Comptabilité :
-# l'équipe de direction (ADMIN_TIER_ROLES) + le rôle COMPTABLE dédié.
-# Aucun rôle externe (ENSEIGNANT, PARENT, ELEVE) ne doit jamais y avoir accès.
-FINANCE_ROLES = (*ADMIN_TIER_ROLES, "COMPTABLE")
+# Rôles autorisés sur les modules Finance / Comptabilité.
+#
+# LA CAISSE N'EST PAS UN DROIT QUI SE DÉLÈGUE AVEC LE RESTE
+# Le DIRECTEUR_NIVEAU est le bras pédagogique de la direction : l'école lui
+# confie les évaluations, la centralisation des notes, les bulletins, les
+# résultats de fin d'année, le centre des examens et l'archive scolaire. Il a
+# donc les mêmes droits que l'administrateur — SAUF la comptabilité. Cet
+# écran-là reste à l'administrateur, à la direction générale et au comptable,
+# et à personne d'autre.
+#
+# Il faisait partie de FINANCE_ROLES par simple héritage d'ADMIN_TIER_ROLES :
+# le frontend lui fermait /comptabilite, mais l'API lui ouvrait les
+# encaissements, les salaires et le grand livre à qui savait appeler la route.
+# Un blocage qui n'existe que dans le navigateur n'est pas un blocage.
+FINANCE_ROLES = ("SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "COMPTABLE")
 
 # RH / Personnel : direction + rôles métiers internes autorisés à consulter leur espace.
 PERSONNEL_ROLES = (
