@@ -9,7 +9,10 @@ import os
 import shutil
 from datetime import datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile,
+)
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -292,10 +295,14 @@ async def upload_sujet(
 
 @router.get("/sujets")
 def get_sujets(
+    response: Response,
     enseignant_id: Optional[int] = None,
     trimestre_id: Optional[int] = None,
     trimestre: Optional[int] = None,
     statut: Optional[str] = None,
+    q: Optional[str] = Query(None, description="Recherche titre / matière / classe / enseignant"),
+    skip: int = 0,
+    limit: int = Query(100, le=500),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     etablissement_id: int = Depends(require_etablissement),
@@ -309,14 +316,32 @@ def get_sujets(
 
     `trimestre_id` filtre sur la période réelle ; `trimestre` (numéro) reste
     accepté pour les appelants non mis à jour.
+
+    POURQUOI LA PAGE NE CHARGEAIT PLUS
+    ----------------------------------
+    Cette route renvoyait TOUS les sujets de l'école, et pour chacun d'eux
+    rechargeait l'enseignant, la matière et la classe — une requête chacun.
+    Sur une année complète (2 674 sujets), cela faisait plus de huit mille
+    allers-retours en base pour un seul affichage : le Centre des Examens
+    tournait indéfiniment sans jamais s'afficher.
+
+    Les trois libellés sont maintenant chargés en trois requêtes groupées,
+    quel que soit le nombre de sujets, et la liste est paginée. Le total réel
+    part dans l'en-tête `X-Total-Count`, comme sur les autres listes.
     """
     query = db.query(SujetExamen).join(Enseignant, Enseignant.enseignant_id == SujetExamen.enseignant_id).filter(
         Enseignant.etablissement_id == etablissement_id
     )
     if current_user.get("role") not in ADMIN_TIER_ROLES and current_user.get("type") == "enseignant":
         query = query.filter(SujetExamen.enseignant_id == current_user.get("sub"))
-    elif enseignant_id:
-        query = query.filter(SujetExamen.enseignant_id == enseignant_id)
+    else:
+        # Un brouillon n'est pas un dépôt : l'enseignant ne l'a pas encore
+        # envoyé. L'écran les écartait déjà à l'affichage, mais le total, lui,
+        # les comptait — et une page entière de brouillons paraissait vide
+        # alors que le compteur annonçait des sujets.
+        query = query.filter(SujetExamen.statut != "BROUILLON")
+        if enseignant_id:
+            query = query.filter(SujetExamen.enseignant_id == enseignant_id)
     if trimestre_id:
         query = query.filter(SujetExamen.trimestre_id == trimestre_id)
     elif trimestre:
@@ -324,7 +349,28 @@ def get_sujets(
     if statut:
         query = query.filter(SujetExamen.statut == statut)
 
-    sujets = query.order_by(SujetExamen.date_depot.desc()).all()
+    # La recherche porte sur TOUTE la base, pas sur la page affichée : filtrer
+    # côté navigateur ne trouvait un sujet que s'il était déjà à l'écran, ce
+    # qui rend la loupe trompeuse dès la deuxième page.
+    if q and q.strip():
+        terme = f"%{q.strip()}%"
+        query = (
+            query.outerjoin(Matiere, Matiere.matiere_id == SujetExamen.matiere_id)
+            .outerjoin(Classe, Classe.classe_id == SujetExamen.classe_id)
+            .filter(or_(
+                SujetExamen.titre.ilike(terme),
+                Matiere.libelle.ilike(terme),
+                Classe.libelle.ilike(terme),
+                Enseignant.nom.ilike(terme),
+                Enseignant.prenom.ilike(terme),
+            ))
+        )
+
+    response.headers["X-Total-Count"] = str(query.count())
+    sujets = query.order_by(SujetExamen.date_depot.desc()).offset(skip).limit(limit).all()
+    if not sujets:
+        return []
+
     # Libellés des périodes en une requête : la boucle ci-dessous en émettait
     # déjà trois par sujet, inutile d'en ajouter une quatrième. Restreinte à
     # l'école appelante : `Trimestre` sans filtre chargeait le calendrier de
@@ -336,11 +382,30 @@ def get_sujets(
         .filter(AnneeScolaire.etablissement_id == etablissement_id)
         .all()
     }
+    # Enseignants, matières et classes de la page : trois requêtes au total,
+    # au lieu de trois PAR SUJET.
+    enseignants = {
+        e.enseignant_id: e for e in db.query(Enseignant).filter(
+            Enseignant.enseignant_id.in_({s.enseignant_id for s in sujets})
+        ).all()
+    }
+    matieres = {
+        m.matiere_id: m for m in db.query(Matiere).filter(
+            Matiere.matiere_id.in_({s.matiere_id for s in sujets})
+        ).all()
+    }
+    classe_ids = {s.classe_id for s in sujets if s.classe_id}
+    classes = {
+        c.classe_id: c for c in db.query(Classe).filter(
+            Classe.classe_id.in_(classe_ids)
+        ).all()
+    } if classe_ids else {}
+
     result = []
     for s in sujets:
-        ens = db.query(Enseignant).filter(Enseignant.enseignant_id == s.enseignant_id).first()
-        mat = db.query(Matiere).filter(Matiere.matiere_id == s.matiere_id).first()
-        cls = db.query(Classe).filter(Classe.classe_id == s.classe_id).first() if s.classe_id else None
+        ens = enseignants.get(s.enseignant_id)
+        mat = matieres.get(s.matiere_id)
+        cls = classes.get(s.classe_id) if s.classe_id else None
         result.append({
             "sujet_id": s.sujet_id,
             "demande_id": s.demande_id,
