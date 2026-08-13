@@ -12,6 +12,7 @@ import json
 
 from app.core.database import get_db
 from app.core.auth import get_current_user, require_etablissement, require_roles, ADMIN_TIER_ROLES
+from app.core.annee_courante import resoudre_annee
 from app.models.academique import (
     Message, DemandeEmploi, Disponibilite, Enseignant,
     Classe, ClasseMatiere, Matiere, Affectation, CreneauEmploi,
@@ -701,6 +702,12 @@ def generer_emplois_depuis_dispos(demande_id: int, db: Session = Depends(get_db)
             par_classe[cid] = []
         par_classe[cid].append(d)
 
+    annee_id = resoudre_annee(db, etablissement_id, None)
+    if annee_id is None:
+        raise HTTPException(
+            400, "Aucune annee scolaire ouverte : impossible de generer un emploi du temps."
+        )
+
     total_created = 0
     classes_generated = []
 
@@ -755,7 +762,7 @@ def generer_emplois_depuis_dispos(demande_id: int, db: Session = Depends(get_db)
                 jour=d.jour,
                 heure_debut=d.heure_debut,
                 heure_fin=d.heure_fin,
-                annee_id=1,
+                annee_id=annee_id,
             )
             db.add(creneau)
             created_for_class += 1
