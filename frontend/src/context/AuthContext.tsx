@@ -13,6 +13,9 @@ export interface UserInfo {
     email: string;
     telephone: string;
     role: string;
+    // Rôle standard dont hérite un rôle créé par l'école (« CENSEUR »).
+    // Absent pour les rôles standards : ils sont leur propre espace.
+    role_base?: string | null;
     /**
      * Établissement du compte, dérivé côté serveur au moment du login — jamais
      * fourni ni modifiable par le client. Sert uniquement à afficher la bonne
@@ -44,8 +47,8 @@ export const AuthContext = createContext<AuthContextType>({
     logout: () => {},
 });
 
-export const getRedirectPath = (userRole: string): string => {
-    return getRedirectPathForRole(userRole);
+export const getRedirectPath = (userRole: string, roleBase?: string | null): string => {
+    return getRedirectPathForRole(userRole, roleBase);
 };
 
 // Pages accessibles sans compte. `/inscription` en fait partie : un
@@ -116,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        const targetPath = getRedirectPath(user.role);
+        const targetPath = getRedirectPath(user.role, user.role_base);
 
         if (pathname === SELECTION_ETABLISSEMENT) {
             router.push(targetPath);
@@ -128,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        if (!canAccessPathForRole(user.role, pathname)) {
+        if (!canAccessPathForRole(user.role, pathname, user.role_base)) {
             router.push(targetPath);
         }
     }, [checked, token, user, pathname, router]);
@@ -140,7 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('smartschool_token', newToken);
         localStorage.setItem('smartschool_user', JSON.stringify(newUser));
 
-        router.push(getRedirectPath(newUser.role));
+        router.push(getRedirectPath(newUser.role, newUser.role_base));
     };
 
     const logout = async () => {

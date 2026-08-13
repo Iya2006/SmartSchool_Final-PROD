@@ -10,6 +10,28 @@ import {
 } from 'lucide-react';
 import styles from './Securite.module.css';
 
+// ── LES ESPACES QU'UN RÔLE CRÉÉ PEUT REPRENDRE ───────────────────────────────
+// Une école ne parle pas de « DIRECTEUR_NIVEAU » mais de censeur, de
+// surveillant général, de caissier. Elle doit pouvoir donner ces noms-là à ses
+// agents — sans que cela crée un pouvoir nouveau. Le rôle créé reprend donc
+// l'espace d'un rôle existant, et n'obtient jamais plus que lui.
+// Miroir de `app/core/auth.py::ROLES_ATTRIBUABLES`.
+const ESPACES_DISPONIBLES = [
+  { code: 'DIRECTEUR_NIVEAU', libelle: 'Direction des études', detail: 'Évaluations, notes, bulletins, résultats de fin d’année, examens, archive. Pas la comptabilité.' },
+  { code: 'ADMIN', libelle: 'Administration complète', detail: 'Tous les écrans, comptabilité comprise.' },
+  { code: 'DG', libelle: 'Direction générale', detail: 'Pilotage de l’école, comptabilité comprise.' },
+  { code: 'FONDATEUR', libelle: 'Fondateur', detail: 'Vision exécutive sur toute la plateforme.' },
+  { code: 'COMPTABLE', libelle: 'Comptabilité', detail: 'Encaissements, dépenses, salaires, rapports. Rien de pédagogique.' },
+  { code: 'SURVEILLANT', libelle: 'Surveillance', detail: 'Discipline, présences, remontées terrain.' },
+  { code: 'OPERATEUR', libelle: 'Secrétariat / opérations', detail: 'Accueil, inscriptions, saisie courante.' },
+  { code: 'BIBLIOTHECAIRE', libelle: 'Bibliothèque', detail: 'Fonds documentaire, prêts et retours.' },
+  { code: 'INFORMATICIEN', libelle: 'Informatique', detail: 'Équipements, incidents, support technique.' },
+  { code: 'AGENT_ENTRETIEN', libelle: 'Entretien (sans accès logiciel)', detail: 'Aucun écran : la personne existe en RH et à la paie, sans compte.' },
+  { code: 'GARDIEN', libelle: 'Gardiennage (sans accès logiciel)', detail: 'Aucun écran : la personne existe en RH et à la paie, sans compte.' },
+  { code: 'CHAUFFEUR', libelle: 'Transport (sans accès logiciel)', detail: 'Aucun écran : la personne existe en RH et à la paie, sans compte.' },
+  { code: 'AUTRE', libelle: 'Autre (sans accès logiciel)', detail: 'Aucun écran : la personne existe en RH et à la paie, sans compte.' },
+] as const;
+
 const TABS = [
   { id: 'roles', label: 'Rôles & Permissions', Icon: Shield },
   { id: 'passwords', label: 'Politique de Mots de Passe', Icon: Key },
@@ -68,6 +90,10 @@ export default function SecuritePage() {
   const [newRoleCode, setNewRoleCode] = useState('');
   const [newRoleLibelle, setNewRoleLibelle] = useState('');
   const [newRoleDesc, setNewRoleDesc] = useState('');
+  // L'espace dont le nouveau rôle hérite. Sans lui, le rôle créé n'ouvrait
+  // aucun écran : la matrice de permissions ne fait que RETIRER des accès,
+  // elle n'en ouvre jamais. Une école obtenait un rôle décoratif.
+  const [newRoleBase, setNewRoleBase] = useState('DIRECTEUR_NIVEAU');
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -120,17 +146,21 @@ export default function SecuritePage() {
     e.preventDefault();
     if (!newRoleCode || !newRoleLibelle) return;
     try {
+      // `etablissement_id` n'est plus envoyé : le serveur prend celui du
+      // compte connecte. La valeur 1 ecrite ici designait la premiere ecole
+      // inscrite, pas celle de l'utilisateur.
       await api.post('/api/securite/roles', {
         code: newRoleCode,
         libelle: newRoleLibelle,
         description: newRoleDesc,
-        etablissement_id: 1
+        role_base: newRoleBase,
       });
       showToast('Rôle créé avec succès');
       setShowRoleModal(false);
       setNewRoleCode('');
       setNewRoleLibelle('');
       setNewRoleDesc('');
+      setNewRoleBase('DIRECTEUR_NIVEAU');
       loadAllData();
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Erreur lors de la création du rôle', 'error');
@@ -595,6 +625,31 @@ export default function SecuritePage() {
                       placeholder="Censeur des études"
                       required
                     />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>
+                      Espace de travail
+                    </label>
+                    <select
+                      className={styles.inputFancy}
+                      style={{ width: '100%', marginTop: 4 }}
+                      value={newRoleBase}
+                      onChange={(e) => setNewRoleBase(e.target.value)}
+                      required
+                    >
+                      {ESPACES_DISPONIBLES.map(esp => (
+                        <option key={esp.code} value={esp.code}>{esp.libelle}</option>
+                      ))}
+                    </select>
+                    <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.5 }}>
+                      Le nouveau rôle travaille dans cet espace, avec exactement les
+                      mêmes accès — jamais plus. Vous pourrez ensuite lui en retirer
+                      dans la matrice ci-dessous, mais pas lui en ajouter.
+                      <br />
+                      <strong style={{ color: '#334155' }}>
+                        {ESPACES_DISPONIBLES.find(e => e.code === newRoleBase)?.detail}
+                      </strong>
+                    </p>
                   </div>
                   <div>
                     <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Description</label>

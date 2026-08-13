@@ -1374,6 +1374,13 @@ class Role(Base):
     libelle = Column(String(100), nullable=False)
     description = Column(String(255))
     est_systeme = Column(String(1), default="N")
+    # Le rôle standard dont ce rôle hérite son espace et ses accès.
+    # « Censeur des études » se base sur DIRECTEUR_NIVEAU, « Caissier » sur
+    # COMPTABLE. Sans base, le rôle n'ouvre rien : la matrice de permissions
+    # ne peut que RETIRER un accès, jamais en créer un — c'est ce qui empêche
+    # qu'une case cochée en base donne la finance à un enseignant.
+    # Voir migrations/2026_08_roles_01_role_base.py
+    role_base = Column(String(30), nullable=True)
     created_date = Column(DateTime, server_default=func.now())
 
 class Permission(Base):

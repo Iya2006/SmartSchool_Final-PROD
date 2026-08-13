@@ -38,6 +38,43 @@ ROLES_AVEC_ACCES = {
 
 ROLES_SANS_ACCES = {"AGENT_ENTRETIEN", "GARDIEN", "CHAUFFEUR", "AUTRE"}
 
+
+def resoudre_role(db: Session, role: str, etablissement_id: int) -> tuple:
+    """(rôle retenu, espace hérité) — accepte les rôles créés par l'école.
+
+    Une école nomme ses postes comme elle les vit : « censeur », « surveillant
+    général », « caissier ». Ces rôles-là sont créés dans Paramètres >
+    Sécurité et désignent l'espace d'un rôle standard. Le formulaire du
+    personnel ne connaissait que la liste figée dans le code : un censeur
+    fraîchement créé n'était donc jamais proposé, et s'il était forcé par
+    l'API, son compte n'ouvrait aucun écran.
+
+    Retourne l'espace hérité pour que l'appelant sache s'il doit générer un
+    login — un rôle basé sur GARDIEN n'a pas plus d'écran que le gardien.
+    """
+    from app.models.academique import Role
+
+    code = (role or "").upper()
+    if code in ROLES_AVEC_ACCES or code in ROLES_SANS_ACCES:
+        return code, code
+
+    perso = db.query(Role).filter(
+        Role.etablissement_id == etablissement_id, Role.code == code
+    ).first()
+    if not perso:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Rôle « {code} » inconnu. Créez-le d'abord dans "
+                   f"Paramètres > Sécurité, ou choisissez un rôle existant.",
+        )
+    if not perso.role_base:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Le rôle « {perso.libelle} » n'a pas d'espace : personne ne "
+                   f"pourrait s'en servir. Indiquez de quel rôle il hérite.",
+        )
+    return code, perso.role_base
+
 # ── QUI TOUCHE AUX FICHES DU PERSONNEL ───────────────────────────────────────
 #
 # Le module entier était ouvert à PERSONNEL_ROLES, c'est-à-dire aussi au
@@ -219,9 +256,13 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etabl
     n'importe quel client pouvait choisir librement l'école propriétaire du
     compte créé.
     """
+    # Le rôle peut être un rôle créé par l'école (« CENSEUR ») : on résout
+    # l'espace dont il hérite pour savoir s'il ouvre un accès.
+    role_retenu, espace = resoudre_role(db, data.role, etablissement_id)
+
     # Génération du login si non fourni mais rôle avec accès
     nom_utilisateur = data.nom_utilisateur
-    if data.role in ROLES_AVEC_ACCES and not nom_utilisateur and data.mot_de_passe:
+    if espace in ROLES_AVEC_ACCES and not nom_utilisateur and data.mot_de_passe:
         nom_utilisateur = generer_nom_utilisateur(db, data.prenom, data.nom)
 
     # Vérifie unicité du login si fourni
@@ -242,6 +283,7 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etabl
 
     payload = data.model_dump(exclude={"nom_utilisateur", "mot_de_passe"})
     payload["etablissement_id"] = etablissement_id
+    payload["role"] = role_retenu
     mot_de_passe_hashed = hash_password(data.mot_de_passe) if data.mot_de_passe else None
 
     p = Utilisateur(
@@ -255,6 +297,10 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etabl
     result = _row_to_dict(p)
     # Retourner le mot de passe en clair (une seule fois) si créé
     result["mot_de_passe_clair"] = data.mot_de_passe if data.mot_de_passe else None
+    # L'espace où cette personne atterrira en se connectant : la direction doit
+    # pouvoir le vérifier au moment où elle crée le compte, pas le découvrir
+    # quand l'intéressé se plaint de tomber sur un écran vide.
+    result["espace"] = espace
     return result
 
 

@@ -145,6 +145,26 @@ def require_etablissement(current_user: dict = Depends(get_current_user)) -> int
 ADMIN_TIER_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "DIRECTEUR_NIVEAU"}
 
 
+# ── LES ESPACES QU'UN RÔLE PERSONNALISÉ PEUT REPRENDRE ───────────────────────
+#
+# Une école ne parle pas de « DIRECTEUR_NIVEAU » mais de « censeur », de
+# « surveillant général », de « caissier ». Elle doit pouvoir donner ces noms-là
+# à ses agents — sans que cela crée un pouvoir nouveau.
+#
+# Un rôle personnalisé désigne donc un rôle standard dont il hérite l'espace :
+# « Censeur des études » se base sur DIRECTEUR_NIVEAU, « Caissier » sur
+# COMPTABLE. Il n'obtient JAMAIS plus que sa base, et la matrice de permissions
+# continue de ne faire que restreindre.
+#
+# SUPER_ADMIN n'y figure pas : c'est le compte de l'éditeur de la plateforme,
+# pas un poste qu'une école attribue.
+ROLES_ATTRIBUABLES = (
+    "FONDATEUR", "DG", "DIRECTEUR_NIVEAU", "ADMIN", "COMPTABLE",
+    "BIBLIOTHECAIRE", "INFORMATICIEN", "SURVEILLANT", "OPERATEUR",
+    "AGENT_ENTRETIEN", "GARDIEN", "CHAUFFEUR", "AUTRE",
+)
+
+
 def roles_du_compte(current_user: dict) -> set:
     """Role principal + roles secondaires declares sur la fiche.
 
@@ -162,6 +182,13 @@ def roles_du_compte(current_user: dict) -> set:
     secondaires = current_user.get("roles_secondaires") or []
     if isinstance(secondaires, (list, tuple, set)):
         roles.update(r for r in secondaires if isinstance(r, str) and r)
+    # Rôle personnalisé (« CENSEUR ») : il vaut son rôle de base et rien de
+    # plus. Le jeton le porte, résolu à la connexion, pour éviter une requête
+    # à chaque appel. Un jeton émis avant ce champ n'en a pas et se comporte
+    # exactement comme avant.
+    base = current_user.get("role_base")
+    if isinstance(base, str) and base:
+        roles.add(base)
     return roles
 
 

@@ -201,19 +201,36 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
 
 export const DEFAULT_ROLE_REDIRECT = '/dashboard';
 
-export const getRoleAccessConfig = (role?: string | null): RoleAccessConfig | null => {
-    if (!role) return null;
-    return ROLE_ACCESS_CONFIG[role] || null;
+/**
+ * Un rôle créé par l'école — « CENSEUR », « CAISSIER » — n'a pas d'entrée
+ * ici : il désigne l'espace d'un rôle standard (`role_base`, résolu par le
+ * serveur à la connexion). Sans cette résolution, un censeur était renvoyé
+ * vers le tableau de bord par défaut, où toutes ses requêtes échouaient.
+ *
+ * `roleBase` n'ouvre jamais plus que ce que ce rôle standard ouvre déjà :
+ * on ne crée pas un accès, on lui donne le nom que l'école emploie.
+ */
+export const getRoleAccessConfig = (
+    role?: string | null,
+    roleBase?: string | null,
+): RoleAccessConfig | null => {
+    if (role && ROLE_ACCESS_CONFIG[role]) return ROLE_ACCESS_CONFIG[role];
+    if (roleBase && ROLE_ACCESS_CONFIG[roleBase]) return ROLE_ACCESS_CONFIG[roleBase];
+    return null;
 };
 
-export const getRedirectPathForRole = (role?: string | null): string => {
-    const config = getRoleAccessConfig(role);
+export const getRedirectPathForRole = (
+    role?: string | null, roleBase?: string | null,
+): string => {
+    const config = getRoleAccessConfig(role, roleBase);
     if (!config) return DEFAULT_ROLE_REDIRECT;
     return config.hasSystemAccess ? config.redirectPath : '/login';
 };
 
-export const canAccessPathForRole = (role: string | undefined | null, pathname: string): boolean => {
-    const config = getRoleAccessConfig(role);
+export const canAccessPathForRole = (
+    role: string | undefined | null, pathname: string, roleBase?: string | null,
+): boolean => {
+    const config = getRoleAccessConfig(role, roleBase);
     if (!config) return pathname.startsWith(DEFAULT_ROLE_REDIRECT);
     if (!config.hasSystemAccess) return pathname === '/login';
     return config.allowedPrefixes.some((prefix) => pathname.startsWith(prefix));
@@ -223,8 +240,8 @@ export const isAdminSystemRole = (role?: string | null) => {
     return !!role && ADMIN_SYSTEM_ROLES.includes(role as typeof ADMIN_SYSTEM_ROLES[number]);
 };
 
-export const getRoleInterfaceSummary = (role?: string | null) => {
-    const config = getRoleAccessConfig(role);
+export const getRoleInterfaceSummary = (role?: string | null, roleBase?: string | null) => {
+    const config = getRoleAccessConfig(role, roleBase);
     if (!config) {
         return {
             hasSystemAccess: true,

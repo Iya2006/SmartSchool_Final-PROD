@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
 from app.core.database import get_db
-from app.core.auth import require_etablissement
+from app.core.auth import ROLES_ATTRIBUABLES, require_etablissement
 from app.models.academique import Role, Permission, AuditLog, Utilisateur
 
 router = APIRouter(prefix="/api/securite", tags=["Sécurité & Accès"])
@@ -48,10 +48,14 @@ class RoleCreate(BaseModel):
     code: str
     libelle: str
     description: Optional[str] = None
+    # Le rôle standard dont celui-ci hérite son espace. Obligatoire : sans lui
+    # le rôle créé n'ouvre aucun écran, ce qui était le cas avant.
+    role_base: str
 
 class RoleUpdate(BaseModel):
     libelle: str
     description: Optional[str] = None
+    role_base: Optional[str] = None
 
 class PermissionItem(BaseModel):
     module: str
@@ -101,6 +105,10 @@ def list_roles(
             "libelle": r.libelle,
             "description": r.description,
             "est_systeme": r.est_systeme == "O",
+            "role_base": r.role_base,
+            # Un rôle sans base n'ouvre aucun écran : l'interface doit le dire
+            # au lieu de le proposer comme s'il fonctionnait.
+            "attribuable": bool(r.role_base),
             "created_date": r.created_date,
             "permissions": [
                 {"module": p.module, "action": p.action, "est_autorise": p.est_autorise == "O"}
@@ -119,11 +127,23 @@ def create_role(
     if existing:
         raise HTTPException(400, "Un rôle avec ce code existe déjà")
 
+    # Un rôle doit reprendre l'espace d'un rôle standard, sinon il ne donne
+    # accès à rien : la matrice de permissions ne fait que RETIRER des accès,
+    # elle n'en ouvre jamais. Avant, l'écran créait des rôles décoratifs.
+    base = (data.role_base or "").upper()
+    if base not in ROLES_ATTRIBUABLES:
+        raise HTTPException(
+            400,
+            "Choisissez l'espace dont ce rôle hérite. Valeurs possibles : "
+            + ", ".join(ROLES_ATTRIBUABLES),
+        )
+
     role = Role(
         etablissement_id=etablissement_id,
         code=data.code.upper(),
         libelle=data.libelle,
         description=data.description,
+        role_base=base,
         est_systeme="N"
     )
     db.add(role)
@@ -141,14 +161,13 @@ def create_role(
             )
             db.add(perm)
     db.commit()
-    # Un rôle personnalisé reste non attribuable : le formulaire du personnel
-    # propose une liste figée, et la matrice ne pouvant que RETIRER des accès,
-    # un rôle hors des ensembles statiques n'obtiendrait de toute façon rien.
     return {
-        "message": "Rôle créé. Il n'est pas attribuable à un compte : seuls les rôles "
-                   "standards ouvrent des accès, la matrice ne pouvant que les restreindre.",
+        "message": f"Rôle « {role.libelle} » créé. Il ouvre le même espace que "
+                   f"{base}, et peut être attribué à un membre du personnel.",
         "role_id": role.role_id,
-        "attribuable": False,
+        "code": role.code,
+        "role_base": base,
+        "attribuable": True,
     }
 
 @router.put("/roles/{role_id}")
@@ -160,8 +179,20 @@ def update_role(
     role = _role_ou_404(db, role_id, etablissement_id)
     role.libelle = data.libelle
     role.description = data.description
+    if data.role_base is not None:
+        base = data.role_base.upper()
+        if base not in ROLES_ATTRIBUABLES:
+            raise HTTPException(
+                400,
+                "Espace inconnu. Valeurs possibles : " + ", ".join(ROLES_ATTRIBUABLES),
+            )
+        if role.est_systeme == "O":
+            # Un rôle système EST son propre espace : le rebaser reviendrait à
+            # donner la comptabilité à tous les surveillants d'un coup.
+            raise HTTPException(400, "Un rôle système ne change pas d'espace.")
+        role.role_base = base
     db.commit()
-    return {"message": "Rôle mis à jour"}
+    return {"message": "Rôle mis à jour", "role_base": role.role_base}
 
 @router.delete("/roles/{role_id}")
 def delete_role(

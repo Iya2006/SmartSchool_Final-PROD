@@ -1,7 +1,7 @@
 'use client';
 
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '@/lib/api';
@@ -103,7 +103,39 @@ export default function NouveauPersonnel() {
         mot_de_passe: '',
     });
 
-    const selectedRoleConfig = ROLES_CONFIG.find((r) => r.value === form.role);
+    // ── LES RÔLES QUE L'ÉCOLE A CRÉÉS ELLE-MÊME ──────────────────────────
+    // « Censeur des études », « Caissier », « Surveillant général » : créés
+    // dans Paramètres > Sécurité, ils héritent chacun de l'espace d'un rôle
+    // standard. Le formulaire ne proposait que la liste figée ci-dessus, si
+    // bien qu'un rôle fraîchement créé restait inutilisable.
+    const [rolesEcole, setRolesEcole] = useState<any[]>([]);
+    useEffect(() => {
+        api.get('/api/securite/roles')
+            .then(res => setRolesEcole((res.data || []).filter(
+                (r: any) => !r.est_systeme && r.attribuable)))
+            .catch(() => setRolesEcole([]));
+    }, []);
+
+    // Les deux listes réunies, chacune sachant dans quel espace elle travaille.
+    const tousLesRoles = useMemo(() => ([
+        ...ROLES_CONFIG.map(r => ({
+            value: r.value, label: r.label, desc: r.desc, icon: r.icon,
+            color: r.color, bg: r.bg, hasAccess: r.hasAccess,
+            espace: r.value, cree: false,
+        })),
+        ...rolesEcole.map((r: any) => {
+            const base = ROLES_CONFIG.find(x => x.value === r.role_base);
+            return {
+                value: r.code, label: r.libelle,
+                desc: r.description || `Travaille dans l'espace ${base?.label || r.role_base}.`,
+                icon: base?.icon || Users, color: base?.color || '#6b7280',
+                bg: base?.bg || '#f9fafb', hasAccess: base?.hasAccess ?? true,
+                espace: r.role_base, cree: true,
+            };
+        }),
+    ]), [rolesEcole]);
+
+    const selectedRoleConfig = tousLesRoles.find((r) => r.value === form.role);
     const selectedInterface = getRoleInterfaceSummary(form.role || null);
     const monthlyCost = Number(form.salaire_base || 0) + Number(form.prime_mensuelle || 0);
 
@@ -450,7 +482,7 @@ export default function NouveauPersonnel() {
                                     {sectionHdr(<Users size={20} />, 'Sélection du rôle principal', 'Choisissez la mission principale du membre et les accès attendus.', 'linear-gradient(135deg, #ede9fe, #dbeafe)')}
                                     <div style={{ padding: '24px' }}>
                                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '12px' }}>
-                                            {ROLES_CONFIG.map((r) => {
+                                            {tousLesRoles.map((r) => {
                                                 const Icon = r.icon;
                                                 const isSelected = form.role === r.value;
                                                 const roleInterface = getRoleInterfaceSummary(r.value);
@@ -492,7 +524,7 @@ export default function NouveauPersonnel() {
                                                     prise en compte est immédiate à sa prochaine connexion.
                                                 </p>
                                                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                                    {ROLES_CONFIG.filter((r) => r.value !== form.role).map((r) => {
+                                                    {tousLesRoles.filter((r) => r.value !== form.role).map((r) => {
                                                         const isChosen = form.roles_secondaires.includes(r.value);
                                                         return (
                                                             <button key={r.value} type="button" onClick={() => toggleRoleSecondaire(r.value)} style={{ padding: '7px 12px', borderRadius: '999px', border: '1.5px solid', borderColor: isChosen ? r.color : '#e2e8f0', background: isChosen ? r.bg : 'white', color: isChosen ? r.color : '#64748b', cursor: 'pointer', fontSize: '12px', fontWeight: 700 }}>

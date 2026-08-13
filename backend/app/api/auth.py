@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.core.security import compte_sans_mot_de_passe, verify_password
-from app.core.auth import create_access_token, get_current_user
+from app.core.auth import ROLES_ATTRIBUABLES, create_access_token, get_current_user
 from app.core.rate_limit import limiter, _DEFAULT_LIMIT
 from app.models.academique import (
-    Eleve, EleveParent, Enseignant, Etablissement, Parent, Utilisateur,
+    Eleve, EleveParent, Enseignant, Etablissement, Parent, Role, Utilisateur,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["Authentification"])
@@ -29,6 +29,30 @@ _STATUTS_ECOLE_BLOQUANTS = {
     "REFUSE": "La demande d'inscription de cet etablissement n'a pas ete retenue.",
     "SUSPENDU": "Cet etablissement est suspendu. Contactez SmartSchool.",
 }
+
+
+def _role_base(db: Session, user: Utilisateur) -> Optional[str]:
+    """Rôle standard dont hérite un rôle personnalisé, ou None.
+
+    Une école nomme ses postes comme elle les vit : « censeur »,
+    « surveillant général », « caissier ». Ces rôles-là sont créés dans
+    Paramètres > Sécurité et désignent l'espace d'un rôle standard
+    (`ss_roles.role_base`). Sans cette résolution, `require_roles` ne les
+    reconnaît pas et toutes les routes répondent 403 : l'école conclut que son
+    censeur « n'a pas les droits », alors que le rôle n'ouvrait rien depuis le
+    départ.
+
+    Un rôle standard n'a rien à résoudre : il EST son espace.
+    """
+    if not user.role or not user.etablissement_id:
+        return None
+    if user.role in ROLES_ATTRIBUABLES or user.role == "SUPER_ADMIN":
+        return None
+    role = db.query(Role).filter(
+        Role.etablissement_id == user.etablissement_id,
+        Role.code == user.role,
+    ).first()
+    return role.role_base if role else None
 
 
 def _verifier_etablissement_actif(db: Session, etablissement_id: Optional[int]) -> None:
@@ -178,6 +202,12 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             # par le token pour éviter une requête à chaque appel ; un token
             # émis avant ce champ vaut liste vide (ancien comportement).
             "roles_secondaires": user.roles_secondaires or [],
+            # Rôle personnalisé (« CENSEUR ») : on résout ici, une fois, le
+            # rôle standard dont il hérite son espace. Sans cela, toutes les
+            # routes répondent 403 et l'école conclut que son censeur n'a
+            # « pas les droits ». Résolu à la connexion pour ne pas interroger
+            # la base à chaque appel.
+            "role_base": _role_base(db, user),
         }
         return {
             "token": create_access_token(token_data),
@@ -193,6 +223,10 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
                 # la même valeur. Le frontend en a besoin pour afficher la bonne
                 # identité d'école (il était figé sur l'établissement 1).
                 "etablissement_id": token_data["etablissement_id"],
+                # Le navigateur s'en sert pour savoir vers quel espace envoyer
+                # un rôle créé par l'école : un « CENSEUR » n'existe pas dans
+                # sa table d'écrans, mais son espace, lui, existe.
+                "role_base": token_data["role_base"],
             }
         }
 
