@@ -661,6 +661,12 @@ class PaiementBase(BaseModel):
     montant: float
     mode_paiement: str
     reference_externe: Optional[str] = None
+    # Le jour où l'argent est REELLEMENT entré en caisse. Absent = aujourd'hui.
+    # Sans ce champ, le comptable qui saisit mardi les recettes de lundi les
+    # datait de mardi : la recette du jour, le rapport mensuel et le journal
+    # comptable portaient tous une date fausse, et le rapprochement de caisse
+    # ne tombait jamais juste.
+    date_paiement: Optional[date] = None
 
 class PaiementCreate(PaiementBase): pass
 class PaiementOut(OrmBase):

@@ -161,6 +161,11 @@ function GestionPaiements() {
     // cette page (encaissement, décaissement) — avant ce fetch, la liste était
     // codée en dur ici et ne reflétait jamais les modes ajoutés dans Paramètres.
     const [modesPaiementConfig, setModesPaiementConfig] = useState<string[]>(DEFAULT_MODES_PAIEMENT);
+    // Filtre par mode, partage par le tableau des encaissements et le bloc
+    // « Derniers Paiements » : cliquer un mode dans la repartition doit
+    // filtrer la liste, sinon la repartition ne sert qu'a regarder.
+    const [filtreMode, setFiltreMode] = useState<string>('');
+    const [rechercheRecents, setRechercheRecents] = useState('');
     useEffect(() => { fetchModesPaiement().then(setModesPaiementConfig); }, []);
     const modesAffichables = modesPaiementConfig.map(value => ({
         value,
@@ -456,7 +461,7 @@ function GestionPaiements() {
             const res = await api.post('/api/finance/salaires/payer-plusieurs-mois', {
                 enseignant_id: ens.id,
                 mois_list: moisList,
-                mode_paiement: 'Cash',
+                mode_paiement: 'ESPECES',
                 etablissement_id: 1,
                 annee_id: filterAnnee,
             });
@@ -599,8 +604,15 @@ function GestionPaiements() {
 
     /* ═══ FILTRES ═══ */
     const filteredPaiements = paiements.filter(p => {
-        const term = searchTerm.toLowerCase();
-        return !term || p.numero_recu?.toLowerCase().includes(term) || p.eleve_nom?.toLowerCase().includes(term) || p.eleve_prenom?.toLowerCase().includes(term) || p.numero_facture?.toLowerCase().includes(term);
+        // Le filtre par mode manquait : impossible de repondre a « combien est
+        // rentre en especes ce mois-ci », qui est la question de base d'un
+        // rapprochement de caisse.
+        if (filtreMode && p.mode_paiement !== filtreMode) return false;
+        const term = searchTerm.trim().toLowerCase();
+        if (!term) return true;
+        return [p.numero_recu, p.eleve_nom, p.eleve_prenom, p.numero_facture,
+                modePaiementLabel(p.mode_paiement), String(p.montant)]
+            .some(champ => (champ || '').toLowerCase().includes(term));
     });
 
     const filteredDepenses = depenses.filter(d => {
@@ -771,11 +783,22 @@ function GestionPaiements() {
                             <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <BarChart3 size={18} color="#10b981" /> Repartition par Mode
                             </h3>
+                            {/* Chaque mode est cliquable : il filtre la liste des
+                                encaissements ET les derniers paiements. Une repartition
+                                qu'on ne peut que regarder ne repond pas a « montre-moi
+                                ces encaissements en especes ». */}
                             {modesAffichables.map(mode => {
                                 const modeTotal = parMode.find(m => m.mode === mode.value)?.total || 0;
                                 const pct = totalEncaisse > 0 ? (modeTotal / totalEncaisse) * 100 : 0;
+                                const actif = filtreMode === mode.value;
                                 return (
-                                    <div key={mode.value} style={{ marginBottom: '12px' }}>
+                                    <div key={mode.value}
+                                        onClick={() => setFiltreMode(actif ? '' : mode.value)}
+                                        title={actif ? 'Retirer le filtre' : `Ne voir que les paiements en ${mode.label}`}
+                                        style={{ marginBottom: '12px', cursor: 'pointer', padding: '6px 8px',
+                                                 margin: '-6px -8px 6px', borderRadius: '8px',
+                                                 background: actif ? '#ecfdf5' : 'transparent',
+                                                 border: `1px solid ${actif ? '#a7f3d0' : 'transparent'}` }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                                             <span style={{ fontSize: '13px', fontWeight: 500, color: '#475569', display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                 <mode.icon size={14} color={mode.color} /> {mode.label}
@@ -792,11 +815,26 @@ function GestionPaiements() {
 
                         {/* Derniers paiements */}
                         <div style={cardStyle}>
-                            <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <h3 style={{ margin: '0 0 12px', fontSize: '15px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <Clock size={18} color="#3b82f6" /> Derniers Paiements
                             </h3>
+                            {/* Huit lignes sans moyen de chercher : retrouver le recu d'un
+                                parent qui appelle obligeait a changer d'onglet. */}
+                            <div style={{ position: 'relative', marginBottom: '12px' }}>
+                                <Search size={15} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                                <input placeholder="Rechercher un eleve, un N de recu, un montant..."
+                                    value={rechercheRecents} onChange={e => setRechercheRecents(e.target.value)}
+                                    style={{ ...inputStyle, paddingLeft: '36px', fontSize: '13px' }} />
+                            </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                {paiements.slice(0, 8).map(p => (
+                                {paiements.filter(p => {
+                                    if (filtreMode && p.mode_paiement !== filtreMode) return false;
+                                    const t = rechercheRecents.trim().toLowerCase();
+                                    if (!t) return true;
+                                    return [p.numero_recu, p.eleve_nom, p.eleve_prenom, p.numero_facture,
+                                            modePaiementLabel(p.mode_paiement), String(p.montant)]
+                                        .some(c => (c || '').toLowerCase().includes(t));
+                                }).slice(0, 8).map(p => (
                                     <div key={p.paiement_id} style={{
                                         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                                         padding: '10px 14px', borderRadius: '10px', background: '#f8fafc',
@@ -814,6 +852,19 @@ function GestionPaiements() {
                                 ))}
                                 {paiements.length === 0 && (
                                     <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '20px 0' }}>Aucun paiement enregistre</p>
+                                )}
+                                {paiements.length > 0 && (rechercheRecents.trim() || filtreMode) &&
+                                 paiements.filter(p => {
+                                     if (filtreMode && p.mode_paiement !== filtreMode) return false;
+                                     const t = rechercheRecents.trim().toLowerCase();
+                                     if (!t) return true;
+                                     return [p.numero_recu, p.eleve_nom, p.eleve_prenom, p.numero_facture,
+                                             modePaiementLabel(p.mode_paiement), String(p.montant)]
+                                         .some(c => (c || '').toLowerCase().includes(t));
+                                 }).length === 0 && (
+                                    <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '20px 0' }}>
+                                        Aucun paiement ne correspond a cette recherche.
+                                    </p>
                                 )}
                             </div>
                         </div>

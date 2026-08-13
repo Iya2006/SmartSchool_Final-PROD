@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from datetime import date as date_type
 from app.core.annee_courante import resoudre_annee
 from app.core.numerotation import generer_numero_facture, generer_numero_recu
+from app.core.modes_paiement import exiger_mode_paiement
 from app.core.database import get_db
 from app.core.auth import require_etablissement
 from app.models.academique import (
@@ -1246,9 +1247,26 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
     # reçu déjà remis à un parent. Deux pièces portant le même numéro, c'est un
     # litige que la comptabilité ne peut pas trancher.
     settings = get_finance_settings(db, etablissement_id)
+    # « Especes », « ESPECES » et « Cash » etaient trois modes differents pour
+    # la base : le panneau « Repartition par Mode » affichait 0 GNF partout,
+    # faute de retrouver ses codes. On normalise a l'ecriture, pas a
+    # l'affichage — un total ne se repare pas apres coup.
+    mode_normalise = exiger_mode_paiement(
+        data.mode_paiement, settings.get("modes_paiement")
+    )
     numero_recu = generer_numero_recu(
         db, etablissement_id, facture.annee_id, settings.get("recu_prefixe") or "REC"
     )
+
+    # Un encaissement porte la date a laquelle l'argent est entre, pas celle de
+    # la saisie. Une date future serait en revanche une faute de frappe : on
+    # n'encaisse pas demain.
+    jour_encaissement = data.date_paiement or date_type.today()
+    if jour_encaissement > date_type.today():
+        raise HTTPException(
+            status_code=400,
+            detail="Un paiement ne peut pas etre date dans le futur.",
+        )
 
     paiement = Paiement(
         facture_id=data.facture_id,
@@ -1256,8 +1274,9 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         echeance_id=data.echeance_id,
         numero_recu=numero_recu,
         montant=data.montant,
-        mode_paiement=data.mode_paiement,
+        mode_paiement=mode_normalise,
         reference_externe=data.reference_externe,
+        date_paiement=jour_encaissement,
         devise=settings.get("devise") or "GNF",
         statut="VALIDE"
     )
@@ -1274,7 +1293,7 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
 
     # Comptabilité générale : encaissement réel (Debit trésorerie / Credit 4111 Élèves)
     insc = db.query(Inscription).filter(Inscription.inscription_id == facture.inscription_id).first()
-    compte_tresorerie, journal_tresorerie = compte_tresorerie_pour_mode(data.mode_paiement)
+    compte_tresorerie, journal_tresorerie = compte_tresorerie_pour_mode(mode_normalise)
     # `eleve_id` n'est posé QUE sur la ligne 4111 (compte élève) — c'est elle
     # qui identifie le compte auxiliaire de l'élève. La poser aussi sur la
     # ligne de trésorerie (comme c'était le cas avant ce correctif) fausse le
@@ -1286,7 +1305,7 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
     # solde réellement dû (symptôme observé : "Facturé"/"Réglé" identiques,
     # toujours "Soldé", quel que soit le montant réellement facturé).
     generer_ecriture_auto(
-        db, date_ecriture=date_type.today(), journal_code=journal_tresorerie,
+        db, date_ecriture=jour_encaissement, journal_code=journal_tresorerie,
         libelle=f"Encaissement scolarité — {numero_recu}",
         reference=numero_recu,
         lignes=[
@@ -3564,6 +3583,10 @@ def list_employes_salaires(
 
     from app.services import paie as _paie
     _annee_paie = _paie.annee_courante_id(db, etablissement_id)
+    # Meme raison que dans preparer_la_paie : un seul appel pour toute la liste.
+    _salaires = _paie.salaires_enseignants(
+        db, [e.enseignant_id for e in enseignants], _annee_paie
+    )
 
     result = []
     # --- Traitement des Enseignants ---
@@ -3571,7 +3594,9 @@ def list_employes_salaires(
         # Le salaire affiche ici doit etre celui que la paie versera. Pour un
         # vacataire il se calcule a partir des heures ; la colonne
         # `ens.salaire_base` vaut 0 et ne veut rien dire.
-        _r = _paie.salaire_enseignant(db, ens.enseignant_id, _annee_paie)
+        _r = _salaires.get(ens.enseignant_id) or {
+            "base": 0.0, "mode": "MENSUEL", "total_heures": 0.0, "lignes": []
+        }
         depenses = (
             db.query(Depense)
             .filter(
@@ -4119,7 +4144,10 @@ def put_date_paie_endpoint(data: dict, db: Session = Depends(get_db), etablissem
 @router.post("/salaires/payer-group")
 def payer_group_endpoint(
     mois_concerne: str = None,
-    mode_paiement: str = "Cash",
+    # « Cash » n'appartient a aucune liste de reference : ce defaut ecrivait un
+    # mode que les totaux par mode ne savaient pas classer, et la depense
+    # salariale disparaissait du rapprochement de caisse.
+    mode_paiement: str = "ESPECES",
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -4130,6 +4158,7 @@ def payer_group_endpoint(
     # salaires sur l'annee scolaire n°1, qui appartient a la premiere ecole
     # inscrite. C'est l'annee EN COURS DE CETTE ECOLE qui fait foi.
     annee_id = resoudre_annee(db, etablissement_id, None)
+    mode_paiement = exiger_mode_paiement(mode_paiement)
 
     refs = _lister_employes_actifs(db, etablissement_id)
     payes, ignores, echecs = [], [], []
@@ -4739,11 +4768,23 @@ def preparer_la_paie(
     annee_id = _paie.annee_courante_id(db, etablissement_id)
     lignes = []
 
-    for ens in db.query(Enseignant).filter(
+    enseignants = db.query(Enseignant).filter(
         Enseignant.etablissement_id == etablissement_id,
         Enseignant.statut == "ACTIF",
-    ).order_by(Enseignant.nom, Enseignant.prenom).all():
-        r = _paie.salaire_enseignant(db, ens.enseignant_id, annee_id)
+    ).order_by(Enseignant.nom, Enseignant.prenom).all()
+
+    # Un appel pour tout le monde, pas un par personne : la version en boucle
+    # lancait quatre requetes par enseignant, soit plus de deux cents sur un
+    # etablissement de cinquante employes — 1,6 seconde d'affichage quand les
+    # autres ecrans repondent en 200 ms. Le cout ne depend plus de l'effectif.
+    salaires = _paie.salaires_enseignants(
+        db, [e.enseignant_id for e in enseignants], annee_id
+    )
+
+    for ens in enseignants:
+        r = salaires.get(ens.enseignant_id) or {
+            "mode": _paie.MODE_HORAIRE, "base": 0.0, "total_heures": 0.0, "lignes": []
+        }
         lignes.append({
             "type": "ENSEIGNANT",
             "id": ens.enseignant_id,

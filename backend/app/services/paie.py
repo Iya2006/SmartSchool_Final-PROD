@@ -60,30 +60,42 @@ def taux_effectif(affectation: Affectation, taux_enseignant) -> Decimal:
     return _dec(taux_enseignant)
 
 
-def detail_heures_enseignant(
-    db: Session, enseignant_id: int, annee_id: Optional[int] = None
-) -> List[dict]:
-    """Ligne par ligne : ce que l'enseignant assure, et à quel tarif.
+def detail_heures_par_enseignant(
+    db: Session, enseignant_ids, annee_id: Optional[int] = None
+) -> Dict[int, List[dict]]:
+    """Le détail des heures de PLUSIEURS enseignants, en quatre requêtes.
 
-    C'est ce détail que le bulletin de paie doit montrer. Un total sans son
-    détail n'est pas contestable, donc pas vérifiable.
+    LE PROBLÈME QUE ÇA RÈGLE
+    La version qui traitait un enseignant à la fois faisait cinq requêtes par
+    personne : sa fiche, ses affectations, les classes, les matières. Sur un
+    établissement de 46 employés, la préparation de paie en lançait donc plus
+    de deux cents et mettait 1,6 seconde — quand tous les autres écrans
+    répondent en moins de 200 ms. À 500 employés l'écran devient inutilisable,
+    et le coût grandit avec l'effectif au lieu de rester stable.
 
-    Préchargement en lot : un enseignant a rarement plus de dix affectations,
-    mais la préparation de paie boucle sur tout l'établissement.
+    Ici, quatre requêtes quel que soit le nombre d'enseignants.
     """
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        return []
+    ids = list({int(i) for i in enseignant_ids})
+    if not ids:
+        return {}
+
+    enseignants = {
+        e.enseignant_id: e for e in db.query(Enseignant).filter(
+            Enseignant.enseignant_id.in_(ids)
+        ).all()
+    }
 
     requete = db.query(Affectation).filter(
-        Affectation.enseignant_id == enseignant_id,
+        Affectation.enseignant_id.in_(ids),
         Affectation.statut == "ACTIVE",
     )
     if annee_id:
         requete = requete.filter(Affectation.annee_id == annee_id)
     affectations = requete.all()
+
+    resultat: Dict[int, List[dict]] = {i: [] for i in ids}
     if not affectations:
-        return []
+        return resultat
 
     classes = {
         c.classe_id: c for c in db.query(Classe).filter(
@@ -96,12 +108,14 @@ def detail_heures_enseignant(
         ).all()
     }
 
-    lignes = []
     for a in affectations:
+        ens = enseignants.get(a.enseignant_id)
+        if ens is None:
+            continue
         heures = _dec(a.nb_heures_semaine)
         taux = taux_effectif(a, ens.taux_horaire)
         cl, mat = classes.get(a.classe_id), matieres.get(a.matiere_id)
-        lignes.append({
+        resultat[a.enseignant_id].append({
             "affectation_id": a.affectation_id,
             "classe": cl.libelle if cl else "?",
             "matiere": mat.libelle if mat else "?",
@@ -110,23 +124,68 @@ def detail_heures_enseignant(
             "taux_specifique": a.taux_horaire is not None,
             "montant_mensuel": float(heures * taux * SEMAINES_PAR_MOIS),
         })
-    return sorted(lignes, key=lambda l: (l["classe"], l["matiere"]))
+
+    for lignes in resultat.values():
+        lignes.sort(key=lambda l: (l["classe"], l["matiere"]))
+    return resultat
 
 
-def salaire_enseignant(
+def detail_heures_enseignant(
     db: Session, enseignant_id: int, annee_id: Optional[int] = None
-) -> dict:
-    """Rémunération mensuelle d'un enseignant, avec son détail."""
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        return {"base": 0.0, "mode": MODE_HORAIRE, "lignes": [], "total_heures": 0.0}
+) -> List[dict]:
+    """Ligne par ligne : ce que l'enseignant assure, et à quel tarif.
+
+    C'est ce détail que le bulletin de paie doit montrer. Un total sans son
+    détail n'est pas contestable, donc pas vérifiable.
+
+    Un seul enseignant : passe par la version en lot, pour qu'il n'existe
+    qu'une implémentation de la règle.
+    """
+    return detail_heures_par_enseignant(db, [enseignant_id], annee_id).get(
+        enseignant_id, []
+    )
+
+
+def salaires_enseignants(
+    db: Session, enseignant_ids, annee_id: Optional[int] = None
+) -> Dict[int, dict]:
+    """Rémunération de PLUSIEURS enseignants, en un nombre fixe de requêtes.
+
+    C'est ce que doit appeler tout écran qui liste du personnel : préparation
+    de paie, liste des employés, arriérés. Boucler sur `salaire_enseignant`
+    rouvrirait quatre requêtes par personne.
+    """
+    ids = list({int(i) for i in enseignant_ids})
+    if not ids:
+        return {}
+    enseignants = {
+        e.enseignant_id: e for e in db.query(Enseignant).filter(
+            Enseignant.enseignant_id.in_(ids)
+        ).all()
+    }
+    details = detail_heures_par_enseignant(db, ids, annee_id)
+    return {
+        i: _composer_salaire(enseignants.get(i), details.get(i, []))
+        for i in ids
+    }
+
+
+def _composer_salaire(ens: Optional[Enseignant], lignes: List[dict]) -> dict:
+    """La règle de rémunération, écrite une seule fois.
+
+    Les versions « un enseignant » et « en lot » passent toutes deux par ici :
+    deux copies de cette règle finiraient par diverger, et deux écrans
+    afficheraient deux salaires différents pour la même personne.
+    """
+    if ens is None:
+        return {"base": 0.0, "mode": MODE_HORAIRE, "lignes": [], "total_heures": 0.0,
+                "explication": "Enseignant introuvable."}
 
     mode = (ens.mode_remuneration or MODE_HORAIRE).upper()
 
     if mode == MODE_MENSUEL:
         # Le détail des heures reste affiché : l'école doit pouvoir voir la
         # charge réelle d'un instituteur, même si elle ne détermine pas sa paie.
-        lignes = detail_heures_enseignant(db, enseignant_id, annee_id)
         return {
             "base": float(_dec(ens.salaire_base)),
             "mode": MODE_MENSUEL,
@@ -135,7 +194,6 @@ def salaire_enseignant(
             "explication": "Salaire mensuel fixe — les heures sont indicatives.",
         }
 
-    lignes = detail_heures_enseignant(db, enseignant_id, annee_id)
     total = sum(_dec(l["montant_mensuel"]) for l in lignes)
     heures = sum(_dec(l["heures_semaine"]) for l in lignes)
 
@@ -171,6 +229,20 @@ def salaire_enseignant(
             "rien à verser tant que l'un des deux n'est pas renseigné."
         ),
     }
+
+
+def salaire_enseignant(
+    db: Session, enseignant_id: int, annee_id: Optional[int] = None
+) -> dict:
+    """Rémunération mensuelle d'UN enseignant, avec son détail.
+
+    Ne jamais appeler dans une boucle : c'est `salaires_enseignants` qu'il faut
+    pour une liste, sinon chaque personne rouvre quatre requêtes.
+    """
+    return salaires_enseignants(db, [enseignant_id], annee_id).get(
+        enseignant_id,
+        {"base": 0.0, "mode": MODE_HORAIRE, "lignes": [], "total_heures": 0.0},
+    )
 
 
 def salaire_personnel(db: Session, utilisateur_id: int) -> dict:

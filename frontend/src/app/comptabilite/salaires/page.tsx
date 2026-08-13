@@ -256,7 +256,7 @@ function SalairesContent() {
             `Total : ${fmt(bilan.resteAVerser)}`
         )) return;
         try {
-            const res = await api.post(`/api/finance/salaires/payer-group?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}&mode_paiement=Cash`);
+            const res = await api.post(`/api/finance/salaires/payer-group?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}&mode_paiement=ESPECES`);
             const echecs = res.data?.echecs || [];
             showMsg(res.data?.message || 'Paiements effectués', echecs.length ? 'error' : 'success');
             invalidateSalaires(); invalidateEmployes();
