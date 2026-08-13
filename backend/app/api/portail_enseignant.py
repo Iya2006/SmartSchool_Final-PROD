@@ -1099,3 +1099,199 @@ def get_enfants_enseignant(
 
     return {"est_parent": True, "parent_id": parent.parent_id, "enfants": enfants}
 
+
+# ════════════════════════════════════════════════════════════
+# L'INSTITUTEUR DU PRIMAIRE PILOTE SA CLASSE DE BOUT EN BOUT
+# ════════════════════════════════════════════════════════════
+#
+# Au collège et au lycée, un professeur tient UNE matière dans plusieurs
+# classes : il saisit ses notes, et c'est tout. Les moyennes, les bulletins et
+# les résultats de fin d'année agrègent le travail de douze collègues — ce
+# n'est le rôle d'aucun d'entre eux.
+#
+# Au primaire, c'est l'inverse : l'instituteur tient UNE classe et y assure
+# TOUTES les matières. Les moyennes de sa classe ne dépendent que de ses
+# propres notes. L'obliger à passer par le secrétariat pour calculer ce qu'il
+# a lui-même noté n'ajoute aucun contrôle, seulement un délai — et dans les
+# petites écoles, l'instituteur EST l'administration.
+#
+# La règle est vérifiable, pas déclarative : cycle primaire, ET l'enseignant
+# est affecté à TOUTES les matières actives de la classe. Un professeur de
+# sport qui passe dans une classe de primaire ne remplit pas cette condition
+# et ne pilote rien.
+
+def _classe_pilotee_par(db: Session, enseignant_id: int, classe_id: int) -> Classe:
+    """La classe, à condition que cet enseignant en soit l'instituteur.
+
+    Lève 403 sinon, en disant pourquoi — un refus qui n'explique pas se lit
+    comme une panne.
+    """
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    if not ens or ens.etablissement_id != classe.etablissement_id:
+        # 404 et non 403 : ne jamais confirmer qu'une classe existe ailleurs.
+        raise HTTPException(404, "Classe non trouvée")
+
+    if get_cycle_key(classe_id, db) != "primaire":
+        raise HTTPException(
+            403,
+            "Le calcul des moyennes et les bulletins d'une classe du secondaire "
+            "reviennent à l'administration : ils rassemblent les notes de tous "
+            "les professeurs de la classe, pas seulement les vôtres.",
+        )
+
+    matieres_classe = {
+        cm.matiere_id for cm in db.query(ClasseMatiere).filter(
+            ClasseMatiere.classe_id == classe_id, ClasseMatiere.est_active == "O"
+        ).all()
+    }
+    mes_matieres = {
+        a.matiere_id for a in db.query(Affectation).filter(
+            Affectation.enseignant_id == enseignant_id,
+            Affectation.classe_id == classe_id,
+            Affectation.statut == "ACTIVE",
+        ).all()
+    }
+    if not matieres_classe or not matieres_classe.issubset(mes_matieres):
+        raise HTTPException(
+            403,
+            "Vous n'êtes pas l'instituteur de cette classe : vous n'y assurez "
+            "pas toutes les matières.",
+        )
+    return classe
+
+
+def _periode_de_la_classe(db: Session, classe: Classe, trimestre_id: int) -> Trimestre:
+    """La période demandée, à condition d'appartenir à l'année de la classe."""
+    periode = db.query(Trimestre).filter(
+        Trimestre.trimestre_id == trimestre_id,
+        Trimestre.annee_id == classe.annee_id,
+    ).first()
+    if not periode:
+        raise HTTPException(404, "Période non trouvée")
+    return periode
+
+
+@router.get("/{enseignant_id}/classe/{classe_id}/pilotage")
+def pilotage_classe(
+    enseignant_id: int, classe_id: int,
+    _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db),
+):
+    """Ce que cet enseignant a le droit de faire sur cette classe.
+
+    L'interface s'en sert pour afficher — ou non — les onglets Moyennes,
+    Bulletins et Résultats de fin d'année. Une porte visible mais fermée
+    décourage plus qu'une porte absente.
+    """
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    cycle = get_cycle_key(classe_id, db)
+    try:
+        _classe_pilotee_par(db, enseignant_id, classe_id)
+    except HTTPException as refus:
+        return {
+            "classe_id": classe_id, "classe": classe.libelle, "cycle": cycle,
+            "peut_saisir_notes": True,
+            "peut_calculer_moyennes": False,
+            "peut_voir_bulletins": False,
+            "peut_calculer_resultats_annuels": False,
+            "motif": refus.detail,
+        }
+    return {
+        "classe_id": classe_id, "classe": classe.libelle, "cycle": cycle,
+        "peut_saisir_notes": True,
+        "peut_calculer_moyennes": True,
+        "peut_voir_bulletins": True,
+        "peut_calculer_resultats_annuels": True,
+        "motif": "Vous êtes l'instituteur de cette classe : vous y assurez "
+                 "toutes les matières.",
+    }
+
+
+@router.post("/{enseignant_id}/classe/{classe_id}/calculer-moyennes")
+def calculer_moyennes_instituteur(
+    enseignant_id: int, classe_id: int, trimestre_id: int,
+    _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db),
+):
+    """L'instituteur calcule les moyennes de sa propre classe."""
+    from app.services.notation import calculer_resultats_periode
+
+    classe = _classe_pilotee_par(db, enseignant_id, classe_id)
+    verifier_annee_modifiable(db, classe.annee_id)
+    periode = _periode_de_la_classe(db, classe, trimestre_id)
+    if periode.statut == "CLOTURE":
+        raise HTTPException(
+            400, f"{periode.libelle} est clôturé — le calcul n'est plus possible."
+        )
+
+    res = calculer_resultats_periode(db, classe_id, trimestre_id, persist=True)
+    return {
+        "message": f"Moyennes calculées pour {res['classe']} — {res['effectif']} bulletins",
+        "classe": res["classe"],
+        "effectif": res["effectif"],
+        "bulletins_total": res["bulletins_total"],
+    }
+
+
+@router.post("/{enseignant_id}/classe/{classe_id}/resultats-annuels")
+def resultats_annuels_instituteur(
+    enseignant_id: int, classe_id: int,
+    _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db),
+):
+    """L'instituteur arrête les résultats de fin d'année de sa classe."""
+    from app.services.notation import calculer_resultats_annuels
+
+    classe = _classe_pilotee_par(db, enseignant_id, classe_id)
+    verifier_annee_modifiable(db, classe.annee_id)
+    res = calculer_resultats_annuels(db, classe_id, persist=True)
+    return {
+        "message": f"Résultats annuels calculés pour {classe.libelle}",
+        "classe": classe.libelle,
+        "effectif": res.get("effectif"),
+        "resultats": res.get("resultats", []),
+    }
+
+
+@router.get("/{enseignant_id}/classe/{classe_id}/bulletins")
+def bulletins_instituteur(
+    enseignant_id: int, classe_id: int, trimestre_id: Optional[int] = None,
+    _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db),
+):
+    """Bulletins de la classe de l'instituteur. Sans période : les annuels."""
+    from app.models.academique import Bulletin
+
+    classe = _classe_pilotee_par(db, enseignant_id, classe_id)
+    filtre = (
+        Bulletin.trimestre_id == _periode_de_la_classe(db, classe, trimestre_id).trimestre_id
+        if trimestre_id else Bulletin.type_bulletin == "ANNUEL"
+    )
+    lignes = (
+        db.query(Bulletin, Eleve)
+        .join(Inscription, Inscription.inscription_id == Bulletin.inscription_id)
+        .join(Eleve, Eleve.eleve_id == Inscription.eleve_id)
+        .filter(Inscription.classe_id == classe_id, filtre)
+        .order_by(Bulletin.rang.is_(None), Bulletin.rang)
+        .all()
+    )
+    return {
+        "classe": classe.libelle,
+        "trimestre_id": trimestre_id,
+        "type": "TRIMESTRIEL" if trimestre_id else "ANNUEL",
+        "bulletins": [
+            {
+                "bulletin_id": b.bulletin_id,
+                "eleve_id": e.eleve_id,
+                "nom": e.nom, "prenom": e.prenom, "matricule": e.matricule,
+                "moyenne_generale": (
+                    float(b.moyenne_generale) if b.moyenne_generale is not None else None
+                ),
+                "rang": b.rang, "mention": b.mention, "statut": b.statut,
+            }
+            for b, e in lignes
+        ],
+    }
+
