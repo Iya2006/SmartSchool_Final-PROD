@@ -430,24 +430,65 @@ def _inscription_active(db: Session, eleve_id: int) -> Inscription:
     return inscription
 
 
+def _periode(db: Session, inscription: Inscription, trimestre_id):
+    """La période demandée, ou celle en cours DANS L'ÉCOLE DE L'ÉLÈVE.
+
+    Ces routes prenaient `trimestre_id = 1` par défaut : la première période
+    créée sur la plateforme, c'est-à-dire celle d'une autre école pour tous
+    sauf la première inscrite. L'élève ouvrait son bulletin et ne voyait rien,
+    sans qu'aucune erreur ne lui soit signalée.
+    """
+    from app.services.notation import periode_courante
+
+    if trimestre_id:
+        return trimestre_id
+    courante = periode_courante(db, inscription.annee_id)
+    return courante.trimestre_id if courante else None
+
+
+@router.get("/{eleve_id}/periodes")
+def get_periodes_eleve(
+    eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
+):
+    """Périodes réelles de l'école de l'élève, pour le sélecteur de bulletin.
+
+    Voir `portail_parent.get_periodes_enfant` : le découpage de l'année ne se
+    devine pas, il se lit.
+    """
+    inscription = _inscription_active(db, eleve_id)
+    periodes = db.query(Trimestre).filter(
+        Trimestre.annee_id == inscription.annee_id
+    ).order_by(Trimestre.numero, Trimestre.date_debut).all()
+    return [
+        {
+            "trimestre_id": p.trimestre_id,
+            "numero": p.numero,
+            "libelle": p.libelle,
+            "statut": p.statut,
+        }
+        for p in periodes
+    ]
+
+
 @router.get("/{eleve_id}/epreuves")
 def get_epreuves_eleve(
-    eleve_id: int, trimestre_id: int = 1,
+    eleve_id: int, trimestre_id: Optional[int] = None,
     _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
 ):
     """Épreuves consultables sur la période (uniquement celles centralisées)."""
     from app.services.notation import epreuves_consultables
 
     inscription = _inscription_active(db, eleve_id)
+    trimestre_id = _periode(db, inscription, trimestre_id)
     return {
         "trimestre_id": trimestre_id,
-        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id),
+        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id) if trimestre_id else [],
     }
 
 
 @router.get("/{eleve_id}/classement")
 def get_classement_eleve(
-    eleve_id: int, trimestre_id: int = 1,
+    eleve_id: int, trimestre_id: Optional[int] = None,
     evaluation_ids: Optional[str] = None,
     _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
 ):
@@ -464,6 +505,7 @@ def get_classement_eleve(
     from app.services.notation import resultat_eleve_sur_epreuves
 
     inscription = _inscription_active(db, eleve_id)
+    trimestre_id = _periode(db, inscription, trimestre_id)
     ids = None
     if evaluation_ids:
         try:
@@ -488,13 +530,14 @@ def get_classement_eleve(
 # BULLETIN
 # ================================================================
 @router.get("/{eleve_id}/bulletin")
-def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
+def get_bulletin_eleve(eleve_id: int, trimestre_id: Optional[int] = None, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
     """Bulletin publié de l'élève."""
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
     ).first()
     if not inscription:
         return None
+    trimestre_id = _periode(db, inscription, trimestre_id)
 
     bulletin = db.query(Bulletin).filter(
         Bulletin.inscription_id == inscription.inscription_id,

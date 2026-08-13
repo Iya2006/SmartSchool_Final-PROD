@@ -2219,6 +2219,110 @@ def _recap_notes(db: Session, eid: int, annee) -> None:
           "c'est voulu)")
 
 
+# ── étape 11 : les bulletins ────────────────────────────────────────────
+#
+# Un bulletin ne se saisit pas : il se CALCULE. Le scénario ne fabrique donc
+# aucune moyenne — il appelle le moteur de l'application, celui-là même que
+# l'école déclenche depuis « Centralisation Notes ». Un scénario qui
+# calculerait ses propres moyennes ne testerait que lui-même, et laisserait
+# passer une erreur de coefficient sans jamais s'en apercevoir.
+def etape_11_bulletins(db: Session) -> None:
+    """Bulletins de chaque semestre, puis bulletin annuel, classe par classe."""
+    from app.services import notation as _notation
+
+    _titre(11, "Bulletins de periode et bulletins annuels")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == eid, AnneeScolaire.est_courante == "O"
+    ).first()
+
+    classes = db.query(Classe).filter(
+        Classe.etablissement_id == eid, Classe.annee_id == annee.annee_id,
+        Classe.statut == "ACTIVE",
+    ).order_by(Classe.code).all()
+    semestres = db.query(Trimestre).filter(
+        Trimestre.annee_id == annee.annee_id
+    ).order_by(Trimestre.numero).all()
+    if not classes or not semestres:
+        print("  ni classes ni semestres — jouer les etapes 1 et 2 d'abord.")
+        return
+
+    print(f"  {len(classes)} classes x {len(semestres)} semestres, "
+          f"puis le bulletin annuel de chacune.\n")
+    nb_periode = nb_annuel = 0
+    for classe in classes:
+        for semestre in semestres:
+            r = _notation.calculer_resultats_periode(
+                db, classe.classe_id, semestre.trimestre_id, persist=True
+            )
+            nb_periode += r.get("bulletins_total", 0)
+        a = _notation.calculer_resultats_annuels(
+            db, classe.classe_id, persist=True
+        )
+        nb_annuel += a.get("bulletins_total", len(a.get("resultats") or []))
+    db.commit()
+
+    print(f"  {nb_periode} bulletins de semestre")
+    print(f"  {nb_annuel} bulletins annuels")
+    _recap_bulletins(db, eid, annee)
+
+
+def _recap_bulletins(db: Session, eid: int, annee) -> None:
+    lignes = db.execute(text("""
+        SELECT COALESCE(t.libelle, 'Annuel') AS periode, b.type_bulletin,
+               count(*) AS bulletins,
+               round(avg(b.moyenne_generale)::numeric, 2) AS moyenne,
+               count(*) FILTER (WHERE b.moyenne_generale >= 10) AS au_dessus,
+               count(*) FILTER (WHERE b.moyenne_generale < 10) AS en_dessous
+        FROM ss_bulletins b
+        JOIN ss_inscriptions i ON i.inscription_id = b.inscription_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        LEFT JOIN ss_trimestres t ON t.trimestre_id = b.trimestre_id
+        WHERE cl.etablissement_id = :eid AND i.annee_id = :aid
+        GROUP BY t.libelle, t.numero, b.type_bulletin
+        ORDER BY b.type_bulletin DESC, t.numero
+    """), {"eid": eid, "aid": annee.annee_id}).fetchall()
+    print(f"\n  {'PERIODE':<16}{'BULLETINS':>10}{'MOYENNE':>10}{'>= 10':>8}{'< 10':>8}")
+    for periode, _type, nb, moyenne, au_dessus, en_dessous in lignes:
+        # Une moyenne vide veut dire quelque chose (aucune note exploitable) :
+        # on l'affiche comme telle, on ne la remplace pas par un zéro.
+        print(f"  {periode:<16}{nb:>10}{(str(moyenne) if moyenne is not None else '—'):>10}"
+              f"{au_dessus:>8}{en_dessous:>8}")
+
+    # LA VERIFICATION QUI COMPTE : un bulletin sans rang n'est pas un bulletin.
+    # Une famille lit d'abord « 3e sur 32 », la moyenne vient apres.
+    sans_rang = db.execute(text("""
+        SELECT count(*) FROM ss_bulletins b
+        JOIN ss_inscriptions i ON i.inscription_id = b.inscription_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid AND i.annee_id = :aid
+          AND b.moyenne_generale IS NOT NULL AND b.rang IS NULL
+    """), {"eid": eid, "aid": annee.annee_id}).scalar()
+    print(f"\n  {'[OK]' if sans_rang == 0 else '[!!]'} bulletins notes sans rang : {sans_rang}")
+
+    # Le major et le dernier de chaque cycle : si les deux se ressemblent,
+    # c'est que les notes ne distinguent personne et que le classement ment.
+    extremes = db.execute(text("""
+        SELECT c.libelle AS cycle,
+               round(max(b.moyenne_generale)::numeric, 2) AS meilleure,
+               round(min(b.moyenne_generale)::numeric, 2) AS derniere,
+               count(*) AS eleves
+        FROM ss_bulletins b
+        JOIN ss_inscriptions i ON i.inscription_id = b.inscription_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        JOIN ss_niveaux niv ON niv.niveau_id = cl.niveau_id
+        JOIN ss_cycles c ON c.cycle_id = niv.cycle_id
+        WHERE cl.etablissement_id = :eid AND i.annee_id = :aid
+          AND b.type_bulletin = 'ANNUEL' AND b.moyenne_generale IS NOT NULL
+        GROUP BY c.libelle, c.ordre ORDER BY c.ordre
+    """), {"eid": eid, "aid": annee.annee_id}).fetchall()
+    print(f"\n  Resultat annuel par cycle :")
+    for cycle, meilleure, derniere, nb in extremes:
+        print(f"     {cycle:<12} {nb:>4} eleves — du dernier ({derniere}) "
+              f"au major ({meilleure})")
+
+
 ETAPES = {
     1: ("Referentiel (cycles, niveaux, matieres, annee, semestres)", etape_1_referentiel),
     2: ("Classes et grille horaire", etape_2_classes),
@@ -2230,6 +2334,7 @@ ETAPES = {
     8: ("Epreuves de l'annee et depot des sujets", etape_8_epreuves_et_sujets),
     9: ("Heures de cours non assurees (college et lycee)", etape_9_absences_enseignants),
     10: ("Notes de l'annee et centralisation des epreuves", etape_10_notes),
+    11: ("Bulletins de periode et bulletins annuels", etape_11_bulletins),
 }
 
 

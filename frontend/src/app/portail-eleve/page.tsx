@@ -78,6 +78,7 @@ export default function PortailEleve() {
         bulletinLoading,
         bulletinTrimestre,
         setBulletinTrimestre,
+        periodes,
         messagesData,
         messagesLoading,
         fournituresData,
@@ -236,6 +237,7 @@ export default function PortailEleve() {
                                         bulletinData={bulletinData}
                                         bulletinTrimestre={bulletinTrimestre}
                                         setBulletinTrimestre={setBulletinTrimestre}
+                                        periodes={periodes}
                                         loading={bulletinLoading}
                                         couleurPortail={couleurPortail}
                                     />

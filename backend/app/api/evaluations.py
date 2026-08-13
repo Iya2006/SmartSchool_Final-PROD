@@ -5,7 +5,7 @@ Toute la logique de calcul (coefficients, moyennes, mentions, barèmes) vit dans
 app/services/notation.py — source unique partagée avec portail_enseignant.py.
 Ce module ne fait qu'exposer les routes HTTP.
 """
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
 from typing import List, Optional
@@ -72,6 +72,38 @@ def _classe_ou_404(db: Session, classe_id: int, etablissement_id: int) -> Classe
     if not c:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
     return c
+
+
+def _periode_ou_404(db: Session, trimestre_id: int, etablissement_id: int) -> Trimestre:
+    """La période, à condition qu'elle appartienne bien à l'école appelante.
+
+    POURQUOI CE CONTRÔLE EXISTE
+    ---------------------------
+    Le calcul des moyennes acceptait n'importe quel `trimestre_id`, et prenait
+    même `1` par défaut quand l'appelant n'en envoyait aucun. Une école dont
+    les périodes portent les identifiants 4 et 5 calculait donc ses bulletins
+    sur le 1er trimestre d'une AUTRE école : aucune évaluation ne
+    correspondait, et le bouton « Calculer les moyennes » créait des bulletins
+    vides, sans moyenne et sans rang, en annonçant sa réussite.
+
+    Trouvé en base : 63 bulletins d'élèves de TrillionX rattachés au 1er
+    trimestre du Lycée d'Excellence de Conakry. Le fondateur voyait un bouton
+    qui « ne prenait pas » ; il prenait, mais sur la mauvaise période.
+
+    `Trimestre` ne porte pas d'établissement : il se lit par son année.
+    """
+    periode = (
+        db.query(Trimestre)
+        .join(AnneeScolaire, AnneeScolaire.annee_id == Trimestre.annee_id)
+        .filter(
+            Trimestre.trimestre_id == trimestre_id,
+            AnneeScolaire.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not periode:
+        raise HTTPException(status_code=404, detail="Période non trouvée")
+    return periode
 
 
 def _evaluation_ou_404(db: Session, evaluation_id: int, etablissement_id: int) -> Evaluation:
@@ -449,12 +481,13 @@ def get_centralisation_stats(trimestre_id: Optional[int] = None, db: Session = D
 @router.get("/classe/{classe_id}/notes-centralisees")
 def get_notes_centralisees_classe(
     classe_id: int,
-    trimestre_id: int = 1,
+    trimestre_id: int = Query(..., description="Période consultée"),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Vue complète des notes d'une classe : tableau élèves × matières avec moyennes."""
     classe = _classe_ou_404(db, classe_id, etablissement_id)
+    _periode_ou_404(db, trimestre_id, etablissement_id)
     cycle_key = get_cycle_key(classe_id, db)
 
     # Matières de cette classe
@@ -584,7 +617,7 @@ def get_notes_centralisees_classe(
 @router.post("/classe/{classe_id}/calculer-moyennes")
 def calculer_moyennes(
     classe_id: int,
-    trimestre_id: int = 1,
+    trimestre_id: int = Query(..., description="Période à calculer"),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -593,12 +626,16 @@ def calculer_moyennes(
     Le calcul lui-même vit dans services/notation.py — partagé avec l'aperçu
     intermédiaire (`/resultats-intermediaires`) pour qu'un chiffre affiché avant
     publication soit exactement celui qui finira sur le bulletin.
+
+    `trimestre_id` est obligatoire et doit être une période DE CETTE ÉCOLE :
+    voir `_periode_ou_404`. Il valait `1` par défaut, ce qui faisait calculer
+    en silence sur la période d'un autre établissement.
     """
     classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
-    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
-    if trimestre and trimestre.statut == "CLOTURE":
+    trimestre = _periode_ou_404(db, trimestre_id, etablissement_id)
+    if trimestre.statut == "CLOTURE":
         raise HTTPException(
             400,
             f"{trimestre.libelle} est cloture - impossible de recalculer les moyennes de cette periode."
@@ -644,7 +681,7 @@ def _enqueue(fonction, *args, timeout: int, etablissement_id: int):
 @router.post("/classe/{classe_id}/calculer-moyennes-async")
 def calculer_moyennes_async(
     classe_id: int,
-    trimestre_id: int = 1,
+    trimestre_id: int = Query(..., description="Période à calculer"),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -662,9 +699,7 @@ def calculer_moyennes_async(
     classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
 
-    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
-    if not trimestre:
-        raise HTTPException(404, "Période non trouvée")
+    trimestre = _periode_ou_404(db, trimestre_id, etablissement_id)
     if trimestre.statut == "CLOTURE":
         raise HTTPException(
             400,
@@ -1892,10 +1927,11 @@ def depublier_bulletin(bulletin_id: int, db: Session = Depends(get_db), etabliss
 # ════════════════════════════════════════════════════════════
 
 @router.put("/classe/{classe_id}/bulletins/publier-tout")
-def publier_bulletins_classe(classe_id: int, trimestre_id: int = 1, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Publie tous les bulletins d'une classe pour un trimestre donné."""
+def publier_bulletins_classe(classe_id: int, trimestre_id: int = Query(..., description="Période à publier"), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Publie tous les bulletins d'une classe pour une période donnée."""
     classe = _classe_ou_404(db, classe_id, etablissement_id)
     verifier_annee_modifiable(db, classe.annee_id)
+    _periode_ou_404(db, trimestre_id, etablissement_id)
 
     inscriptions = db.query(Inscription).filter(
         Inscription.classe_id == classe_id,

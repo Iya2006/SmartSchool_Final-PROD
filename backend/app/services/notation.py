@@ -132,6 +132,32 @@ def periode_pour_date(db: Session, annee_id: int, jour: date) -> Optional[Trimes
     ).order_by(Trimestre.numero).first()
 
 
+def periode_courante(db: Session, annee_id: int) -> Optional[Trimestre]:
+    """Période de travail d'une année : celle en cours, sinon la première.
+
+    Sert de valeur par défaut quand l'appelant n'en précise aucune. Les
+    portails élève et parent prenaient `trimestre_id = 1` dans ce cas : un
+    identifiant en dur, qui désigne la première période créée sur la
+    plateforme — donc celle d'une autre école pour tout le monde sauf la
+    première inscrite. La famille ouvrait son bulletin et ne voyait rien.
+    """
+    if not annee_id:
+        return None
+    periodes = db.query(Trimestre).filter(
+        Trimestre.annee_id == annee_id
+    ).order_by(Trimestre.numero, Trimestre.date_debut).all()
+    if not periodes:
+        return None
+    aujourdhui = date.today()
+    return (
+        next((p for p in periodes if p.statut == "EN_COURS"), None)
+        or next((p for p in periodes
+                 if p.date_debut and p.date_fin
+                 and p.date_debut <= aujourdhui <= p.date_fin), None)
+        or periodes[0]
+    )
+
+
 def verifier_date_dans_periode(db: Session, trimestre: Trimestre, jour: date) -> None:
     """Refuse une épreuve datée hors de la période à laquelle on la rattache.
 

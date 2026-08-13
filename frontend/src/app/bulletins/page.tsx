@@ -70,6 +70,14 @@ function BulletinsContent() {
                 ]);
                 setClasses(clsRes.data);
                 setTrimestres(triRes.data);
+                // Même correctif que l'écran Notes : la période était figée à
+                // l'identifiant 1, celui de la première période créée sur la
+                // plateforme — donc celle d'une autre école. On part de la
+                // période en cours de l'école, sinon de la première définie.
+                if (triRes.data?.length) {
+                    const enCours = triRes.data.find((t: any) => t.statut === 'EN_COURS');
+                    setSelectedTrimestre((enCours || triRes.data[0]).trimestre_id);
+                }
                 try {
                     const typesRes = await api.get('/api/evaluations/types');
                     setTypesEval((typesRes.data || []).filter((t: any) => t.statut === 'ACTIF'));
