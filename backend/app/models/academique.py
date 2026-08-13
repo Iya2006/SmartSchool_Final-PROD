@@ -21,8 +21,13 @@ class Utilisateur(Base):
     __tablename__ = "ss_utilisateurs"
     utilisateur_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
-    nom_utilisateur = Column(String(100), unique=True, nullable=False, index=True)
-    mot_de_passe = Column(String(255), nullable=False)
+    # Facultatifs : un gardien, un agent d'entretien ou un chauffeur n'a aucun
+    # écran à consulter, mais il doit exister en base — il faut le payer.
+    # L'absence de mot de passe signifie exactement ce qu'elle dit : pas
+    # d'accès. Voir app/core/security.py::verify_password, qui n'accepte plus
+    # de passe-partout, et la migration 2026_08_personnel_01_compte_facultatif.
+    nom_utilisateur = Column(String(100), unique=True, nullable=True, index=True)
+    mot_de_passe = Column(String(255), nullable=True)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
     email = Column(String(150))

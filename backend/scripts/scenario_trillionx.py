@@ -2323,6 +2323,164 @@ def _recap_bulletins(db: Session, eid: int, annee) -> None:
               f"au major ({meilleure})")
 
 
+# ── étape 12 : le personnel non enseignant ──────────────────────────────
+#
+# UNE ÉCOLE N'EST PAS FAITE QUE D'ENSEIGNANTS
+# Mille élèves, ça veut dire quelqu'un pour encaisser, quelqu'un pour tenir
+# le portail, quelqu'un pour inscrire au guichet, quelqu'un pour surveiller la
+# cour. Ces gens-là ont chacun leur espace dans l'application — et pour la
+# plupart, un salaire mensuel fixe que la direction inscrit AU MOMENT où elle
+# crée leur compte. C'est le geste réel : on embauche, on ouvre l'accès et on
+# fixe la paie d'un seul mouvement.
+#
+# Trois d'entre eux n'ont pas de compte : l'agent d'entretien, le gardien et
+# le chauffeur ne se connectent à rien. Ils existent quand même en base — il
+# faut bien les payer.
+#
+# Salaires mensuels en GNF, ordre de grandeur d'une école privée de Conakry.
+EFFECTIF_PERSONNEL = [
+    # (rôle, nombre, salaire mensuel, prime, intitulé du poste)
+    ("DG",              1, 4_500_000, 500_000, "Directeur General"),
+    ("DIRECTEUR_NIVEAU", 1, 3_000_000, 300_000, "Directeur des Etudes"),
+    ("COMPTABLE",       1, 2_500_000, 250_000, "Comptable"),
+    ("INFORMATICIEN",   1, 2_000_000, 150_000, "Informaticien"),
+    ("OPERATEUR",       2, 1_500_000, 100_000, "Secretaire"),
+    ("SURVEILLANT",     3, 1_400_000, 100_000, "Surveillant"),
+    ("BIBLIOTHECAIRE",  1, 1_300_000,  80_000, "Bibliothecaire"),
+    ("CHAUFFEUR",       1, 1_200_000,  50_000, "Chauffeur"),
+    ("GARDIEN",         2, 1_000_000,  50_000, "Gardien"),
+    ("AGENT_ENTRETIEN", 4,   900_000,  40_000, "Agent d'entretien"),
+]
+NOMS_PERSONNEL = [
+    ("Sylla", "Mariama"), ("Bah", "Alseny"), ("Camara", "Fatoumata"),
+    ("Diallo", "Ousmane"), ("Conde", "Kadiatou"), ("Toure", "Sekou"),
+    ("Barry", "Aissatou"), ("Keita", "Mamadou"), ("Soumah", "Hawa"),
+    ("Kourouma", "Lansana"), ("Bangoura", "Mabinty"), ("Sow", "Ibrahima"),
+    ("Traore", "Djenabou"), ("Doumbouya", "Alpha"), ("Fofana", "Nene"),
+    ("Cisse", "Abdoulaye"), ("Sangare", "Salematou"),
+]
+MOT_DE_PASSE_PERSONNEL = "TrillionX2026!"
+
+
+def etape_12_personnel(db: Session) -> None:
+    """Le personnel non enseignant : comptes, espaces et salaires."""
+    from app.api.personnel import ROLES_AVEC_ACCES, generer_nom_utilisateur
+    from app.core.security import hash_password
+    from app.models.academique import Utilisateur
+
+    _titre(12, "Personnel non enseignant : comptes, espaces et salaires")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+
+    deja = db.query(Utilisateur).filter(
+        Utilisateur.etablissement_id == eid,
+        Utilisateur.role != "ADMIN",
+    ).count()
+    if deja:
+        print(f"  {deja} membre(s) du personnel deja en poste — etape deja jouee.")
+        _recap_personnel(db, eid)
+        return
+
+    noms = list(NOMS_PERSONNEL)
+    random.shuffle(noms)
+    index = 0
+    nb_avec_compte = nb_sans_compte = 0
+    for role, nombre, salaire, prime, poste in EFFECTIF_PERSONNEL:
+        for _ in range(nombre):
+            nom, prenom = noms[index % len(noms)]
+            index += 1
+            # Le compte n'existe que si le rôle a un espace. Créer un login
+            # pour un gardien qui n'a rien à consulter, c'est une porte de plus
+            # à surveiller pour aucun usage.
+            a_un_espace = role in ROLES_AVEC_ACCES
+            login = generer_nom_utilisateur(db, prenom, nom) if a_un_espace else None
+            db.add(Utilisateur(
+                etablissement_id=eid, nom=nom, prenom=prenom, role=role,
+                nom_utilisateur=login,
+                mot_de_passe=hash_password(MOT_DE_PASSE_PERSONNEL) if a_un_espace else None,
+                email=f"{(login or f'{prenom}.{nom}').lower()}@trillionx.gn",
+                telephone=f"62{random.randint(1000000, 9999999)}",
+                sexe=random.choice(["M", "F"]),
+                statut="ACTIF", type_contrat="PERMANENT",
+                date_embauche=ANNEE_DEBUT,
+                # LE SALAIRE EST INSCRIT ICI, A LA CREATION DU COMPTE.
+                # C'est le geste de la direction : on embauche, on ouvre
+                # l'acces et on fixe la paie d'un seul mouvement.
+                salaire_base=salaire, prime_mensuelle=prime,
+                mode_paiement_salaire="ESPECES",
+            ))
+            db.flush()
+            nb_avec_compte += 1 if a_un_espace else 0
+            nb_sans_compte += 0 if a_un_espace else 1
+    db.commit()
+
+    print(f"  {nb_avec_compte} membre(s) avec un compte et un espace")
+    print(f"  {nb_sans_compte} membre(s) sans compte (aucun espace a consulter), "
+          f"payes comme les autres")
+    print(f"  mot de passe commun a la recette : {MOT_DE_PASSE_PERSONNEL}")
+    _recap_personnel(db, eid)
+
+
+def _recap_personnel(db: Session, eid: int) -> None:
+    # Où chaque rôle atterrit en se connectant. La table vit dans le frontend
+    # (`roleAccess.ts`) ; elle est reprise ici pour que le récapitulatif dise
+    # à quoi sert chaque compte créé.
+    espaces = {
+        "ADMIN": "/dashboard",
+        "DG": "/dashboard",
+        "DIRECTEUR_NIVEAU": "/dashboard (sans la comptabilite)",
+        "COMPTABLE": "/comptabilite/dashboard",
+        "BIBLIOTHECAIRE": "/personnel/portail/bibliothecaire",
+        "INFORMATICIEN": "/personnel/portail/informaticien",
+        "SURVEILLANT": "/personnel/portail/surveillant",
+        "OPERATEUR": "/personnel/portail/operateur",
+    }
+    lignes = db.execute(text("""
+        SELECT role, count(*) AS nb,
+               count(nom_utilisateur) AS avec_compte,
+               sum(COALESCE(salaire_base, 0) + COALESCE(prime_mensuelle, 0)) AS cout_mensuel
+        FROM ss_utilisateurs WHERE etablissement_id = :eid
+        GROUP BY role ORDER BY sum(COALESCE(salaire_base, 0)) DESC
+    """), {"eid": eid}).fetchall()
+
+    print(f"\n  {'ROLE':<18}{'NB':>4}{'COMPTE':>8}{'COUT MENSUEL':>16}   ESPACE")
+    total = 0
+    for role, nb, avec_compte, cout in lignes:
+        total += float(cout or 0)
+        print(f"  {role:<18}{nb:>4}{avec_compte:>8}{float(cout or 0):>16,.0f}   "
+              f"{espaces.get(role, 'aucun espace')}")
+    print(f"  {'TOTAL':<18}{'':>4}{'':>8}{total:>16,.0f} GNF / mois")
+
+    # Ce que ça pèse sur l'année scolaire, octobre à juin : neuf mois.
+    print(f"\n  Sur les 9 mois de l'annee scolaire : {total * 9:,.0f} GNF")
+
+    # VERIFICATION : un compte sans mot de passe ne peut pas se connecter, et
+    # un compte avec mot de passe doit avoir un login. L'un sans l'autre donne
+    # un compte inutilisable que personne ne remarque avant la rentree.
+    incoherents = db.execute(text("""
+        SELECT count(*) FROM ss_utilisateurs
+        WHERE etablissement_id = :eid
+          AND ((nom_utilisateur IS NULL) <> (mot_de_passe IS NULL))
+    """), {"eid": eid}).scalar()
+    print(f"  {'[OK]' if incoherents == 0 else '[!!]'} comptes a moitie ouverts "
+          f"(login sans mot de passe, ou l'inverse) : {incoherents}")
+
+    # Un salaire manquant se nomme : « 1 membre sans salaire » n'est pas
+    # actionnable, « Sekou TOURE, ADMIN » l'est.
+    sans_salaire = db.execute(text("""
+        SELECT prenom || ' ' || nom AS qui, role FROM ss_utilisateurs
+        WHERE etablissement_id = :eid AND COALESCE(salaire_base, 0) = 0
+        ORDER BY role
+    """), {"eid": eid}).fetchall()
+    if not sans_salaire:
+        print("  [OK] tout le monde a un salaire renseigne")
+    else:
+        print(f"  [A COMPLETER] {len(sans_salaire)} membre(s) sans salaire — "
+              f"ils ne sortiront pas a la paie :")
+        for qui, role in sans_salaire:
+            print(f"     {qui} ({role})")
+
+
 ETAPES = {
     1: ("Referentiel (cycles, niveaux, matieres, annee, semestres)", etape_1_referentiel),
     2: ("Classes et grille horaire", etape_2_classes),
@@ -2335,6 +2493,7 @@ ETAPES = {
     9: ("Heures de cours non assurees (college et lycee)", etape_9_absences_enseignants),
     10: ("Notes de l'annee et centralisation des epreuves", etape_10_notes),
     11: ("Bulletins de periode et bulletins annuels", etape_11_bulletins),
+    12: ("Personnel non enseignant : comptes, espaces et salaires", etape_12_personnel),
 }
 
 

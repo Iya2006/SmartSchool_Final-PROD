@@ -77,6 +77,24 @@ def _masquer(fiche: dict) -> dict:
     return allege
 
 
+def generer_nom_utilisateur(db: Session, prenom: str, nom: str) -> str:
+    """Login proposé à la création : « ma.sylla », puis « ma.sylla2 », etc.
+
+    Fonction partagée plutôt que règle recopiée : le scénario de recette crée
+    du personnel par le même chemin que l'écran, sinon il vérifierait une
+    logique qui n'est pas celle en production.
+
+    L'unicité est cherchée sur TOUTE la plateforme, pas dans l'école seule :
+    `auth.py` identifie par login sans savoir de quelle école on vient.
+    """
+    base = f"{(prenom or '')[:2].lower()}.{(nom or '').lower()}".strip(".")
+    base = base or "utilisateur"
+    existants = db.query(func.count(Utilisateur.utilisateur_id)).filter(
+        Utilisateur.nom_utilisateur.ilike(f"{base}%")
+    ).scalar() or 0
+    return base if existants == 0 else f"{base}{existants + 1}"
+
+
 def _row_to_dict(p: Utilisateur) -> dict:
     """Sérialise un Utilisateur en dict compatible avec PersonnelOut."""
     return {
@@ -204,12 +222,7 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etabl
     # Génération du login si non fourni mais rôle avec accès
     nom_utilisateur = data.nom_utilisateur
     if data.role in ROLES_AVEC_ACCES and not nom_utilisateur and data.mot_de_passe:
-        base = f"{data.prenom[:2].lower()}.{data.nom.lower()}"
-        # Vérifie unicité
-        count = db.query(func.count(Utilisateur.utilisateur_id)).filter(
-            Utilisateur.nom_utilisateur.ilike(f"{base}%")
-        ).scalar() or 0
-        nom_utilisateur = base if count == 0 else f"{base}{count + 1}"
+        nom_utilisateur = generer_nom_utilisateur(db, data.prenom, data.nom)
 
     # Vérifie unicité du login si fourni
     if nom_utilisateur:
