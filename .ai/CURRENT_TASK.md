@@ -1,6 +1,40 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active — Refonte commerciale de la page de connexion + PWA installable (13/08/2026)
+## Tâche active — Fusion Sams + « incidents » locaux périmés (13/08/2026)
+Après avoir fusionné `origin/main` (PR #5 du collaborateur Sams — paie
+enseignants, correctifs comptabilité) dans `IYA` (5 conflits résolus —
+dont un bug trouvé dans mon propre code, `Depends()` invalide sur un
+champ Pydantic —, 4 migrations exécutées, 2 échecs de test pré-existants
+chez Sams root-causés et signalés sans y toucher), l'utilisateur a
+montré une capture de la page `/administration/incidents` avec 14 groupes
+d'erreurs non résolues (« column X does not exist » — `ss_classe_matieres.
+note_sur`, `ss_types_frais.etablissement_id`, `ss_parents.etablissement_id`,
+`ss_sujets_examen.trimestre_id`, `ss_evaluations.session_id`,
+`ss_types_evaluation.etablissement_id`, etc.), plus un bloc de texte collé
+signalant des erreurs similaires **en production** (Vercel/Render/Supabase).
+
+**Distinction posée explicitement par l'utilisateur** : ne toucher qu'aux
+erreurs locales — la production est gérée par son collaborateur qui a les
+identifiants, à ne pas toucher.
+
+**Diagnostic** : ces 14 groupes d'incidents sont des entrées **historiques
+périmées**, pas des bugs actifs. `IncidentApplicatif.resolu` est un
+drapeau **manuel** (bouton « Réglé » → `PUT /api/incidents/marquer-resolu`,
+`backend/app/api/incidents.py`) — rien ne re-vérifie automatiquement si un
+bug enregistré autrefois existe encore. Vérifié à la fois par
+`sqlalchemy.inspect` ET par de vraies requêtes SQL directes
+(`SELECT colonne FROM table LIMIT 1`) sur la base locale réelle : les 8
+colonnes existent toutes déjà (migrations exécutées plus tôt cette
+session, notamment lors des travaux notation/multi-écoles/paie). Les 14
+groupes (168 occurrences) ont été marqués résolus via le même mécanisme
+que le bouton « Réglé » — aucune donnée supprimée, juste le drapeau.
+
+**Non touché, sur instruction explicite** : tout ce qui concerne la
+production (Vercel/Render/Supabase) — le collaborateur de l'utilisateur
+s'en charge avec ses propres identifiants. Aucune tentative d'obtenir ou
+d'utiliser `DATABASE_URL` de production.
+
+## Tâche précédente — Refonte commerciale de la page de connexion + PWA installable (13/08/2026)
 Demande de l'utilisateur : transformer `/login` (fonctionnelle mais
 technique, pas "vitrine") en page commerciale premium, plus rendre le PWA
 réellement installable (manifest jamais lié, icônes fausses). Périmètre
