@@ -1898,6 +1898,239 @@ def _recap_absences(db: Session, eid: int, annee) -> None:
     print(f"  manquee est retenue a SON tarif, celui de sa classe.")
 
 
+# ── étape 10 : les notes ────────────────────────────────────────────────
+#
+# UN ÉLÈVE N'EST PAS UN TIRAGE AU SORT
+# Des notes tirées au hasard donneraient une école où le premier du premier
+# semestre finit dernier au second, où personne ne progresse et où aucun
+# classement ne veut rien dire. Les moyennes seraient plausibles, les
+# trajectoires absurdes — et c'est justement les trajectoires que l'école
+# regarde.
+#
+# Chaque élève porte donc trois choses stables toute l'année :
+#   son NIVEAU        — ce qu'il vaut en général ;
+#   ses AFFINITÉS     — fort en maths, faible en français, et ça ne s'inverse
+#                       pas d'une épreuve à l'autre ;
+#   sa PROGRESSION    — il monte, stagne ou décroche, et la pente tient.
+# Le hasard ne joue que sur le jour de l'épreuve : la forme du moment.
+NIVEAU_MOYEN = 11.5          # sur 20, moyenne de l'école
+NIVEAU_ECART = 3.2           # écart entre un bon et un faible élève
+AFFINITE_ECART = 1.6         # écart d'une matière à l'autre chez un même élève
+FORME_DU_JOUR = 1.5          # ce que le hasard d'une épreuve peut ajouter/ôter
+PENTE_ANNUELLE = (-1.5, 2.5) # du décrochage à la vraie progression, sur l'année
+MALUS_COMPOSITION = 0.7      # une composition est plus dure qu'une évaluation
+PART_ABSENTS_EPREUVE = 0.02  # un élève sur cinquante manque une épreuve donnée
+
+
+def _note_reelle(niveau, affinite, avancement, pente, est_compo, note_sur):
+    """La note d'un élève à une épreuve, sur le barème de cette épreuve."""
+    sur_20 = (
+        niveau + affinite + pente * avancement
+        + random.gauss(0, FORME_DU_JOUR)
+        - (MALUS_COMPOSITION if est_compo else 0)
+    )
+    # Une note reste dans son barème. Un 21/20 n'existe pas, un -2 non plus :
+    # ce sont les deux bornes que la saisie manuelle refuse déjà.
+    return round(min(max(sur_20, 0.0), 20.0) * float(note_sur) / 20.0, 2)
+
+
+def etape_10_notes(db: Session) -> None:
+    """Les notes de toutes les épreuves, puis leur centralisation."""
+    _titre(10, "Notes de l'annee et centralisation des epreuves")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == eid, AnneeScolaire.est_courante == "O"
+    ).first()
+
+    deja = db.execute(text("""
+        SELECT count(*) FROM ss_notes n
+        JOIN ss_evaluations e ON e.evaluation_id = n.evaluation_id
+        JOIN ss_classes cl ON cl.classe_id = e.classe_id
+        WHERE cl.etablissement_id = :eid
+    """), {"eid": eid}).scalar()
+    if deja:
+        print(f"  {deja} note(s) deja saisie(s) — etape deja jouee.")
+        _recap_notes(db, eid, annee)
+        return
+
+    # Toutes les épreuves de l'année, dans l'ordre où elles se sont tenues :
+    # l'ordre EST la progression, on ne peut pas le tirer au sort après coup.
+    epreuves = db.execute(text("""
+        SELECT e.evaluation_id, e.classe_id, e.matiere_id, e.note_sur,
+               te.code AS type_code, e.date_evaluation
+        FROM ss_evaluations e
+        JOIN ss_classes cl ON cl.classe_id = e.classe_id
+        JOIN ss_trimestres t ON t.trimestre_id = e.trimestre_id
+        JOIN ss_types_evaluation te ON te.type_eval_id = e.type_eval_id
+        WHERE cl.etablissement_id = :eid AND t.annee_id = :aid
+        ORDER BY e.classe_id, e.date_evaluation, e.matiere_id
+    """), {"eid": eid, "aid": annee.annee_id}).fetchall()
+    if not epreuves:
+        print("  aucune epreuve — jouer l'etape 8 d'abord.")
+        return
+
+    # Les élèves de chaque classe. Une note se rattache à l'INSCRIPTION, pas à
+    # l'élève : c'est ce qui fait qu'un redoublant garde ses notes de l'an
+    # dernier au lieu de les voir réécrites par celles de cette année.
+    inscrits = {}
+    for classe_id, inscription_id in db.execute(text("""
+        SELECT i.classe_id, i.inscription_id
+        FROM ss_inscriptions i
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid AND i.annee_id = :aid AND i.statut = 'ACTIVE'
+        ORDER BY i.inscription_id
+    """), {"eid": eid, "aid": annee.annee_id}).fetchall():
+        inscrits.setdefault(classe_id, []).append(inscription_id)
+
+    # Le portrait scolaire de chaque élève, fixé une fois pour toutes.
+    profils = {}
+    for liste in inscrits.values():
+        for insc_id in liste:
+            profils[insc_id] = {
+                "niveau": random.gauss(NIVEAU_MOYEN, NIVEAU_ECART),
+                "pente": random.uniform(*PENTE_ANNUELLE),
+                "affinites": {},
+            }
+
+    # Combien d'épreuves par classe : sert à situer chaque épreuve sur l'année
+    # (0 = rentrée, 1 = fin juin) et donc à faire porter la progression.
+    rang_epreuve = {}
+    compteur = {}
+    for ep in epreuves:
+        cle = (ep.classe_id, ep.matiere_id)
+        rang_epreuve[ep.evaluation_id] = compteur.get(cle, 0)
+        compteur[cle] = compteur.get(cle, 0) + 1
+    total_par_cle = dict(compteur)
+
+    lignes = []
+    nb_absents = 0
+    for ep in epreuves:
+        eleves = inscrits.get(ep.classe_id) or []
+        total = max(total_par_cle.get((ep.classe_id, ep.matiere_id), 1) - 1, 1)
+        avancement = rang_epreuve[ep.evaluation_id] / total
+        est_compo = ep.type_code == "COMPO"
+        for insc_id in eleves:
+            profil = profils[insc_id]
+            affinite = profil["affinites"].get(ep.matiere_id)
+            if affinite is None:
+                affinite = random.gauss(0, AFFINITE_ECART)
+                profil["affinites"][ep.matiere_id] = affinite
+
+            if random.random() < PART_ABSENTS_EPREUVE:
+                # Absent : pas de note. Surtout pas un zéro — un zéro dit
+                # « il a composé et n'a rien su », ce qui est faux et fait
+                # chuter une moyenne annuelle sans raison.
+                lignes.append({"e": ep.evaluation_id, "i": insc_id,
+                               "v": None, "a": "O"})
+                nb_absents += 1
+                continue
+            lignes.append({
+                "e": ep.evaluation_id, "i": insc_id,
+                "v": _note_reelle(profil["niveau"], affinite, avancement,
+                                  profil["pente"], est_compo, ep.note_sur or 20),
+                "a": "N",
+            })
+
+        if len(lignes) >= 5000:
+            db.execute(text(
+                "INSERT INTO ss_notes (evaluation_id, inscription_id, valeur, est_absent) "
+                "VALUES (:e, :i, :v, :a)"), lignes)
+            lignes = []
+    if lignes:
+        db.execute(text(
+            "INSERT INTO ss_notes (evaluation_id, inscription_id, valeur, est_absent) "
+            "VALUES (:e, :i, :v, :a)"), lignes)
+    db.commit()
+
+    # CENTRALISER : c'est le geste qui fait entrer une épreuve dans le bulletin.
+    # L'application interdit de centraliser une épreuve sans note — le scénario
+    # applique la même règle plutôt que de passer par-dessus.
+    centralisees = db.execute(text("""
+        UPDATE ss_evaluations e SET statut = 'CENTRALISEE'
+        FROM ss_classes cl, ss_trimestres t
+        WHERE cl.classe_id = e.classe_id AND t.trimestre_id = e.trimestre_id
+          AND cl.etablissement_id = :eid AND t.annee_id = :aid
+          AND EXISTS (SELECT 1 FROM ss_notes n
+                      WHERE n.evaluation_id = e.evaluation_id AND n.valeur IS NOT NULL)
+    """), {"eid": eid, "aid": annee.annee_id}).rowcount
+    db.commit()
+
+    total_notes = db.execute(text("""
+        SELECT count(*) FROM ss_notes n
+        JOIN ss_evaluations e ON e.evaluation_id = n.evaluation_id
+        JOIN ss_classes cl ON cl.classe_id = e.classe_id
+        WHERE cl.etablissement_id = :eid
+    """), {"eid": eid}).scalar()
+    print(f"  {total_notes} notes saisies sur {len(epreuves)} epreuves")
+    print(f"  {nb_absents} absence(s) a une epreuve — sans note, et non zero")
+    print(f"  {centralisees} epreuve(s) centralisees : elles comptent au bulletin")
+    _recap_notes(db, eid, annee)
+
+
+def _recap_notes(db: Session, eid: int, annee) -> None:
+    lignes = db.execute(text("""
+        SELECT c.libelle AS cycle, count(*) AS notes,
+               round(avg(n.valeur * 20 / NULLIF(e.note_sur, 0))::numeric, 2) AS moyenne,
+               min(n.valeur * 20 / NULLIF(e.note_sur, 0)) AS mini,
+               max(n.valeur * 20 / NULLIF(e.note_sur, 0)) AS maxi
+        FROM ss_notes n
+        JOIN ss_evaluations e ON e.evaluation_id = n.evaluation_id
+        JOIN ss_classes cl ON cl.classe_id = e.classe_id
+        JOIN ss_niveaux niv ON niv.niveau_id = cl.niveau_id
+        JOIN ss_cycles c ON c.cycle_id = niv.cycle_id
+        WHERE cl.etablissement_id = :eid AND n.valeur IS NOT NULL
+        GROUP BY c.libelle, c.ordre ORDER BY c.ordre
+    """), {"eid": eid}).fetchall()
+    print(f"\n  {'CYCLE':<16}{'NOTES':>9}{'MOYENNE':>10}{'MIN':>8}{'MAX':>8}   (ramene sur 20)")
+    for cycle, nb, moyenne, mini, maxi in lignes:
+        print(f"  {cycle:<16}{nb:>9}{moyenne:>10}{float(mini):>8.1f}{float(maxi):>8.1f}")
+
+    # LA VRAIE VERIFICATION : est-ce que les eleves se distinguent ?
+    # Une ecole ou tout le monde a 11,5 de moyenne n'a pas de classement, pas
+    # de redoublant, pas de major. Ces notes-la seraient inutilisables pour
+    # tester la cloture de l'annee.
+    ecart = db.execute(text("""
+        WITH par_eleve AS (
+            SELECT n.inscription_id,
+                   avg(n.valeur * 20 / NULLIF(e.note_sur, 0)) AS moy
+            FROM ss_notes n
+            JOIN ss_evaluations e ON e.evaluation_id = n.evaluation_id
+            JOIN ss_classes cl ON cl.classe_id = e.classe_id
+            WHERE cl.etablissement_id = :eid AND n.valeur IS NOT NULL
+            GROUP BY n.inscription_id)
+        SELECT count(*), round(avg(moy)::numeric, 2), round(min(moy)::numeric, 2),
+               round(max(moy)::numeric, 2),
+               count(*) FILTER (WHERE moy < 10) AS sous_la_moyenne
+        FROM par_eleve
+    """), {"eid": eid}).first()
+    nb, moy, mini, maxi, faibles = ecart
+    print(f"\n  {nb} eleves notes — moyenne generale {moy}/20, du plus faible "
+          f"({mini}) au meilleur ({maxi})")
+    print(f"  {faibles} eleve(s) sous 10 de moyenne annuelle : ce sont eux que la "
+          f"cloture devra trancher")
+
+    # La progression, semestre par semestre : elle doit se voir, sinon la pente
+    # posee plus haut ne sert a rien et l'annee n'a aucune histoire.
+    par_semestre = db.execute(text("""
+        SELECT t.libelle, te.libelle AS type,
+               round(avg(n.valeur * 20 / NULLIF(e.note_sur, 0))::numeric, 2) AS moyenne,
+               count(*) AS notes
+        FROM ss_notes n
+        JOIN ss_evaluations e ON e.evaluation_id = n.evaluation_id
+        JOIN ss_classes cl ON cl.classe_id = e.classe_id
+        JOIN ss_trimestres t ON t.trimestre_id = e.trimestre_id
+        JOIN ss_types_evaluation te ON te.type_eval_id = e.type_eval_id
+        WHERE cl.etablissement_id = :eid AND n.valeur IS NOT NULL AND t.annee_id = :aid
+        GROUP BY t.libelle, t.numero, te.libelle ORDER BY t.numero, te.libelle
+    """), {"eid": eid, "aid": annee.annee_id}).fetchall()
+    print()
+    for libelle, type_eval, moyenne, nb in par_semestre:
+        print(f"  {libelle:<15}{type_eval:<16}{moyenne:>7}/20  sur {nb} notes")
+    print("  (les compositions sont plus basses : elles sont plus dures, "
+          "c'est voulu)")
+
+
 ETAPES = {
     1: ("Referentiel (cycles, niveaux, matieres, annee, semestres)", etape_1_referentiel),
     2: ("Classes et grille horaire", etape_2_classes),
@@ -1908,6 +2141,7 @@ ETAPES = {
     7: ("Encaissements de l'annee et relances", etape_7_encaissements),
     8: ("Epreuves de l'annee et depot des sujets", etape_8_epreuves_et_sujets),
     9: ("Heures de cours non assurees (college et lycee)", etape_9_absences_enseignants),
+    10: ("Notes de l'annee et centralisation des epreuves", etape_10_notes),
 }
 
 
