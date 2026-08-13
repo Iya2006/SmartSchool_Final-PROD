@@ -256,7 +256,7 @@ export default function CentreEvaluationPage() {
                             background: 'rgba(255,255,255,0.2)', backdropFilter: 'blur(10px)', color: 'white',
                             textDecoration: 'none', fontSize: '13px', fontWeight: 700, border: '1px solid rgba(255,255,255,0.3)'
                         }}>
-                            <Clock size={15} /> Emploi des Examens
+                            <Clock size={15} /> Calendrier des épreuves
                         </Link>
                     </div>
                 </div>
