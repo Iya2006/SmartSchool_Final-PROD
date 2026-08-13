@@ -25,7 +25,11 @@ export default function RapportsPage() {
     // Filters
     const [moisCible, setMoisCible] = useState(new Date().getMonth() + 1);
     const [anneeCible, setAnneeCible] = useState(new Date().getFullYear());
-    const [anneeCibleAnnuel, setAnneeCibleAnnuel] = useState(new Date().getFullYear());
+    // 0 = l'année scolaire de l'école (septembre → juillet). Le sélecteur
+    // n'offrait que des millésimes civils, ce qui forçait un rapport
+    // janvier–décembre : pour l'école qui clôture 2025-2026, la moitié de son
+    // année manquait et l'autre moitié appartenait à l'année précédente.
+    const [anneeCibleAnnuel, setAnneeCibleAnnuel] = useState(0);
 
     // Search student
     const [searchEleve, setSearchEleve] = useState('');
@@ -71,7 +75,9 @@ export default function RapportsPage() {
         setLoading(true);
         setDataAnnuel(null);
         try {
-            const res = await api.get(`/api/finance/rapports/annuel?etablissement_id=${etablissementId}&annee_id=${anneeId}&annee=${anneeCibleAnnuel}`);
+            // Sans `annee`, le serveur borne sur les dates de l'année scolaire.
+            const millesime = anneeCibleAnnuel ? `&annee=${anneeCibleAnnuel}` : '';
+            const res = await api.get(`/api/finance/rapports/annuel?etablissement_id=${etablissementId}&annee_id=${anneeId}${millesime}`);
             setDataAnnuel(res.data);
         } catch (e) {
             console.error(e);
@@ -205,7 +211,8 @@ export default function RapportsPage() {
                         )}
                         {tab === 'annuel' && (
                             <select value={anneeCibleAnnuel} onChange={e => setAnneeCibleAnnuel(parseInt(e.target.value))} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, background: '#fff', outline: 'none' }}>
-                                {ANNEES.map(a => <option key={a} value={a}>{a}</option>)}
+                                <option value={0}>Année scolaire en cours</option>
+                                {ANNEES.map(a => <option key={a} value={a}>Année civile {a}</option>)}
                             </select>
                         )}
 
@@ -378,7 +385,7 @@ export default function RapportsPage() {
                             {tab === 'annuel' && dataAnnuel && (
                                 <div>
                                     <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 20, color: '#1e293b' }}>
-                                        Rapport Financier Annuel — Année {dataAnnuel.annee}
+                                        Rapport Financier Annuel — {dataAnnuel.periode_libelle || `Année ${dataAnnuel.annee}`}
                                     </h2>
 
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 20, marginBottom: 30 }}>

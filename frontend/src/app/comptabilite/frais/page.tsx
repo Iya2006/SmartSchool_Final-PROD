@@ -309,6 +309,90 @@ function FraisScolaritePage() {
         await queryClient.invalidateQueries({ queryKey: ['frais-all'] });
     }, [queryClient]);
 
+    /* ─── Grille des tarifs : le coût de l'année, classe par classe ──────────
+       Le réglage vivait derrière un petit bouton sur une ligne de liste, et
+       s'ouvrait un type de frais à la fois. Impossible de répondre à « la 6ᵉ,
+       ça coûte combien à l'année ? » sans additionner de tête. */
+    const { data: grille } = useQuery({
+        queryKey: ['grille-tarifs', filterAnnee],
+        queryFn: async () =>
+            (await api.get(`/api/finance/tarifs-classe/grille?annee_id=${filterAnnee}`)).data,
+        enabled: !!filterAnnee,
+        staleTime: 1000 * 60 * 3,
+    });
+    // Saisie en cours, par (classe, type de frais). Tant qu'elle n'est pas
+    // enregistrée elle vit ici : un rechargement ne doit pas laisser croire
+    // qu'un tarif est posé alors qu'il n'a jamais quitté l'écran.
+    const [grilleSaisie, setGrilleSaisie] = useState<Record<string, string>>({});
+    const [grilleEnCours, setGrilleEnCours] = useState(false);
+
+    const cleGrille = (classeId: number, typeId: number) => `${classeId}:${typeId}`;
+    const valeurGrille = (classeId: number, typeId: number, montant: number | null) => {
+        const k = cleGrille(classeId, typeId);
+        if (k in grilleSaisie) return grilleSaisie[k];
+        return montant ? String(montant) : '';
+    };
+    const majGrille = (classeId: number, typeId: number, v: string) =>
+        setGrilleSaisie(prev => ({ ...prev, [cleGrille(classeId, typeId)]: v }));
+    const caseModifiee = (classeId: number, typeId: number) => cleGrille(classeId, typeId) in grilleSaisie;
+    const grilleModifiee = Object.keys(grilleSaisie).length > 0;
+
+    const enregistrerGrille = async () => {
+        if (!grille || !grilleModifiee) return;
+        // On n'envoie que ce qui a changé : réécrire la grille entière
+        // répercuterait un tarif inchangé sur des factures impayées sans raison.
+        const entries = Object.entries(grilleSaisie).map(([k, v]) => {
+            const [classeId, typeId] = k.split(':').map(Number);
+            return { classe_id: classeId, type_frais_id: typeId, montant: parseFloat(v) || 0 };
+        });
+        setGrilleEnCours(true);
+        try {
+            const res = await api.put('/api/finance/tarifs-classe', entries);
+            showMsg(res.data?.message || 'Tarifs enregistrés', 'success');
+            setGrilleSaisie({});
+            await queryClient.invalidateQueries({ queryKey: ['grille-tarifs'] });
+            await loadAll();
+        } catch (err: any) {
+            showMsg(err?.response?.data?.detail || "Erreur lors de l'enregistrement", 'error');
+        }
+        setGrilleEnCours(false);
+    };
+
+    /* ─── Factures rattachées à aucun type de frais ──────────────────────────
+       Une facture sans type n'apparaît sous aucun intitulé dans les rapports :
+       le total « recettes par type de frais » l'ignore, alors que l'argent a
+       bien été encaissé. Elles existaient sans que rien ne les signale. */
+    const { data: orphelines } = useQuery({
+        queryKey: ['factures-sans-type'],
+        queryFn: async () => (await api.get('/api/finance/factures/sans-type')).data,
+        staleTime: 1000 * 60 * 5,
+    });
+    const [rattachTypeId, setRattachTypeId] = useState('');
+    const [rattachEnCours, setRattachEnCours] = useState(false);
+
+    const rattacherOrphelines = async () => {
+        if (!rattachTypeId || !orphelines?.factures?.length) return;
+        const tf = typesFrais.find(t => String(t.type_frais_id) === rattachTypeId);
+        if (!confirm(
+            `Rattacher ${orphelines.total} facture(s) — ${fmtMoney(orphelines.montant_total)} — ` +
+            `au frais « ${tf?.libelle || ''} » ?\n\n` +
+            `Ces recettes seront désormais comptées sous cet intitulé.`
+        )) return;
+        setRattachEnCours(true);
+        try {
+            const res = await api.put('/api/finance/factures/rattacher-type', {
+                facture_ids: orphelines.factures.map((f: any) => f.facture_id),
+                type_frais_id: Number(rattachTypeId),
+            });
+            showMsg(res.data?.message || 'Factures rattachées', 'success');
+            await queryClient.invalidateQueries({ queryKey: ['factures-sans-type'] });
+            await loadAll();
+        } catch (err: any) {
+            showMsg(err?.response?.data?.detail || 'Erreur lors du rattachement', 'error');
+        }
+        setRattachEnCours(false);
+    };
+
     // --- TypeFrais CRUD ---
     const openNewTypeFrais = () => {
         setEditingTypeFrais(null);
@@ -540,6 +624,63 @@ function FraisScolaritePage() {
 
             {/* =========== TAB: TYPES DE FRAIS =========== */}
             {tabParam === 'types' && (
+              <>
+                {/* On ne devine pas ce que ces factures facturent — c'est de
+                    l'argent. On les montre, et l'école le dit elle-même. */}
+                {orphelines?.total > 0 && (
+                    <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '12px', padding: '18px 20px', marginBottom: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                            <AlertTriangle size={20} color="#b45309" style={{ flexShrink: 0, marginTop: 2 }} />
+                            <div style={{ flex: 1 }}>
+                                <h4 style={{ margin: '0 0 4px 0', fontSize: '15px', color: '#92400e' }}>
+                                    {orphelines.total} facture{orphelines.total > 1 ? 's' : ''} ne {orphelines.total > 1 ? 'sont' : 'est'} rattachée{orphelines.total > 1 ? 's' : ''} à aucun frais
+                                </h4>
+                                <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: '#92400e', lineHeight: 1.6 }}>
+                                    Elles totalisent <strong>{fmtMoney(orphelines.montant_total)}</strong>. L&apos;argent
+                                    a bien été encaissé, mais ces recettes n&apos;apparaissent sous aucun intitulé
+                                    dans les rapports — le total par type de frais les ignore.
+                                </p>
+
+                                {typesFrais.length === 0 ? (
+                                    <p style={{ margin: 0, fontSize: '13px', color: '#92400e', fontWeight: 600 }}>
+                                        Créez d&apos;abord un type de frais ci-dessous, puis revenez les rattacher.
+                                    </p>
+                                ) : (
+                                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <select value={rattachTypeId} onChange={e => setRattachTypeId(e.target.value)}
+                                            style={{ padding: '9px 12px', borderRadius: '8px', border: '1px solid #fcd34d', background: '#fff', fontSize: '13px', minWidth: '220px' }}>
+                                            <option value="">Ces factures correspondent à…</option>
+                                            {typesFrais.map(tf => (
+                                                <option key={tf.type_frais_id} value={tf.type_frais_id}>{tf.libelle}</option>
+                                            ))}
+                                        </select>
+                                        <button onClick={rattacherOrphelines} disabled={!rattachTypeId || rattachEnCours}
+                                            style={{
+                                                padding: '9px 16px', borderRadius: '8px', border: 'none',
+                                                background: rattachTypeId ? '#b45309' : '#e2e8f0',
+                                                color: rattachTypeId ? '#fff' : '#94a3b8',
+                                                fontSize: '13px', fontWeight: 700,
+                                                cursor: rattachTypeId ? 'pointer' : 'not-allowed',
+                                            }}>
+                                            {rattachEnCours ? 'Rattachement…' : 'Rattacher'}
+                                        </button>
+                                        <details style={{ fontSize: '12.5px', color: '#92400e' }}>
+                                            <summary style={{ cursor: 'pointer' }}>Voir lesquelles</summary>
+                                            <div style={{ maxHeight: '180px', overflowY: 'auto', marginTop: '8px', background: '#fff', border: '1px solid #fde68a', borderRadius: '8px', padding: '8px 12px' }}>
+                                                {orphelines.factures.map((f: any) => (
+                                                    <div key={f.facture_id} style={{ padding: '4px 0', borderBottom: '1px solid #fef3c7', color: '#78350f' }}>
+                                                        {f.numero_facture} · {f.eleve} · {f.classe} · <strong>{fmtMoney(f.montant_net)}</strong>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </details>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                         <div>
@@ -598,6 +739,159 @@ function FraisScolaritePage() {
                             <p style={{ fontWeight: '600' }}>Aucun type de frais configuré</p>
                             <p style={{ fontSize: '13px' }}>Commencez par créer vos catégories de frais (Inscription, Scolarité, etc.)</p>
                         </div>
+                    )}
+                </div>
+              </>
+            )}
+
+            {/* =========== TAB: TARIFS PAR CLASSE =========== */}
+            {/* La question d'un fondateur est « la 6ᵉ, ça coûte combien à
+                l'année ? ». Avant, il fallait ouvrir chaque type de frais l'un
+                après l'autre et additionner de tête. */}
+            {tabParam === 'tarifs' && (
+                <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '18px', gap: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                            <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', color: '#0f172a' }}>Ce que coûte l&apos;année, classe par classe</h3>
+                            <p style={{ margin: 0, color: '#64748b', fontSize: '13px' }}>
+                                Chaque école fixe ses propres montants. La scolarité de la 7ᵉ n&apos;est pas
+                                celle de la Terminale.
+                            </p>
+                        </div>
+                        {grilleModifiee && (
+                            <button onClick={enregistrerGrille} disabled={grilleEnCours}
+                                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>
+                                {grilleEnCours ? 'Enregistrement…' : 'Enregistrer les tarifs'}
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Un écran vide qui dit « allez ailleurs » sans y emmener est un
+                        cul-de-sac. Et il manque parfois DEUX choses : les frais et les
+                        classes. On dit lesquelles, dans l'ordre où il faut les faire. */}
+                    {!grille ? (
+                        <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>Chargement…</div>
+                    ) : grille.types_frais.length === 0 || grille.classes.length === 0 ? (
+                        <div style={{ padding: '40px 20px', textAlign: 'center' }}>
+                            <Coins size={40} color="#cbd5e1" style={{ margin: '0 auto 12px auto' }} />
+                            <p style={{ fontWeight: 700, color: '#0f172a', fontSize: '16px', margin: '0 0 6px' }}>
+                                Il manque {grille.types_frais.length === 0 && grille.classes.length === 0
+                                    ? 'deux choses' : 'une chose'} avant de pouvoir fixer les tarifs
+                            </p>
+                            <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 22px' }}>
+                                Un tarif, c&apos;est un montant pour <strong>une classe</strong> et
+                                <strong> un type de frais</strong>. Il faut les deux.
+                            </p>
+
+                            <div style={{ display: 'flex', gap: '14px', justifyContent: 'center', flexWrap: 'wrap', maxWidth: '620px', margin: '0 auto' }}>
+                                <div style={{ flex: '1 1 260px', border: `1px solid ${grille.classes.length === 0 ? '#fde68a' : '#dcfce7'}`, background: grille.classes.length === 0 ? '#fffbeb' : '#f0fdf4', borderRadius: '12px', padding: '18px', textAlign: 'left' }}>
+                                    <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '14px', color: grille.classes.length === 0 ? '#92400e' : '#15803d' }}>
+                                        {grille.classes.length === 0 ? '1. Vos classes' : '✓ Vos classes'}
+                                    </p>
+                                    <p style={{ margin: '0 0 12px', fontSize: '12.5px', color: '#64748b', lineHeight: 1.55 }}>
+                                        {grille.classes.length === 0
+                                            ? "Aucune classe active pour cette année scolaire. Créez-les d'abord : ce sont les lignes du tableau des tarifs."
+                                            : `${grille.classes.length} classe(s) active(s) pour cette année.`}
+                                    </p>
+                                    {grille.classes.length === 0 && (
+                                        <button onClick={() => router.push('/classes')}
+                                            style={{ padding: '9px 16px', background: '#b45309', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+                                            Créer mes classes
+                                        </button>
+                                    )}
+                                </div>
+
+                                <div style={{ flex: '1 1 260px', border: `1px solid ${grille.types_frais.length === 0 ? '#fde68a' : '#dcfce7'}`, background: grille.types_frais.length === 0 ? '#fffbeb' : '#f0fdf4', borderRadius: '12px', padding: '18px', textAlign: 'left' }}>
+                                    <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '14px', color: grille.types_frais.length === 0 ? '#92400e' : '#15803d' }}>
+                                        {grille.types_frais.length === 0 ? '2. Ce que vous faites payer' : '✓ Ce que vous faites payer'}
+                                    </p>
+                                    <p style={{ margin: '0 0 12px', fontSize: '12.5px', color: '#64748b', lineHeight: 1.55 }}>
+                                        {grille.types_frais.length === 0
+                                            ? 'Scolarité, inscription, cantine… Ce sont les colonnes du tableau des tarifs.'
+                                            : `${grille.types_frais.length} type(s) de frais défini(s).`}
+                                    </p>
+                                    {grille.types_frais.length === 0 && (
+                                        <button onClick={() => { router.push('/comptabilite/frais?tab=types'); openNewTypeFrais(); }}
+                                            style={{ padding: '9px 16px', background: '#b45309', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+                                            Créer un type de frais
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            {grille.nb_classes_incompletes > 0 && (
+                                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '10px', padding: '12px 16px', marginBottom: '16px', fontSize: '13px', color: '#92400e', lineHeight: 1.6 }}>
+                                    <strong>{grille.nb_classes_incompletes} classe{grille.nb_classes_incompletes > 1 ? 's' : ''}</strong> sur {grille.classes.length} n&apos;{grille.nb_classes_incompletes > 1 ? 'ont' : 'a'} pas
+                                    de tarif pour tous les frais obligatoires. Tant qu&apos;une case reste vide, la
+                                    facture se fait au montant tapé à la main — c&apos;est ainsi que deux élèves
+                                    d&apos;une même classe finissent facturés différemment.
+                                </div>
+                            )}
+
+                            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                    <thead>
+                                        <tr style={{ backgroundColor: '#f8fafc' }}>
+                                            <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: 600, color: '#475569', position: 'sticky', left: 0, background: '#f8fafc', minWidth: '170px' }}>Classe</th>
+                                            {grille.types_frais.map((tf: any) => (
+                                                <th key={tf.type_frais_id} style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 600, color: '#475569', minWidth: '140px' }}>
+                                                    {tf.libelle}
+                                                    <div style={{ fontSize: '11px', fontWeight: 400, color: '#94a3b8' }}>
+                                                        {tf.est_obligatoire === 'O' ? 'obligatoire' : 'facultatif'}
+                                                    </div>
+                                                </th>
+                                            ))}
+                                            <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: 700, color: '#0f172a', minWidth: '150px' }}>
+                                                Total pour l&apos;année
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {grille.classes.map((ligne: any) => {
+                                            const total = grille.types_frais.reduce((t: number, tf: any) => {
+                                                const v = valeurGrille(ligne.classe_id, tf.type_frais_id, ligne.montants[tf.type_frais_id]);
+                                                return t + (parseFloat(v) || 0);
+                                            }, 0);
+                                            return (
+                                                <tr key={ligne.classe_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                                    <td style={{ padding: '10px 14px', fontWeight: 600, color: '#0f172a', position: 'sticky', left: 0, background: '#fff' }}>
+                                                        {ligne.classe_libelle}
+                                                        <div style={{ fontSize: '11.5px', fontWeight: 400, color: '#94a3b8' }}>
+                                                            {ligne.effectif} élève{ligne.effectif > 1 ? 's' : ''}
+                                                        </div>
+                                                    </td>
+                                                    {grille.types_frais.map((tf: any) => (
+                                                        <td key={tf.type_frais_id} style={{ padding: '8px 14px', textAlign: 'right' }}>
+                                                            <input type="number" min={0}
+                                                                value={valeurGrille(ligne.classe_id, tf.type_frais_id, ligne.montants[tf.type_frais_id])}
+                                                                onChange={e => majGrille(ligne.classe_id, tf.type_frais_id, e.target.value)}
+                                                                placeholder="—"
+                                                                style={{
+                                                                    width: '125px', padding: '7px 9px', textAlign: 'right',
+                                                                    border: `1px solid ${caseModifiee(ligne.classe_id, tf.type_frais_id) ? '#f59e0b' : '#e2e8f0'}`,
+                                                                    borderRadius: '6px', fontSize: '13px', boxSizing: 'border-box',
+                                                                }} />
+                                                        </td>
+                                                    ))}
+                                                    <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, color: total > 0 ? '#059669' : '#b45309' }}>
+                                                        {total > 0 ? fmtMoney(total) : 'à fixer'}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <p style={{ margin: '14px 0 0', fontSize: '12.5px', color: '#64748b', lineHeight: 1.6 }}>
+                                Laissez une case <strong>vide ou à 0</strong> pour une classe non concernée par ce
+                                frais. Modifier un tarif met à jour les factures <strong>encore impayées</strong> de
+                                cette classe — celles déjà réglées ne bougent pas, une recette encaissée ne se
+                                réécrit pas.
+                            </p>
+                        </>
                     )}
                 </div>
             )}
@@ -929,18 +1223,48 @@ function FraisScolaritePage() {
                             <h3 style={{ margin: 0, fontSize: '18px', color: '#0f172a' }}>{editingTypeFrais ? 'Modifier' : 'Nouveau'} type de frais</h3>
                             <button onClick={() => setShowTypeFraisModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><X size={20} /></button>
                         </div>
+                        {/* Un type de frais dit CE QUE l'école fait payer, pas COMBIEN.
+                            Le montant dépend de la classe : la 6ᵉ ne coûte pas comme la
+                            Terminale. Le formulaire le disait mal — « Montant par défaut »
+                            laissait croire à un prix unique pour toute l'école. */}
                         <form onSubmit={submitTypeFrais} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Code *</label>
-                                    <input value={tfCode} onChange={e => setTfCode(e.target.value)} required placeholder="ex: SCOL" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box', textTransform: 'uppercase' }} />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Libellé *</label>
-                                    <input value={tfLibelle} onChange={e => setTfLibelle(e.target.value)} required placeholder="ex: Frais de scolarité" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
-                                </div>
+                            <div style={{ padding: '12px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '10px', fontSize: '12.5px', color: '#1e40af', lineHeight: 1.55 }}>
+                                Un type de frais désigne <strong>ce que l&apos;école fait payer</strong> —
+                                scolarité, inscription, cantine. Le <strong>montant réel se fixe
+                                ensuite par classe</strong> ; celui saisi ici sert de valeur de départ.
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>
+                                    Nom du frais <span style={{ color: '#dc2626' }}>*</span>
+                                </label>
+                                <input
+                                    value={tfLibelle}
+                                    onChange={e => {
+                                        setTfLibelle(e.target.value);
+                                        // Le code est technique : le faire saisir par l'école
+                                        // n'apporte rien et produit des « csfd ». On le
+                                        // dérive du nom, en le laissant modifiable.
+                                        if (!editingTypeFrais) {
+                                            setTfCode(
+                                                e.target.value
+                                                    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                                                    .toUpperCase().replace(/[^A-Z0-9]/g, '')
+                                                    .slice(0, 12)
+                                            );
+                                        }
+                                    }}
+                                    required
+                                    placeholder="Frais de scolarité"
+                                    autoFocus
+                                    style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }}
+                                />
+                                <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
+                                    C&apos;est ce nom qui apparaîtra sur les factures et les reçus des parents.
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
                                 <div>
                                     <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Catégorie</label>
                                     <select value={tfCategorie} onChange={e => setTfCategorie(e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
@@ -948,27 +1272,70 @@ function FraisScolaritePage() {
                                     </select>
                                 </div>
                                 <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Montant par défaut (GNF)</label>
-                                    <input type="number" value={tfMontantDefaut} onChange={e => setTfMontantDefaut(e.target.value)} placeholder="ex: 150000" style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Fréquence</label>
+                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Payé</label>
                                     <select value={tfFrequence} onChange={e => setTfFrequence(e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
-                                        {FREQUENCES.map(f => <option key={f}>{f}</option>)}
-                                    </select>
-                                </div>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>Obligatoire ?</label>
-                                    <select value={tfObligatoire} onChange={e => setTfObligatoire(e.target.value)} style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px' }}>
-                                        <option value="O">Oui</option>
-                                        <option value="N">Non</option>
+                                        <option value="ANNUEL">Une fois par an</option>
+                                        <option value="TRIMESTRIEL">Chaque trimestre</option>
+                                        <option value="MENSUEL">Chaque mois</option>
+                                        <option value="UNIQUE">Une seule fois</option>
                                     </select>
                                 </div>
                             </div>
-                            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '8px' }}>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: '13px', color: '#475569', marginBottom: '6px', fontWeight: '500' }}>
+                                    Montant de référence (GNF)
+                                </label>
+                                <input
+                                    type="number" min={0}
+                                    value={tfMontantDefaut}
+                                    onChange={e => setTfMontantDefaut(e.target.value)}
+                                    placeholder="150000"
+                                    style={{ width: '100%', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }}
+                                />
+                                <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
+                                    Facultatif. Utilisé pour les classes dont le tarif n&apos;est pas encore fixé.
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '11px 13px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+                                <input
+                                    type="checkbox" id="tf-obligatoire"
+                                    checked={tfObligatoire === 'O'}
+                                    onChange={e => setTfObligatoire(e.target.checked ? 'O' : 'N')}
+                                    style={{ marginTop: 2, cursor: 'pointer' }}
+                                />
+                                <label htmlFor="tf-obligatoire" style={{ cursor: 'pointer', fontSize: '13px', color: '#334155', lineHeight: 1.5 }}>
+                                    <strong>Frais obligatoire</strong>
+                                    <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>
+                                        Facturé automatiquement à tous les élèves. Décochez pour un frais
+                                        optionnel — cantine, transport — facturé au cas par cas.
+                                    </span>
+                                </label>
+                            </div>
+
+                            {/* Le code reste visible mais discret : il sert au systeme, pas
+                                a l'ecole. L'imposer en premier champ produisait des « csfd ». */}
+                            <details>
+                                <summary style={{ fontSize: '12.5px', color: '#64748b', cursor: 'pointer' }}>
+                                    Code interne : <strong>{tfCode || '—'}</strong>
+                                </summary>
+                                <input
+                                    value={tfCode}
+                                    onChange={e => setTfCode(e.target.value.toUpperCase())}
+                                    required
+                                    placeholder="SCOL"
+                                    style={{ width: '100%', marginTop: '8px', padding: '10px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box', textTransform: 'uppercase' }}
+                                />
+                                <span style={{ fontSize: '11.5px', color: '#94a3b8' }}>
+                                    Généré depuis le nom. Ne le changez que si vous savez pourquoi.
+                                </span>
+                            </details>
+
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                                 <button type="button" onClick={() => setShowTypeFraisModal(false)} style={{ padding: '10px 20px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>Annuler</button>
                                 <button type="submit" style={{ padding: '10px 20px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>
-                                    {editingTypeFrais ? 'Mettre à jour' : 'Créer'}
+                                    {editingTypeFrais ? 'Enregistrer' : 'Créer'}
                                 </button>
                             </div>
                         </form>

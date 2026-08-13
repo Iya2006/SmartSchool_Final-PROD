@@ -8,15 +8,18 @@ from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, Fil
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Dict, List, Optional
+
+from pydantic import BaseModel
 from datetime import date as date_type
 from app.core.annee_courante import resoudre_annee
+from app.core.numerotation import generer_numero_facture, generer_numero_recu
 from app.core.database import get_db
 from app.core.auth import require_etablissement
 from app.models.academique import (
     TypeFrais, TarifClasse, Facture, EcheanceFacture, Paiement, Depense,
     Inscription, Classe, Eleve, AnneeScolaire, Enseignant, Utilisateur,
     Employe, Avance, Prime, AbsencePersonnel, BulletinPaie, PresenceAgent,
-    Message, ParametreComptabilite,
+    Message, ParametreComptabilite, Affectation,
 )
 import calendar
 from app.schemas.schemas import (
@@ -343,6 +346,108 @@ def delete_type_frais(
 # automatiquement synchronisés sans logique de synchro dédiée.
 # ============================================================================
 
+# ════════════════════════════════════════════════════════════════════════
+# FACTURES RATTACHÉES À RIEN
+# ════════════════════════════════════════════════════════════════════════
+# Une facture sans type de frais n'apparaît sous aucun intitulé dans les
+# rapports : le total « recettes par type de frais » l'ignore purement et
+# simplement, alors que l'argent, lui, a bien été encaissé. La base en compte
+# 45, toutes antérieures aux contrôles posés depuis.
+#
+# On ne devine pas ce qu'elles facturent — c'est de l'argent. On les montre à
+# l'école, et on lui donne le moyen de le dire.
+
+
+@router.get("/factures/sans-type")
+def factures_sans_type(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Factures de cette école qui ne sont rattachées à aucun type de frais."""
+    lignes = (
+        db.query(Facture, Eleve, Classe)
+        .join(Inscription, Inscription.inscription_id == Facture.inscription_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .join(Eleve, Eleve.eleve_id == Inscription.eleve_id)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            Facture.type_frais_id.is_(None),
+        )
+        .order_by(Facture.facture_id)
+        .all()
+    )
+    return {
+        "total": len(lignes),
+        "montant_total": round(sum(float(f.montant_net or 0) for f, _, _ in lignes), 2),
+        "factures": [
+            {
+                "facture_id": f.facture_id,
+                "numero_facture": f.numero_facture,
+                "montant_net": float(f.montant_net or 0),
+                "statut": f.statut,
+                "eleve": f"{e.prenom} {e.nom}",
+                "classe": c.libelle,
+            }
+            for f, e, c in lignes
+        ],
+    }
+
+
+class RattachementFactures(BaseModel):
+    """Quelles factures, et à quel type de frais."""
+    facture_ids: List[int]
+    type_frais_id: int
+
+
+@router.put("/factures/rattacher-type")
+def rattacher_factures_a_un_type(
+    data: RattachementFactures,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Rattache des factures orphelines à un type de frais de cette école.
+
+    Ne touche QUE les factures encore sans type : réaffecter une facture déjà
+    rattachée déplacerait une recette déjà comptabilisée d'un intitulé à un
+    autre, sans laisser de trace. Ce n'est pas une correction, c'est une
+    réécriture — et ça ne se fait pas depuis un bouton.
+    """
+    if not data.facture_ids:
+        raise HTTPException(400, "Aucune facture sélectionnée.")
+
+    type_frais = db.query(TypeFrais).filter(
+        TypeFrais.type_frais_id == data.type_frais_id,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first()
+    if not type_frais:
+        raise HTTPException(404, "Type de frais non trouvé")
+
+    # Le bornage à l'école ET à l'état « sans type » est dans la requête, pas
+    # dans une vérification que l'on pourrait oublier de faire.
+    factures = (
+        db.query(Facture)
+        .join(Inscription, Inscription.inscription_id == Facture.inscription_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(
+            Facture.facture_id.in_(data.facture_ids),
+            Classe.etablissement_id == etablissement_id,
+            Facture.type_frais_id.is_(None),
+        )
+        .all()
+    )
+    for f in factures:
+        f.type_frais_id = type_frais.type_frais_id
+    db.commit()
+
+    ignorees = len(data.facture_ids) - len(factures)
+    message = f"{len(factures)} facture(s) rattachée(s) à « {type_frais.libelle} »."
+    if ignorees:
+        message += (
+            f" {ignorees} ignorée(s) : déjà rattachée(s), ou hors de cet établissement."
+        )
+    return {"message": message, "rattachees": len(factures), "ignorees": ignorees}
+
+
 @router.get("/tarifs-classe")
 def get_tarifs_classe(
     type_frais_id: Optional[int] = None,
@@ -375,6 +480,97 @@ def get_tarifs_classe(
         }
         for t, c, tf in query.all()
     ]
+
+
+@router.get("/tarifs-classe/grille")
+def grille_tarifs(
+    annee_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Ce que coûte l'année, classe par classe.
+
+    Le réglage le plus important du module vivait derrière un petit bouton, sur
+    une ligne de la liste des types de frais : il fallait savoir qu'il existait
+    pour le trouver, et l'ouvrir type de frais par type de frais pour voir le
+    tarif d'une classe. Impossible de répondre à la seule question que se pose
+    un fondateur — « la 6ᵉ, ça coûte combien à l'année ? » — sans ouvrir tous
+    les types de frais les uns après les autres et additionner de tête.
+
+    Ici, une lecture : chaque classe, ce qu'elle paie par type de frais, et son
+    total annuel. Les manques sont comptés, pas masqués : une classe sans tarif
+    sera facturée au montant tapé à la main, ce qui est exactement la façon dont
+    une école se retrouve avec deux élèves de la même classe facturés
+    différemment.
+    """
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+
+    classes = (
+        db.query(Classe)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            Classe.annee_id == annee_id,
+            Classe.statut == "ACTIVE",
+        )
+        .order_by(Classe.code)
+        .all()
+    )
+    types = (
+        db.query(TypeFrais)
+        .filter(TypeFrais.etablissement_id == etablissement_id)
+        .order_by(TypeFrais.categorie, TypeFrais.libelle)
+        .all()
+    )
+
+    # Un seul aller-retour pour tous les tarifs : la grille fait
+    # classes x types de frais, la remplir case par case serait un N+1 garanti.
+    tarifs = {}
+    if classes and types:
+        for t in (
+            db.query(TarifClasse)
+            .filter(
+                TarifClasse.classe_id.in_([c.classe_id for c in classes]),
+                TarifClasse.type_frais_id.in_([tf.type_frais_id for tf in types]),
+            )
+            .all()
+        ):
+            tarifs[(t.classe_id, t.type_frais_id)] = float(t.montant or 0)
+
+    lignes = []
+    for c in classes:
+        montants = {
+            tf.type_frais_id: tarifs.get((c.classe_id, tf.type_frais_id))
+            for tf in types
+        }
+        obligatoires_manquants = [
+            tf.libelle for tf in types
+            if tf.est_obligatoire == "O" and not montants.get(tf.type_frais_id)
+        ]
+        lignes.append({
+            "classe_id": c.classe_id,
+            "classe_code": c.code,
+            "classe_libelle": c.libelle,
+            "effectif": c.effectif_actuel or 0,
+            "montants": montants,
+            "total_annuel": round(sum(v for v in montants.values() if v), 2),
+            "manquants": obligatoires_manquants,
+        })
+
+    return {
+        "types_frais": [
+            {
+                "type_frais_id": tf.type_frais_id,
+                "libelle": tf.libelle,
+                "categorie": tf.categorie,
+                "est_obligatoire": tf.est_obligatoire,
+                "frequence": tf.frequence,
+            }
+            for tf in types
+        ],
+        "classes": lignes,
+        "nb_classes_completes": sum(1 for l in lignes if not l["manquants"]),
+        "nb_classes_incompletes": sum(1 for l in lignes if l["manquants"]),
+    }
 
 
 def _repercuter_tarif_sur_factures(db: Session, type_frais_id: int, classe_id: int, nouveau_montant: float) -> int:
@@ -463,6 +659,18 @@ def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get
         ).all()}
         if trouvees != classe_ids:
             raise HTTPException(status_code=403, detail="Classe(s) invalide(s) pour cet établissement")
+
+    # Les classes etaient verifiees, le type de frais non — alors qu'il
+    # appartient lui aussi a une ecole depuis la migration 2026_08_compta_01.
+    # Une ecole pouvait donc poser un tarif sur le type de frais d'une autre.
+    types_ids = {e.type_frais_id for e in entries}
+    if types_ids:
+        types_ok = {t[0] for t in db.query(TypeFrais.type_frais_id).filter(
+            TypeFrais.type_frais_id.in_(types_ids),
+            TypeFrais.etablissement_id == etablissement_id,
+        ).all()}
+        if types_ok != types_ids:
+            raise HTTPException(status_code=404, detail="Type de frais non trouvé")
 
     upserted, deleted, factures_maj = 0, 0, 0
     for entry in entries:
@@ -703,7 +911,14 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db), etablisse
     _verifier_annee_modifiable(db, inscription.annee_id)
 
     # Vérifier le type de frais
-    type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == data.type_frais_id).first()
+    # Le type de frais est desormais PROPRE A CHAQUE ECOLE : le chercher par son
+    # seul identifiant permettait de facturer un eleve avec le type de frais
+    # d'un autre etablissement — la facture portait alors le libelle d'une ecole
+    # etrangere, et la recette se rangeait sous SON intitule.
+    type_frais = db.query(TypeFrais).filter(
+        TypeFrais.type_frais_id == data.type_frais_id,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first()
     if not type_frais:
         raise HTTPException(status_code=404, detail="Type de frais non trouvé")
 
@@ -716,23 +931,11 @@ def create_facture(data: FactureCreate, db: Session = Depends(get_db), etablisse
                 detail=f"La somme des échéances ({total_echeances:,.0f}) doit être égale au montant total ({data.montant_total:,.0f})"
             )
 
-    # Générer numéro de facture en se basant sur le numéro le plus élevé existant (évite les doublons)
-    # Compteur filtré par établissement (règle §4.5 : sinon une école déduit
-    # le volume de factures des autres, et deux écoles partagent la même
-    # séquence FAC-NNNNNN au lieu d'avoir chacune la leur).
-    last_facture = db.query(Facture).join(
-        Inscription, Facture.inscription_id == Inscription.inscription_id
-    ).join(
-        Classe, Inscription.classe_id == Classe.classe_id
-    ).filter(Classe.etablissement_id == etablissement_id).order_by(Facture.numero_facture.desc()).first()
-    if last_facture and last_facture.numero_facture.startswith("FAC-"):
-        try:
-            max_num = int(last_facture.numero_facture.rsplit("-", 1)[-1])
-        except ValueError:
-            max_num = 0
-    else:
-        max_num = 0
-    numero_facture = f"FAC-{etablissement_id}-{max_num + 1:06d}"
+    # « Lire le dernier numéro, ajouter 1 » : deux saisies simultanées lisaient
+    # le même dernier numéro et fabriquaient le même — la seconde tombait en
+    # erreur 500 sur l'index unique. Et la séquence était commune à toutes les
+    # écoles. Le compteur persistant règle les deux (app/core/numerotation.py).
+    numero_facture = generer_numero_facture(db, etablissement_id, inscription.annee_id)
 
     facture = Facture(
         inscription_id=data.inscription_id,
@@ -817,7 +1020,14 @@ def generer_factures_classe(
     if not inscriptions:
         raise HTTPException(status_code=404, detail="Aucun élève actif dans cette classe")
 
-    type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == data.type_frais_id).first()
+    # Le type de frais est desormais PROPRE A CHAQUE ECOLE : le chercher par son
+    # seul identifiant permettait de facturer un eleve avec le type de frais
+    # d'un autre etablissement — la facture portait alors le libelle d'une ecole
+    # etrangere, et la recette se rangeait sous SON intitule.
+    type_frais = db.query(TypeFrais).filter(
+        TypeFrais.type_frais_id == data.type_frais_id,
+        TypeFrais.etablissement_id == etablissement_id,
+    ).first()
     if not type_frais:
         raise HTTPException(status_code=404, detail="Type de frais non trouvé")
 
@@ -861,23 +1071,10 @@ def generer_factures_classe(
     created_count = 0
     skipped_count = 0
 
-    # Récupérer le plus grand numéro de facture existant UNE SEULE FOIS avant la boucle
-    # pour garantir que chaque nouveau numéro est unique
-    # Compteur filtré par établissement (règle §4.5 : sinon une école déduit
-    # le volume de factures des autres, et deux écoles partagent la même
-    # séquence FAC-NNNNNN au lieu d'avoir chacune la leur).
-    last_facture = db.query(Facture).join(
-        Inscription, Facture.inscription_id == Inscription.inscription_id
-    ).join(
-        Classe, Inscription.classe_id == Classe.classe_id
-    ).filter(Classe.etablissement_id == etablissement_id).order_by(Facture.numero_facture.desc()).first()
-    if last_facture and last_facture.numero_facture.startswith("FAC-"):
-        try:
-            max_num = int(last_facture.numero_facture.rsplit("-", 1)[-1])
-        except ValueError:
-            max_num = 0
-    else:
-        max_num = 0
+    # Le numéro se tire dans la boucle, une pièce à la fois : le calculer une
+    # fois puis ajouter un décalage supposait qu'aucune autre facture n'était
+    # créée pendant la génération — ce qui est précisément le cas où deux
+    # secrétariats facturent deux classes en même temps.
 
     finance_settings = get_finance_settings(db, etablissement_id) if data.appliquer_reductions else None
 
@@ -891,8 +1088,9 @@ def generer_factures_classe(
             skipped_count += 1
             continue
 
-        # Numéro unique basé sur le max_num + offset courant
-        numero_facture = f"FAC-{etablissement_id}-{max_num + created_count + 1:06d}"
+        numero_facture = generer_numero_facture(
+            db, etablissement_id, inscription.annee_id
+        )
 
         # Réduction fratrie (optionnelle, configurée dans /parametres/finance)
         montant_remise = 0.0
@@ -1078,23 +1276,14 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         else:
             echeance.statut = "PARTIELLEMENT_PAYEE"
 
-    # Générer numéro de reçu (préfixe configurable via /parametres/finance)
-    # Compteur filtré par établissement (règle §4.5 : toute agrégation
-    # servant à générer un numéro se filtre par école, sinon une école
-    # déduit le volume de paiements des autres via ses propres reçus).
+    # Le numéro de reçu venait d'un COUNT global : il régressait dès qu'un
+    # paiement était annulé, et réattribuait alors un numéro figurant sur un
+    # reçu déjà remis à un parent. Deux pièces portant le même numéro, c'est un
+    # litige que la comptabilité ne peut pas trancher.
     settings = get_finance_settings(db, etablissement_id)
-    prefixe_recu = settings.get("recu_prefixe") or "REC"
-    count = db.query(func.count(Paiement.paiement_id)).join(
-        Facture, Paiement.facture_id == Facture.facture_id
-    ).join(
-        Inscription, Facture.inscription_id == Inscription.inscription_id
-    ).join(
-        Classe, Inscription.classe_id == Classe.classe_id
-    ).filter(Classe.etablissement_id == etablissement_id).scalar() or 0
-    # Établissement dans le numéro (comme numero_facture) : sinon deux écoles
-    # dont c'est le 1er paiement génèrent toutes les deux "REC-000001", qui
-    # entre en collision sur la contrainte UNIQUE globale de la colonne.
-    numero_recu = f"{prefixe_recu}-{etablissement_id}-{count + 1:06d}"
+    numero_recu = generer_numero_recu(
+        db, etablissement_id, facture.annee_id, settings.get("recu_prefixe") or "REC"
+    )
 
     paiement = Paiement(
         facture_id=data.facture_id,
@@ -1185,8 +1374,18 @@ def list_depenses(
         Depense.etablissement_id == etablissement_id,
         Depense.annee_id == annee_id
     )
+    # Les salaires sont enregistres comme des depenses de categorie SALAIRES,
+    # mais ils relevent du module Salaires et de ses ecrans. Les afficher ici
+    # doublerait les montants a l'oeil du comptable et rendrait illisibles les
+    # depenses de fonctionnement. Meme perimetre que `stats_depenses`, sans
+    # quoi le total affiche et la liste en dessous ne diraient pas la meme
+    # chose. `categorie=SALAIRES` reste possible pour qui les demande.
     if categorie:
         query = query.filter(Depense.categorie == categorie)
+    else:
+        query = query.filter(
+            func.upper(func.coalesce(Depense.categorie, "")) != "SALAIRES"
+        )
     if classe_id:
         query = query.filter(Depense.classe_id == classe_id)
     if statut:
@@ -1262,10 +1461,14 @@ def stats_depenses(annee_id: Optional[int] = None, db: Session = Depends(get_db)
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
+    # Meme perimetre que la liste : les salaires relevent du module Salaires.
+    # Sans cette exclusion, le total des depenses et la liste affichee en
+    # dessous ne diraient pas la meme chose.
     query_base = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
         Depense.annee_id == annee_id,
-        Depense.statut != "REJETEE"
+        Depense.statut != "REJETEE",
+        func.upper(func.coalesce(Depense.categorie, "")) != "SALAIRES",
     )
     total = query_base.with_entities(func.coalesce(func.sum(Depense.montant), 0)).scalar()
     par_categorie = query_base.with_entities(
@@ -2090,15 +2293,57 @@ def rapport_annuel(
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Rapport financier annuel : recettes, dépenses, masse salariale et résultat net."""
+    """Rapport financier annuel : recettes, dépenses, masse salariale et résultat net.
+
+    L'ANNÉE D'UNE ÉCOLE N'EST PAS L'ANNÉE DU CALENDRIER
+    Ce rapport bornait sa période sur `extract("year", date_paiement) == 2025`,
+    c'est-à-dire janvier à décembre. Or l'année scolaire va de septembre à
+    juillet. Pour l'école qui clôturait son année 2025-2026, le « rapport
+    annuel » additionnait donc septembre–décembre 2025 avec janvier–juillet
+    2025 : la moitié de l'année en cours manquait, et la moitié affichée
+    appartenait à l'année précédente. Le paramètre `annee_id` était bien résolu,
+    puis jamais utilisé.
+
+    La période suit désormais les dates de l'année scolaire de cette école.
+    `annee` (millésime civil) reste accepté pour qui veut expressément un
+    janvier–décembre : la période retenue est renvoyée dans la réponse, pour
+    que l'écran affiche sur quoi porte le total.
+    """
+    from datetime import date as today_type
+
+    from sqlalchemy import extract
+
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
-    from datetime import date as today_type
-    from sqlalchemy import extract
+
+    debut = fin = None
+    libelle_periode = None
+    if annee is None and annee_id:
+        scolaire = (
+            db.query(AnneeScolaire)
+            .filter(
+                AnneeScolaire.annee_id == annee_id,
+                AnneeScolaire.etablissement_id == etablissement_id,
+            )
+            .first()
+        )
+        if scolaire and scolaire.date_debut and scolaire.date_fin:
+            debut, fin = scolaire.date_debut, scolaire.date_fin
+            libelle_periode = scolaire.libelle
 
     today = today_type.today()
-    annee_cible = annee or today.year
+    annee_cible = annee or (debut.year if debut else today.year)
+
+    if debut and fin:
+        borne_paiement = (Paiement.date_paiement >= debut, Paiement.date_paiement <= fin)
+        borne_depense = (Depense.date_depense >= debut, Depense.date_depense <= fin)
+    else:
+        # Repli : millésime civil demandé explicitement, ou année scolaire sans
+        # dates renseignées.
+        borne_paiement = (extract("year", Paiement.date_paiement) == annee_cible,)
+        borne_depense = (extract("year", Depense.date_depense) == annee_cible,)
+        libelle_periode = f"Année civile {annee_cible}"
 
     total_encaisse = float((
         db.query(func.coalesce(func.sum(Paiement.montant), 0))
@@ -2107,7 +2352,7 @@ def rapport_annuel(
         .join(Classe, Inscription.classe_id == Classe.classe_id)
         .filter(
             Classe.etablissement_id == etablissement_id,
-            extract("year", Paiement.date_paiement) == annee_cible,
+            *borne_paiement,
             Paiement.statut == "VALIDE"
         )
         .scalar() or 0
@@ -2115,7 +2360,7 @@ def rapport_annuel(
 
     query_dep = db.query(Depense).filter(
         Depense.etablissement_id == etablissement_id,
-        extract("year", Depense.date_depense) == annee_cible,
+        *borne_depense,
         Depense.statut == "VALIDE"
     )
     total_depenses = float(
@@ -2128,6 +2373,11 @@ def rapport_annuel(
 
     return {
         "annee": annee_cible,
+        # Sur quoi porte réellement ce total — un rapport dont on ignore la
+        # période n'est pas vérifiable.
+        "periode_libelle": libelle_periode or f"Année civile {annee_cible}",
+        "periode_debut": debut.isoformat() if debut else None,
+        "periode_fin": fin.isoformat() if fin else None,
         "total_encaisse": total_encaisse,
         "total_depenses": total_depenses,
         "masse_salariale": masse_salariale,
@@ -3397,14 +3647,22 @@ def list_employes_salaires(
         db.query(Utilisateur)
         .filter(
             Utilisateur.etablissement_id == etablissement_id,
-            Utilisateur.statut == "ACTIF"
+            Utilisateur.statut == "ACTIF",
+            Utilisateur.role != "SUPER_ADMIN",
         )
         .all()
     )
 
+    from app.services import paie as _paie
+    _annee_paie = _paie.annee_courante_id(db, etablissement_id)
+
     result = []
     # --- Traitement des Enseignants ---
     for ens in enseignants:
+        # Le salaire affiche ici doit etre celui que la paie versera. Pour un
+        # vacataire il se calcule a partir des heures ; la colonne
+        # `ens.salaire_base` vaut 0 et ne veut rien dire.
+        _r = _paie.salaire_enseignant(db, ens.enseignant_id, _annee_paie)
         depenses = (
             db.query(Depense)
             .filter(
@@ -3452,7 +3710,10 @@ def list_employes_salaires(
             "nom": ens.nom,
             "prenom": ens.prenom,
             "role_label": "Enseignant",
-            "salaire_base": float(ens.salaire_base) if ens.salaire_base else 0,
+            "salaire_base": _r["base"],
+            "mode_remuneration": _r["mode"],
+            "total_heures": _r["total_heures"],
+            "explication_salaire": _r.get("explication", ""),
             "prime_mensuelle": float(ens.prime_mensuelle) if ens.prime_mensuelle else 0,
             "telephone": ens.telephone,
             "paye_ce_mois": paye_ce_mois,
@@ -3511,6 +3772,9 @@ def list_employes_salaires(
             "prenom": p.prenom,
             "role_label": p.role,
             "salaire_base": float(p.salaire_base) if p.salaire_base else 0,
+            "mode_remuneration": "MENSUEL",
+            "total_heures": 0.0,
+            "explication_salaire": "Salaire mensuel fixe.",
             "prime_mensuelle": float(p.prime_mensuelle) if p.prime_mensuelle else 0,
             "telephone": p.telephone,
             "paye_ce_mois": paye_ce_mois,
@@ -3590,12 +3854,28 @@ def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int)
         ).first()
         if not ens:
             raise HTTPException(status_code=404, detail="Enseignant introuvable")
+        # Au primaire, le salaire est un montant fixe inscrit sur la fiche.
+        # Au college et au lycee, il n'existe nulle part en base : il se CALCULE
+        # a partir des heures reellement affectees. Lire `ens.salaire_base` pour
+        # tout le monde renvoyait donc 0 pour chaque vacataire — un net a payer
+        # nul, une retenue d'absence nulle, et l'enseignant purement absent de la
+        # paie du mois. Le calcul vit dans services/paie.py et nulle part
+        # ailleurs : le passer ici garantit que la preparation, le paiement, les
+        # arrieres et le bulletin lisent tous le meme chiffre.
+        from app.services import paie as _paie
+
+        _r = _paie.salaire_enseignant(
+            db, emp_id, _paie.annee_courante_id(db, etablissement_id)
+        )
         return {
             "nom": ens.nom, "prenom": ens.prenom, "poste": "Enseignant",
-            "salaire_base": float(ens.salaire_base or 0),
+            "salaire_base": _r["base"],
             "prime_mensuelle": float(ens.prime_mensuelle or 0),
             "type_contrat": ens.type_contrat or "PERMANENT", "mobile_money": None,
             "type_agent": "ENSEIGNANT", "agent_id": emp_id,
+            "mode_remuneration": _r["mode"],
+            "total_heures": _r["total_heures"],
+            "explication_salaire": _r.get("explication", ""),
         }
     elif prefix == "PERS":
         pers = db.query(Utilisateur).filter(
@@ -3609,6 +3889,11 @@ def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int)
             "prime_mensuelle": float(pers.prime_mensuelle or 0),
             "type_contrat": pers.type_contrat or "PERMANENT", "mobile_money": None,
             "type_agent": "PERSONNEL", "agent_id": emp_id,
+            # Un comptable, un surveillant, un gardien ne sont pas payes a
+            # l'heure de cours : leur salaire est fixe, par mois.
+            "mode_remuneration": "MENSUEL",
+            "total_heures": 0.0,
+            "explication_salaire": "Salaire mensuel fixe.",
         }
     raise HTTPException(status_code=400, detail="Type d'employé inconnu")
 
@@ -3676,6 +3961,9 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
             "bulletin_id": bulletin_existant.bulletin_id,
             "nom_complet": f"{infos['prenom']} {infos['nom']}",
             "details_absences": bulletin_existant.details_absences,
+            "mode_remuneration": infos.get("mode_remuneration", "MENSUEL"),
+            "total_heures": infos.get("total_heures", 0.0),
+            "explication_salaire": infos.get("explication_salaire", ""),
         }
 
     primes_ponctuelles = (
@@ -3733,18 +4021,36 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
         "bulletin_id": None,
         "nom_complet": f"{infos['prenom']} {infos['nom']}",
         "details_absences": details_absences_texte,
+        "mode_remuneration": infos.get("mode_remuneration", "MENSUEL"),
+        "total_heures": infos.get("total_heures", 0.0),
+        "explication_salaire": infos.get("explication_salaire", ""),
     }
 
 
 def _lister_employes_actifs(db: Session, etablissement_id: int):
-    """Retourne la liste des références employés actifs ('ENS_x'/'PERS_x')."""
+    """Tout le personnel actif a payer ('ENS_x'/'PERS_x').
+
+    La liste filtrait sur `salaire_base > 0`. Un vacataire du college a
+    `salaire_base = 0` en base — son salaire se calcule a partir de ses heures
+    — donc il ne figurait dans AUCUNE liste de paie : ni preparation, ni
+    paiement groupe. Il n'apparaissait nulle part et personne ne pouvait s'en
+    apercevoir, puisqu'il ne s'affichait meme pas comme impaye.
+
+    On ne filtre donc plus sur le montant. Un employe sans salaire renseigne
+    reste visible et ressort comme « montant a completer » : un manque affiche
+    vaut mieux qu'un employe efface.
+
+    Le SUPER_ADMIN est l'editeur de la plateforme, pas un salarie de l'ecole.
+    """
     refs = []
     for ens in db.query(Enseignant).filter(
-        Enseignant.etablissement_id == etablissement_id, Enseignant.statut == "ACTIF", Enseignant.salaire_base > 0
+        Enseignant.etablissement_id == etablissement_id, Enseignant.statut == "ACTIF"
     ).all():
         refs.append(f"ENS_{ens.enseignant_id}")
     for pers in db.query(Utilisateur).filter(
-        Utilisateur.etablissement_id == etablissement_id, Utilisateur.statut == "ACTIF", Utilisateur.salaire_base > 0
+        Utilisateur.etablissement_id == etablissement_id,
+        Utilisateur.statut == "ACTIF",
+        Utilisateur.role != "SUPER_ADMIN",
     ).all():
         refs.append(f"PERS_{pers.utilisateur_id}")
     return refs
@@ -3844,12 +4150,30 @@ def calculer_salaires_endpoint(
                 "total_avances": calc["total_avances"],
                 "net_a_payer": calc["net_a_payer"],
                 "statut": calc["statut"],
-                "deja_paye": calc["statut"] == "PAYE"
+                "deja_paye": calc["statut"] == "PAYE",
+                "mode_remuneration": calc.get("mode_remuneration", "MENSUEL"),
+                "total_heures": calc.get("total_heures", 0.0),
+                "explication_salaire": calc.get("explication_salaire", ""),
+                "erreur": None,
             })
         except Exception as e:
-            # Skip invalid employees during bulk calculation
-            continue
-            
+            # Cette boucle faisait `continue` : l'employe dont le calcul echouait
+            # disparaissait purement et simplement du tableau. Le comptable payait
+            # cinq personnes sur six en croyant avoir tout paye, et rien a l'ecran
+            # ne le lui disait. On garde donc la ligne, avec sa raison.
+            db.rollback()
+            result.append({
+                "employe_id": ref,
+                "nom": ref, "prenom": "", "poste": "—",
+                "salaire_base": 0, "total_primes": 0,
+                "total_absences": 0, "total_avances": 0,
+                "net_a_payer": 0,
+                "statut": "ERREUR", "deja_paye": False,
+                "mode_remuneration": "", "total_heures": 0.0,
+                "explication_salaire": "",
+                "erreur": str(getattr(e, "detail", None) or e)[:200],
+            })
+
     return result
 
 @router.get("/salaires/date-paie")
@@ -3903,26 +4227,54 @@ def payer_group_endpoint(
     if not mois_concerne:
         mois_concerne = date_type.today().strftime("%Y-%m")
 
+    # `annee_id=1` etait code en dur : l'ecole n°37 enregistrait ses depenses de
+    # salaires sur l'annee scolaire n°1, qui appartient a la premiere ecole
+    # inscrite. C'est l'annee EN COURS DE CETTE ECOLE qui fait foi.
+    annee_id = resoudre_annee(db, etablissement_id, None)
+
     refs = _lister_employes_actifs(db, etablissement_id)
-    count = 0
+    payes, ignores, echecs = [], [], []
 
     for ref in refs:
         try:
             calc = _calculer_salaire(db, ref, mois_concerne, etablissement_id)
-            if calc["statut"] != "PAYE" and calc["net_a_payer"] > 0:
-                _executer_paiement_salaire(
-                    db=db,
-                    employe_id_str=ref,
-                    mois_concerne=mois_concerne,
-                    mode_paiement=mode_paiement,
-                    etablissement_id=etablissement_id,
-                    annee_id=1
-                )
-                count += 1
-        except Exception:
-            pass
-            
-    return {"message": f"{count} salaires payés avec succès"}
+            if calc["statut"] == "PAYE":
+                ignores.append({"nom": calc["nom_complet"], "raison": "deja paye ce mois"})
+                continue
+            if calc["net_a_payer"] <= 0:
+                ignores.append({"nom": calc["nom_complet"], "raison": "aucun montant a verser"})
+                continue
+            _executer_paiement_salaire(
+                db=db,
+                employe_id_str=ref,
+                mois_concerne=mois_concerne,
+                mode_paiement=mode_paiement,
+                etablissement_id=etablissement_id,
+                annee_id=annee_id,
+            )
+            payes.append({"nom": calc["nom_complet"], "montant": calc["net_a_payer"]})
+        except Exception as e:
+            # `except: pass` renvoyait « 3 salaires payes » sans jamais dire que
+            # deux autres avaient echoue. Un paiement qui ne passe pas doit se
+            # voir : c'est de l'argent que quelqu'un attend.
+            db.rollback()
+            echecs.append({
+                "employe_id": ref,
+                "raison": str(getattr(e, "detail", None) or e)[:200],
+            })
+
+    message = f"{len(payes)} salaire(s) paye(s)"
+    if ignores:
+        message += f", {len(ignores)} sans rien a verser"
+    if echecs:
+        message += f", {len(echecs)} EN ECHEC"
+    return {
+        "message": message + ".",
+        "payes": payes,
+        "ignores": ignores,
+        "echecs": echecs,
+        "total_verse": round(sum(p["montant"] for p in payes), 2),
+    }
 
 
 def _derniers_mois(n: int):
@@ -4101,10 +4453,13 @@ def avances_endpoint(data: dict, db: Session = Depends(get_db), etablissement_id
     )
     db.add(avance)
     
-    # Avance is money leaving the school NOW, so we need a Depense
+    # Une avance, c'est de l'argent qui sort de la caisse aujourd'hui : elle
+    # devient une dépense immédiatement. Sur l'année de CETTE école — `1` était
+    # l'année de la première école inscrite, donc une dépense invisible dans la
+    # comptabilité de celle qui l'a réellement versée.
     dep = Depense(
         etablissement_id=etablissement_id,
-        annee_id=1,
+        annee_id=resoudre_annee(db, etablissement_id, None),
         categorie="AVANCE_SALAIRE",
         libelle=f"{motif} {infos['nom']} {infos['prenom']} — {mois}",
         montant=float(montant),
@@ -4389,3 +4744,154 @@ def annuler_salaire(depense_id: int, db: Session = Depends(get_db), etablissemen
     return {"message": "Paiement annulé"}
 
 
+# ════════════════════════════════════════════════════════════════════════
+# RÉMUNÉRATION — au mois ou à l'heure
+# ════════════════════════════════════════════════════════════════════════
+# Un enseignant portait un seul taux horaire, le même partout : impossible
+# d'exprimer qu'une heure de Terminale ne se paie pas comme une heure de 7ᵉ.
+# Et rien ne distinguait l'instituteur du primaire, payé au mois, du vacataire
+# du collège payé à l'heure.
+#
+# Le calcul vit dans `app/services/paie.py` — jamais réécrit ici, sous peine de
+# voir deux chiffres différents pour le même salaire selon l'écran consulté.
+
+
+from pydantic import BaseModel as _BaseModel
+
+
+class TauxAffectation(_BaseModel):
+    """Exception de tarif sur une affectation précise.
+
+    `None` et `0` ne sont PAS équivalents : `None` remet le taux de
+    l'enseignant, `0` signifie que cette heure n'est pas rémunérée (bénévolat,
+    forfait déjà couvert).
+    """
+    taux_horaire: Optional[float] = None
+
+
+@router.get("/remuneration/enseignant/{enseignant_id}")
+def remuneration_enseignant(
+    enseignant_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Rémunération mensuelle d'un enseignant, avec le détail de ses heures.
+
+    Le détail est renvoyé même en mode MENSUEL : l'école doit pouvoir voir la
+    charge réelle d'un instituteur, même si elle ne détermine pas sa paie. Un
+    total sans son détail n'est pas contestable, donc pas vérifiable.
+    """
+    from app.services import paie as _paie
+
+    ens = db.query(Enseignant).filter(
+        Enseignant.enseignant_id == enseignant_id,
+        Enseignant.etablissement_id == etablissement_id,
+    ).first()
+    if not ens:
+        raise HTTPException(404, "Enseignant non trouvé")
+
+    resultat = _paie.salaire_enseignant(
+        db, enseignant_id, _paie.annee_courante_id(db, etablissement_id)
+    )
+    resultat["enseignant"] = f"{ens.prenom} {ens.nom}"
+    resultat["taux_reference"] = float(ens.taux_horaire or 0)
+    resultat["salaire_mensuel"] = float(ens.salaire_base or 0)
+    return resultat
+
+
+@router.put("/remuneration/affectation/{affectation_id}/taux")
+def definir_taux_affectation(
+    affectation_id: int,
+    data: TauxAffectation,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Fixe — ou retire — l'exception de tarif d'une affectation."""
+    aff = (
+        db.query(Affectation)
+        .join(Enseignant, Enseignant.enseignant_id == Affectation.enseignant_id)
+        .filter(
+            Affectation.affectation_id == affectation_id,
+            Enseignant.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not aff:
+        raise HTTPException(404, "Affectation non trouvée")
+    if data.taux_horaire is not None and data.taux_horaire < 0:
+        raise HTTPException(400, "Un taux horaire ne peut pas être négatif.")
+
+    aff.taux_horaire = data.taux_horaire
+    db.commit()
+    return {
+        "message": ("Tarif spécifique enregistré." if data.taux_horaire is not None
+                    else "Tarif spécifique retiré : le taux de l'enseignant s'applique."),
+        "affectation_id": affectation_id,
+        "taux_horaire": data.taux_horaire,
+    }
+
+
+@router.get("/remuneration/preparer")
+def preparer_la_paie(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """UNE seule préparation de paie : enseignants ET personnel.
+
+    Les deux populations étaient calculées par des chemins séparés, obligeant
+    le comptable à faire deux fois le travail sans jamais pouvoir recouper le
+    total. Ici, tout le monde figure dans la même liste, avec la raison de son
+    montant.
+    """
+    from app.services import paie as _paie
+
+    annee_id = _paie.annee_courante_id(db, etablissement_id)
+    lignes = []
+
+    for ens in db.query(Enseignant).filter(
+        Enseignant.etablissement_id == etablissement_id,
+        Enseignant.statut == "ACTIF",
+    ).order_by(Enseignant.nom, Enseignant.prenom).all():
+        r = _paie.salaire_enseignant(db, ens.enseignant_id, annee_id)
+        lignes.append({
+            "type": "ENSEIGNANT",
+            "id": ens.enseignant_id,
+            "nom": f"{ens.prenom} {ens.nom}",
+            "fonction": "Enseignant",
+            "mode": r["mode"],
+            "base": r["base"],
+            "total_heures": r["total_heures"],
+            "explication": r.get("explication", ""),
+            "nb_affectations": len(r["lignes"]),
+        })
+
+    # Le SUPER_ADMIN est l'editeur de la plateforme : il n'est pas salarie de
+    # l'ecole et n'a donc rien a faire dans sa paie.
+    for u in db.query(Utilisateur).filter(
+        Utilisateur.etablissement_id == etablissement_id,
+        Utilisateur.statut == "ACTIF",
+        Utilisateur.role != "SUPER_ADMIN",
+    ).order_by(Utilisateur.nom, Utilisateur.prenom).all():
+        r = _paie.salaire_personnel(db, u.utilisateur_id)
+        lignes.append({
+            "type": "PERSONNEL",
+            "id": u.utilisateur_id,
+            "nom": f"{u.prenom} {u.nom}",
+            "fonction": u.role,
+            "mode": r["mode"],
+            "base": r["base"],
+            "total_heures": 0.0,
+            "explication": r.get("explication", ""),
+            "nb_affectations": 0,
+        })
+
+    # Les salaires non renseignes sont comptes a part : les noyer dans le total
+    # laisserait croire que la paie est prete alors qu'il manque des montants.
+    a_completer = [l for l in lignes if l["base"] <= 0]
+    return {
+        "lignes": lignes,
+        "effectif": len(lignes),
+        "total_a_payer": round(sum(l["base"] for l in lignes), 2),
+        "a_completer": len(a_completer),
+        "noms_a_completer": [l["nom"] for l in a_completer][:20],
+    }

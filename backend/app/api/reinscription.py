@@ -23,6 +23,7 @@ from app.core.database import get_db
 from app.core.auth import require_etablissement
 from app.models.academique import Inscription, Eleve, Classe, Facture, EcheanceFacture, TypeFrais, TarifClasse
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
+from app.core.numerotation import generer_numero_facture
 
 router = APIRouter(prefix="/api/reinscription", tags=["Réinscription V2"])
 
@@ -79,21 +80,14 @@ def _generer_frais_reinscription(db: Session, inscription: Inscription, classe: 
         f.type_frais_id for f in db.query(Facture).filter(Facture.inscription_id == inscription.inscription_id).all()
     }
 
-    last_facture = db.query(Facture).order_by(Facture.numero_facture.desc()).first()
-    if last_facture and last_facture.numero_facture.startswith("FAC-"):
-        try:
-            max_num = int(last_facture.numero_facture.split("-")[1])
-        except ValueError:
-            max_num = 0
-    else:
-        max_num = 0
-
     created = 0
     for tarif, type_frais in tarifs:
         if type_frais.type_frais_id in deja_facture:
             continue
         montant = float(tarif.montant)
-        numero_facture = f"FAC-{max_num + created + 1:06d}"
+        numero_facture = generer_numero_facture(
+            db, etablissement_id, inscription.annee_id
+        )
 
         facture = Facture(
             inscription_id=inscription.inscription_id,

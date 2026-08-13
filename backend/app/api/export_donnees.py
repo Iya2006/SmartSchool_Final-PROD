@@ -39,23 +39,54 @@ router = APIRouter(prefix="/api/export", tags=["Export des données"])
 _require_admin = require_roles(*ADMIN_TIER_ROLES)
 
 
-def _fichier_csv(entetes: list, lignes: list, nom: str) -> StreamingResponse:
+# Un export se lit ligne a ligne : rien ne justifie de detenir le fichier
+# entier avant d'en envoyer le premier octet.
+_LIGNES_PAR_ENVOI = 500
+
+
+def _fichier_csv(entetes: list, lignes, nom: str) -> StreamingResponse:
     """CSV `;` avec BOM UTF-8 : c'est ce qu'attend Excel en configuration
     française. Sans le BOM les accents sont illisibles ; sans le `;` tout
-    atterrit dans une seule colonne."""
-    tampon = io.StringIO()
-    tampon.write("﻿")
-    writer = csv.writer(tampon, delimiter=";", lineterminator="\r\n")
-    writer.writerow(entetes)
-    writer.writerows(lignes)
-    tampon.seek(0)
+    atterrit dans une seule colonne.
+
+    `lignes` accepte une liste OU un générateur, et le contenu part par paquets
+    au fur et à mesure. La version précédente écrivait tout dans un `StringIO`,
+    puis en prenait une COPIE complète (`iter([tampon.getvalue()])`) : le
+    fichier tenait donc deux fois en mémoire avant que le premier octet ne
+    parte. Sur une école de quelques centaines d'élèves c'est indolore ; sur un
+    export de notes à l'échelle du million, c'est le serveur qui tombe — et il
+    tombe pour tout le monde, pas seulement pour celui qui a cliqué.
+    """
+    def flux():
+        tampon = io.StringIO()
+        writer = csv.writer(tampon, delimiter=";", lineterminator="\r\n")
+        tampon.write("﻿")
+        writer.writerow(entetes)
+
+        depuis = 0
+        for ligne in lignes:
+            writer.writerow(ligne)
+            depuis += 1
+            if depuis >= _LIGNES_PAR_ENVOI:
+                yield tampon.getvalue()
+                tampon.seek(0)
+                tampon.truncate(0)
+                depuis = 0
+        reste = tampon.getvalue()
+        if reste:
+            yield reste
 
     horodatage = datetime.now().strftime("%Y%m%d_%H%M")
     return StreamingResponse(
-        iter([tampon.getvalue()]),
+        flux(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{nom}_{horodatage}.csv"'},
     )
+
+
+# `.all()` charge tout le resultat d'un coup. `.yield_per()` demande a
+# PostgreSQL de livrer par paquets : la memoire ne depend plus du volume.
+_LIGNES_PAR_LOT = 1000
 
 
 def _nom_ecole(db: Session, etablissement_id: int) -> str:
@@ -126,15 +157,15 @@ def exporter_eleves(
             raise HTTPException(404, "Classe non trouvée")
         requete = requete.filter(Inscription.classe_id == classe_id)
 
-    lignes = [
+    lignes = (
         [
             e.matricule, e.nom, e.prenom, e.sexe,
             e.date_naissance.isoformat() if e.date_naissance else "",
             e.lieu_naissance or "", c.libelle if c else "",
             e.telephone or "", e.email or "", e.quartier or "", e.statut or "",
         ]
-        for e, c in requete.order_by(Eleve.nom, Eleve.prenom).all()
-    ]
+        for e, c in requete.order_by(Eleve.nom, Eleve.prenom).yield_per(_LIGNES_PAR_LOT)
+    )
     return _fichier_csv(
         ["Matricule", "Nom", "Prénom", "Sexe", "Date de naissance", "Lieu de naissance",
          "Classe", "Téléphone", "E-mail", "Quartier", "Statut"],
@@ -181,7 +212,9 @@ def exporter_notes(
     if trimestre_id:
         requete = requete.filter(Bulletin.trimestre_id == trimestre_id)
 
-    lignes = [
+    # Une ligne par eleve et par matiere et par periode : c'est l'export qui
+    # grossit le plus vite de tout le systeme.
+    lignes = (
         [
             el.matricule, el.nom, el.prenom, cl.libelle,
             tr.libelle if tr else "Annuel",
@@ -193,8 +226,8 @@ def exporter_notes(
         ]
         for b, lg, el, cl, mat, tr in requete.order_by(
             Classe.libelle, Eleve.nom, Eleve.prenom
-        ).all()
-    ]
+        ).yield_per(_LIGNES_PAR_LOT)
+    )
     return _fichier_csv(
         ["Matricule", "Nom", "Prénom", "Classe", "Période", "Matière",
          "Moyenne matière", "Coefficient", "Moyenne générale", "Rang",
@@ -218,33 +251,27 @@ def exporter_paiements(
         .join(Classe, Classe.classe_id == Inscription.classe_id)
         .filter(Classe.etablissement_id == etablissement_id)
         .order_by(Facture.date_facture.desc())
-        .all()
+        .yield_per(_LIGNES_PAR_LOT)
     )
-    if not factures:
-        return _fichier_csv(
-            ["Facture", "Matricule", "Nom", "Prénom", "Classe", "Date",
-             "Montant total", "Payé", "Restant", "Statut"],
-            [], f"paiements_{_nom_ecole(db, etablissement_id)}",
-        )
 
     # `montant_paye` et `montant_restant` sont tenus a jour sur la facture
     # elle-meme : les recalculer depuis les paiements ferait courir le risque
     # d'afficher un chiffre different de celui de l'ecran comptabilite.
-    lignes = []
-    for f, el, cl in factures:
-        total = float(f.montant_net or f.montant_total or 0)
-        paye = float(f.montant_paye or 0)
-        lignes.append([
-            f.numero_facture or f.facture_id,
-            el.matricule if el else "", el.nom if el else "", el.prenom if el else "",
-            cl.libelle if cl else "",
-            f.date_facture.isoformat() if f.date_facture else "",
-            total, paye,
-            float(f.montant_restant) if f.montant_restant is not None else round(total - paye, 2),
-            f.statut or "",
-        ])
+    def lignes():
+        for f, el, cl in factures:
+            total = float(f.montant_net or f.montant_total or 0)
+            paye = float(f.montant_paye or 0)
+            yield [
+                f.numero_facture or f.facture_id,
+                el.matricule if el else "", el.nom if el else "", el.prenom if el else "",
+                cl.libelle if cl else "",
+                f.date_facture.isoformat() if f.date_facture else "",
+                total, paye,
+                float(f.montant_restant) if f.montant_restant is not None else round(total - paye, 2),
+                f.statut or "",
+            ]
     return _fichier_csv(
         ["Facture", "Matricule", "Nom", "Prénom", "Classe", "Date",
          "Montant total", "Payé", "Restant", "Statut"],
-        lignes, f"paiements_{_nom_ecole(db, etablissement_id)}",
+        lignes(), f"paiements_{_nom_ecole(db, etablissement_id)}",
     )

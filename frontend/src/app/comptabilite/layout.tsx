@@ -46,8 +46,13 @@ const MODULES = [
     },
     {
         id: 'frais', label: 'Frais & Tarifs', icon: Receipt, path: '/comptabilite/frais',
+        // « Tarifs par classe » vivait derriere un petit bouton sur une ligne de
+        // la liste des types de frais. C'est pourtant LE reglage du module : le
+        // prix de l'annee. Il devient une destination, juste apres l'ecran qui
+        // dit CE QUE l'ecole fait payer — quoi, puis combien.
         subItems: [
             { id: 'frais-types', label: 'Types de frais', path: '/comptabilite/frais?tab=types', tab: 'types' },
+            { id: 'frais-tarifs', label: 'Tarifs par classe', path: '/comptabilite/frais?tab=tarifs', tab: 'tarifs' },
             { id: 'frais-factures', label: 'Factures', path: '/comptabilite/frais?tab=factures', tab: 'factures' },
             { id: 'frais-echeances', label: 'Échéanciers', path: '/comptabilite/frais?tab=echeances', tab: 'echeances' },
         ]

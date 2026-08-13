@@ -15,6 +15,7 @@ from app.models.academique import (
     Enseignant, Affectation, Matiere, Classe, ClasseMatiere, CreneauEmploi, Cycle
 )
 from app.schemas.schemas import EnseignantCreate, EnseignantUpdate, EnseignantOut
+from app.core.annee_courante import resoudre_annee
 
 router = APIRouter(prefix="/api/enseignants", tags=["Enseignants"])
 
@@ -87,6 +88,7 @@ def get_enseignant(enseignant_id: int, db: Session = Depends(get_db), etablissem
 @router.get("/{enseignant_id}/affectations")
 def get_affectations(enseignant_id: int, annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     _enseignant_ou_404(db, enseignant_id, etablissement_id)
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     results = db.query(
         Affectation.affectation_id,
         Classe.classe_id,
@@ -96,6 +98,7 @@ def get_affectations(enseignant_id: int, annee_id: int = Depends(resolve_annee_i
         Matiere.code.label("matiere_code"),
         Matiere.libelle.label("matiere"),
         Affectation.nb_heures_semaine,
+        Affectation.taux_horaire,
         Affectation.est_principal,
         Affectation.statut
     ).join(
@@ -117,6 +120,11 @@ def get_affectations(enseignant_id: int, annee_id: int = Depends(resolve_annee_i
             "matiere_code": r.matiere_code,
             "matiere": r.matiere,
             "heures": float(r.nb_heures_semaine) if r.nb_heures_semaine else 0,
+            # `None` et `0` ne sont PAS equivalents : None = le taux de
+            # l'enseignant s'applique, 0 = cette heure n'est pas remuneree.
+            # Les confondre effacerait la difference entre « rien de
+            # particulier » et « benevolat ».
+            "taux_horaire": float(r.taux_horaire) if r.taux_horaire is not None else None,
             "est_principal": r.est_principal == "O",
             "statut": r.statut
         } for r in results
@@ -131,6 +139,7 @@ def get_affectations(enseignant_id: int, annee_id: int = Depends(resolve_annee_i
 def get_emploi_enseignant(enseignant_id: int, annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Retourne l'emploi du temps personnel d'un enseignant (grille semaine)."""
     _enseignant_ou_404(db, enseignant_id, etablissement_id)
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
 
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.enseignant_id == enseignant_id,
@@ -167,6 +176,7 @@ def get_emploi_enseignant(enseignant_id: int, annee_id: int = Depends(resolve_an
 def get_enseignant_stats(enseignant_id: int, annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Statistiques agrégées de l'enseignant pour son profil/dashboard."""
     _enseignant_ou_404(db, enseignant_id, etablissement_id)
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
 
     # Nombre de classes
     nb_classes = db.query(distinct(Affectation.classe_id)).filter(
@@ -266,7 +276,16 @@ def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_
         ClasseMatiere.classe_id == classe_id,
         ClasseMatiere.matiere_id == matiere_id
     ).first()
-    nb_heures = cm.nb_heures_semaine if cm else data.get("nb_heures_semaine", 2)
+    # `cm.nb_heures_semaine if cm else ...` retenait 0 quand la grille existait
+    # mais n'etait pas renseignee. Pour un enseignant paye a l'heure, 0 heure
+    # vaut 0 GNF : il faut donc pouvoir passer les heures a la main, et ne
+    # retomber sur la grille que lorsqu'elle dit quelque chose.
+    nb_heures = data.get("nb_heures_semaine")
+    if nb_heures in (None, "", 0):
+        nb_heures = (cm.nb_heures_semaine if cm and cm.nb_heures_semaine else 0)
+    nb_heures = float(nb_heures or 0)
+    if nb_heures < 0:
+        raise HTTPException(400, "Un nombre d'heures ne peut pas etre negatif.")
 
     aff = Affectation(
         enseignant_id=enseignant_id,
@@ -278,13 +297,24 @@ def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_
         statut="ACTIVE"
     )
     db.add(aff)
+    db.flush()
+
+    # Des qu'un enseignant est affecte a une classe de PRIMAIRE, il passe au
+    # salaire MENSUEL : un instituteur assure toutes les matieres d'une meme
+    # classe, le compter a l'heure n'aurait aucun sens. Au-dela, c'est
+    # l'HORAIRE. Le mode est donc deduit des affectations plutot que saisi —
+    # une case a cocher de plus serait une case a oublier.
+    from app.services.paie import synchroniser_mode_remuneration
+    mode = synchroniser_mode_remuneration(db, enseignant_id)
+
     db.commit()
     db.refresh(aff)
 
     return {
         "message": f"Affectation créée : {ens.prenom} {ens.nom} → {mat.libelle} en {cls.libelle}",
         "affectation_id": aff.affectation_id,
-        "heures": float(nb_heures)
+        "heures": float(nb_heures),
+        "mode_remuneration": mode,
     }
 
 
@@ -302,9 +332,81 @@ def supprimer_affectation(affectation_id: int, db: Session = Depends(get_db), et
     )
     if not aff:
         raise HTTPException(404, "Affectation non trouvée")
+    enseignant_id = aff.enseignant_id
     db.delete(aff)
+    db.flush()
+
+    # Le mode doit pouvoir REVENIR en arriere : un enseignant qui perd sa
+    # derniere classe de primaire repasse a l'horaire. Sans ce recalcul, il
+    # resterait au mensuel indefiniment.
+    from app.services.paie import synchroniser_mode_remuneration
+    mode = synchroniser_mode_remuneration(db, enseignant_id)
+
     db.commit()
-    return {"message": "Affectation supprimée"}
+    return {"message": "Affectation supprimée", "mode_remuneration": mode}
+
+
+@router.put("/affectations/{affectation_id}")
+def modifier_affectation(
+    affectation_id: int,
+    data: dict,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Corriger le nombre d'heures hebdomadaires d'une affectation.
+
+    Ces heures ne sont pas un detail d'emploi du temps : pour un enseignant du
+    college ou du lycee, elles SONT son salaire. Elles n'etaient modifiables
+    par aucune route — la seule facon de corriger une erreur etait de
+    supprimer l'affectation et de la recreer, ce qui faisait perdre au passage
+    le tarif specifique eventuellement pose dessus.
+
+    Le tarif, lui, se regle par PUT /api/finance/remuneration/affectation/{id}/taux :
+    l'emploi du temps et la remuneration restent deux sujets distincts, avec
+    une seule route d'ecriture chacun.
+    """
+    aff = (
+        db.query(Affectation)
+        .join(Enseignant, Enseignant.enseignant_id == Affectation.enseignant_id)
+        .filter(
+            Affectation.affectation_id == affectation_id,
+            Enseignant.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not aff:
+        raise HTTPException(404, "Affectation non trouvée")
+
+    if "nb_heures_semaine" in data:
+        try:
+            heures = float(data["nb_heures_semaine"] or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Nombre d'heures invalide.")
+        if heures < 0:
+            raise HTTPException(400, "Un nombre d'heures ne peut pas etre negatif.")
+        # Une semaine scolaire ne compte pas 50 heures de cours dans la meme
+        # classe : au-dela, c'est une faute de frappe qui gonflerait la paie.
+        if heures > 40:
+            raise HTTPException(400, "40 heures par semaine au maximum pour une meme matiere.")
+        aff.nb_heures_semaine = heures
+
+    if "statut" in data and data["statut"] in ("ACTIVE", "INACTIVE"):
+        aff.statut = data["statut"]
+
+    db.flush()
+
+    from app.services.paie import synchroniser_mode_remuneration
+    mode = synchroniser_mode_remuneration(db, aff.enseignant_id)
+
+    db.commit()
+    db.refresh(aff)
+    return {
+        "message": "Affectation mise à jour",
+        "affectation_id": aff.affectation_id,
+        "nb_heures_semaine": float(aff.nb_heures_semaine or 0),
+        "statut": aff.statut,
+        "mode_remuneration": mode,
+    }
 
 
 @router.post("", response_model=EnseignantOut, status_code=201)
@@ -368,6 +470,8 @@ def get_affectations_globales(annee_id: int = Depends(resolve_annee_id), db: Ses
     l'écran Salle des Profs affichait les affectations de toutes les écoles.
     """
     from app.models.academique import Niveau
+
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
 
     results = db.query(
         Affectation.affectation_id,
@@ -505,6 +609,7 @@ def get_salle_des_profs_stats(annee_id: int = Depends(resolve_annee_id), db: Ses
     heures, taux de couverture des postes) étaient calculés sur l'ensemble
     de la plateforme.
     """
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     total_enseignants = db.query(func.count(Enseignant.enseignant_id)).filter(
         Enseignant.statut == "ACTIF",
         Enseignant.etablissement_id == etablissement_id,
