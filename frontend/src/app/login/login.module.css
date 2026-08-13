@@ -39,15 +39,19 @@
         radial-gradient(circle at bottom right, rgba(16, 185, 129, 0.18), transparent 28%);
 }
 
-/* Filigrane — logo de l'agence, discret derriere le contenu marketing,
-   jamais interactif ni annonce aux lecteurs d'ecran (purement decoratif). */
+/* Filigrane — logo de l'agence, centre et mis a l'echelle du cadre entier
+   (object-fit: contain sur la boite interieure apres padding) : jamais
+   rogne quelle que soit la hauteur du panneau (court sur mobile, plein
+   sur desktop), toujours entierement visible et centre. Discret derriere
+   le contenu marketing, jamais interactif ni annonce aux lecteurs
+   d'ecran (purement decoratif). */
 .heroWatermark {
     position: absolute;
-    right: clamp(-40px, -4vw, 10px);
-    bottom: clamp(-30px, -3vw, 20px);
-    width: clamp(220px, 34vw, 460px);
-    height: auto;
-    opacity: 0.28;
+    inset: 0;
+    padding: 14% 12%;
+    object-fit: contain;
+    object-position: center;
+    opacity: 0.16;
     pointer-events: none;
     user-select: none;
     filter: saturate(1.15);
