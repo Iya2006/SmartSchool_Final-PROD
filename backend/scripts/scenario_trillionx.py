@@ -1771,6 +1771,133 @@ def _recap_epreuves(db: Session, eid: int, annee) -> None:
               f"au {dernier:%d/%m/%Y}")
 
 
+# ── étape 9 : les heures de cours non assurées ─────────────────────────
+#
+# UNIQUEMENT AU COLLÈGE ET AU LYCÉE, et c'est logique : là-bas un professeur
+# est payé pour les heures qu'il donne. Un instituteur du primaire, lui, est
+# payé au mois — son absence se retient à la journée, pas à l'heure, et le
+# calcul existant est déjà le bon pour lui.
+#
+# Une absence est enregistrée pour un JOUR. Ce que ça coûte se lit ensuite dans
+# l'emploi du temps : le professeur manque exactement les créneaux qu'il avait
+# ce jour-là.
+PART_PROFS_ABSENTS = 0.35        # un tiers des professeurs manque au moins un jour
+MAX_JOURS_ABSENCE = 4            # sur toute l'année, par professeur concerné
+MOTIFS_ABSENCE = [
+    "Maladie", "Convocation administrative", "Deuil familial",
+    "Empêchement personnel", "Retard de transport",
+]
+
+
+def etape_9_absences_enseignants(db: Session) -> None:
+    """Des professeurs du secondaire ratent des heures — et la paie le voit."""
+    from app.models.academique import AbsencePersonnel, Employe
+
+    _titre(9, "Heures de cours non assurees (college et lycee)")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == eid, AnneeScolaire.est_courante == "O"
+    ).first()
+
+    # Les enseignants payés à l'heure : ce sont eux, et eux seuls, que ce
+    # scénario concerne.
+    profs = db.execute(text("""
+        SELECT e.enseignant_id, e.prenom || ' ' || e.nom AS nom, e.taux_horaire
+        FROM ss_enseignants e
+        WHERE e.etablissement_id = :eid AND e.statut = 'ACTIF'
+          AND e.mode_remuneration = 'HORAIRE'
+        ORDER BY e.enseignant_id
+    """), {"eid": eid}).fetchall()
+    if not profs:
+        print("  aucun enseignant paye a l'heure — rien a faire.")
+        return
+
+    deja = db.execute(text("""
+        SELECT count(*) FROM ss_absences_personnel a
+        JOIN ss_employes e ON e.employe_id = a.employe_id
+        WHERE e.etablissement_id = :eid
+    """), {"eid": eid}).scalar()
+    if deja:
+        print(f"  {deja} absence(s) deja enregistree(s) — etape deja jouee.")
+        _recap_absences(db, eid, annee)
+        return
+
+    # Les jours de classe de l'année : du lundi au vendredi, hors vacances
+    # d'usage. Une absence un dimanche ne coûterait rien et ne prouverait rien.
+    from datetime import timedelta
+
+    jours_classe = []
+    jour = ANNEE_DEBUT
+    while jour <= ANNEE_FIN:
+        if jour.weekday() < 5 and not (
+            (jour.month == 12 and jour.day >= 20) or (jour.month == 1 and jour.day <= 4)
+        ):
+            jours_classe.append(jour)
+        jour += timedelta(days=1)
+
+    nb_absences = 0
+    concernes = 0
+    for p in profs:
+        if random.random() > PART_PROFS_ABSENTS:
+            continue
+        concernes += 1
+        # La ligne SS_EMPLOYES est le miroir auquel s'accrochent primes,
+        # avances et absences : on passe par la fonction de l'application.
+        from app.api.finance import _get_or_sync_employe_paie, _identifier_employe
+
+        ref = f"ENS_{p.enseignant_id}"
+        infos = _identifier_employe(ref, db, eid)
+        employe = _get_or_sync_employe_paie(db, ref, infos, eid)
+
+        for jour_absent in random.sample(jours_classe, random.randint(1, MAX_JOURS_ABSENCE)):
+            db.add(AbsencePersonnel(
+                employe_id=employe.employe_id, date_absence=jour_absent,
+                motif=random.choice(MOTIFS_ABSENCE),
+                # Non justifiée : c'est ce qui déclenche la retenue. Une absence
+                # justifiée est enregistrée mais ne coûte rien à l'enseignant.
+                est_justifie="N" if random.random() < 0.7 else "O",
+            ))
+            nb_absences += 1
+    db.commit()
+
+    print(f"  {concernes} professeur(s) sur {len(profs)} ont manque au moins un jour")
+    print(f"  {nb_absences} absence(s) enregistree(s)")
+    _recap_absences(db, eid, annee)
+
+
+def _recap_absences(db: Session, eid: int, annee) -> None:
+    from app.services import paie as _paie
+
+    lignes = db.execute(text("""
+        SELECT e.enseignant_id, e.prenom || ' ' || e.nom AS nom,
+               count(*) FILTER (WHERE a.est_justifie = 'N') AS non_justifiees,
+               count(*) FILTER (WHERE a.est_justifie = 'O') AS justifiees,
+               array_agg(a.date_absence ORDER BY a.date_absence)
+                 FILTER (WHERE a.est_justifie = 'N') AS jours
+        FROM ss_absences_personnel a
+        JOIN ss_employes emp ON emp.employe_id = a.employe_id
+        JOIN ss_enseignants e ON 'ENS_' || e.enseignant_id = emp.source_ref
+        WHERE emp.etablissement_id = :eid AND e.mode_remuneration = 'HORAIRE'
+        GROUP BY e.enseignant_id, e.prenom, e.nom
+        ORDER BY count(*) DESC LIMIT 8
+    """), {"eid": eid}).fetchall()
+    if not lignes:
+        return
+
+    print("\n  Ce que ces absences coutent reellement — heures de l'emploi du temps :")
+    print(f"     {'ENSEIGNANT':<26}{'ABSENCES':>9}{'HEURES':>8}{'RETENUE':>16}")
+    total = 0.0
+    for _eid_ens, nom, non_just, just, jours in lignes:
+        manque = _paie.heures_manquees(db, _eid_ens, list(jours or []), annee.annee_id)
+        total += manque["montant"]
+        print(f"     {nom[:25]:<26}{non_just:>9}{manque['heures']:>8.1f}"
+              f"{manque['montant']:>16,.0f}")
+    print(f"\n  Le taux journalier (salaire / 26) aurait retenu la meme somme pour")
+    print(f"  un jour a deux heures de cours et un jour a six. Ici chaque heure")
+    print(f"  manquee est retenue a SON tarif, celui de sa classe.")
+
+
 ETAPES = {
     1: ("Referentiel (cycles, niveaux, matieres, annee, semestres)", etape_1_referentiel),
     2: ("Classes et grille horaire", etape_2_classes),
@@ -1780,6 +1907,7 @@ ETAPES = {
     6: ("Tarifs par classe et facturation", etape_6_tarifs_et_factures),
     7: ("Encaissements de l'annee et relances", etape_7_encaissements),
     8: ("Epreuves de l'annee et depot des sujets", etape_8_epreuves_et_sujets),
+    9: ("Heures de cours non assurees (college et lycee)", etape_9_absences_enseignants),
 }
 
 

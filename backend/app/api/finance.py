@@ -3904,27 +3904,72 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
     )
     total_primes = float(infos["prime_mensuelle"]) + float(primes_ponctuelles or 0)
 
-    nb_absences_pointage = db.query(func.count(PresenceAgent.presence_id)).filter(
-        PresenceAgent.type_agent == infos["type_agent"],
-        PresenceAgent.agent_id == infos["agent_id"],
-        PresenceAgent.statut == "ABSENT",
-        PresenceAgent.date_presence >= debut_mois,
-        PresenceAgent.date_presence <= fin_mois,
-    ).scalar() or 0
-    nb_absences_manuelles = db.query(func.count(AbsencePersonnel.absence_id)).filter(
-        AbsencePersonnel.employe_id == employe.employe_id,
-        AbsencePersonnel.est_justifie == "N",
-        AbsencePersonnel.date_absence >= debut_mois,
-        AbsencePersonnel.date_absence <= fin_mois,
-    ).scalar() or 0
-    taux_journalier = infos["salaire_base"] / JOURS_OUVRABLES_MOIS if infos["salaire_base"] else 0
-    total_absences = round((nb_absences_pointage + nb_absences_manuelles) * taux_journalier, 2)
-    
+    # On releve les JOURS d'absence, pas seulement leur nombre : pour un
+    # professeur paye a l'heure, ce qui compte est ce qu'il avait a donner ces
+    # jours-la, et ca se lit dans son emploi du temps.
+    jours_pointage = [
+        r[0] for r in db.query(PresenceAgent.date_presence).filter(
+            PresenceAgent.type_agent == infos["type_agent"],
+            PresenceAgent.agent_id == infos["agent_id"],
+            PresenceAgent.statut == "ABSENT",
+            PresenceAgent.date_presence >= debut_mois,
+            PresenceAgent.date_presence <= fin_mois,
+        ).all()
+    ]
+    jours_manuels = [
+        r[0] for r in db.query(AbsencePersonnel.date_absence).filter(
+            AbsencePersonnel.employe_id == employe.employe_id,
+            AbsencePersonnel.est_justifie == "N",
+            AbsencePersonnel.date_absence >= debut_mois,
+            AbsencePersonnel.date_absence <= fin_mois,
+        ).all()
+    ]
+    nb_absences_pointage = len(jours_pointage)
+    nb_absences_manuelles = len(jours_manuels)
+    jours_absents = sorted(set(jours_pointage) | set(jours_manuels))
+
     details_absences_parts = []
-    if nb_absences_pointage > 0:
-        details_absences_parts.append(f"{nb_absences_pointage} absence(s) pointage QR")
-    if nb_absences_manuelles > 0:
-        details_absences_parts.append(f"{nb_absences_manuelles} absence(s) saisie(s) manuellement (non justifiée)")
+    heures_perdues = 0.0
+
+    if infos.get("mode_remuneration") == "HORAIRE" and infos["type_agent"] == "ENSEIGNANT":
+        # AU COLLEGE ET AU LYCEE, on retient les HEURES REELLEMENT MANQUEES.
+        # Le taux journalier (salaire / 26) retenait la meme somme pour un
+        # mardi a deux heures de cours et un jeudi a six : trop dans un cas,
+        # pas assez dans l'autre, jamais le bon montant. Un vacataire n'est pas
+        # paye pour etre la, il est paye pour les heures qu'il donne.
+        from app.services import paie as _paie
+
+        manque = _paie.heures_manquees(
+            db, infos["agent_id"], jours_absents,
+            _paie.annee_courante_id(db, etablissement_id),
+        )
+        total_absences = round(manque["montant"], 2)
+        heures_perdues = manque["heures"]
+        if heures_perdues:
+            details_absences_parts.append(
+                f"{heures_perdues:g} h de cours non assurees sur "
+                f"{len(jours_absents)} jour(s) d'absence"
+            )
+            details_absences_parts.extend(
+                f"{l['date']} {l['creneau']} {l['matiere']} ({l['classe']}) — "
+                f"{l['heures']:g} h x {l['taux_horaire']:,.0f}"
+                for l in manque["lignes"][:8]
+            )
+        elif jours_absents:
+            # Absent un jour ou il n'avait pas cours : rien a retenir, et il
+            # faut le dire plutot que de laisser croire a un oubli.
+            details_absences_parts.append(
+                f"{len(jours_absents)} jour(s) d'absence sans cours prevu — aucune retenue"
+            )
+    else:
+        # Au primaire et pour le personnel : le salaire est mensuel, la presence
+        # est due tous les jours. Le taux journalier est alors le bon calcul.
+        taux_journalier = infos["salaire_base"] / JOURS_OUVRABLES_MOIS if infos["salaire_base"] else 0
+        total_absences = round(len(jours_absents) * taux_journalier, 2)
+        if nb_absences_pointage > 0:
+            details_absences_parts.append(f"{nb_absences_pointage} absence(s) pointage QR")
+        if nb_absences_manuelles > 0:
+            details_absences_parts.append(f"{nb_absences_manuelles} absence(s) saisie(s) manuellement (non justifiée)")
     
     details_absences_texte = None
     if details_absences_parts:
@@ -3937,6 +3982,9 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
     ).scalar()
     total_avances = float(avances_en_attente or 0)
 
+    # Une retenue superieure au salaire donnerait un net negatif — un
+    # « paiement » que l'ecole devrait recevoir de son employe.
+    total_absences = min(total_absences, infos["salaire_base"] + total_primes)
     net_a_payer = round(infos["salaire_base"] + total_primes - total_absences - total_avances, 2)
 
     return {
