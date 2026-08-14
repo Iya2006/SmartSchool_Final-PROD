@@ -740,12 +740,39 @@ def get_absences_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_pa
 # MESSAGERIE PARENT
 # ================================================================
 
+def _ecoles_du_parent(db: Session, parent_id: int) -> set:
+    """Les écoles auxquelles ce parent appartient, par ses enfants réels.
+
+    UN PARENT NE VOIT QUE LES MESSAGES DE SON ÉCOLE
+    -----------------------------------------------
+    Les diffusions `TOUS_PARENTS` et `TOUS` n'étaient filtrées par aucun
+    établissement : un parent de TrillionX recevait les annonces d'une autre
+    école. Trouvé en vrai — un parent de l'école 3 voyait « Information paie du
+    personnel » diffusée à tous les parents de l'école 1, un message qui ne le
+    concerne ni par son école ni par son contenu.
+
+    On borne donc à l'ensemble des écoles de ses enfants (un parent peut en
+    avoir dans deux écoles — Cas B) plutôt qu'à une seule choisie
+    arbitrairement.
+    """
+    lignes = (
+        db.query(Eleve.etablissement_id)
+        .join(EleveParent, EleveParent.eleve_id == Eleve.eleve_id)
+        .filter(EleveParent.parent_id == parent_id)
+        .distinct()
+        .all()
+    )
+    return {e for (e,) in lignes if e is not None}
+
+
 @router.get("/{parent_id}/messages")
 def get_messages_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
     """Messages reçus et envoyés par un parent."""
     parent = db.query(Parent).filter(Parent.parent_id == parent_id).first()
     if not parent:
         raise HTTPException(404, "Parent non trouvé")
+
+    ecoles = _ecoles_du_parent(db, parent_id)
 
     # Get children IDs for this parent
     liens = db.query(EleveParent).filter(EleveParent.parent_id == parent_id).all()
@@ -770,11 +797,13 @@ def get_messages_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db:
         )
 
     received = db.query(Message).filter(
-        or_(*filters)
+        Message.etablissement_id.in_(ecoles or [-1]),
+        or_(*filters),
     ).order_by(desc(Message.date_envoi)).limit(50).all()
 
-    # Messages sent by this parent
+    # Messages sent by this parent — bornés à son école pour la même raison.
     sent = db.query(Message).filter(
+        Message.etablissement_id.in_(ecoles or [-1]),
         Message.expediteur_type == "PARENT",
         Message.expediteur_id == parent_id
     ).order_by(desc(Message.date_envoi)).limit(20).all()
@@ -805,6 +834,8 @@ def count_non_lus_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db
     """Nombre de messages non lus."""
     from sqlalchemy import or_
 
+    ecoles = _ecoles_du_parent(db, parent_id)
+
     liens = db.query(EleveParent).filter(EleveParent.parent_id == parent_id).all()
     children_classe_ids = []
     for lien in liens:
@@ -825,6 +856,7 @@ def count_non_lus_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db
         )
 
     count = db.query(Message).filter(
+        Message.etablissement_id.in_(ecoles or [-1]),
         or_(*filters),
         Message.statut == "ENVOYE"
     ).count()
@@ -834,8 +866,12 @@ def count_non_lus_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db
 
 @router.put("/{parent_id}/messages/{message_id}/lire")
 def marquer_lu_parent(parent_id: int, message_id: int, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
-    """Marquer un message comme lu."""
-    msg = db.query(Message).filter(Message.message_id == message_id).first()
+    """Marquer un message comme lu — s'il relève bien de l'école du parent."""
+    ecoles = _ecoles_du_parent(db, parent_id)
+    msg = db.query(Message).filter(
+        Message.message_id == message_id,
+        Message.etablissement_id.in_(ecoles or [-1]),
+    ).first()
     if not msg:
         raise HTTPException(404, "Message non trouvé")
     if msg.statut == "ENVOYE":
