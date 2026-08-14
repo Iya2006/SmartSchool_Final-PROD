@@ -236,6 +236,17 @@ type ClasseAppel = { classe_id: number; libelle: string };
 
 type ProfOption = { enseignant_id: number; nom: string; prenom: string; matiere?: string | null };
 
+/** Les enseignants rangés par cycle : quarante-six noms à plat, c'est une
+ *  liste dans laquelle on ne retrouve personne. */
+type GroupeCycle = {
+    code: string;
+    libelle: string;
+    enseignants: {
+        enseignant_id: number; nom: string; prenom: string;
+        matricule?: string | null; autres_cycles: string[];
+    }[];
+};
+
 type EleveOption = {
     eleve_id: number;
     matricule?: string | null;
@@ -1043,6 +1054,9 @@ function SurveillantPortal() {
     // Les heures que ce professeur n'a pas assurees. Vide au primaire : le
     // maitre tient sa classe toute la journee, il n'y a rien a cocher.
     const [coursCoches, setCoursCoches] = useState<number[]>([]);
+    // Ranges par cycle : le surveillant sait dans quel cycle il vient de
+    // constater l'absence, la liste doit suivre sa tete.
+    const [cycles, setCycles] = useState<GroupeCycle[]>([]);
     const [signalEnCours, setSignalEnCours] = useState(false);
 
     /* LES COURS DU JOUR
@@ -1141,6 +1155,11 @@ function SurveillantPortal() {
             ]);
             setClasses(classesRes.data || []);
             setProfs(Array.isArray(profsRes.data) ? profsRes.data : []);
+            // Le rangement par cycle ne doit pas empêcher l'écran de s'ouvrir :
+            // s'il échoue, on retombe sur la liste à plat.
+            api.get<{ groupes: GroupeCycle[] }>('/api/vie-scolaire/enseignants-par-cycle')
+                .then((r) => setCycles(r.data?.groupes || []))
+                .catch(() => setCycles([]));
             setPresenceStats(presenceRes.data || { total: 0, presents: 0, absents: 0, retards: 0, taux_presence: 0 });
             setIncidentStats(incidentStatsRes.data || { total_incidents: 0, par_gravite: [], top_types: [] });
             setIncidents(incidentsRes.data || []);
@@ -1377,7 +1396,22 @@ function SurveillantPortal() {
                                 onChange={(e) => setSignalement((v) => ({ ...v, enseignant_id: e.target.value }))}
                                 style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }}>
                                 <option value="">Choisir…</option>
-                                {profs.map((pr) => (
+                                {/* Rangés par cycle : le surveillant sait dans quel
+                                    cycle il vient de constater l'absence. Un
+                                    professeur qui enseigne dans deux cycles apparaît
+                                    dans celui où il a le plus de classes, et sa
+                                    ligne le dit — le classer ailleurs en silence
+                                    serait plus déroutant que de ne pas le classer. */}
+                                {cycles.length > 0 ? cycles.map((g) => (
+                                    <optgroup key={g.code} label={`${g.libelle} — ${g.enseignants.length}`}>
+                                        {g.enseignants.map((pr) => (
+                                            <option key={pr.enseignant_id} value={pr.enseignant_id}>
+                                                {pr.nom} {pr.prenom}
+                                                {pr.autres_cycles.length ? ` (aussi ${pr.autres_cycles.join(', ')})` : ''}
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                )) : profs.map((pr) => (
                                     <option key={pr.enseignant_id} value={pr.enseignant_id}>
                                         {pr.nom} {pr.prenom}
                                     </option>

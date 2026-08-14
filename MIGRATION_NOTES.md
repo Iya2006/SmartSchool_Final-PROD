@@ -563,6 +563,15 @@ L'écran du surveillant coche les heures du professeur choisi ; quand il n'y en 
 aucune à l'emploi du temps — le cas du primaire — il l'annonce et le signalement
 porte sur la journée entière.
 
+**Enseignants rangés par cycle.** `GET /vie-scolaire/enseignants-par-cycle`
+groupe les professeurs en primaire / collège / lycée. Quarante-six noms à plat,
+c'est une liste où l'on ne retrouve personne ; le surveillant sait dans quel
+cycle il vient de constater l'absence. Un professeur qui enseigne dans deux
+cycles est rangé là où il a le plus d'affectations, et sa ligne le dit (« aussi
+Lycée ») — le classer ailleurs en silence serait plus déroutant. Vérifié sur
+l'école 3 : 17 au primaire, 14 au collège, 15 au lycée. Deux requêtes, pas une
+par professeur. La liste déroulante du signalement utilise ces `<optgroup>`.
+
 **Le pointage des enseignants n'a demandé aucun code** : `/api/presences-agents/scan`
 reconnaît déjà le matricule d'un enseignant et écrit `type_agent='ENSEIGNANT'`.
 Constat sur l'école 3 : 817 pointages, **tous du personnel administratif, aucun

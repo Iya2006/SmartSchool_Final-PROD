@@ -575,6 +575,83 @@ def signaler_absence_enseignant(
     }
 
 
+@router.get("/enseignants-par-cycle")
+def enseignants_par_cycle(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
+):
+    """Les enseignants rangés par cycle : primaire, collège, lycée.
+
+    Une école de quarante-six professeurs affichés à plat, c'est une liste
+    dans laquelle on ne retrouve personne. Le surveillant sait dans quel cycle
+    il vient de constater une absence — la liste doit suivre sa tête, pas
+    l'ordre alphabétique de toute l'école.
+
+    Un professeur enseigne parfois dans deux cycles (le collège et le lycée
+    partagent souvent les mêmes professeurs de matière). On le range dans
+    celui où il a le plus d'affectations, et on le dit : le classer ailleurs
+    en silence serait plus déroutant que de ne pas le classer du tout.
+
+    Deux requêtes, quel que soit l'effectif.
+    """
+    from app.models.academique import Affectation, Classe as C, Cycle, Enseignant, Niveau
+
+    _peut(current_user, CONSTATE_LES_ABSENCES,
+          "Accès réservé à la surveillance et à la direction.")
+
+    profs = db.query(Enseignant).filter(
+        Enseignant.etablissement_id == etablissement_id,
+        Enseignant.statut == "ACTIF",
+    ).order_by(Enseignant.nom, Enseignant.prenom).all()
+
+    # Combien d'affectations chaque professeur a-t-il dans chaque cycle ?
+    comptes = db.query(
+        Affectation.enseignant_id, Cycle.code, Cycle.libelle, Cycle.ordre,
+        func.count(Affectation.affectation_id).label("nb"),
+    ).join(
+        C, C.classe_id == Affectation.classe_id
+    ).join(
+        Niveau, Niveau.niveau_id == C.niveau_id
+    ).join(
+        Cycle, Cycle.cycle_id == Niveau.cycle_id
+    ).filter(
+        C.etablissement_id == etablissement_id,
+        Affectation.statut == "ACTIVE",
+    ).group_by(
+        Affectation.enseignant_id, Cycle.code, Cycle.libelle, Cycle.ordre
+    ).all()
+
+    par_prof: dict = {}
+    for ligne in comptes:
+        par_prof.setdefault(ligne.enseignant_id, []).append(ligne)
+
+    SANS = {"code": "SANS_CYCLE", "libelle": "Sans classe affectée", "ordre": 99}
+    groupes: dict = {}
+    for p in profs:
+        lignes = sorted(par_prof.get(p.enseignant_id, []), key=lambda x: -x.nb)
+        principal = lignes[0] if lignes else None
+        code = principal.code if principal else SANS["code"]
+        libelle = principal.libelle if principal else SANS["libelle"]
+        ordre = principal.ordre if principal else SANS["ordre"]
+
+        groupes.setdefault(code, {"code": code, "libelle": libelle,
+                                  "ordre": ordre or 0, "enseignants": []})
+        groupes[code]["enseignants"].append({
+            "enseignant_id": p.enseignant_id,
+            "nom": p.nom,
+            "prenom": p.prenom,
+            "matricule": p.matricule,
+            # Dit franchement qu'il enseigne aussi ailleurs.
+            "autres_cycles": [x.libelle for x in lignes[1:]],
+        })
+
+    return {
+        "total": len(profs),
+        "groupes": sorted(groupes.values(), key=lambda g: (g["ordre"], g["libelle"])),
+    }
+
+
 @router.get("/absences-enseignant")
 def lister_absences_enseignant(
     statut: Optional[str] = None,
