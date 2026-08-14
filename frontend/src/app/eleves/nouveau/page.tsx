@@ -4,7 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, DollarSign, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock } from 'lucide-react';
+import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
@@ -489,7 +489,7 @@ export default function NouveauEleve() {
                                         </div>
                                         
                                         <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <DollarSign size={16} color="#64748b" />
+                                            <Banknote size={16} color="#64748b" />
                                             <input 
                                                 type="number" 
                                                 value={state.montant}

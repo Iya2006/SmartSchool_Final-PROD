@@ -16,7 +16,7 @@ import {
     Building2,
     CheckCircle2,
     Crown,
-    DollarSign,
+    Banknote,
     Edit,
     Eye,
     GraduationCap,
@@ -69,7 +69,7 @@ const ROLES_CONFIG: Record<string, {
         description: 'Accès complet à l\'administration', hasAccess: true
     },
     COMPTABLE: {
-        label: 'Comptable', icon: DollarSign,
+        label: 'Comptable', icon: Banknote,
         color: '#b45309', bg: '#fffbeb', gradient: 'linear-gradient(135deg, #b45309, #92400e)',
         description: 'Gestion financière et comptabilité', hasAccess: true
     },
@@ -328,7 +328,7 @@ export default function PersonnelPage() {
                                     label: 'Masse salariale',
                                     value: formatCompactMoney(totalMasse),
                                     note: 'GNF consolidés',
-                                    icon: DollarSign,
+                                    icon: Banknote,
                                 },
                             ].map((item) => {
                                 const Icon = item.icon;
@@ -421,7 +421,7 @@ export default function PersonnelPage() {
                     { label: 'Personnel total', value: totalPersonnel, note: `${totalActifs} actifs • ${totalInactifs} non actifs`, bg: 'linear-gradient(135deg, #eff6ff, #ffffff)', color: '#2563eb', icon: Users },
                     { label: 'Accès système', value: totalAvecAcces, note: `${totalSansAcces} sans accès logiciel`, bg: 'linear-gradient(135deg, #f0fdf4, #ffffff)', color: '#16a34a', icon: Key },
                     { label: 'RH uniquement', value: totalSansInterface, note: 'sans portail numérique', bg: 'linear-gradient(135deg, #f8fafc, #ffffff)', color: '#475569', icon: Lock },
-                    { label: 'Masse salariale', value: formatMoney(totalMasse), note: 'vision RH consolidée', bg: 'linear-gradient(135deg, #fff7ed, #ffffff)', color: '#c2410c', icon: DollarSign },
+                    { label: 'Masse salariale', value: formatMoney(totalMasse), note: 'vision RH consolidée', bg: 'linear-gradient(135deg, #fff7ed, #ffffff)', color: '#c2410c', icon: Banknote },
                 ].map((card) => {
                     const Icon = card.icon;
                     return (

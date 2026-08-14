@@ -5,12 +5,12 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import api from '@/lib/api';
 import {
-    CreditCard, DollarSign, FileText, Users, Search, RefreshCw,
-    Download, Banknote, Smartphone, Building2, X, CheckCircle2,
+    CreditCard, Banknote, FileText, Users, Search, RefreshCw,
+    Download, Smartphone, Building2, X, CheckCircle2,
     AlertTriangle, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
     Plus, Eye, Printer, XCircle, ChevronDown, Filter, Calendar,
     Briefcase, PieChart, BarChart3, Receipt, Wallet, HandCoins,
-    CircleDollarSign, Landmark, Percent, Award, Ban, Clock, ChevronRight, CheckCircle,
+    Coins, Landmark, Percent, Award, Ban, Clock, ChevronRight, CheckCircle,
     AlertCircle, Loader2, Store, Package, Wrench, Monitor, Bus, Signal, ClipboardList
 } from 'lucide-react';
 import Pagination from '@/components/Pagination';
@@ -1313,7 +1313,7 @@ function GestionPaiements() {
                         {/* Penalites */}
                         <div style={cardStyle}>
                             <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <CircleDollarSign size={18} color="#ef4444" /> Penalites & Frais Supplementaires
+                                <Coins size={18} color="#ef4444" /> Penalites & Frais Supplementaires
                             </h3>
                             <p style={{ fontSize: '13px', color: '#64748b', lineHeight: 1.6 }}>
                                 Les penalites de retard et frais supplementaires peuvent etre configures dans
@@ -1822,7 +1822,7 @@ function GestionPaiements() {
                                                                 disabled={salairePaying === ens.id}
                                                                 style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: 'white', fontSize: '13px', fontWeight: 600, cursor: salairePaying === ens.id ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
                                                             >
-                                                                {salairePaying === ens.id ? <Loader2 size={16} className="animate-spin" /> : <DollarSign size={16} />}
+                                                                {salairePaying === ens.id ? <Loader2 size={16} className="animate-spin" /> : <Banknote size={16} />}
                                                                 Payer ce mois
                                                             </button>
                                                         )}
