@@ -21,13 +21,17 @@ export default function TopbarUserMenu() {
 
     // Fermer au clic extérieur
     useEffect(() => {
-        const handleClickOutside = (e: MouseEvent) => {
+        const handleClickOutside = (e: MouseEvent | TouchEvent) => {
             if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
                 setDropdownOpen(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
+        document.addEventListener('touchstart', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('touchstart', handleClickOutside);
+        };
     }, []);
 
     const displayName = user ? `${user.prenom} ${user.nom}` : 'Administrateur';

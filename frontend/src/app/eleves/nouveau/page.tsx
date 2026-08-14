@@ -234,7 +234,7 @@ export default function NouveauEleve() {
                     </div>
 
                     <div style={{ padding: '28px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div className="form-grid-2">
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                 <label style={LABEL}>Nom de famille *</label>
                                 <input type="text" name="nom" value={formData.nom} onChange={handleChange} required placeholder="Ex: DIALLO" style={FIELD} />
@@ -352,7 +352,7 @@ export default function NouveauEleve() {
                     </div>
 
                     <div style={{ padding: '28px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div className="form-grid-2">
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                 <label style={LABEL}>Nom du parent *</label>
                                 <input type="text" name="parent_nom" value={formData.parent_nom} onChange={handleChange} placeholder="Ex: DIALLO" style={FIELD} />

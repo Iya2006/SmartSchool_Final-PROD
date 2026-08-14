@@ -1323,8 +1323,8 @@ export default function PortailEnseignant() {
                                         <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8' }}>Détail des affectations et activités</p>
                                     </div>
                                 </div>
-                                <div style={{ padding: '0' }}>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                <div className="table-scroll" style={{ padding: '0' }}>
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '600px' }}>
                                         <thead>
                                             <tr style={{ background: '#f8fafc' }}>
                                                 <th style={{ padding: '14px 20px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Classe</th>
@@ -1454,6 +1454,7 @@ export default function PortailEnseignant() {
                                         <p style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 600 }}>Aucun créneau programmé</p>
                                     </div>
                                 ) : (
+                                    <div className="table-scroll">
                                     <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
                                         <thead>
                                             <tr>
@@ -1492,6 +1493,7 @@ export default function PortailEnseignant() {
                                             })}
                                         </tbody>
                                     </table>
+                                    </div>
                                 )}
                             </div>
                         </motion.div>
@@ -1921,8 +1923,8 @@ export default function PortailEnseignant() {
                                         </div>
 
                                         {/* Notes table */}
-                                        <div style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
-                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                        <div className="table-scroll" style={{ flex: 1, overflowY: 'auto', padding: '0' }}>
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '620px' }}>
                                                 <thead>
                                                     <tr style={{ background: '#f8fafc', position: 'sticky', top: 0, zIndex: 1 }}>
                                                         <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: '11px' }}>#</th>

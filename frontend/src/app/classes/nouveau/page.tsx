@@ -115,7 +115,7 @@ export default function NouvelleClasse() {
                         Informations de la Classe
                     </h3>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px' }}>
+                    <div className="form-grid-2">
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Nom de la Classe (Libellé) *</label>
                             <input

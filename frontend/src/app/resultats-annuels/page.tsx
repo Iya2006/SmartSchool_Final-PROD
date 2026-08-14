@@ -618,7 +618,8 @@ export default function ResultatsAnnuelsPage() {
                                 </div>
                             )}
 
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
+                            <div className="table-scroll">
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px', minWidth: '480px' }}>
                                 <thead>
                                     <tr style={{ background: '#f8fafc' }}>
                                         <th style={th}>MATRICULE</th>
@@ -641,6 +642,7 @@ export default function ResultatsAnnuelsPage() {
                                     ))}
                                 </tbody>
                             </table>
+                            </div>
                         </div>
 
                         <div style={{ padding: '14px 20px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>

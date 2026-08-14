@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, Suspense } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 // SEPT ENTREES, pas douze.
 //
@@ -86,30 +87,62 @@ const MODULES = [
     },
 ];
 
-function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
+function SidebarMenu({ isSidebarOpen, isMobile, mobileMenuOpen, onNavigate }: {
+    isSidebarOpen: boolean; isMobile: boolean; mobileMenuOpen: boolean; onNavigate: () => void;
+}) {
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
     const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({ general: true });
-    
+
     const activeTab = searchParams.get('tab') || 'saisie';
 
     const toggleMenu = (id: string) => {
         setOpenMenus(prev => ({ ...prev, [id]: !prev[id] }));
     };
 
-    const collapsed = !isSidebarOpen;
+    // Sur mobile, jamais le rail icone-seule desktop : soit cache, soit
+    // grand ouvert avec les libelles complets.
+    const collapsed = !isMobile && !isSidebarOpen;
+
+    // Styles inline (comme le reste de ce fichier — pas de module CSS ici) :
+    // un tiroir position:fixed sous 768px plutot que le calcul de largeur
+    // 64/280px utilise au-dessus de 768px. Evite tout conflit de
+    // specificite entre une regle CSS externe et un style inline (une
+    // regle @media externe ne pourrait pas l'emporter sans !important).
+    const mobileWidth = 'min(280px, 84vw)';
+    const asideStyle: React.CSSProperties = isMobile ? {
+        width: mobileWidth,
+        minWidth: mobileWidth,
+        position: 'fixed',
+        top: 0, left: 0, bottom: 0,
+        zIndex: 200,
+        transform: mobileMenuOpen ? 'translateX(0)' : 'translateX(-100%)',
+        transition: 'transform 0.3s ease',
+        boxShadow: mobileMenuOpen ? '10px 0 34px rgba(15,23,42,0.18)' : 'none',
+        backgroundColor: '#ffffff',
+        borderRight: '1px solid #e2e8f0',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        boxSizing: 'border-box',
+    } : {
+        width: collapsed ? '64px' : '280px',
+        minWidth: collapsed ? '64px' : '280px',
+        backgroundColor: '#ffffff',
+        borderRight: '1px solid #e2e8f0',
+        transition: 'all 0.3s ease',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+    };
 
     return (
-        <aside style={{
-            width: collapsed ? '64px' : '280px',
-            minWidth: collapsed ? '64px' : '280px',
-            backgroundColor: '#ffffff',
-            borderRight: '1px solid #e2e8f0',
-            transition: 'all 0.3s ease',
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden'
+        <aside style={asideStyle} onClick={(e) => {
+            if (isMobile && (e.target as HTMLElement).closest('a')) onNavigate();
         }}>
             {/* Logo Area */}
             <div style={{
@@ -148,8 +181,12 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
 
                     return (
                         <div key={mod.id} style={{ marginBottom: '2px' }}>
-                            <div 
-                                onClick={() => hasSubItems && !collapsed ? toggleMenu(mod.id) : router.push(mod.path)}
+                            <div
+                                onClick={() => {
+                                    if (hasSubItems && !collapsed) { toggleMenu(mod.id); return; }
+                                    router.push(mod.path);
+                                    if (isMobile) onNavigate();
+                                }}
                                 title={collapsed ? mod.label : undefined}
                                 style={{
                                     display: 'flex',
@@ -239,8 +276,16 @@ function SidebarMenu({ isSidebarOpen }: { isSidebarOpen: boolean }) {
 export default function ComptabiliteLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const [isSidebarOpen, setSidebarOpen] = useState(true);
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const isMobile = useIsMobile();
     const { user, isAuthenticated, logout } = useAuth();
     const { etablissementNom } = useApp();
+
+    // Ferme le tiroir mobile a chaque changement de page — sinon il reste
+    // ouvert par-dessus la nouvelle page apres un clic de navigation.
+    useEffect(() => {
+        setMobileMenuOpen(false);
+    }, [pathname]);
 
     // L'authentification et le contrôle d'accès par rôle sont déjà gérés
     // globalement par AuthProvider (voir frontend/src/context/AuthContext.tsx +
@@ -251,7 +296,7 @@ export default function ComptabiliteLayout({ children }: { children: React.React
     if (!isAuthenticated || !user) return null;
 
     return (
-        <div style={{ display: 'flex', height: '100vh', backgroundColor: '#f8fafc', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', height: '100vh', backgroundColor: '#f8fafc', overflowY: 'auto', overflowX: 'hidden' }}>
             <style>{`
                 .sidebar-scroll::-webkit-scrollbar {
                     display: none;
@@ -261,13 +306,26 @@ export default function ComptabiliteLayout({ children }: { children: React.React
                     scrollbar-width: none;  /* Firefox */
                 }
             `}</style>
-            
+
             <Suspense fallback={<aside style={{width: '320px', borderRight: '1px solid #e2e8f0'}} />}>
-                <SidebarMenu isSidebarOpen={isSidebarOpen} />
+                <SidebarMenu
+                    isSidebarOpen={isSidebarOpen}
+                    isMobile={isMobile}
+                    mobileMenuOpen={mobileMenuOpen}
+                    onNavigate={() => setMobileMenuOpen(false)}
+                />
             </Suspense>
 
+            {isMobile && mobileMenuOpen && (
+                <div
+                    onClick={() => setMobileMenuOpen(false)}
+                    aria-hidden="true"
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 190 }}
+                />
+            )}
+
             {/* Main Content */}
-            <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
                 {/* Topbar */}
                 <header style={{
                     height: '70px',
@@ -276,49 +334,57 @@ export default function ComptabiliteLayout({ children }: { children: React.React
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    padding: '0 24px'
+                    padding: isMobile ? '0 14px' : '0 24px',
+                    gap: '12px',
                 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                        <button 
-                            onClick={() => setSidebarOpen(!isSidebarOpen)}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
+                        <button
+                            onClick={() => isMobile ? setMobileMenuOpen(o => !o) : setSidebarOpen(!isSidebarOpen)}
+                            aria-label="Ouvrir le menu de navigation"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', flexShrink: 0 }}
                         >
                             <Menu size={24} />
                         </button>
-                        <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#0f172a' }}>
+                        <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {MODULES.find(m => pathname.startsWith(m.path))?.label || 'Comptabilité'}
                         </h2>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <div style={{ 
-                                width: '38px', height: '38px', 
-                                borderRadius: '50%', 
-                                backgroundColor: '#ecfdf5', 
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', 
-                                fontWeight: '700', color: '#059669',
-                                border: '1px solid #d1fae5',
-                                fontSize: '14px'
-                            }}>
-                                {user.prenom?.[0] || 'C'}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
+                        {/* Nom/etablissement : masques sous 768px pour laisser la
+                            place au titre de la page — l'avatar seul suffit a
+                            confirmer qui est connecte. */}
+                        {!isMobile && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <div style={{
+                                    width: '38px', height: '38px',
+                                    borderRadius: '50%',
+                                    backgroundColor: '#ecfdf5',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    fontWeight: '700', color: '#059669',
+                                    border: '1px solid #d1fae5',
+                                    fontSize: '14px'
+                                }}>
+                                    {user.prenom?.[0] || 'C'}
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <p style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#0f172a', lineHeight: '1.2' }}>
+                                        {user.prenom} {user.nom}
+                                    </p>
+                                    <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#64748b', fontWeight: '500', lineHeight: '1.1' }}>
+                                        {etablissementNom || 'Portail Financier'}
+                                    </p>
+                                </div>
                             </div>
-                            <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                <p style={{ margin: 0, fontSize: '14px', fontWeight: '600', color: '#0f172a', lineHeight: '1.2' }}>
-                                    {user.prenom} {user.nom}
-                                </p>
-                                <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#64748b', fontWeight: '500', lineHeight: '1.1' }}>
-                                    {etablissementNom || 'Portail Financier'}
-                                </p>
-                            </div>
-                        </div>
-                        <button 
+                        )}
+                        <button
                             onClick={logout}
+                            title="Se déconnecter"
                             style={{
                                 background: '#fee2e2',
                                 color: '#ef4444',
                                 border: 'none',
-                                padding: '8px 16px',
+                                padding: isMobile ? '8px' : '8px 16px',
                                 borderRadius: '6px',
                                 display: 'flex',
                                 alignItems: 'center',
@@ -329,13 +395,13 @@ export default function ComptabiliteLayout({ children }: { children: React.React
                             }}
                         >
                             <LogOut size={16} />
-                            Se déconnecter
+                            {!isMobile && 'Se déconnecter'}
                         </button>
                     </div>
                 </header>
 
                 {/* Page Content */}
-                <div style={{ flex: 1, overflow: 'auto', padding: '24px' }}>
+                <div style={{ flex: 1, overflow: 'auto', padding: isMobile ? '14px' : '24px' }}>
                     {children}
                 </div>
             </main>

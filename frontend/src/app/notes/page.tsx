@@ -1462,7 +1462,8 @@ export default function CentralisationNotesPage() {
                                 ) : notesSaisie.length === 0 ? (
                                     <p style={{ textAlign: 'center', color: '#94a3b8', padding: '40px' }}>Aucun élève inscrit dans cette classe.</p>
                                 ) : (
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '380px' }}>
                                         <thead>
                                             <tr style={{ background: '#f8fafc' }}>
                                                 <th style={{ padding: '8px', textAlign: 'left', fontSize: '11px', color: '#64748b', fontWeight: 700 }}>ÉLÈVE</th>
@@ -1488,6 +1489,7 @@ export default function CentralisationNotesPage() {
                                             ))}
                                         </tbody>
                                     </table>
+                                    </div>
                                 )}
                             </div>
 
@@ -1557,8 +1559,8 @@ export default function CentralisationNotesPage() {
                                     </button>
                                 </div>
                             </div>
-                            <div style={{ padding: '4px 24px 20px' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                            <div className="table-scroll" style={{ padding: '4px 24px 20px' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '520px' }}>
                                     <thead>
                                         <tr style={{ background: '#f8fafc' }}>
                                             {['RANG', 'ÉLÈVE', 'MATRICULE', 'MOYENNE', 'MENTION'].map((h, i) => (
