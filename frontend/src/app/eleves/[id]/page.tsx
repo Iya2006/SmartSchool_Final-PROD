@@ -317,8 +317,8 @@ export default function ProfilEleve() {
                             <h5>Emploi du temps — Aujourd'hui</h5>
                             <button className="btn btn-outline btn-sm">Voir tout</button>
                         </div>
-                        <div className="card-body" style={{ padding: 0 }}>
-                            <table className="sp-table">
+                        <div className="card-body table-scroll" style={{ padding: 0 }}>
+                            <table className="sp-table" style={{ minWidth: '520px' }}>
                                 <thead>
                                     <tr>
                                         <th>Horaire</th>
@@ -357,7 +357,7 @@ export default function ProfilEleve() {
                         <div className="card-header">
                             <h5>Activités & Évaluations à venir</h5>
                         </div>
-                        <div className="card-body" style={{ padding: 0 }}>
+                        <div className="card-body table-scroll" style={{ padding: 0 }}>
                             <table className="sp-table">
                                 <tbody>
                                     {activitiesData.map((act, i) => (

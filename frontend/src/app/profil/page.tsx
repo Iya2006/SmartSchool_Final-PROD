@@ -1,41 +1,40 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { 
-    User, Mail, Phone, Shield, Building, Edit2, Loader2, Save, X, 
-    Key, Bell, CheckCircle2, AlertCircle, Megaphone, Lock, Activity,
-    Calendar, Sparkles, LogOut, Check, Eye, EyeOff, FileText, Send, Trash2
+import { useApp } from '@/context/AppContext';
+import {
+    User, Mail, Building, Edit2, Loader2, Save, X,
+    Key, CheckCircle2, Lock, Shield, Activity,
+    Sparkles, LogOut, Check, Eye, EyeOff, Camera
 } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 
-interface Announcement {
-    id: string;
-    title: string;
-    target: string;
-    date: string;
-    content: string;
-    priority: 'high' | 'medium' | 'normal';
-}
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
 
 export default function ProfilPage() {
     const { user, logout } = useAuth();
+    const { etablissementNom } = useApp();
     const [loading, setLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState<'profil' | 'annonces' | 'securite' | 'preferences' | 'audit'>('profil');
-    
-    // User Profile Form State
+    const [activeTab, setActiveTab] = useState<'profil' | 'securite'>('profil');
+
+    // User Profile Form State — chargé depuis GET /api/personnel/{id} (fiche
+    // réelle), pas depuis /api/auth/me (qui ne renvoie que 6 champs du JWT).
     const [nom, setNom] = useState('');
     const [prenom, setPrenom] = useState('');
     const [email, setEmail] = useState('');
     const [telephone, setTelephone] = useState('');
-    const [fonction, setFonction] = useState('Directeur Général');
-    const [etablissement, setEtablissement] = useState('SmartSchool ERP Guinée');
+    const [fonction, setFonction] = useState(''); // lecture seule : dérivé du vrai rôle
     const [photoUrl, setPhotoUrl] = useState('');
-    const [bio, setBio] = useState('Administrateur principal responsable de la supervision globale de l\'établissement.');
+    // Un SUPER_ADMIN plateforme n'a pas de fiche /api/personnel (pas rattaché
+    // à une école) — on retombe alors sur une vue minimale, en lecture seule.
+    const [profilComplet, setProfilComplet] = useState(true);
 
     const [isSaving, setIsSaving] = useState(false);
     const [editMode, setEditMode] = useState(false);
+    const [photoUploading, setPhotoUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Security Form State
     const [oldPassword, setOldPassword] = useState('');
@@ -47,67 +46,29 @@ export default function ProfilPage() {
     const [pinConfigured, setPinConfigured] = useState<boolean | null>(null);
     const [isSavingSecurity, setIsSavingSecurity] = useState(false);
 
-    // Announcements State
-    const [announcements, setAnnouncements] = useState<Announcement[]>([
-        {
-            id: '1',
-            title: 'Réunion générale de pré-rentrée des enseignants',
-            target: 'Enseignants & Personnel',
-            date: new Date().toLocaleDateString('fr-FR'),
-            content: 'Chers collaborateurs, la présence de tous les professeurs est requise vendredi à 09h00.',
-            priority: 'high'
-        },
-        {
-            id: '2',
-            title: 'Rappel concernant le paiement de la 2ème tranche des frais scolaires',
-            target: 'Tous les Parents',
-            date: new Date().toLocaleDateString('fr-FR'),
-            content: 'Chers parents, merci de régulariser la situation financière avant le 15 du mois.',
-            priority: 'medium'
-        }
-    ]);
-    const [newTitle, setNewTitle] = useState('');
-    const [newTarget, setNewTarget] = useState('Tous les utilisateurs');
-    const [newContent, setNewContent] = useState('');
-    const [newPriority, setNewPriority] = useState<'high' | 'medium' | 'normal'>('normal');
-
-    // System Preferences State
-    const [emailNotifs, setEmailNotifs] = useState(true);
-    const [smsNotifs, setSmsNotifs] = useState(true);
-    const [autoBackup, setAutoBackup] = useState(true);
-    const [twoFactor, setTwoFactor] = useState(false);
-
     useEffect(() => {
-        // Robust data resolution strategy: API -> Context -> LocalStorage -> Fallback
         const loadProfileData = async () => {
+            if (!user?.id) { setLoading(false); return; }
             try {
-                let baseData: any = user;
-
-                if (!baseData) {
-                    const stored = localStorage.getItem('smartschool_user');
-                    if (stored) {
-                        try { baseData = JSON.parse(stored); } catch (e) {}
-                    }
-                }
-
-                // Try fetching live API data
-                try {
-                    const res = await api.get('/api/auth/me');
-                    if (res.data) {
-                        baseData = { ...baseData, ...res.data };
-                    }
-                } catch (e) {
-                    // Fail silently, use cached user object
-                }
-
-                setNom(baseData?.nom || 'Admin');
-                setPrenom(baseData?.prenom || 'Superviseur');
-                setEmail(baseData?.email || 'admin@smartschool.edu.gn');
-                setTelephone(baseData?.telephone || '+224 620 00 00 00');
-                setFonction(baseData?.role || 'Super Administrateur');
-                setPhotoUrl(baseData?.photo || '');
+                const res = await api.get(`/api/personnel/${user.id}`);
+                const p = res.data;
+                setNom(p.nom || '');
+                setPrenom(p.prenom || '');
+                setEmail(p.email || '');
+                setTelephone(p.telephone || '');
+                setFonction(p.role || user.role || '');
+                setPhotoUrl(p.photo_url || '');
+                setProfilComplet(true);
             } catch (err) {
-                console.error("Profile load error:", err);
+                // SUPER_ADMIN plateforme (pas de fiche personnel) ou fiche
+                // introuvable : on affiche quand même l'essentiel connu du
+                // jeton, en lecture seule plutôt que de bloquer la page.
+                setNom(user?.nom || '');
+                setPrenom(user?.prenom || '');
+                setEmail(user?.email || '');
+                setTelephone(user?.telephone || '');
+                setFonction(user?.role || '');
+                setProfilComplet(false);
             } finally {
                 setLoading(false);
             }
@@ -123,31 +84,38 @@ export default function ProfilPage() {
     }, []);
 
     const handleSaveProfile = async () => {
+        if (!user?.id) return;
         setIsSaving(true);
         try {
-            const updatedUser = {
-                nom,
-                prenom,
-                email,
-                telephone,
-                role: fonction,
-                photo: photoUrl
-            };
-
-            // Update LocalStorage so Topbar immediately reflects changes
-            const stored = localStorage.getItem('smartschool_user');
-            let merged = { ...updatedUser };
-            if (stored) {
-                try { merged = { ...JSON.parse(stored), ...updatedUser }; } catch (e) {}
-            }
-            localStorage.setItem('smartschool_user', JSON.stringify(merged));
-
+            // Jamais role/statut dans ce payload : un admin ne doit pas
+            // pouvoir s'auto-attribuer un rôle supérieur via son propre profil.
+            await api.put(`/api/personnel/${user.id}`, { nom, prenom, email, telephone });
             toast.success("Profil mis à jour avec succès !");
             setEditMode(false);
-        } catch (err) {
-            toast.error("Erreur lors de la sauvegarde du profil.");
+        } catch (err: any) {
+            toast.error(err.response?.data?.detail || "Erreur lors de la sauvegarde du profil.");
         } finally {
             setIsSaving(false);
+        }
+    };
+
+    const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file || !user?.id) return;
+        setPhotoUploading(true);
+        try {
+            const fd = new FormData();
+            fd.append('fichier', file);
+            const res = await api.post(`/api/photos/upload/personnel/${user.id}`, fd, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            setPhotoUrl(res.data.photo_url || '');
+            toast.success('Photo mise à jour.');
+        } catch (err: any) {
+            toast.error(err.response?.data?.detail || "Erreur lors de l'envoi de la photo.");
+        } finally {
+            setPhotoUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
         }
     };
 
@@ -167,13 +135,20 @@ export default function ProfilPage() {
         }
 
         setIsSavingSecurity(true);
-        setTimeout(() => {
-            setIsSavingSecurity(false);
+        try {
+            await api.put('/api/personnel/me/changer-mot-de-passe', {
+                ancien_mdp: oldPassword,
+                nouveau_mdp: newPassword,
+            });
             setOldPassword('');
             setNewPassword('');
             setConfirmPassword('');
             toast.success("Mot de passe modifié avec succès !");
-        }, 800);
+        } catch (err: any) {
+            toast.error(err.response?.data?.detail || "Erreur lors du changement de mot de passe.");
+        } finally {
+            setIsSavingSecurity(false);
+        }
     };
 
     const handleSavePin = async () => {
@@ -199,34 +174,8 @@ export default function ProfilPage() {
         }
     };
 
-    const handleCreateAnnouncement = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!newTitle || !newContent) {
-            toast.error("Veuillez saisir un titre et le contenu de l'annonce.");
-            return;
-        }
-
-        const created: Announcement = {
-            id: Date.now().toString(),
-            title: newTitle,
-            target: newTarget,
-            date: new Date().toLocaleDateString('fr-FR'),
-            content: newContent,
-            priority: newPriority
-        };
-
-        setAnnouncements([created, ...announcements]);
-        setNewTitle('');
-        setNewContent('');
-        toast.success("Annonce officielle publiée avec succès !");
-    };
-
-    const handleDeleteAnnouncement = (id: string) => {
-        setAnnouncements(announcements.filter(a => a.id !== id));
-        toast.success("Annonce supprimée.");
-    };
-
     const initials = `${prenom ? prenom.charAt(0) : 'A'}${nom ? nom.charAt(0) : 'D'}`.toUpperCase();
+    const photoSrc = photoUrl ? `${API_BASE}${photoUrl}` : '';
 
     return (
         <div style={{ maxWidth: '1280px', margin: '0 auto', padding: '24px 20px', fontFamily: '"Inter", sans-serif' }}>
@@ -264,21 +213,37 @@ export default function ProfilPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
                         {/* Avatar */}
                         <div style={{ position: 'relative' }}>
+                            <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handlePhotoUpload} />
                             <div style={{
                                 width: '96px', height: '96px', borderRadius: '24px',
-                                background: photoUrl ? `url(${photoUrl}) center/cover` : 'linear-gradient(135deg, #6366f1, #3b82f6)',
+                                background: photoSrc ? `url(${photoSrc}) center/cover` : 'linear-gradient(135deg, #6366f1, #3b82f6)',
                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                                 fontSize: '36px', fontWeight: 800, color: 'white',
                                 boxShadow: '0 10px 25px rgba(0,0,0,0.3)',
                                 border: '3px solid rgba(255,255,255,0.2)'
                             }}>
-                                {!photoUrl && initials}
+                                {!photoSrc && initials}
                             </div>
                             <div title="En ligne" style={{
                                 position: 'absolute', bottom: '-4px', right: '-4px',
                                 background: '#10b981', width: '22px', height: '22px',
                                 borderRadius: '50%', border: '3px solid #0f172a'
                             }} />
+                            <button
+                                type="button"
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={photoUploading || !profilComplet}
+                                title="Changer la photo"
+                                style={{
+                                    position: 'absolute', bottom: '-4px', left: '-4px',
+                                    width: '30px', height: '30px', borderRadius: '50%',
+                                    background: '#3b82f6', border: '3px solid #0f172a',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    cursor: profilComplet ? 'pointer' : 'not-allowed', opacity: profilComplet ? 1 : 0.5,
+                                }}
+                            >
+                                {photoUploading ? <Loader2 size={13} color="white" style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={13} color="white" />}
+                            </button>
                         </div>
 
                         {/* Nom & Roles */}
@@ -305,7 +270,7 @@ export default function ProfilPage() {
                             </h1>
                             <p style={{ margin: '6px 0 0', opacity: 0.8, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '16px' }}>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Mail size={14} /> {email}</span>
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Building size={14} /> {etablissement}</span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Building size={14} /> {etablissementNom}</span>
                             </p>
                         </div>
                     </div>
@@ -387,19 +352,6 @@ export default function ProfilPage() {
                 </button>
 
                 <button
-                    onClick={() => setActiveTab('annonces')}
-                    style={{
-                        padding: '12px 20px', background: 'transparent', border: 'none',
-                        borderBottom: activeTab === 'annonces' ? '3px solid #3b82f6' : '3px solid transparent',
-                        color: activeTab === 'annonces' ? '#3b82f6' : '#64748b',
-                        fontWeight: activeTab === 'annonces' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', whiteSpace: 'nowrap'
-                    }}
-                >
-                    <Megaphone size={18} /> Mes Annonces Officielles ({announcements.length})
-                </button>
-
-                <button
                     onClick={() => setActiveTab('securite')}
                     style={{
                         padding: '12px 20px', background: 'transparent', border: 'none',
@@ -410,32 +362,6 @@ export default function ProfilPage() {
                     }}
                 >
                     <Key size={18} /> Sécurité & PIN
-                </button>
-
-                <button
-                    onClick={() => setActiveTab('preferences')}
-                    style={{
-                        padding: '12px 20px', background: 'transparent', border: 'none',
-                        borderBottom: activeTab === 'preferences' ? '3px solid #3b82f6' : '3px solid transparent',
-                        color: activeTab === 'preferences' ? '#3b82f6' : '#64748b',
-                        fontWeight: activeTab === 'preferences' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', whiteSpace: 'nowrap'
-                    }}
-                >
-                    <Bell size={18} /> Préférences Système
-                </button>
-
-                <button
-                    onClick={() => setActiveTab('audit')}
-                    style={{
-                        padding: '12px 20px', background: 'transparent', border: 'none',
-                        borderBottom: activeTab === 'audit' ? '3px solid #3b82f6' : '3px solid transparent',
-                        color: activeTab === 'audit' ? '#3b82f6' : '#64748b',
-                        fontWeight: activeTab === 'audit' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', whiteSpace: 'nowrap'
-                    }}
-                >
-                    <Activity size={18} /> Journal d'Audit
                 </button>
             </div>
 
@@ -452,7 +378,8 @@ export default function ProfilPage() {
                         {!editMode ? (
                             <button
                                 onClick={() => setEditMode(true)}
-                                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: '#eff6ff', color: '#3b82f6', border: 'none', borderRadius: '10px', fontWeight: 700, cursor: 'pointer', fontSize: '14px' }}
+                                disabled={!profilComplet}
+                                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: '#eff6ff', color: '#3b82f6', border: 'none', borderRadius: '10px', fontWeight: 700, cursor: profilComplet ? 'pointer' : 'not-allowed', fontSize: '14px', opacity: profilComplet ? 1 : 0.5 }}
                             >
                                 <Edit2 size={16} /> Éditer les données
                             </button>
@@ -524,165 +451,33 @@ export default function ProfilPage() {
                             <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>Titre / Fonction</label>
                             <input
                                 type="text"
-                                disabled={!editMode}
+                                disabled
                                 value={fonction}
-                                onChange={e => setFonction(e.target.value)}
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', fontSize: '14px', outline: 'none' }}
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '14px', outline: 'none' }}
                             />
+                            <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#94a3b8' }}>Non modifiable ici — géré dans Personnel.</p>
                         </div>
 
                         <div>
                             <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>Établissement Principal</label>
                             <input
                                 type="text"
-                                disabled={!editMode}
-                                value={etablissement}
-                                onChange={e => setEtablissement(e.target.value)}
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', fontSize: '14px', outline: 'none' }}
+                                disabled
+                                value={etablissementNom}
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '14px', outline: 'none' }}
                             />
+                            <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#94a3b8' }}>Non modifiable ici — géré dans Paramètres.</p>
                         </div>
                     </div>
 
-                    <div style={{ marginTop: '24px' }}>
-                        <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>URL de la Photo de Profil (Optionnel)</label>
-                        <input
-                            type="text"
-                            disabled={!editMode}
-                            placeholder="https://..."
-                            value={photoUrl}
-                            onChange={e => setPhotoUrl(e.target.value)}
-                            style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', fontSize: '14px', outline: 'none' }}
-                        />
-                    </div>
-
-                    <div style={{ marginTop: '24px' }}>
-                        <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '8px' }}>Note / Bio d'administration</label>
-                        <textarea
-                            rows={3}
-                            disabled={!editMode}
-                            value={bio}
-                            onChange={e => setBio(e.target.value)}
-                            style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', fontSize: '14px', outline: 'none', resize: 'vertical' }}
-                        />
-                    </div>
-                </div>
-            )}
-
-            {/* ════════════════════════════════════════════════════════════ */}
-            {/* TAB 2 : GESTION DES ANNONCES OFFICIELLES                     */}
-            {/* ════════════════════════════════════════════════════════════ */}
-            {activeTab === 'annonces' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
-                    {/* Formulaire de publication */}
-                    <div style={{ background: 'white', borderRadius: '20px', padding: '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
-                        <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 8px 0', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <Megaphone color="#3b82f6" size={22} /> Publier une nouvelle annonce
-                        </h2>
-                        <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '24px' }}>Diffuser une communication officielle aux enseignants, élèves ou parents.</p>
-
-                        <form onSubmit={handleCreateAnnouncement} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div>
-                                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Titre de l'annonce</label>
-                                <input
-                                    type="text"
-                                    placeholder="Ex: Réunion administrative..."
-                                    value={newTitle}
-                                    onChange={e => setNewTitle(e.target.value)}
-                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '14px' }}
-                                />
-                            </div>
-
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Cible des destinataires</label>
-                                    <select
-                                        value={newTarget}
-                                        onChange={e => setNewTarget(e.target.value)}
-                                        style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '14px', background: 'white' }}
-                                    >
-                                        <option value="Tous les utilisateurs">Tous les utilisateurs</option>
-                                        <option value="Enseignants & Personnel">Enseignants & Personnel</option>
-                                        <option value="Tous les Parents">Tous les Parents</option>
-                                        <option value="Élèves">Élèves</option>
-                                    </select>
-                                </div>
-
-                                <div>
-                                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Priorité / Urgence</label>
-                                    <select
-                                        value={newPriority}
-                                        onChange={e => setNewPriority(e.target.value as any)}
-                                        style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '14px', background: 'white' }}
-                                    >
-                                        <option value="normal">Normale</option>
-                                        <option value="medium">Moyenne (Important)</option>
-                                        <option value="high">Haute (Urgent)</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div>
-                                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Contenu du message</label>
-                                <textarea
-                                    rows={4}
-                                    placeholder="Rédigez votre annonce officielle ici..."
-                                    value={newContent}
-                                    onChange={e => setNewContent(e.target.value)}
-                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '14px', resize: 'vertical' }}
-                                />
-                            </div>
-
-                            <button
-                                type="submit"
-                                style={{
-                                    padding: '14px', borderRadius: '12px', border: 'none',
-                                    background: '#3b82f6', color: 'white', fontWeight: 700,
-                                    fontSize: '15px', cursor: 'pointer', display: 'flex',
-                                    alignItems: 'center', justifyContent: 'center', gap: '8px',
-                                    boxShadow: '0 4px 15px rgba(59,130,246,0.3)', marginTop: '8px'
-                                }}
-                            >
-                                <Send size={18} /> Publier immédiatement
-                            </button>
-                        </form>
-                    </div>
-
-                    {/* Liste des annonces actives */}
-                    <div style={{ background: 'white', borderRadius: '20px', padding: '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
-                        <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 16px 0', color: '#0f172a' }}>Annonces Publiées</h2>
-                        
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            {announcements.map(item => (
-                                <div key={item.id} style={{
-                                    padding: '16px', borderRadius: '14px', border: '1px solid #e2e8f0',
-                                    background: item.priority === 'high' ? '#fef2f2' : item.priority === 'medium' ? '#fff7ed' : '#f8fafc',
-                                    position: 'relative'
-                                }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                                        <span style={{
-                                            fontSize: '11px', fontWeight: 800, textTransform: 'uppercase',
-                                            padding: '4px 8px', borderRadius: '6px',
-                                            background: item.priority === 'high' ? '#ef4444' : item.priority === 'medium' ? '#f97316' : '#3b82f6',
-                                            color: 'white'
-                                        }}>
-                                            {item.target}
-                                        </span>
-                                        <button
-                                            onClick={() => handleDeleteAnnouncement(item.id)}
-                                            style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '4px' }}
-                                        >
-                                            <Trash2 size={16} />
-                                        </button>
-                                    </div>
-                                    <h4 style={{ margin: '0 0 6px 0', fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>{item.title}</h4>
-                                    <p style={{ margin: 0, fontSize: '13px', color: '#475569', lineHeight: 1.5 }}>{item.content}</p>
-                                    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '10px', textAlign: 'right' }}>{item.date}</div>
-                                </div>
-                            ))}
+                    {!profilComplet && (
+                        <div style={{ marginTop: '24px', padding: '14px 18px', borderRadius: '14px', background: '#fffbeb', border: '1px solid #fde68a', fontSize: '13px', color: '#92400e' }}>
+                            Vue partielle : ce compte n'est rattaché à aucun établissement (administrateur plateforme), la fiche complète (photo, édition) n'est donc pas disponible ici.
                         </div>
-                    </div>
+                    )}
                 </div>
             )}
+
 
             {/* ════════════════════════════════════════════════════════════ */}
             {/* TAB 3 : SÉCURITÉ & AUTHENTIFICATION                          */}
@@ -802,88 +597,6 @@ export default function ProfilPage() {
                 </div>
             )}
 
-            {/* ════════════════════════════════════════════════════════════ */}
-            {/* TAB 4 : PRÉFÉRENCES SYSTEME                                  */}
-            {/* ════════════════════════════════════════════════════════════ */}
-            {activeTab === 'preferences' && (
-                <div style={{ background: 'white', borderRadius: '20px', padding: '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
-                    <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 24px 0', color: '#0f172a' }}>Préférences et Alertes Système</h2>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: '#f8fafc', borderRadius: '14px' }}>
-                            <div>
-                                <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>Notifications par Email</h4>
-                                <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>Recevoir des récapitulatifs quotidiens des inscriptions et présences par email.</p>
-                            </div>
-                            <input
-                                type="checkbox"
-                                checked={emailNotifs}
-                                onChange={e => setEmailNotifs(e.target.checked)}
-                                style={{ width: '20px', height: '20px', cursor: 'pointer' }}
-                            />
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: '#f8fafc', borderRadius: '14px' }}>
-                            <div>
-                                <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>Alerte SMS Urgente</h4>
-                                <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>Avertir par SMS en cas d'absence d'un enseignant ou problème de sécurité.</p>
-                            </div>
-                            <input
-                                type="checkbox"
-                                checked={smsNotifs}
-                                onChange={e => setSmsNotifs(e.target.checked)}
-                                style={{ width: '20px', height: '20px', cursor: 'pointer' }}
-                            />
-                        </div>
-
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', background: '#f8fafc', borderRadius: '14px' }}>
-                            <div>
-                                <h4 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>Sauvegarde Automatique Quotidienne</h4>
-                                <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>Effectuer un archivage automatique des données scolaires chaque soir à minuit.</p>
-                            </div>
-                            <input
-                                type="checkbox"
-                                checked={autoBackup}
-                                onChange={e => setAutoBackup(e.target.checked)}
-                                style={{ width: '20px', height: '20px', cursor: 'pointer' }}
-                            />
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* ════════════════════════════════════════════════════════════ */}
-            {/* TAB 5 : JOURNAL D'AUDIT ADMIN                                */}
-            {/* ════════════════════════════════════════════════════════════ */}
-            {activeTab === 'audit' && (
-                <div style={{ background: 'white', borderRadius: '20px', padding: '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
-                    <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 16px 0', color: '#0f172a' }}>Historique des Actions Administratives</h2>
-                    <p style={{ color: '#64748b', fontSize: '14px', marginBottom: '24px' }}>Traçabilité complète des modifications et opérations critiques sur l'ERP.</p>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        {[
-                            { action: 'Connexion Administrateur', detail: 'Authentification via Token JWT', time: 'Aujourd\'hui 20:45', status: 'Succès' },
-                            { action: 'Modification Code PIN', detail: 'Mise à jour du PIN comptabilité', time: 'Aujourd\'hui 19:30', status: 'Succès' },
-                            { action: 'Pointage QR Code', detail: 'Configuration des bornes élèves et agents', time: 'Aujourd\'hui 18:15', status: 'Succès' },
-                            { action: 'Sauvegarde Base de Données', detail: 'Export PostgreSQL automatique', time: 'Hier 23:59', status: 'Succès' }
-                        ].map((log, index) => (
-                            <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', border: '1px solid #e2e8f0', borderRadius: '14px', background: '#f8fafc' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                    <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#10b981' }} />
-                                    <div>
-                                        <div style={{ fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>{log.action}</div>
-                                        <div style={{ fontSize: '12px', color: '#64748b' }}>{log.detail}</div>
-                                    </div>
-                                </div>
-                                <div style={{ textAlign: 'right' }}>
-                                    <div style={{ fontSize: '12px', fontWeight: 600, color: '#0f172a' }}>{log.time}</div>
-                                    <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 700 }}>{log.status}</span>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
                 </>
             )}
         </div>

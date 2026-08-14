@@ -17,6 +17,7 @@ from app.models.academique import (
 )
 from app.schemas.schemas import EleveCreate, EleveUpdate, EleveOut, EleveListOut
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
+from app.core.annee_lock import resolve_annee_id
 from app.core.annee_courante import resoudre_annee
 from app.core.numerotation import generer_numero_facture
 from pydantic import BaseModel
@@ -26,7 +27,7 @@ router = APIRouter(prefix="/api/eleves", tags=["Élèves"])
 
 @router.get("", response_model=List[EleveListOut])
 def list_eleves(
-    annee_id: Optional[int] = None,
+    annee_id: int = Depends(resolve_annee_id),
     statut: Optional[str] = None,
     search: Optional[str] = None,
     classe_code: Optional[str] = None,
@@ -93,7 +94,7 @@ class EleveDeltaOut(BaseModel):
 @router.get("/delta", response_model=EleveDeltaOut)
 def delta_eleves(
     since: Optional[datetime] = None,
-    annee_id: Optional[int] = None,
+    annee_id: int = Depends(resolve_annee_id),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -348,6 +349,9 @@ class InscriptionCompleteData(BaseModel):
     statut: str = "ACTIF"
     # `None` = l'annee en cours de l'ecole appelante, resolue cote serveur.
     # Un client qui envoie 1 inscrirait l'eleve sur l'annee d'une autre ecole.
+    # (Pydantic BaseModel — `Depends(...)` n'existe que pour les parametres
+    # de fonction de route, pas pour un champ de modele : la resolution se
+    # fait explicitement dans le corps de la route, voir plus bas.)
     annee_id: Optional[int] = None
     classe_id: Optional[int] = None
     eleve_mot_de_passe: Optional[str] = None  # MDP portail élève (optionnel, défaut: smartschool)
@@ -747,7 +751,7 @@ def get_dossier_annee(eleve_id: int, inscription_id: int, db: Session = Depends(
 @router.get("/{eleve_id}/certificat-scolarite/pdf")
 def generer_certificat_scolarite_pdf(
     eleve_id: int,
-    annee_id: Optional[int] = None,
+    annee_id: int = Depends(resolve_annee_id),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):

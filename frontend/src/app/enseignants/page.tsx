@@ -11,6 +11,7 @@ import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
 import { useRouter } from 'next/navigation';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface Enseignant {
     enseignant_id: number; matricule: string; nom: string; prenom: string;
@@ -107,37 +108,62 @@ export default function EnseignantsPage() {
     const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
     const { etablissementId } = useApp();
     const router = useRouter();
+    const isMobile = useIsMobile();
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
     const [previewEns, setPreviewEns] = useState<Enseignant | null>(null);
     const [badgeEns, setBadgeEns] = useState<Enseignant | null>(null);
     const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+    const [total, setTotal] = useState(0);
+    const [counts, setCounts] = useState({ total: 0, actifs: 0, vacataires: 0 });
     const pageSize = 10;
 
+    // Paginée + recherchée côté serveur (le backend le supportait déjà,
+    // seule cette page ne l'utilisait pas) — avant, un seul lot de 50
+    // enseignants était chargé une fois, puis re-tranché par 10 côté client :
+    // au-delà du 50e enseignant, aucune page suivante n'affichait quoi que
+    // ce soit malgré un pagineur qui laissait croire le contraire.
     const fetchData = () => {
-        api.get(`/api/enseignants?etablissement_id=${etablissementId}`)
-            .then(res => { setEnseignants(res.data); setLoading(false); })
+        setLoading(true);
+        const skip = (currentPage - 1) * pageSize;
+        api.get('/api/enseignants', {
+            params: { etablissement_id: etablissementId, search: search || undefined, skip, limit: pageSize },
+        })
+            .then(res => {
+                setEnseignants(res.data);
+                const totalCount = res.headers?.['x-total-count'];
+                setTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
+                setLoading(false);
+            })
             .catch(() => setLoading(false));
     };
 
-    useEffect(() => { fetchData(); }, []);
+    useEffect(() => { fetchData(); }, [etablissementId, currentPage, search]);
+
+    // Agrégats globaux (toute l'école, pas seulement la page affichée) —
+    // rechargés au montage et après une suppression, pas à chaque page.
+    const fetchCounts = () => {
+        if (!etablissementId) return;
+        api.get('/api/enseignants/count', { params: { etablissement_id: etablissementId } })
+            .then(res => setCounts(res.data))
+            .catch(() => {});
+    };
+    useEffect(() => { fetchCounts(); }, [etablissementId]);
+
+    // Recherche : revenir à la page 1 pour éviter une page vide après filtrage
+    useEffect(() => { setCurrentPage(1); }, [search]);
 
     const handleDelete = async (id: number) => {
         if (!window.confirm('Supprimer cet enseignant ?')) return;
-        try { await api.delete(`/api/enseignants/${id}`); fetchData(); }
+        try { await api.delete(`/api/enseignants/${id}`); fetchData(); fetchCounts(); }
         catch { alert('Erreur lors de la suppression'); }
     };
 
-    const filtered = enseignants.filter(e =>
-        e.nom.toLowerCase().includes(search.toLowerCase()) ||
-        e.prenom.toLowerCase().includes(search.toLowerCase()) ||
-        e.matricule.toLowerCase().includes(search.toLowerCase())
-    );
-    const totalPages = Math.ceil(filtered.length / pageSize);
-    const paginatedList = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-    const totalTeachers = enseignants.length;
-    const activeTeachers = enseignants.filter(e => e.statut === 'ACTIF').length;
+    const paginatedList = enseignants;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const totalTeachers = counts.total;
+    const activeTeachers = counts.actifs;
     const onLeave = totalTeachers - activeTeachers;
 
     const kpis = [
@@ -254,9 +280,10 @@ export default function EnseignantsPage() {
                 ))}
             </div>
 
-            {/* Featured Cards — with hover animations like élèves page */}
+            {/* Featured Cards — with hover animations like élèves page — masquées sur mobile, redondantes avec la liste en cartes */}
+            {!isMobile && (
             <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '16px' }}>
                     {enseignants.slice(0, 6).map((e, i) => (
                         <motion.div key={e.enseignant_id}
                             initial={{ opacity: 0, scale: 0.95 }}
@@ -283,6 +310,7 @@ export default function EnseignantsPage() {
                     ))}
                 </div>
             </motion.div>
+            )}
 
             {/* Table with photo upload */}
             <motion.div className="card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
@@ -302,7 +330,39 @@ export default function EnseignantsPage() {
                         </div>
                     ) : (
                         <>
-                            <table className="sp-table">
+                            {isMobile ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '16px' }}>
+                                    {paginatedList.map((ens, i) => (
+                                        <motion.div key={ens.enseignant_id}
+                                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.02 }}
+                                            style={{ border: '1px solid var(--border-light)', borderRadius: '14px', padding: '14px', display: 'flex', gap: '12px', alignItems: 'flex-start', background: 'white' }}>
+                                            <div style={{ cursor: 'pointer' }} onClick={() => setPreviewEns(ens)}>
+                                                <EnsAvatar ens={ens} size={44} idx={i} onUploaded={fetchData} />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                                                    <p style={{ fontWeight: 700, fontSize: '14px' }}>{ens.prenom} {ens.nom}</p>
+                                                    <span className={`badge ${ens.statut === 'ACTIF' ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '10px', flexShrink: 0 }}>{ens.statut}</span>
+                                                </div>
+                                                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 6px' }}>{ens.specialite || subjects[i % subjects.length]}</p>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                                                    <code style={{ background: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', fontSize: '12px' }}>{ens.matricule}</code>
+                                                    <span className={`badge ${ens.type_contrat === 'PERMANENT' ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '10px' }}>{ens.type_contrat}</span>
+                                                    {ens.telephone && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{ens.telephone}</span>}
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '6px' }}>
+                                                    <Link href={`/enseignants/${ens.enseignant_id}`} className="btn btn-outline btn-sm" style={{ padding: '6px 10px' }} title="Voir"><Eye size={14} /></Link>
+                                                    <button onClick={() => setBadgeEns({ ...ens, role: 'ENSEIGNANT' })} className="btn btn-outline btn-sm" style={{ padding: '6px 10px', color: '#10b981', borderColor: '#10b981' }} title="Voir la Carte (Badge)"><UserCheck size={14} /></button>
+                                                    <Link href={`/enseignants/modifier/${ens.enseignant_id}`} className="btn btn-outline btn-sm" style={{ padding: '6px 10px' }} title="Modifier"><Edit size={14} /></Link>
+                                                    <button onClick={() => handleDelete(ens.enseignant_id)} className="btn btn-outline btn-sm" style={{ padding: '6px 10px', color: 'var(--danger)' }} title="Supprimer"><Trash2 size={14} /></button>
+                                                </div>
+                                            </div>
+                                        </motion.div>
+                                    ))}
+                                </div>
+                            ) : (
+                            <div className="table-scroll">
+                            <table className="sp-table" style={{ minWidth: '820px' }}>
                                 <thead>
                                     <tr>
                                         <th>#</th>
@@ -344,6 +404,8 @@ export default function EnseignantsPage() {
                                     ))}
                                 </tbody>
                             </table>
+                            </div>
+                            )}
                             <div className="pagination">
                                 <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}><ChevronLeft size={16} /></button>
                                 {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map(page => (

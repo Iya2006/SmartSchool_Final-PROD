@@ -321,8 +321,8 @@ export default function SalleDesProfsPage() {
                                                     exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
                                                     style={{ overflow: 'hidden', borderTop: '1px solid var(--border-light)' }}
                                                 >
-                                                    <div style={{ padding: '12px 20px' }}>
-                                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                    <div className="table-scroll" style={{ padding: '12px 20px' }}>
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
                                                             <thead>
                                                                 <tr>
                                                                     {['Matière', 'Catégorie', 'Coef', 'H/sem', 'Enseignant Affecté', ''].map((h, i) => (

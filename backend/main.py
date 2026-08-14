@@ -31,6 +31,7 @@ from app.api.examens import router as examens_router
 from app.api.portail_parent import router as parent_portal_router
 from app.api.portail_enseignant import router as teacher_portal_router
 from app.api.sync import router as sync_router
+from app.api.seances import router as seances_teacher_router, router_admin as seances_admin_router
 from app.api.portail_eleve import router as eleve_portal_router
 from app.api.auth import router as auth_router
 from app.api.inscription_etablissement import router as inscription_etablissement_router
@@ -299,6 +300,7 @@ app.include_router(notes_router, dependencies=[Depends(get_current_user), Depend
 # ── Routes COMPTABILITÉ / FINANCE / RH / PRÉSENCES AGENTS (rôles restreints) ──
 app.include_router(finance_router, dependencies=[Depends(require_roles(*FINANCE_ROLES)), Depends(_MOD_FINANCE)])
 app.include_router(vie_scolaire_router, dependencies=[Depends(get_current_user), Depends(_MOD_VIE_SCOLAIRE)])
+app.include_router(seances_admin_router, dependencies=[Depends(get_current_user), Depends(_MOD_VIE_SCOLAIRE)])
 app.include_router(parametrage_router, dependencies=[Depends(get_current_user), Depends(_MOD_PARAMETRES)])
 # Sécurité & audit : rôles, permissions et journal d'audit. Seule la page
 # admin /parametres/securite consomme ces routes (vérifié côté frontend), donc
@@ -355,6 +357,7 @@ app.include_router(export_router)
 app.include_router(parent_portal_router)  # Login parent → son propre JWT
 app.include_router(teacher_portal_router) # Login enseignant → son propre JWT
 app.include_router(sync_router)           # Sync offline-first — auth via _enseignant_auth par route (même pattern que teacher_portal_router)
+app.include_router(seances_teacher_router) # Séances (portail enseignant) — auth via _enseignant_auth par route
 app.include_router(eleve_portal_router)   # Login élève → son propre JWT
 app.include_router(parametrage_public_router) # GET établissement + settings (sans JWT)
 

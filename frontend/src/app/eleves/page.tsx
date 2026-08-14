@@ -20,6 +20,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEleves, type Eleve } from '@/hooks/useEleves';
 import BadgeCarte from '@/components/BadgeCarte';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 // ─── Constantes ─────────────────────────────────────────────────────────────
 const AVATAR_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#6366f1', '#ec4899', '#14b8a6', '#f97316'];
@@ -129,6 +130,7 @@ function PhotoLightbox({ eleve, onClose }: { eleve: Eleve; onClose: () => void }
 export default function ElevesPage() {
     const { etablissementId, anneeId } = useApp();
     const router = useRouter();
+    const isMobile = useIsMobile();
 
     // ── État UI local (filtres, pagination, sélection) ──
     const [search, setSearch]               = useState('');
@@ -425,8 +427,9 @@ export default function ElevesPage() {
                         </div>
                     ) : (
                         <>
-                            {/* TOP 5 CARTES */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '16px', marginBottom: '28px' }}>
+                            {/* TOP 5 CARTES — masquées sur mobile, redondantes avec la liste en cartes juste en dessous */}
+                            {!isMobile && (
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '16px', marginBottom: '28px' }}>
                                 {eleves.slice(0, 5).map((eleve, i) => (
                                     <motion.div key={eleve.eleve_id}
                                         initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
@@ -445,9 +448,44 @@ export default function ElevesPage() {
                                     </motion.div>
                                 ))}
                             </div>
+                            )}
 
-                            {/* TABLE */}
-                            <table className="sp-table">
+                            {/* LISTE — cartes empilées sur mobile, tableau sur tablette/desktop */}
+                            {isMobile ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                    {eleves.map((eleve, i) => (
+                                        <motion.div key={eleve.eleve_id}
+                                            initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                                            transition={{ delay: i * 0.02 }}
+                                            style={{ border: '1px solid var(--border-light)', borderRadius: '14px', padding: '14px', display: 'flex', gap: '12px', alignItems: 'flex-start', background: 'white' }}>
+                                            <div style={{ cursor: 'pointer' }} onClick={() => setPreviewEleve(eleve)}>
+                                                <EleveAvatar eleve={eleve} size={44} colorIndex={i} />
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                                                    <p style={{ fontWeight: 700, fontSize: '14px' }}>{eleve.prenom} {eleve.nom}</p>
+                                                    <span className={`badge ${eleve.statut === 'ACTIF' ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '10px', flexShrink: 0 }}>{eleve.statut}</span>
+                                                </div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', margin: '6px 0 10px' }}>
+                                                    <code style={{ background: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', fontSize: '12px' }}>{eleve.matricule}</code>
+                                                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{eleve.classe_code || '—'}</span>
+                                                    <span className={`badge ${eleve.sexe === 'M' ? 'badge-info' : 'badge-subtle-danger'}`} style={{ fontSize: '10px' }}>
+                                                        {eleve.sexe === 'M' ? '♂' : '♀'}
+                                                    </span>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '6px' }}>
+                                                    <button onClick={() => setBadgeEleve(eleve)} className="btn btn-outline btn-sm" style={{ padding: '6px 10px', color: '#10b981', borderColor: '#10b981' }} title="Voir la Carte (Badge)"><UserCheck size={14} /></button>
+                                                    <Link href={`/eleves/${eleve.eleve_id}`} className="btn btn-outline btn-sm" style={{ padding: '6px 10px' }} title="Voir"><Eye size={14} /></Link>
+                                                    <Link href={`/eleves/modifier/${eleve.eleve_id}`} className="btn btn-outline btn-sm" style={{ padding: '6px 10px' }} title="Modifier"><Edit size={14} /></Link>
+                                                    <button onClick={() => handleDelete(eleve.eleve_id)} className="btn btn-outline btn-sm" style={{ padding: '6px 10px', color: 'var(--danger)' }} title="Supprimer"><Trash2 size={14} /></button>
+                                                </div>
+                                            </div>
+                                        </motion.div>
+                                    ))}
+                                </div>
+                            ) : (
+                            <div className="table-scroll">
+                            <table className="sp-table" style={{ minWidth: '760px' }}>
                                 <thead>
                                     <tr>
                                         <th>#</th><th>Photo</th><th>Élève</th><th>Matricule</th>
@@ -491,6 +529,8 @@ export default function ElevesPage() {
                                     ))}
                                 </tbody>
                             </table>
+                            </div>
+                            )}
 
                             {/* Pagination */}
                             <div className="pagination">

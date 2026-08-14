@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { getRoleInterfaceSummary } from '@/lib/roleAccess';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import {
     ArrowLeft,
     Briefcase,
@@ -69,6 +70,7 @@ interface CreatedInfo {
 
 export default function NouveauPersonnel() {
     const { etablissementId } = useApp();
+    const isMobile = useIsMobile();
 
     const [step, setStep] = useState<Step>('role');
     const [loading, setLoading] = useState(false);
@@ -348,7 +350,7 @@ export default function NouveauPersonnel() {
             <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
                 <section style={{ position: 'relative', overflow: 'hidden', borderRadius: '32px', padding: '30px', background: 'linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%)', color: 'white', boxShadow: '0 30px 70px rgba(15,23,42,0.18)' }}>
                     <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top right, rgba(255,255,255,0.16), transparent 22%), radial-gradient(circle at bottom left, rgba(16,185,129,0.22), transparent 28%)' }} />
-                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(320px, 0.8fr)', gap: '22px', alignItems: 'stretch' }}>
+                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.2fr) minmax(320px, 0.8fr)', gap: '22px', alignItems: 'stretch' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', alignSelf: 'flex-start', padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.14)', fontSize: '12px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                                 <CheckCircle2 size={14} /> Recrutement validé
@@ -429,7 +431,7 @@ export default function NouveauPersonnel() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <section style={{ position: 'relative', overflow: 'hidden', borderRadius: '32px', padding: '28px', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 38%, #1d4ed8 100%)', color: 'white', boxShadow: '0 28px 70px rgba(15,23,42,0.18)' }}>
                 <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top right, rgba(255,255,255,0.14), transparent 24%), radial-gradient(circle at bottom left, rgba(16,185,129,0.18), transparent 28%)' }} />
-                <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 1.25fr) minmax(320px, 0.8fr)', gap: '22px', alignItems: 'stretch' }}>
+                <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.25fr) minmax(320px, 0.8fr)', gap: '22px', alignItems: 'stretch' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
                             <Link href="/personnel" style={{ width: 46, height: 46, borderRadius: '16px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.14)', color: 'white', display: 'grid', placeItems: 'center', textDecoration: 'none' }}>
@@ -503,7 +505,7 @@ export default function NouveauPersonnel() {
                 </div>
             )}
 
-            <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.15fr) minmax(300px, 0.85fr)', gap: '20px', alignItems: 'start' }}>
+            <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.85fr)', gap: '20px', alignItems: 'start' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                     <AnimatePresence mode="wait">
                         {step === 'role' && (
@@ -575,7 +577,7 @@ export default function NouveauPersonnel() {
                                 <div style={{ background: 'rgba(255,255,255,0.94)', border: '1px solid rgba(226,232,240,0.92)', borderRadius: '28px', overflow: 'hidden', boxShadow: '0 24px 54px rgba(15,23,42,0.06)' }}>
                                     {sectionHdr(<User size={20} />, 'Identité & informations personnelles', 'Collecte RH premium : état civil, contact et données d’identification.', 'linear-gradient(135deg, #dcfce7, #dbeafe)')}
                                     <div style={{ padding: '24px' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '18px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '18px' }}>
                                             <div>
                                                 <label style={labelStyle}>Nom de famille *</label>
                                                 <input value={form.nom} onChange={(e) => ch('nom', e.target.value)} placeholder="Ex: CAMARA" style={inputStyle} />
@@ -626,7 +628,7 @@ export default function NouveauPersonnel() {
                                 <div style={{ background: 'rgba(255,255,255,0.94)', border: '1px solid rgba(226,232,240,0.92)', borderRadius: '28px', overflow: 'hidden', boxShadow: '0 24px 54px rgba(15,23,42,0.06)' }}>
                                     {sectionHdr(<FileTextIcon size={20} />, 'Contrat & rémunération', 'Cadre contractuel, coût RH et mode de paiement préférentiel.', 'linear-gradient(135deg, #fef3c7, #dbeafe)')}
                                     <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '18px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '18px' }}>
                                             <div>
                                                 <label style={labelStyle}>Type de contrat</label>
                                                 <select value={form.type_contrat} onChange={(e) => ch('type_contrat', e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
@@ -688,7 +690,7 @@ export default function NouveauPersonnel() {
                                 <div style={{ background: 'rgba(255,255,255,0.94)', border: '1px solid rgba(226,232,240,0.92)', borderRadius: '28px', overflow: 'hidden', boxShadow: '0 24px 54px rgba(15,23,42,0.06)' }}>
                                     {sectionHdr(<Lock size={20} />, 'Accès système & identifiants', 'Déterminez l’accès à SmartSchool et préparez l’expérience de connexion.', 'linear-gradient(135deg, #fde68a, #dbeafe)')}
                                     <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
                                             <button type="button" onClick={() => ch('accesSysteme', false)} style={{ padding: '18px', borderRadius: '22px', border: '1.5px solid', borderColor: !form.accesSysteme ? '#ef4444' : '#e2e8f0', background: !form.accesSysteme ? '#fef2f2' : 'white', cursor: 'pointer', textAlign: 'left' }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
                                                     <X size={20} style={{ color: !form.accesSysteme ? '#ef4444' : '#94a3b8' }} />
@@ -715,7 +717,7 @@ export default function NouveauPersonnel() {
                                         <AnimatePresence>
                                             {form.accesSysteme && (
                                                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
-                                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '18px' }}>
+                                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '18px' }}>
                                                         <div>
                                                             <label style={labelStyle}>Nom d'utilisateur *</label>
                                                             <div style={{ display: 'flex', gap: '8px' }}>
@@ -767,7 +769,7 @@ export default function NouveauPersonnel() {
                                             </div>
                                         </div>
 
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '12px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
                                             {[
                                                 { label: 'Sexe', value: form.sexe === 'M' ? 'Masculin' : 'Féminin' },
                                                 { label: 'Téléphone', value: form.telephone || '—' },

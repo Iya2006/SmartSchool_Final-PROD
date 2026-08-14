@@ -10,12 +10,14 @@ import {
   AlertTriangle,
   ArrowRight,
   ArrowUpRight,
+  ArrowDownRight,
   Banknote,
   BellRing,
   BookOpen,
   Building2,
   CalendarDays,
 
+  ChevronDown,
   ChevronRight,
 
   CreditCard,
@@ -55,6 +57,10 @@ interface DashboardData {
     total_recettes: number;
     total_depenses: number;
     taux_presence: number;
+    taux_absence: number;
+    taux_retard: number;
+    nb_classes_couvertes: number;
+    nb_seances_comptabilisees: number;
     incidents_mois: number;
     evaluations_prevues: number;
   };
@@ -157,6 +163,10 @@ function formatCompactMoney(value: number) {
   return `${n.toLocaleString('fr-FR')} GNF`;
 }
 
+function formatFullMoney(value: number) {
+  return `${Number(value || 0).toLocaleString('fr-FR')} GNF`;
+}
+
 function formatDate(dateValue?: string | null) {
   if (!dateValue) return 'Date non précisée';
   const date = new Date(dateValue);
@@ -168,14 +178,23 @@ function formatDate(dateValue?: string | null) {
   });
 }
 
+// Un taux de présence calculé sur 1-2 classes sur 19 est mathématiquement
+// correct mais pas représentatif de tout l'établissement — le seuil de
+// couverture évite qu'un échantillon minuscule ne déclenche à tort un badge
+// "Opérations stables" ou "À surveiller" sur toute l'école.
+function couvertureSuffisante(kpi: DashboardData['kpi']) {
+  return kpi.nb_classes > 0 && kpi.nb_classes_couvertes / kpi.nb_classes >= 0.5;
+}
+
 function getHealthStatus(data: DashboardData) {
+  const presenceRepresentative = couvertureSuffisante(data.kpi);
   if (data.kpi.incidents_mois >= 8 || data.finance_stats.total_impayes > data.kpi.total_recettes * 0.45) {
     return { label: 'Sous tension', color: ALERT_COLORS.critical, tone: 'critical' as const };
   }
-  if (data.kpi.taux_presence < 75 || data.finance_stats.taux_recouvrement < 60) {
+  if ((presenceRepresentative && data.kpi.taux_presence < 75) || data.finance_stats.taux_recouvrement < 60) {
     return { label: 'À surveiller', color: ALERT_COLORS.warning, tone: 'warning' as const };
   }
-  if (data.kpi.taux_presence >= 85 && data.pedagogie_stats.taux_reussite_global >= 70) {
+  if (presenceRepresentative && data.kpi.taux_presence >= 85 && data.pedagogie_stats.taux_reussite_global >= 70) {
     return { label: 'Opérations stables', color: ALERT_COLORS.success, tone: 'success' as const };
   }
   return { label: 'En observation', color: ALERT_COLORS.info, tone: 'info' as const };
@@ -187,6 +206,8 @@ export default function DashboardPage() {
   const [impayesSearch, setImpayesSearch] = useState('');
   const [impayesPage, setImpayesPage] = useState(1);
   const [selectedCycle, setSelectedCycle] = useState<string | null>(null);
+  const [expandedStat, setExpandedStat] = useState<string | null>(null);
+  const [expandedPaymentStudent, setExpandedPaymentStudent] = useState<string | null>(null);
 
   const IMPAYES_PER_PAGE = 8;
 
@@ -203,6 +224,9 @@ export default function DashboardPage() {
       return res.data as DashboardData;
     },
     enabled: !!etablissementId && !!anneeId,
+    // Rafraîchissement automatique toutes les 15 secondes pour les activités en temps réel
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
   });
 
   const filteredImpayes = useMemo(() => {
@@ -221,6 +245,25 @@ export default function DashboardPage() {
     const start = (impayesPage - 1) * IMPAYES_PER_PAGE;
     return filteredImpayes.slice(start, start + IMPAYES_PER_PAGE);
   }, [filteredImpayes, impayesPage]);
+
+  const groupedRecentPayments = useMemo(() => {
+    if (!data?.paiements_recents) return [];
+    
+    const groups = new Map<string, typeof data.paiements_recents>();
+    
+    data.paiements_recents.forEach(payment => {
+      if (!groups.has(payment.eleve)) {
+        groups.set(payment.eleve, []);
+      }
+      groups.get(payment.eleve)!.push(payment);
+    });
+    
+    return Array.from(groups.entries()).slice(0, 6).map(([eleve, payments]) => ({
+      eleve,
+      classe: payments[0].classe,
+      payments
+    }));
+  }, [data?.paiements_recents]);
 
   const financeSeries = useMemo(() => {
     if (!data) return [];
@@ -262,11 +305,17 @@ export default function DashboardPage() {
       tone: 'info',
     });
 
-    if (data.kpi.taux_presence >= 85) {
+    if (couvertureSuffisante(data.kpi) && data.kpi.taux_presence >= 85) {
       alerts.push({
         title: 'Présence scolaire solide',
-        description: `Le taux de présence observé est de ${data.kpi.taux_presence}% sur les 30 derniers jours.`,
+        description: `Le taux de présence observé est de ${data.kpi.taux_presence}% sur les 30 derniers jours (${data.kpi.nb_classes_couvertes}/${data.kpi.nb_classes} classes ont fait l'appel via une séance).`,
         tone: 'success',
+      });
+    } else if (data.kpi.nb_seances_comptabilisees > 0) {
+      alerts.push({
+        title: 'Suivi de présence en cours de constitution',
+        description: `${data.kpi.nb_classes_couvertes}/${data.kpi.nb_classes} classes ont fait l'appel via une séance ces 30 derniers jours — le taux affiché (${data.kpi.taux_presence}%) ne reflète pas encore tout l'établissement.`,
+        tone: 'info',
       });
     }
 
@@ -342,11 +391,29 @@ export default function DashboardPage() {
     || data.pedagogie_stats.taux_reussite_par_cycle[0]
     || null;
 
-  const heroStats = [
-    { label: 'Recettes consolidées', value: formatCompactMoney(data.kpi.total_recettes), icon: Wallet, color: '#2563eb' },
-    { label: 'Dépenses engagées', value: formatCompactMoney(data.kpi.total_depenses), icon: Banknote, color: '#f97316' },
-    { label: 'Résultat net', value: formatCompactMoney(netResult), icon: TrendingUp, color: netResult >= 0 ? '#10b981' : '#ef4444' },
-    { label: 'Présence observée', value: `${data.kpi.taux_presence}%`, icon: ShieldCheck, color: '#8b5cf6' },
+  const couvertureFaible = data.kpi.nb_classes > 0 && data.kpi.nb_classes_couvertes / data.kpi.nb_classes < 0.5;
+  const couvertureLabel = `${data.kpi.nb_classes_couvertes}/${data.kpi.nb_classes} classe${data.kpi.nb_classes > 1 ? 's' : ''} · ${data.kpi.nb_seances_comptabilisees} séance${data.kpi.nb_seances_comptabilisees > 1 ? 's' : ''} (30 j)`;
+
+  const heroStats: {
+    label: string; value: string; icon: typeof Wallet; color: string;
+    fullValue?: string;
+    breakdown?: { label: string; value: number; color: string }[];
+    caption?: string;
+    captionWarning?: boolean;
+  }[] = [
+    { label: 'Recettes consolidées', value: formatCompactMoney(data.kpi.total_recettes), fullValue: formatFullMoney(data.kpi.total_recettes), icon: Wallet, color: '#2563eb' },
+    { label: 'Dépenses engagées', value: formatCompactMoney(data.kpi.total_depenses), fullValue: formatFullMoney(data.kpi.total_depenses), icon: Banknote, color: '#f97316' },
+    { label: 'Résultat net', value: formatCompactMoney(netResult), fullValue: formatFullMoney(netResult), icon: TrendingUp, color: netResult >= 0 ? '#10b981' : '#ef4444' },
+    {
+      label: 'Présence observée', value: `${data.kpi.taux_presence}%`, icon: ShieldCheck, color: '#8b5cf6',
+      breakdown: [
+        { label: 'Présence', value: data.kpi.taux_presence, color: '#10b981' },
+        { label: 'Absence', value: data.kpi.taux_absence, color: '#ef4444' },
+        { label: 'Retard', value: data.kpi.taux_retard, color: '#f59e0b' },
+      ],
+      caption: couvertureLabel,
+      captionWarning: couvertureFaible,
+    },
   ];
 
   const mainKpis = [
@@ -406,29 +473,70 @@ export default function DashboardPage() {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 14 }}>
-              {heroStats.map((item, index) => (
-                <motion.div
-                  key={item.label}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.05 * index }}
-                  style={{
-                    padding: '18px 16px',
-                    borderRadius: 20,
-                    background: 'rgba(255,255,255,0.08)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    backdropFilter: 'blur(8px)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                    <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.68)', fontWeight: 700 }}>{item.label}</span>
-                    <div style={{ width: 36, height: 36, borderRadius: 12, display: 'grid', placeItems: 'center', background: `${item.color}22`, color: item.color }}>
-                      <item.icon size={18} />
+              {heroStats.map((item, index) => {
+                const isExpanded = expandedStat === item.label;
+                const isClickable = !!(item.fullValue || item.breakdown);
+                return (
+                  <motion.div
+                    key={item.label}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.05 * index }}
+                    onClick={() => isClickable && setExpandedStat(isExpanded ? null : item.label)}
+                    style={{
+                      padding: '18px 16px',
+                      borderRadius: 20,
+                      background: isExpanded ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.08)',
+                      border: isExpanded ? `1px solid ${item.color}66` : '1px solid rgba(255,255,255,0.08)',
+                      backdropFilter: 'blur(8px)',
+                      cursor: isClickable ? 'pointer' : 'default',
+                      transition: 'background 0.15s, border 0.15s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                      <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.68)', fontWeight: 700 }}>{item.label}</span>
+                      <div style={{ width: 36, height: 36, borderRadius: 12, display: 'grid', placeItems: 'center', background: `${item.color}22`, color: item.color }}>
+                        <item.icon size={18} />
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ fontSize: 24, fontWeight: 900 }}>{item.value}</div>
-                </motion.div>
-              ))}
+
+                    {!isExpanded && <div style={{ fontSize: 24, fontWeight: 900 }}>{item.value}</div>}
+
+                    {item.caption && (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: 4, marginTop: 4,
+                        fontSize: 10.5, fontWeight: 700,
+                        color: item.captionWarning ? '#fbbf24' : 'rgba(255,255,255,0.5)',
+                      }}>
+                        {item.captionWarning && <AlertTriangle size={11} />}
+                        {item.caption}
+                      </div>
+                    )}
+
+                    {isExpanded && item.fullValue && (
+                      <div style={{ fontSize: 17, fontWeight: 900, wordBreak: 'break-word' }}>{item.fullValue}</div>
+                    )}
+
+                    {isExpanded && item.breakdown && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                        {item.breakdown.map((b) => (
+                          <div key={b.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5 }}>
+                            <span style={{ color: 'rgba(255,255,255,0.75)' }}>{b.label}</span>
+                            <span style={{ fontWeight: 800, color: b.color }}>{b.value}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {isClickable && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 10, fontSize: 10, color: 'rgba(255,255,255,0.45)', fontWeight: 700 }}>
+                        <ChevronDown size={11} style={{ transform: isExpanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                        {isExpanded ? 'Réduire' : (item.breakdown ? 'Voir le détail' : 'Voir le montant exact')}
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
             </div>
           </div>
 
@@ -438,12 +546,37 @@ export default function DashboardPage() {
                 <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Voix du centre</h3>
                 <BellRing size={18} color="#cbd5e1" />
               </div>
-              <p style={{ margin: 0, color: 'rgba(255,255,255,0.78)', lineHeight: 1.7, fontSize: 14 }}>
-                {health.tone === 'critical' && 'Attention : plusieurs signaux exigent une action rapide, notamment sur les impayés ou la pression disciplinaire.'}
-                {health.tone === 'warning' && 'La situation reste maîtrisable, mais certains indicateurs exigent une surveillance rapprochée dans les prochaines heures.'}
-                {health.tone === 'success' && 'Les opérations sont globalement stables. Le centre recommande de maintenir le rythme actuel et d’anticiper les prochaines évaluations.'}
-                {health.tone === 'info' && 'Les opérations sont en observation. Le centre conseille de suivre les flux financiers et la mobilisation des familles.'}
-              </p>
+              <div style={{ margin: 0, color: 'rgba(255,255,255,0.78)', lineHeight: 1.7, fontSize: 14 }}>
+                <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {(() => {
+                    const msgs = [];
+                    if (data.finance_stats.total_impayes > 0) {
+                      if (data.finance_stats.taux_recouvrement < 60) {
+                        msgs.push(`Urgence financière : Le taux de recouvrement est critique (${data.finance_stats.taux_recouvrement}%). Relancez urgemment les impayés (${formatCompactMoney(data.finance_stats.total_impayes)}).`);
+                      } else {
+                        msgs.push(`Finance : Il reste ${formatCompactMoney(data.finance_stats.total_impayes)} d'impayés en attente. Une relance globale (SMS/Email) est conseillée.`);
+                      }
+                    }
+                    if (data.kpi.incidents_mois >= 5) {
+                      msgs.push(`Climat scolaire : Hausse de la pression disciplinaire (${data.kpi.incidents_mois} incidents ce mois).`);
+                    }
+                    const presenceRepresentative = couvertureSuffisante(data.kpi);
+                    if (presenceRepresentative && data.kpi.taux_presence < 75) {
+                      msgs.push(`Assiduité : Taux de présence global faible (${data.kpi.taux_presence}%). Vérifiez les absences non justifiées.`);
+                    } else if (!presenceRepresentative && data.kpi.nb_seances_comptabilisees > 0) {
+                      msgs.push(`Assiduité : suivi encore partiel (${data.kpi.nb_classes_couvertes}/${data.kpi.nb_classes} classes ont fait l'appel via une séance) — pas encore assez de données pour juger l'établissement.`);
+                    }
+                    if (data.pedagogie_stats.taux_reussite_global < 50 && data.pedagogie_stats.taux_reussite_global > 0) {
+                      msgs.push(`Pédagogie : Alerte sur le niveau global (réussite moyenne de ${data.pedagogie_stats.taux_reussite_global}%).`);
+                    }
+                    if (msgs.length === 0) {
+                      const presenceMsg = presenceRepresentative ? ` et présence à ${data.kpi.taux_presence}%` : '';
+                      msgs.push(`Système stable. Recouvrement à ${data.finance_stats.taux_recouvrement}%${presenceMsg}. Maintenez le cap !`);
+                    }
+                    return msgs.map((msg, i) => <li key={i}>{msg}</li>);
+                  })()}
+                </ul>
+              </div>
             </div>
 
             <div style={{ padding: 20, borderRadius: 24, background: '#fff', color: '#0f172a', boxShadow: '0 18px 38px rgba(15, 23, 42, 0.10)' }}>
@@ -768,17 +901,20 @@ export default function DashboardPage() {
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 24 }}>
           <div style={{ padding: '22px 24px 12px', borderBottom: '1px solid var(--border-light)' }}>
             <h5 style={{ margin: 0, fontSize: 18 }}>Activité temps réel</h5>
-            <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>Journal des événements et actions visibles aujourd’hui.</p>
+            <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>Journal des événements et actions visibles aujourd'hui.</p>
           </div>
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {data.activites_du_jour?.slice(0, 5).map((activity, index) => (
+            {data.activites_du_jour?.slice(0, 8).map((activity, index) => (
               <div key={`${activity.titre}-${index}`} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: 14, borderRadius: 18, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                <div style={{ width: 40, height: 40, borderRadius: 14, display: 'grid', placeItems: 'center', background: `${activity.couleur || '#2563eb'}15`, color: activity.couleur || '#2563eb' }}>
-                  <Radio size={17} />
+                <div style={{ width: 40, height: 40, borderRadius: 14, display: 'grid', placeItems: 'center', background: `${activity.couleur || '#2563eb'}15`, color: activity.couleur || '#2563eb', flexShrink: 0 }}>
+                  {activity.type === 'PAIEMENT' ? <CreditCard size={17} /> :
+                   activity.type === 'DEPENSE' ? <ArrowDownRight size={17} /> :
+                   activity.type === 'INSCRIPTION' ? <Users size={17} /> :
+                   <Radio size={17} />}
                 </div>
                 <div>
                   <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>{activity.titre}</div>
-                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>{activity.heure || 'Aujourd’hui'}</div>
+                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>{activity.heure || "Aujourd'hui"}</div>
                   <p style={{ margin: 0, color: '#475569', fontSize: 13, lineHeight: 1.55 }}>{activity.description || 'Aucun détail supplémentaire.'}</p>
                 </div>
               </div>
@@ -817,19 +953,61 @@ export default function DashboardPage() {
             <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>Derniers flux validés remontés dans le cockpit financier.</p>
           </div>
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {data.paiements_recents?.slice(0, 6).map((payment, index) => (
-              <div key={`${payment.recu}-${index}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', padding: 14, borderRadius: 18, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                <div>
-                  <div style={{ fontWeight: 800, color: '#0f172a' }}>{payment.eleve}</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>{payment.classe} • {payment.mode} • {payment.recu}</div>
+            {groupedRecentPayments.map((group, index) => {
+              const isExpanded = expandedPaymentStudent === group.eleve;
+              const latestPayment = group.payments[0];
+              const hasMultiple = group.payments.length > 1;
+              
+              return (
+                <div 
+                  key={`${group.eleve}-${index}`} 
+                  onClick={() => hasMultiple && setExpandedPaymentStudent(isExpanded ? null : group.eleve)}
+                  style={{ display: 'flex', flexDirection: 'column', padding: 14, borderRadius: 18, background: '#f8fafc', border: '1px solid #e2e8f0', cursor: hasMultiple ? 'pointer' : 'default' }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ fontWeight: 800, color: '#0f172a' }}>{group.eleve}</div>
+                        {hasMultiple && (
+                          <div style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 99, background: '#e0e7ff', color: '#3730a3' }}>
+                            {group.payments.length} paiements
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#64748b' }}>{group.classe} • {latestPayment.mode} • {latestPayment.recu}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ fontWeight: 900, color: '#10b981' }}>{formatCompactMoney(latestPayment.montant)}</div>
+                      <div style={{ fontSize: 12, color: '#94a3b8' }}>{formatDate(latestPayment.date)}</div>
+                    </div>
+                  </div>
+                  
+                  <AnimatePresence>
+                    {isExpanded && hasMultiple && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0, marginTop: 0 }}
+                        animate={{ height: 'auto', opacity: 1, marginTop: 12 }}
+                        exit={{ height: 0, opacity: 0, marginTop: 0 }}
+                        style={{ overflow: 'hidden' }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, borderTop: '1px dashed #cbd5e1' }}>
+                          {group.payments.slice(1).map((payment, i) => (
+                            <div key={`${payment.recu}-${i}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ fontSize: 12, color: '#64748b' }}>{payment.mode} • {payment.recu}</div>
+                              <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontWeight: 800, color: '#10b981', fontSize: 13 }}>{formatCompactMoney(payment.montant)}</div>
+                                <div style={{ fontSize: 11, color: '#94a3b8' }}>{formatDate(payment.date)}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontWeight: 900, color: '#10b981' }}>{formatCompactMoney(payment.montant)}</div>
-                  <div style={{ fontSize: 12, color: '#94a3b8' }}>{formatDate(payment.date)}</div>
-                </div>
-              </div>
-            ))}
-            {(!data.paiements_recents || data.paiements_recents.length === 0) && (
+              );
+            })}
+            {groupedRecentPayments.length === 0 && (
               <div style={{ padding: 18, textAlign: 'center', color: '#94a3b8' }}>Aucun paiement récent disponible.</div>
             )}
           </div>

@@ -207,7 +207,8 @@ export default function ClasseArchivePage() {
                     {activeTab === 'eleves' && (
                         <motion.div key="eleves" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
                             <div style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <div className="table-scroll">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '520px' }}>
                                     <thead>
                                         <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                                             <th style={{ padding: '16px 24px', fontSize: '13px', color: '#64748b', fontWeight: 700 }}>Matricule</th>
@@ -246,6 +247,7 @@ export default function ClasseArchivePage() {
                                         ))}
                                     </tbody>
                                 </table>
+                                </div>
                                 {eleves.length === 0 && (
                                     <div style={{ textAlign: 'center', padding: '48px', color: '#94a3b8' }}>
                                         <Users size={40} style={{ margin: '0 auto 12px', opacity: 0.5 }} />
@@ -282,7 +284,8 @@ export default function ClasseArchivePage() {
                                         <p style={{ margin: 0 }}>Aucun bulletin généré pour ce trimestre.</p>
                                     </div>
                                 ) : (
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '600px' }}>
                                         <thead>
                                             <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                                                 <th style={{ padding: '14px 24px', fontSize: '13px', color: '#64748b', fontWeight: 700 }}>Élève</th>
@@ -313,6 +316,7 @@ export default function ClasseArchivePage() {
                                             ))}
                                         </tbody>
                                     </table>
+                                    </div>
                                 )}
                             </div>
                         </motion.div>
@@ -333,7 +337,8 @@ export default function ClasseArchivePage() {
                                         <p style={{ margin: 0 }}>Aucune présence enregistrée pour cette classe.</p>
                                     </div>
                                 ) : (
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '520px' }}>
                                         <thead>
                                             <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                                                 <th style={{ padding: '14px 24px', fontSize: '13px', color: '#64748b', fontWeight: 700 }}>Matricule</th>
@@ -355,6 +360,7 @@ export default function ClasseArchivePage() {
                                             ))}
                                         </tbody>
                                     </table>
+                                    </div>
                                 )}
                             </div>
                         </motion.div>

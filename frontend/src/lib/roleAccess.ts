@@ -22,7 +22,7 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         redirectPath: '/dashboard',
         // `/selection-etablissement` : réservé au SUPER_ADMIN, seul compte non
         // rattaché à une école et donc seul à devoir en désigner une.
-        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring', '/selection-etablissement', '/administration'],
+        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring', '/selection-etablissement', '/administration', '/profil', '/vie-scolaire'],
         tier: 'full-admin',
         hasSystemAccess: true,
         description: 'Pilotage global de la plateforme : crée les écoles, les supervise, et entre dans l\'une d\'elles au besoin.',
@@ -32,7 +32,7 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         role: 'FONDATEUR',
         label: 'Fondateur',
         redirectPath: '/dashboard',
-        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring'],
+        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring', '/profil', '/vie-scolaire'],
         tier: 'full-admin',
         hasSystemAccess: true,
         description: 'Vision exécutive, arbitrage et supervision de toute la plateforme.',
@@ -42,7 +42,7 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         role: 'DG',
         label: 'Directeur Général',
         redirectPath: '/dashboard',
-        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring'],
+        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring', '/profil', '/vie-scolaire'],
         tier: 'full-admin',
         hasSystemAccess: true,
         description: 'Conduite opérationnelle et pilotage de la performance de l\'école.',
@@ -61,7 +61,11 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         role: 'DIRECTEUR_NIVEAU',
         label: 'Directeur des Études',
         redirectPath: '/dashboard',
-        allowedPrefixes: ['/dashboard', '/personnel', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/monitoring'],
+        // Réunion des deux listes : le délégué garde ses écrans pédagogiques
+        // (archive, fournitures, galerie, centre d'évaluation, activités) et
+        // gagne ceux ajoutés depuis (son profil, la vie scolaire). Aucune ne
+        // touche à /comptabilite — c'est le seul interdit du poste.
+        allowedPrefixes: ['/dashboard', '/personnel', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/monitoring', '/profil', '/vie-scolaire'],
         tier: 'full-admin',
         hasSystemAccess: true,
         description: 'Délégué pédagogique de la direction : évaluations, notes, bulletins, résultats de fin d\'année, examens et archive. Pas d\'accès à la comptabilité.',
@@ -71,7 +75,7 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         role: 'ADMIN',
         label: 'Administrateur',
         redirectPath: '/dashboard',
-        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring'],
+        allowedPrefixes: ['/dashboard', '/personnel', '/parametres', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/comptabilite', '/monitoring', '/profil', '/vie-scolaire'],
         tier: 'full-admin',
         hasSystemAccess: true,
         description: 'Administration complète du système et orchestration des services.',

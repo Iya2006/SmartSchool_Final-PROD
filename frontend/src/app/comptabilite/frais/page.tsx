@@ -6,8 +6,8 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import {
     PlusCircle, Trash2, Edit2, CheckCircle2, AlertTriangle, XCircle,
-    Search, RefreshCw, FileText, Banknote, Users, Calendar,
-    ChevronDown, ChevronRight, CreditCard, Smartphone, X, Coins, Lightbulb
+    Search, RefreshCw, FileText, Users, Calendar,
+    ChevronDown, ChevronRight, Banknote, CreditCard, Smartphone, X, Coins, Lightbulb, Loader2
 } from 'lucide-react';
 import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
 import { useApp } from '@/context/AppContext';
@@ -91,10 +91,18 @@ function FraisScolaritePage() {
 
     // UI State
     const [searchFacture, setSearchFacture] = useState('');
+    const [searchPaiement, setSearchPaiement] = useState('');
+    const [expandedEleveRecus, setExpandedEleveRecus] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState('Scolarité');
     const [filterStatut, setFilterStatut] = useState('');
+    const [filterClasse, setFilterClasse] = useState('');
     const [facturesPage, setFacturesPage] = useState(1);
-    const FACTURES_PAGE_SIZE = 25;
+    const FACTURES_PAGE_SIZE = 50;
+
+    const [echeancesPage, setEcheancesPage] = useState(1);
+    const [echeancesClasseFilter, setEcheancesClasseFilter] = useState('');
+    const [echeancesStatutFilter, setEcheancesStatutFilter] = useState('');
+    const ECHEANCES_PAGE_SIZE = 25;
 
     // Modals
     const [showTypeFraisModal, setShowTypeFraisModal] = useState(false);
@@ -543,7 +551,7 @@ function FraisScolaritePage() {
     if (!categories.includes('Inscription')) categories.push('Inscription');
 
     // Filtered factures
-    useEffect(() => { setFacturesPage(1); }, [searchFacture, filterStatut, activeTab]);
+    useEffect(() => { setFacturesPage(1); }, [searchFacture, filterStatut, filterClasse, activeTab]);
 
     const filteredFactures = factures.filter(f => {
         const tf = typesFrais.find(t => t.type_frais_id === f.type_frais_id);
@@ -551,6 +559,7 @@ function FraisScolaritePage() {
         if (cat !== activeTab) return false;
         
         if (filterStatut && f.statut !== filterStatut) return false;
+        if (filterClasse && String(f.classe_id) !== filterClasse) return false;
         if (searchFacture) {
             const q = searchFacture.toLowerCase();
             if (!f.eleve_nom.toLowerCase().includes(q) &&
@@ -558,6 +567,15 @@ function FraisScolaritePage() {
                 !f.numero_facture.toLowerCase().includes(q) &&
                 !f.classe_nom.toLowerCase().includes(q)) return false;
         }
+        return true;
+    });
+
+    useEffect(() => { setEcheancesPage(1); }, [echeancesClasseFilter, echeancesStatutFilter]);
+
+    const filteredFacturesEcheances = factures.filter(f => {
+        if (!f.echeances || f.echeances.length === 0) return false;
+        if (echeancesStatutFilter && f.statut !== echeancesStatutFilter) return false;
+        if (echeancesClasseFilter && String(f.classe_id) !== echeancesClasseFilter) return false;
         return true;
     });
 
@@ -918,11 +936,17 @@ function FraisScolaritePage() {
                     </div>
 
                     {/* Filters */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '12px', marginBottom: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '12px', marginBottom: '20px' }}>
                         <div style={{ position: 'relative' }}>
                             <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                             <input value={searchFacture} onChange={e => setSearchFacture(e.target.value)} placeholder="Rechercher par nom, numéro, classe..." style={{ width: '100%', padding: '10px 12px 10px 36px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
                         </div>
+                        <select value={filterClasse} onChange={e => setFilterClasse(e.target.value)} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', backgroundColor: 'white', cursor: 'pointer' }}>
+                            <option value="">Toutes les classes</option>
+                            {classes.map(c => (
+                                <option key={c.classe_id} value={c.classe_id}>{c.libelle || c.nom || c.classe}</option>
+                            ))}
+                        </select>
                         <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', backgroundColor: 'white', cursor: 'pointer' }}>
                             <option value="">Tous les statuts</option>
                             <option value="EN_ATTENTE">En attente</option>
@@ -978,50 +1002,81 @@ function FraisScolaritePage() {
                     <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', color: '#0f172a' }}>Suivi des Échéanciers</h3>
                     <p style={{ margin: '0 0 20px 0', color: '#64748b', fontSize: '13px' }}>Vue d'ensemble des paiements fractionnés et de leurs échéances</p>
 
+                    <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
+                        <select value={echeancesClasseFilter} onChange={e => setEcheancesClasseFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', backgroundColor: 'white', cursor: 'pointer', flex: 1 }}>
+                            <option value="">Toutes les classes</option>
+                            {classes.map(c => (
+                                <option key={c.classe_id} value={c.classe_id}>{c.libelle || c.nom || c.classe}</option>
+                            ))}
+                        </select>
+                        <select value={echeancesStatutFilter} onChange={e => setEcheancesStatutFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', backgroundColor: 'white', cursor: 'pointer', flex: 1 }}>
+                            <option value="">Tous les statuts de facture</option>
+                            <option value="EN_ATTENTE">En attente</option>
+                            <option value="PARTIELLEMENT_PAYEE">Partiellement payées</option>
+                            <option value="PAYEE">Payées</option>
+                            <option value="EN_RETARD">En retard</option>
+                        </select>
+                    </div>
+
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        {factures.filter(f => f.echeances && f.echeances.length > 0).map(f => (
-                            <div key={f.facture_id} style={{ border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                                        <span style={{ fontWeight: '700', color: '#3b82f6', fontSize: '14px' }}>{f.numero_facture}</span>
-                                        <span style={{ color: '#0f172a', fontWeight: '600' }}>{f.eleve_prenom} {f.eleve_nom}</span>
-                                        <span style={{ color: '#64748b', fontSize: '13px' }}>{f.classe_nom}</span>
-                                    </div>
-                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                                        <span style={{ fontWeight: '600', color: '#0f172a' }}>{fmtMoney(f.montant_total)}</span>
-                                        <Badge statut={f.statut} />
-                                        {f.statut !== 'PAYEE' && (
-                                            <button onClick={() => openPaiement(f)} style={{ padding: '5px 12px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
-                                                Payer
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                                <div style={{ padding: '0 16px' }}>
-                                    {f.echeances.map((e, i) => (
-                                        <div key={e.echeance_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < f.echeances.length - 1 ? '1px solid #f1f5f9' : 'none' }}>
-                                            <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                                                <Calendar size={14} color="#94a3b8" />
-                                                <span style={{ fontSize: '13px', color: '#475569' }}>{e.libelle}</span>
-                                                <span style={{ fontSize: '12px', color: '#94a3b8' }}>Échéance : {new Date(e.date_limite).toLocaleDateString('fr-FR')}</span>
-                                            </div>
-                                            <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                                                <span style={{ fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>{fmtMoney(e.montant_attendu)}</span>
-                                                <span style={{ fontSize: '12px', color: '#10b981' }}>Payé: {fmtMoney(e.montant_paye)}</span>
-                                                <Badge statut={e.statut} />
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
+                        {loading ? (
+                            <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>
+                                <Loader2 className="animate-spin" size={40} style={{ margin: '0 auto 12px auto' }} />
+                                <p style={{ fontWeight: '600' }}>Chargement en cours...</p>
                             </div>
-                        ))}
-                        {factures.filter(f => f.echeances && f.echeances.length > 0).length === 0 && (
+                        ) : filteredFacturesEcheances.length === 0 ? (
                             <div style={{ textAlign: 'center', padding: '60px', color: '#94a3b8' }}>
                                 <Calendar size={40} style={{ margin: '0 auto 12px auto' }} />
-                                <p style={{ fontWeight: '600' }}>Aucun échéancier créé</p>
+                                <p style={{ fontWeight: '600' }}>Aucun échéancier trouvé</p>
                                 <p style={{ fontSize: '13px' }}>Les factures générées avec fractionnement apparaîtront ici.</p>
                             </div>
+                        ) : (
+                            filteredFacturesEcheances.slice((echeancesPage - 1) * ECHEANCES_PAGE_SIZE, echeancesPage * ECHEANCES_PAGE_SIZE).map(f => (
+                                <div key={f.facture_id} style={{ border: '1px solid #e2e8f0', borderRadius: '10px', overflow: 'hidden' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                            <span style={{ fontWeight: '700', color: '#3b82f6', fontSize: '14px' }}>{f.numero_facture}</span>
+                                            <span style={{ color: '#0f172a', fontWeight: '600' }}>{f.eleve_prenom} {f.eleve_nom}</span>
+                                            <span style={{ color: '#64748b', fontSize: '13px' }}>{f.classe_nom}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                            <span style={{ fontWeight: '600', color: '#0f172a' }}>{fmtMoney(f.montant_total)}</span>
+                                            <Badge statut={f.statut} />
+                                            {f.statut !== 'PAYEE' && (
+                                                <button onClick={() => openPaiement(f)} style={{ padding: '5px 12px', background: '#10b981', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                                                    Payer
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div style={{ padding: '0 16px' }}>
+                                        {(() => {
+                                            let montantRestantDistribuer = f.montant_paye || 0;
+                                            return [...(f.echeances || [])].sort((a, b) => new Date(a.date_limite).getTime() - new Date(b.date_limite).getTime()).map((e, i) => {
+                                                const payeIci = Math.min(e.montant_attendu, montantRestantDistribuer);
+                                                montantRestantDistribuer -= payeIci;
+                                                const statutCalc = payeIci >= e.montant_attendu ? 'PAYEE' : (payeIci > 0 ? 'PARTIELLEMENT_PAYEE' : 'EN_ATTENTE');
+                                                return (
+                                                    <div key={e.echeance_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < f.echeances.length - 1 ? '1px solid #f1f5f9' : 'none' }}>
+                                                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                                                            <Calendar size={14} color="#94a3b8" />
+                                                            <span style={{ fontSize: '13px', color: '#475569' }}>{e.libelle}</span>
+                                                            <span style={{ fontSize: '12px', color: '#94a3b8' }}>Échéance : {new Date(e.date_limite).toLocaleDateString('fr-FR')}</span>
+                                                        </div>
+                                                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                                                            <span style={{ fontSize: '13px', fontWeight: '600', color: '#0f172a' }}>{fmtMoney(e.montant_attendu)}</span>
+                                                            <span style={{ fontSize: '12px', color: '#10b981' }}>Payé: {fmtMoney(payeIci)}</span>
+                                                            <Badge statut={statutCalc} />
+                                                        </div>
+                                                    </div>
+                                                );
+                                            });
+                                        })()}
+                                    </div>
+                                </div>
+                            ))
                         )}
+                        <Pagination page={echeancesPage} pageSize={ECHEANCES_PAGE_SIZE} total={filteredFacturesEcheances.length} onPageChange={setEcheancesPage} />
                     </div>
                 </div>
             )}
@@ -1030,45 +1085,133 @@ function FraisScolaritePage() {
             {tabParam === 'paiements' && (
                 <div style={{ backgroundColor: 'white', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
                     <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', color: '#0f172a' }}>Suivi des Encaissements</h3>
-                    <p style={{ margin: '0 0 20px 0', color: '#64748b', fontSize: '13px' }}>Historique de tous les paiements enregistrés</p>
+                    <p style={{ margin: '0 0 16px 0', color: '#64748b', fontSize: '13px' }}>Historique de tous les paiements — groupés par élève, cliquez pour voir l'historique complet</p>
 
-                    <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
-                            <thead>
-                                <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                                    {['N° Reçu', 'Date', 'Élève', 'N° Facture', 'Montant', 'Mode', 'Statut'].map(h => (
-                                        <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '600', color: '#475569', fontSize: '12px', textTransform: 'uppercase' }}>{h}</th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {paiements.map(p => (
-                                    <tr key={p.paiement_id} style={{ borderBottom: '1px solid #f1f5f9' }} onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f8fafc')} onMouseLeave={e => (e.currentTarget.style.backgroundColor = '')}>
-                                        <td style={{ padding: '10px 12px', fontWeight: '700', color: '#10b981' }}>{p.numero_recu}</td>
-                                        <td style={{ padding: '10px 12px', color: '#475569' }}>{new Date(p.date_paiement).toLocaleDateString('fr-FR')}</td>
-                                        <td style={{ padding: '10px 12px', fontWeight: '500', color: '#0f172a' }}>{p.eleve_prenom} {p.eleve_nom}</td>
-                                        <td style={{ padding: '10px 12px', color: '#3b82f6' }}>{p.numero_facture}</td>
-                                        <td style={{ padding: '10px 12px', fontWeight: '700', color: '#0f172a' }}>{fmtMoney(p.montant)}</td>
-                                        <td style={{ padding: '10px 12px' }}>
-                                            <span style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '12px', backgroundColor: '#f1f5f9', color: '#475569' }}>
-                                                {modePaiementLabel(p.mode_paiement)}
-                                            </span>
-                                        </td>
-                                        <td style={{ padding: '10px 12px' }}>
-                                            {p.statut === 'ANNULE' ? (
-                                                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', backgroundColor: '#fee2e2', color: '#dc2626' }}>Annulé</span>
-                                            ) : (
-                                                <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', backgroundColor: '#d1fae5', color: '#059669' }}>✓ Validé</span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                        {paiements.length === 0 && (
-                            <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Aucun encaissement enregistré</div>
-                        )}
+                    {/* Barre de recherche */}
+                    <div style={{ position: 'relative', maxWidth: '400px', marginBottom: '20px' }}>
+                        <Search size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                        <input
+                            placeholder="Rechercher par élève, N° reçu..."
+                            value={searchPaiement}
+                            onChange={e => setSearchPaiement(e.target.value)}
+                            style={{ width: '100%', padding: '10px 10px 10px 36px', borderRadius: 10, border: '1px solid #e2e8f0', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
+                        />
                     </div>
+
+                    {/* Tableau groupé */}
+                    {(() => {
+                        const q = searchPaiement.toLowerCase();
+                        const filtered = paiements.filter(p =>
+                            !q ||
+                            `${p.eleve_prenom} ${p.eleve_nom}`.toLowerCase().includes(q) ||
+                            p.numero_recu?.toLowerCase().includes(q) ||
+                            p.numero_facture?.toLowerCase().includes(q)
+                        );
+
+                        const groups = new Map<string, { eleve: string; latest: Paiement; historique: Paiement[] }>();
+                        filtered.forEach(p => {
+                            const key = `${p.eleve_prenom} ${p.eleve_nom}`.trim();
+                            if (!groups.has(key)) {
+                                groups.set(key, { eleve: key, latest: p, historique: [p] });
+                            } else {
+                                const g = groups.get(key)!;
+                                g.historique.push(p);
+                                if (new Date(p.date_paiement) > new Date(g.latest.date_paiement)) g.latest = p;
+                            }
+                        });
+                        const groupList = Array.from(groups.values());
+                        groupList.forEach(g => g.historique.sort((a, b) => new Date(b.date_paiement).getTime() - new Date(a.date_paiement).getTime()));
+
+                        return (
+                            <div style={{ overflowX: 'auto' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+                                    <thead>
+                                        <tr style={{ backgroundColor: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                                            {['', 'N° Reçu', 'Date', 'Élève', 'N° Facture', 'Montant', 'Mode', 'Statut'].map(h => (
+                                                <th key={h} style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '600', color: '#475569', fontSize: '12px', textTransform: 'uppercase' }}>{h}</th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {groupList.map(group => {
+                                            const isExpanded = expandedEleveRecus === group.eleve;
+                                            const hasMultiple = group.historique.length > 1;
+                                            const p = group.latest;
+                                            return (
+                                                <React.Fragment key={group.eleve}>
+                                                    {/* Ligne principale (dernier paiement) */}
+                                                    <tr
+                                                        onClick={() => hasMultiple && setExpandedEleveRecus(isExpanded ? null : group.eleve)}
+                                                        style={{ borderBottom: '1px solid #f1f5f9', cursor: hasMultiple ? 'pointer' : 'default', transition: 'background 0.15s' }}
+                                                        onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f8fafc')}
+                                                        onMouseLeave={e => (e.currentTarget.style.backgroundColor = '')}>
+                                                        <td style={{ padding: '10px 12px', width: 32 }}>
+                                                            {hasMultiple
+                                                                ? (isExpanded ? <ChevronDown size={15} color="#94a3b8" /> : <ChevronRight size={15} color="#94a3b8" />)
+                                                                : <div style={{ width: 15 }} />}
+                                                        </td>
+                                                        <td style={{ padding: '10px 12px', fontWeight: '700', color: '#10b981' }}>
+                                                            {p.numero_recu}
+                                                            {hasMultiple && (
+                                                                <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 99, background: '#e0e7ff', color: '#3730a3' }}>
+                                                                    {group.historique.length} reçus
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                        <td style={{ padding: '10px 12px', color: '#475569' }}>{new Date(p.date_paiement).toLocaleDateString('fr-FR')}</td>
+                                                        <td style={{ padding: '10px 12px', fontWeight: '600', color: '#0f172a' }}>{group.eleve}</td>
+                                                        <td style={{ padding: '10px 12px', color: '#3b82f6' }}>{p.numero_facture}</td>
+                                                        <td style={{ padding: '10px 12px', fontWeight: '700', color: '#0f172a' }}>{fmtMoney(p.montant)}</td>
+                                                        <td style={{ padding: '10px 12px' }}>
+                                                            <span style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '12px', backgroundColor: '#f1f5f9', color: '#475569' }}>
+                                                                {modePaiementLabel(p.mode_paiement)}
+                                                            </span>
+                                                        </td>
+                                                        <td style={{ padding: '10px 12px' }}>
+                                                            {p.statut === 'ANNULE'
+                                                                ? <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', backgroundColor: '#fee2e2', color: '#dc2626' }}>Annulé</span>
+                                                                : <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', backgroundColor: '#d1fae5', color: '#059669' }}>✓ Validé</span>}
+                                                        </td>
+                                                    </tr>
+                                                    {/* Historique déplié */}
+                                                    {isExpanded && hasMultiple && (
+                                                        <tr style={{ background: '#f8fafc' }}>
+                                                            <td colSpan={8} style={{ padding: '0 16px 16px 16px', borderBottom: '1px solid #e2e8f0' }}>
+                                                                <div style={{ background: 'white', borderRadius: 10, padding: 14, border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                                                                    <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>Tous les paiements de {group.eleve} ({group.historique.length})</p>
+                                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                                                        <tbody>
+                                                                            {group.historique.map(hp => (
+                                                                                <tr key={hp.paiement_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                                    <td style={{ padding: '7px 8px', fontWeight: 600, color: '#10b981' }}>{hp.numero_recu}</td>
+                                                                                    <td style={{ padding: '7px 8px', color: '#64748b' }}>{new Date(hp.date_paiement).toLocaleDateString('fr-FR')}</td>
+                                                                                    <td style={{ padding: '7px 8px', color: '#3b82f6' }}>{hp.numero_facture}</td>
+                                                                                    <td style={{ padding: '7px 8px', fontWeight: 700 }}>{fmtMoney(hp.montant)}</td>
+                                                                                    <td style={{ padding: '7px 8px', color: '#64748b' }}>{modePaiementLabel(hp.mode_paiement)}</td>
+                                                                                    <td style={{ padding: '7px 8px' }}>
+                                                                                        {hp.statut === 'ANNULE'
+                                                                                            ? <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 11, fontWeight: 600, backgroundColor: '#fee2e2', color: '#dc2626' }}>Annulé</span>
+                                                                                            : <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 11, fontWeight: 600, backgroundColor: '#d1fae5', color: '#059669' }}>✓ Validé</span>}
+                                                                                    </td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                </React.Fragment>
+                                            );
+                                        })}
+                                        {groupList.length === 0 && (
+                                            <tr><td colSpan={8} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Aucun encaissement enregistré</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        );
+                    })()}
                 </div>
             )}
 

@@ -545,7 +545,8 @@ export default function ProfilEnseignant() {
                                         l&apos;enseignant ; écrire <strong>0</strong> signifie que ces heures ne
                                         sont pas rémunérées.
                                     </p>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '760px' }}>
                                         <thead>
                                             <tr>
                                                 {['Classe', 'Matière', 'H / sem', 'Tarif horaire', 'Par mois', 'Horaire', ''].map((h, i, t) => (
@@ -615,7 +616,9 @@ export default function ProfilEnseignant() {
                                             })}
                                         </tbody>
                                     </table>
+                                    </div>
                                 </>
+
                             )}
                         </div>
                     </motion.div>
@@ -635,7 +638,8 @@ export default function ProfilEnseignant() {
                                     <p style={{ fontWeight: 600 }}>Emploi du temps non encore généré</p>
                                 </div>
                             ) : (
-                                <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                                <div className="table-scroll">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: '760px' }}>
                                     <thead>
                                         <tr>
                                             <th style={{ width: '65px', padding: '8px', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'left', borderBottom: '2px solid var(--border-light)' }}>
@@ -703,6 +707,7 @@ export default function ProfilEnseignant() {
                                         })}
                                     </tbody>
                                 </table>
+                                </div>
                             )}
                         </div>
                     </motion.div>

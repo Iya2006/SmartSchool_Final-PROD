@@ -154,7 +154,7 @@ export default function ModifierEnseignant() {
                             </div>
                         )}
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                        <div className="form-grid-2" style={{ gap: '24px' }}>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                 <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Nom de famille *</label>
@@ -292,7 +292,7 @@ export default function ModifierEnseignant() {
                     </div>
 
                     <div style={{ padding: '32px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                        <div className="form-grid-2" style={{ gap: '24px' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                 <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Salaire Mensuel de Base (GNF)</label>
                                 <input type="number" name="salaire_base" value={formData.salaire_base} onChange={handleChange} placeholder="0" style={{ padding: '12px 16px', borderRadius: '8px', border: '1px solid var(--border-focus)', outline: 'none', background: 'var(--bg-body)', fontSize: '14px' }} />

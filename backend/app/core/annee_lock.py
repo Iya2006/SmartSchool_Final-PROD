@@ -11,12 +11,72 @@ place dans app/core plutôt que dans un routeur métier comme finance.py, où il
 vivait initialement).
 """
 from typing import Optional
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.academique import AnneeScolaire
+from app.core.database import get_db
+from app.core.auth import require_etablissement
+from app.models.academique import AnneeScolaire, Trimestre
 
 ANNEE_VERROUILLEE = ("CLOTURE_COMPTABLE", "ARCHIVEE")
+
+
+def get_active_annee_id(db: Session, etablissement_id: int, fallback: int = 1) -> int:
+    """Année active DE CETTE ÉCOLE — jamais un `1` codé en dur (qui retombe
+    sur l'année 1 d'une AUTRE école dès que la sienne a un id différent,
+    cause des "0/0/0" observés en réel). À utiliser en valeur par défaut
+    partout où une route accepte `annee_id` en paramètre optionnel."""
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == etablissement_id, AnneeScolaire.est_courante == "O"
+    ).first()
+    if not annee:
+        annee = db.query(AnneeScolaire).filter(
+            AnneeScolaire.etablissement_id == etablissement_id
+        ).order_by(AnneeScolaire.annee_id.desc()).first()
+    return annee.annee_id if annee else fallback
+
+
+def get_active_trimestre_id(db: Session, etablissement_id: int, fallback: int = 1) -> int:
+    """Trimestre actif de l'année active DE CETTE ÉCOLE (même raison que
+    `get_active_annee_id` — `Trimestre` est OWNERSHIP, isolé via son
+    `annee_id`, voir docs/MULTI_ECOLES_REGLES_DEV.md §5)."""
+    annee_id = get_active_annee_id(db, etablissement_id, fallback=0)
+    if not annee_id:
+        return fallback
+    trimestre = db.query(Trimestre).filter(
+        Trimestre.annee_id == annee_id, Trimestre.statut == "EN_COURS"
+    ).first()
+    if not trimestre:
+        trimestre = db.query(Trimestre).filter(
+            Trimestre.annee_id == annee_id
+        ).order_by(Trimestre.numero.desc()).first()
+    return trimestre.trimestre_id if trimestre else fallback
+
+
+def resolve_annee_id(
+    annee_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+) -> int:
+    """Dépendance FastAPI — remplace tout `annee_id: int = 1` en paramètre de
+    route. `annee_id` fourni par le client est utilisé tel quel (la route
+    reste responsable de vérifier qu'il appartient bien à `etablissement_id`
+    si c'est un point sensible) ; sinon résolu vers l'année active de
+    l'école de l'appelant plutôt qu'un `1` arbitraire."""
+    if annee_id is not None:
+        return annee_id
+    return get_active_annee_id(db, etablissement_id)
+
+
+def resolve_trimestre_id(
+    trimestre_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+) -> int:
+    """Équivalent de `resolve_annee_id` pour `trimestre_id`."""
+    if trimestre_id is not None:
+        return trimestre_id
+    return get_active_trimestre_id(db, etablissement_id)
 
 
 def verifier_annee_modifiable(db: Session, annee_id: Optional[int]) -> None:

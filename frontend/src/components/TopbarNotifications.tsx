@@ -189,13 +189,17 @@ export default function TopbarNotifications() {
     const { messages, unreadCount, loading, markAllAsRead } = useNotifications(30000);
 
     useEffect(() => {
-        const handleClickOutside = (e: MouseEvent) => {
+        const handleClickOutside = (e: MouseEvent | TouchEvent) => {
             if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
                 setNotifOpen(false);
             }
         };
         document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
+        document.addEventListener('touchstart', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+            document.removeEventListener('touchstart', handleClickOutside);
+        };
     }, []);
 
     const handleToggle = () => {
@@ -272,8 +276,8 @@ export default function TopbarNotifications() {
                         style={{
                             position: 'absolute',
                             top: 'calc(100% + 12px)',
-                            right: '-26px',
-                            width: '420px',
+                            right: 0,
+                            width: 'min(420px, calc(100vw - 32px))',
                             background: 'rgba(255,255,255,0.96)',
                             borderRadius: '24px',
                             border: '1px solid rgba(226,232,240,0.95)',

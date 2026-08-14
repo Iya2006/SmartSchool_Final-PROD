@@ -1,6 +1,275 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active — Service Worker Offline-First (Serwist, remplace next-pwa) (09/08/2026)
+## Tâche active — Refonte mobile complète + identité visuelle SmartSchool (14/08/2026)
+Brief de 17 phases de l'utilisateur (captures d'écran à l'appui) :
+la version mobile de l'app était « éclatée au sol » — sidebar affichée
+à pleine largeur desktop, écrasée dans ~375px, aucun repli responsive.
+Demande : identité PWA/icônes, vrai logo, audit mobile complet par
+composants partagés (pas de rustines page par page), non-régression
+desktop obligatoire, rapport final structuré.
+
+3 agents Explore (lecture seule) avant tout code. Trouvé : 3 barres
+latérales indépendantes sans aucun traitement mobile ; `UIContext.tsx`
+avait déjà l'état `mobileSidebarOpen` mais jamais branché nulle part ;
+`portail-eleve/` avait déjà un vrai système responsive (modèle repris) ;
+37 fichiers avec `<table>` brut, `eleves/page.tsx` et
+`enseignants/page.tsx` sans aucun wrapper ; plusieurs pages comptabilité
+avec un vrai bug `overflow:hidden` tronquant des colonnes ;
+`TopbarNotifications.tsx` avec un panneau `right:-26px` hors écran.
+
+Fait, par paliers avec checkpoint `tsc`/`vitest` après chacun : nouveau
+symbole SmartSchool dessiné à la main (SVG, remplace l'icône générique
+`ShieldCheck`) + icônes PWA régénérées ; hook `useIsMobile` (première
+introduction de ce motif dans le projet) ; les 3 barres latérales
+converties en tiroir mobile (état déjà existant branché, pas de nouvel
+état) ; 37 fichiers à tableau audités un par un (défilement horizontal
+protégé + bugs `overflow:hidden` corrigés) ; `eleves/page.tsx` et
+`enseignants/page.tsx` transformés en vraie vue carte sur mobile ;
+bug réel de `TopbarNotifications` corrigé + `touchstart` ajouté sur les
+2 menus déroulants pour une fermeture fiable au doigt ; `.form-grid-2`
+retrofité sur les formulaires nouveau/modifier (élèves, enseignants,
+classes, personnel) ; zones de sécurité iOS/Android sur les 3 tiroirs.
+
+Vérifié : `tsc --noEmit` 0 erreur, `vitest run` 102/102, `npm run build`
+78 routes générées avec succès, non-régression desktop confirmée
+explicitement (valeurs `sidebarWidth` desktop inchangées). Rapport
+complet : `.ai/MOBILE_PWA_REFONTE_RAPPORT.md`. Rien touché côté backend/
+API/JWT/isolation multi-tenant. Périmètre non couvert documenté
+explicitement (vue carte limitée à 2 pages démo, `.modal-box` pas
+retrofitée partout) plutôt que caché.
+
+## Tâche précédente — Fusion Sams + « incidents » locaux périmés (13/08/2026)
+Après avoir fusionné `origin/main` (PR #5 du collaborateur Sams — paie
+enseignants, correctifs comptabilité) dans `IYA` (5 conflits résolus —
+dont un bug trouvé dans mon propre code, `Depends()` invalide sur un
+champ Pydantic —, 4 migrations exécutées, 2 échecs de test pré-existants
+chez Sams root-causés et signalés sans y toucher), l'utilisateur a
+montré une capture de la page `/administration/incidents` avec 14 groupes
+d'erreurs non résolues (« column X does not exist » — `ss_classe_matieres.
+note_sur`, `ss_types_frais.etablissement_id`, `ss_parents.etablissement_id`,
+`ss_sujets_examen.trimestre_id`, `ss_evaluations.session_id`,
+`ss_types_evaluation.etablissement_id`, etc.), plus un bloc de texte collé
+signalant des erreurs similaires **en production** (Vercel/Render/Supabase).
+
+**Distinction posée explicitement par l'utilisateur** : ne toucher qu'aux
+erreurs locales — la production est gérée par son collaborateur qui a les
+identifiants, à ne pas toucher.
+
+**Diagnostic** : ces 14 groupes d'incidents sont des entrées **historiques
+périmées**, pas des bugs actifs. `IncidentApplicatif.resolu` est un
+drapeau **manuel** (bouton « Réglé » → `PUT /api/incidents/marquer-resolu`,
+`backend/app/api/incidents.py`) — rien ne re-vérifie automatiquement si un
+bug enregistré autrefois existe encore. Vérifié à la fois par
+`sqlalchemy.inspect` ET par de vraies requêtes SQL directes
+(`SELECT colonne FROM table LIMIT 1`) sur la base locale réelle : les 8
+colonnes existent toutes déjà (migrations exécutées plus tôt cette
+session, notamment lors des travaux notation/multi-écoles/paie). Les 14
+groupes (168 occurrences) ont été marqués résolus via le même mécanisme
+que le bouton « Réglé » — aucune donnée supprimée, juste le drapeau.
+
+**Non touché, sur instruction explicite** : tout ce qui concerne la
+production (Vercel/Render/Supabase) — le collaborateur de l'utilisateur
+s'en charge avec ses propres identifiants. Aucune tentative d'obtenir ou
+d'utiliser `DATABASE_URL` de production.
+
+## Tâche précédente — Refonte commerciale de la page de connexion + PWA installable (13/08/2026)
+Demande de l'utilisateur : transformer `/login` (fonctionnelle mais
+technique, pas "vitrine") en page commerciale premium, plus rendre le PWA
+réellement installable (manifest jamais lié, icônes fausses). Périmètre
+explicitement limité au front (aucune touche backend/JWT/rôles/routes).
+
+Audit (2 agents Explore) avant tout code : `/login` avait déjà une
+structure deux-zones (hero + formulaire) mais un seul breakpoint fragile
+(media query sur le contenu littéral d'un attribut `style`) ; le manifest
+existait mais n'était lié nulle part (`app is probably not installable at
+all`) ; ses icônes pointaient vers `guinea_coat_of_arms.png` (emblème
+national, en réalité un JPEG mal étiqueté `.png`) ; aucun logo statique
+"SmartSchool" n'existe (chaque école a le sien, repli `ShieldCheck`) ;
+aucune fonctionnalité "mot de passe oublié" n'existe (front ou back).
+2 décisions posées à l'utilisateur avant le plan (AskUserQuestion) :
+garder le repli `ShieldCheck` affiné (pas de nouvel asset), lien "mot de
+passe oublié" → message informatif (pas d'appel serveur). Plan Mode
+approuvé avant tout code.
+
+Fait : contenu commercial imposé (titre/sous-titre/signature/3 bénéfices)
+remplace l'ancien ton technique ; vrai système responsive mobile-first
+(`login.module.css`, 5 paliers, `100dvh`, safe-area iOS, cibles tactiles
+≥44px, `:focus-visible`) remplace le hack ; manifest enfin lié
+(`metadata.manifest` + `viewport.themeColor`, ce dernier déplacé hors de
+`Metadata` — déprécié sur Next 16) ; icônes réellement générées (script
+`generate-icons.mjs` + `sharp`, déjà présent en dépendance transitive —
+aucune install) à partir du path SVG exact de `ShieldCheck` (licence ISC,
+déjà utilisée dans l'app) pour rester visuellement identique ; variante
+maskable dédiée ; `icon.png`/`apple-icon.png` (convention Next) remplacent
+le favicon générique du template ; `start_url` `/dashboard` → `/login` ;
+hook `useInstallPrompt` (vrai `beforeinstallprompt`, jamais simulé) +
+bouton conditionnel. Alignement léger sur `/login/ecole` (pas de refonte
+marketing, redondant juste après l'écran précédent).
+
+Vérifié : `tsc --noEmit` propre, vitest 102/102, `next build --webpack`
+réussi (confirme la génération Serwist + les nouvelles routes
+icon.png/apple-icon.png), eslint 0 erreur, HTML généré inspecté
+directement (`rel=manifest`, icon, apple-touch-icon, theme-color tous
+présents). Rendu visuel réel non vérifié (aucun outil d'automatisation
+navigateur disponible). Détail complet dans
+`.ai/LOGIN_PWA_REFONTE_RAPPORT.md`.
+
+## Tâche précédente — Fluidité à grande échelle + Galerie paginée + Profil admin réel (12/08/2026)
+Voir `.ai/SCALABILITE_GALERIE_PROFIL_RAPPORT.md` pour le détail complet.
+Résumé : après la fusion du travail du collaborateur, l'utilisateur a
+demandé (1) une analyse + corrections de fluidité pour supporter jusqu'à
+1M élèves/école sans toucher au backend du collaborateur, (2) un correctif
+pour la page Galerie qui plantait à 5000 élèves (chargeait tout d'un
+coup), (3) une refonte de la page Profil admin, en grande partie factice
+(sauvegarde en `localStorage` seulement, changement de mot de passe faux,
+pas de vrai upload photo).
+
+Fait : 12 nouveaux index de performance (nouveau fichier de migration,
+même motif que celui du collaborateur, non modifié) ; pagination ajoutée
+partout où elle manquait réellement (personnel, classes, enseignants,
+galerie) avec correction au passage des cartes de statistiques qui
+auraient sinon silencieusement cessé de représenter toute l'école ; 4
+vrais bugs N+1 corrigés (règle déjà documentée dans
+`.ai/PROJECT_MEMORY.md`) ; galerie repensée en 50 photos par page (vérifié
+contre les vraies données à 5000 élèves — le scénario exact du
+signalement) ; page Profil entièrement reconnectée à des données réelles
+(fiche personnel, changement de mot de passe avec vérification de
+l'ancien, vrai upload de photo) et ses 3 onglets 100% factices (Annonces,
+Préférences Système, Journal d'Audit) retirés sur décision explicite de
+l'utilisateur.
+
+État vérifié : suite backend 667 passed/0 échec, `tsc` propre, 102/102
+frontend, migration exécutée sur la base locale (schéma confirmé aligné).
+Rendu visuel réel non vérifié (aucun outil d'automatisation navigateur
+disponible cette session).
+
+**Suite directe (même jour) — 3 correctifs suite à un test utilisateur
+réel** : l'utilisateur a testé le mécanisme de photo (parent envoie la
+photo de son enfant → admin valide) et signalé un avertissement React
+"key" sur la Galerie + "rien ne se passe" côté parent et côté admin. Voir
+l'addendum complet dans `.ai/SCALABILITE_GALERIE_PROFIL_RAPPORT.md`.
+Résumé : (1) avertissement "key" = condition de course au changement
+d'onglet, corrigée ; (2) "rien ne se passe" côté admin = régression que
+j'avais moi-même introduite au tour précédent (`/pending/ids` avait perdu
+`file_path`), corrigée ; (3) upload parent qui échoue = **bug préexistant,
+pas une régression de cette session** — `POST /api/portail-parent/login`
+(la vraie route du frontend parent) n'incluait jamais `etablissement_id`
+dans le token, faisant échouer en 403 tout appel protégé par
+`require_etablissement`, dont l'upload de photo. Corrigé, nouveau test de
+régression ajouté (aucune couverture n'existait avant pour cette route).
+Suite finale : 676 passed/2 skipped (1 erreur Docker/Redis non liée),
+`tsc` propre, 102/102 frontend.
+
+**Suite directe (13/08/2026) — 3 nouveaux bugs suite à un second test
+utilisateur réel** : le problème persistait, plus un symptôme inédit —
+en modifiant la photo de son enfant, le statut "en attente" apparaissait
+à tort sur la fiche du PARENT, et inversement. Voir l'addendum complet
+dans `.ai/SCALABILITE_GALERIE_PROFIL_RAPPORT.md`. Résumé : (1) mélange
+parent/enfant = `pendingPhotos`/`photoUploading` (portail-parent)
+indexés par id numérique brut sans distinguer le type d'entité —
+`Parent.parent_id` et `Eleve.eleve_id` sont deux séquences indépendantes
+qui se recoupent facilement (ex. les deux valent 12 sans lien entre
+elles) ; corrigé en indexant par clé `"type:id"`. (2) "Rien ne se passe"
+après validation = cause racine enfin trouvée : `validate_photo`/
+`upload_photo` écrivaient sur un nom de fichier STABLE
+(`{type}_{id}.ext`) — en modifiant une photo déjà existante, la nouvelle
+image portait la même URL que l'ancienne, le navigateur affichait donc
+la version mise en cache (le fichier et la base étaient pourtant bien
+mis à jour) ; corrigé avec un suffixe unique, comme pour les fichiers en
+attente. (3) `_entite_appartient_a_etablissement` pour `parent` utilisait
+encore l'ancienne dérivation via EleveParent->Eleve (motif Lot 5) au lieu
+de la colonne directe `Parent.etablissement_id` (migration multi-écoles) ;
+corrigée. 3 nouveaux tests de régression. Suite finale : 678 passed/2
+skipped (0 échec), `tsc` propre, 102/102 frontend.
+
+## Tâche précédente — Fusion `origin/main` (PR du collaborateur) dans `IYA` (12/08/2026)
+Voir `.ai/FUSION_MAIN_DANS_IYA_RAPPORT.md` pour le détail complet. Résumé :
+l'utilisateur a accepté une PR de son collaborateur sur `main`
+(comptabilité, moteur de notation, inscription en ligne des
+établissements) et craignait qu'une fusion vers `IYA` n'écrase son propre
+travail sur les mêmes zones (comptabilité notamment). Diagnostic par
+simulation en lecture seule AVANT tout geste (`git merge-tree`) : seuls 3
+fichiers auraient réellement conflictué, `comptabilite.py` n'en faisait
+PAS partie (modifications disjointes). Travail non commité de la session
+mis en ordre (3 commits distincts), puis fusion réelle (4 conflits
+résolus en combinant les deux côtés, jamais en écrasant), puis un bug
+latent de rate limiting trouvé et corrigé (slowapi ne désactivait jamais
+vraiment le rate limiting en test, invisible jusqu'ici). Suite finale :
+667 passed/0 échec, `tsc` propre, 102/102 frontend. Point produit encore
+ouvert, signalé mais pas tranché : deux écrans admin concurrents pour
+configurer les horaires d'établissement (notre grille horaire vs.
+`parametres/horaires` du collaborateur). Fusion locale uniquement, pas
+encore poussée vers `origin/IYA`.
+
+**Suite directe (même jour)** : décision utilisateur sur le point ouvert
+ci-dessus — garder uniquement le système d'horaires du collaborateur
+(`parametres/horaires`), retirer la grille horaire configurable de cette
+session (Addendum 4 de `.ai/IYA0_RAPPORT.md`, voir Addendum 6). Les 4
+fichiers concernés restaurés à leur état d'avant ce chantier (aucun risque,
+`origin/main` ne les avait pas touchés). Suite backend 667 passed/0 échec,
+`tsc` propre, 102/102 frontend, toujours vrais après ce retrait.
+
+**Suite directe (même jour)** : l'utilisateur a signalé des erreurs
+réelles en testant (traceback backend collé dans la conversation). Cause
+trouvée : 13 migrations de la fusion `origin/main` n'avaient jamais été
+exécutées sur la base locale (fusionner du code ne migre pas la base).
+Toutes exécutées avec succès (2 nécessitaient une décision d'établissement
+— une seule école réelle ici, sans ambiguïté ; 1 bloquée par des emails
+vides au lieu de NULL sur 3 lignes, normalisés puis relancée). Vérifié
+au-delà : comparaison systématique de tous les modèles SQLAlchemy contre
+le schéma réel, aucun autre désalignement. Suite backend 667 passed/0
+échec reconfirmée. Détail complet dans
+`.ai/FUSION_MAIN_DANS_IYA_RAPPORT.md`.
+
+## Tâche précédente — Séances pédagogiques + grille horaire configurable (branche `IYA`, 12/08/2026)
+Voir `.ai/IYA0_RAPPORT.md` pour le détail complet (fichiers, migration,
+corrections, tests, verdict GO). Résumé : `Presence` (appel de classe)
+n'avait aucune notion de matière/enseignant/séance — un enseignant avec
+plusieurs matières sur la même classe ne pouvait faire qu'un appel par
+demi-journée, le second écrasant silencieusement le premier. Corrigé par un
+nouveau modèle `Seance` (OWNERSHIP via `Classe`) + 13 routes
+(`backend/app/api/seances.py`) + UI "Mes Séances" côté portail enseignant +
+page admin `/vie-scolaire/seances`. Aucun chemin d'écriture historique
+retiré (`enregistrer_appel`/`sync_presences`/`saisie_presences_batch`
+inchangés). Développé et documenté sous le nom `IYA0` (convention demandée
+par l'utilisateur, distincte de la numérotation `LOT{0..12}` du chantier
+multi-écoles de son collaborateur) sur la branche `IYA`, pas encore
+mergée dans `main`.
+
+**Suite directe (même jour, Addendum 4)** : grille horaire configurable —
+les créneaux d'emploi du temps étaient codés en dur (blocs fixes d'1h,
+pause déjeuner 12h-14h figée) ; l'administrateur peut désormais configurer
+librement la durée de chaque créneau (cours de 2h possibles) et la
+position/durée/libellé de chaque pause, via une nouvelle modale
+"Configurer les horaires" sur `/emploi-du-temps`. Stocké dans
+`ParametreEtablissement` (categorie=`EMPLOI_DU_TEMPS`, réutilise les routes
+`/api/parametrage/settings` existantes, aucune migration). 4 fichiers
+touchés (1 backend, 3 frontend) — détail dans le rapport.
+
+**Suite directe (même jour, Addendum 5)** : signalement utilisateur — taux
+"Présence observée" du dashboard admin à 89% alors que testé avec un seul
+enseignant sur une seule classe (école de 19 classes), jugé trompeur.
+Reproduit sur la base réelle : calcul correct (89% pour CES 2 classes),
+mais couverture jamais affichée. Corrigé : `nb_classes_couvertes`/
+`nb_seances_comptabilisees` ajoutés au KPI, légende de couverture
+permanente sous le pourcentage (alerte visuelle si <50% des classes
+actives), et le taux ne pèse plus seul sur le badge "état global"/les
+alertes tant que la couverture est insuffisante (`couvertureSuffisante()`,
+seuil 50%). 3 fichiers touchés (`dashboard.py`, `schemas.py`,
+`dashboard/page.tsx`).
+
+**État vérifié à date** : suite backend **508 passed, 10 skipped, 0
+échec** (Docker Python 3.12), frontend `tsc --noEmit` propre + **102/102**
+Vitest, plus des vérifications fonctionnelles directes contre la base
+réelle locale : grille horaire (défaut + config personnalisée avec cours
+de 2h, confirmé un seul bloc) ET couverture KPI présence (2/19 classes, 2
+séances — mêmes chiffres que le signalement). Reste ouvert : validation
+manuelle navigateur (aucun outil d'automatisation disponible cette
+session), Phase 2 explicitement différée pour les séances (support offline
+de l'appel, dashboard/stats, workflow `REPORTEE` complet — voir le
+rapport).
+
+## Tâche précédente — Service Worker Offline-First (Serwist, remplace next-pwa) (09/08/2026) — TERMINÉE, voir historique ci-dessous
 Nouvelle spécification détaillée fournie par l'utilisateur pour étendre
 l'offline-first à ~10 modules (classification de risque Niveau A/B/C :
 paiements/comptabilité/utilisateurs traités à part, jamais un blocage

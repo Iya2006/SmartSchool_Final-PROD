@@ -10,12 +10,14 @@ import {
     Shield, Loader2, Lock, Home, ArrowLeft, LogOut, ChevronDown, Send, Inbox,
     PieChart, Activity, TrendingDown, Mail, MailOpen, Settings, Key,
     Camera, Upload, ImageIcon, ChevronLeft, ShoppingBag, Download, CheckCircle2, XCircle, PenLine, AlertTriangle, Target,
-    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil
+    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil, Hourglass, Menu
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import ClassementEpreuves from '@/components/ClassementEpreuves';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface MsgItem {
     message_id: number; expediteur_type: string; expediteur_id: number|null;
@@ -106,7 +108,17 @@ export default function PortailParent() {
     const [showNotifDrop, setShowNotifDrop] = useState(false);
     const [showUserMenu, setShowUserMenu] = useState(false);
     const [showProfileDropdown, setShowProfileDropdown] = useState(false);
-    const [pendingPhotos, setPendingPhotos] = useState<Set<number>>(new Set());
+    // Tiroir mobile — aucun traitement responsive n'existait sur cette page
+    // avant ce chantier (contrairement a portail-eleve, qui a servi de motif
+    // de reference).
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const isMobile = useIsMobile();
+    // Clé "type:id" (ex. "eleve:12") — jamais un id nu : Parent.parent_id et
+    // Eleve.eleve_id sont deux séquences auto-incrémentées indépendantes qui
+    // se recoupent facilement (ex. parent_id=12 et un eleve_id=12 sans lien
+    // entre eux), ce qui mélangeait le statut "en attente" entre le parent
+    // et son enfant quand seul l'id nu servait de clé.
+    const [pendingPhotos, setPendingPhotos] = useState<Set<string>>(new Set());
     const [selectedMsg, setSelectedMsg] = useState<MsgItem|null>(null);
     const [newMsgSujet, setNewMsgSujet] = useState('');
     const [newMsgContenu, setNewMsgContenu] = useState('');
@@ -157,7 +169,7 @@ export default function PortailParent() {
 
     // Photos state
     const [photoSuccess, setPhotoSuccess] = useState<string | null>(null);
-    const [photoUploading, setPhotoUploading] = useState<number | null>(null);
+    const [photoUploading, setPhotoUploading] = useState<string | null>(null);
 
     // Refs for carousel scrolling
     const childCarouselRef = useRef<HTMLDivElement>(null);
@@ -167,6 +179,12 @@ export default function PortailParent() {
     const [expandedFactureId, setExpandedFactureId] = useState<number | null>(null);
     // Ref stable pour le parentId — évite les dépendances circulaires dans refreshDashboard
     const parentIdRef = useRef<number | null>(null);
+
+    // Ferme le tiroir mobile a chaque changement d'onglet — la navigation ici
+    // se fait via setActiveTab, pas via le routeur.
+    useEffect(() => {
+        setMobileMenuOpen(false);
+    }, [activeTab]);
 
     // Load timetable when tab changes to 'emploi' or child changes
     useEffect(() => {
@@ -264,17 +282,19 @@ export default function PortailParent() {
         setPendingPhotos(prev => {
             const next = new Set(prev);
             // Check parent photo
+            const parentKey = `parent:${data.parent.parent_id}`;
             if (data.parent.has_pending_photo) {
-                next.add(data.parent.parent_id);
-            } else if (data.parent.photo_url && next.has(data.parent.parent_id)) {
-                next.delete(data.parent.parent_id);
+                next.add(parentKey);
+            } else if (data.parent.photo_url && next.has(parentKey)) {
+                next.delete(parentKey);
             }
             // Check children photos
             for (const enf of data.enfants || []) {
+                const eleveKey = `eleve:${enf.eleve_id}`;
                 if (enf.has_pending_photo) {
-                    next.add(enf.eleve_id);
-                } else if (enf.photo_url && next.has(enf.eleve_id)) {
-                    next.delete(enf.eleve_id);
+                    next.add(eleveKey);
+                } else if (enf.photo_url && next.has(eleveKey)) {
+                    next.delete(eleveKey);
                 }
             }
             return next;
@@ -321,7 +341,7 @@ export default function PortailParent() {
     const downloadFacturePDF = async (e: React.MouseEvent, factureId: number, numero: string) => {
         e.stopPropagation();
         try {
-            const res = await api.get(`/api/finance/factures/${factureId}/pdf`, { responseType: 'blob' });
+            const res = await api.get(`/api/portail-parent/factures/${factureId}/pdf`, { responseType: 'blob' });
             const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
             const link = document.createElement('a');
             link.href = url;
@@ -329,7 +349,7 @@ export default function PortailParent() {
             link.click();
             URL.revokeObjectURL(url);
         } catch {
-            alert('Erreur lors du téléchargement de la facture');
+            toast.error('Erreur lors du téléchargement de la facture');
         }
     };
 
@@ -339,7 +359,9 @@ export default function PortailParent() {
     const downloadRecuPDF = async (e: React.MouseEvent, paiementId: number, numeroRecu: string) => {
         e.stopPropagation();
         try {
-            const res = await api.get(`/api/finance/paiements/${paiementId}/recu-pdf`, { responseType: 'blob' });
+            // L'endpoint /api/finance/paiements/{id}/recu-pdf est protégé par FINANCE_ROLES
+            // et inaccessible au token parent. On utilise l'endpoint dédié du portail parent.
+            const res = await api.get(`/api/portail-parent/paiements/${paiementId}/recu-pdf`, { responseType: 'blob' });
             const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
             const link = document.createElement('a');
             link.href = url;
@@ -347,7 +369,7 @@ export default function PortailParent() {
             link.click();
             URL.revokeObjectURL(url);
         } catch {
-            alert('Erreur lors du téléchargement du reçu');
+            toast.error('Erreur lors du téléchargement du reçu');
         }
     };
 
@@ -434,10 +456,22 @@ export default function PortailParent() {
     ];
 
     return (
-        <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: 'Inter, -apple-system, sans-serif', background: '#f8fafc' }}>
+        <div style={{ display: 'flex', height: '100dvh', overflow: 'hidden', fontFamily: 'Inter, -apple-system, sans-serif', background: '#f8fafc' }}>
 
-            {/* ══ SIDEBAR PARENT (Émeraude) ══ */}
-            <div style={{
+            {/* ══ SIDEBAR PARENT (Émeraude) — tiroir sous 768px, aucun
+                traitement responsive n'existait ici avant ce chantier ══ */}
+            <div style={isMobile ? {
+                width: 'min(240px, 84vw)', background: `linear-gradient(180deg, ${primaryColor} 0%, ${accentColor} 100%)`,
+                display: 'flex', flexDirection: 'column', flexShrink: 0,
+                position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 200,
+                transform: mobileMenuOpen ? 'translateX(0)' : 'translateX(-100%)',
+                transition: 'transform 0.3s ease',
+                boxShadow: mobileMenuOpen ? '10px 0 34px rgba(0,0,0,0.25)' : 'none',
+                paddingLeft: 'env(safe-area-inset-left)',
+                paddingTop: 'env(safe-area-inset-top)',
+                paddingBottom: 'env(safe-area-inset-bottom)',
+                boxSizing: 'border-box',
+            } : {
                 width: '240px', background: `linear-gradient(180deg, ${primaryColor} 0%, ${accentColor} 100%)`,
                 display: 'flex', flexDirection: 'column', flexShrink: 0,
                 boxShadow: '4px 0 24px rgba(0,0,0,0.2)',
@@ -484,7 +518,7 @@ export default function PortailParent() {
                         const badge = item.key === 'messages' && unreadCount > 0 ? unreadCount : null;
                         return (
                             <button key={item.key}
-                                onClick={() => setActiveTab(item.key)}
+                                onClick={() => { setActiveTab(item.key); setMobileMenuOpen(false); }}
                                 style={{
                                     width: '100%', display: 'flex', alignItems: 'center', gap: '12px',
                                     padding: '10px 14px', borderRadius: '10px', border: 'none', cursor: 'pointer',
@@ -517,10 +551,28 @@ export default function PortailParent() {
                 </div>
             </div>
 
+            {/* Overlay du tiroir mobile — clic pour fermer */}
+            {isMobile && mobileMenuOpen && (
+                <div
+                    onClick={() => setMobileMenuOpen(false)}
+                    aria-hidden="true"
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 190 }}
+                />
+            )}
+
             {/* ══ CONTENU PRINCIPAL ══ */}
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 {/* ── HEADER ── */}
-                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 32px', flexShrink: 0, position: 'relative' }}>
+                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: isMobile ? 'space-between' : 'flex-end', padding: isMobile ? '0 14px' : '0 32px', flexShrink: 0, position: 'relative' }}>
+                    {isMobile && (
+                        <button
+                            onClick={() => setMobileMenuOpen(o => !o)}
+                            aria-label="Ouvrir le menu de navigation"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#334155', padding: '6px' }}
+                        >
+                            <Menu size={22} />
+                        </button>
+                    )}
                     <div style={{ position: 'relative' }}>
                         <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
                             <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: primaryColor, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>
@@ -561,7 +613,7 @@ export default function PortailParent() {
                 </motion.div>
 
                 {/* KPI Cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '18px', marginBottom: '28px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '18px', marginBottom: '28px' }}>
                     {[
                         { label: 'Enfants Inscrits', value: String(data.nb_enfants), icon: <GraduationCap size={22} />, color: '#6366f1', bg: '#ede9fe' },
                         { label: 'Total Facturé', value: formatGNF(data.finance_resume.total_factures), icon: <FileText size={22} />, color: '#f59e0b', bg: '#fef3c7' },
@@ -627,7 +679,7 @@ export default function PortailParent() {
 
                 {/* ═══ MAIN CONTENT: TWO COLUMNS ═══ */}
                 {child && (
-                    <div style={{ display: 'grid', gridTemplateColumns: ['profil', 'parametres', 'evenements', 'activites'].includes(activeTab) ? '1fr' : '340px 1fr', gap: '24px', alignItems: 'start' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile || ['profil', 'parametres', 'evenements', 'activites'].includes(activeTab) ? '1fr' : '340px 1fr', gap: '24px', alignItems: 'start' }}>
 
                         {/* ─── LEFT: CHILD CARD ─── */}
                         {!['profil', 'parametres', 'evenements', 'activites'].includes(activeTab) && (
@@ -772,7 +824,8 @@ export default function PortailParent() {
                                                         <p style={{ fontSize: '12px', color: '#cbd5e1' }}>Les notes apparaîtront ici après les évaluations</p>
                                                     </div>
                                                 ) : (
-                                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                    <div className="table-scroll">
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '560px' }}>
                                                         <thead>
                                                             <tr>
                                                                 {['Matière', 'Évaluation', 'Note', 'Coef.', 'Date'].map(h => (
@@ -811,6 +864,7 @@ export default function PortailParent() {
                                                             ))}
                                                         </tbody>
                                                     </table>
+                                                    </div>
                                                 )}
                                             </div>
                                             {/* Classement par épreuve : le backend l'exposait
@@ -840,16 +894,16 @@ export default function PortailParent() {
                                             {/* Summary Cards */}
                                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
                                                 {[
-                                                    { label: 'Montant Total', value: formatGNF(totalFact), icon: 'FileText', color: '#6366f1', bg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)' },
-                                                    { label: 'Montant Payé', value: formatGNF(totalPaye), icon: 'CheckCircle2', color: primaryColor, bg: 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
-                                                    { label: 'Reste à Payer', value: formatGNF(totalRestant), icon: 'Hourglass', color: totalRestant > 0 ? '#ef4444' : '#10b981', bg: totalRestant > 0 ? 'linear-gradient(135deg, #fee2e2, #fecaca)' : 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
+                                                    { label: 'Montant Total', value: formatGNF(totalFact), icon: <FileText size={24} />, color: '#6366f1', bg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)' },
+                                                    { label: 'Montant Payé', value: formatGNF(totalPaye), icon: <CheckCircle2 size={24} />, color: primaryColor, bg: 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
+                                                    { label: 'Reste à Payer', value: formatGNF(totalRestant), icon: <Hourglass size={24} />, color: totalRestant > 0 ? '#ef4444' : '#10b981', bg: totalRestant > 0 ? 'linear-gradient(135deg, #fee2e2, #fecaca)' : 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
                                                 ].map((s, i) => (
                                                     <div key={i} style={{
                                                         background: s.bg, borderRadius: '16px', padding: '24px',
                                                         border: '1px solid rgba(0,0,0,0.04)', position: 'relative', overflow: 'hidden',
                                                     }}>
                                                         <div style={{ position: 'absolute', top: '-15px', right: '-15px', width: '60px', height: '60px', borderRadius: '50%', background: 'rgba(255,255,255,0.3)' }} />
-                                                        <span style={{ fontSize: '24px' }}>{s.icon}</span>
+                                                        <span style={{ color: s.color, display: 'block' }}>{s.icon}</span>
                                                         <p style={{ margin: '8px 0 0', fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{s.label}</p>
                                                         <p style={{ margin: '4px 0 0', fontSize: '22px', fontWeight: 800, color: s.color }}>{s.value}</p>
                                                     </div>
@@ -940,11 +994,32 @@ export default function PortailParent() {
                                                                         </div>
 
                                                                         {/* Expanded Echeances */}
-                                                                        {isExpanded && f.echeances && (
+                                                                        {isExpanded && f.echeances && (() => {
+                                                                            // Cascade logic: distribute montant_paye from the facture
+                                                                            // across echeances sorted by date_limite chronologically.
+                                                                            // This corrects visual status when the backend hasn't propagated
+                                                                            // payments down to individual tranche records yet.
+                                                                            const sorted = [...f.echeances].sort((a, b) => {
+                                                                                const da = a.date_limite ? new Date(a.date_limite).getTime() : 0;
+                                                                                const db = b.date_limite ? new Date(b.date_limite).getTime() : 0;
+                                                                                return da - db;
+                                                                            });
+                                                                            let remaining = f.montant_paye;
+                                                                            const cascaded = sorted.map(ech => {
+                                                                                const echPaye = Math.min(remaining, ech.montant_attendu);
+                                                                                remaining = Math.max(0, remaining - ech.montant_attendu);
+                                                                                const statut = echPaye >= ech.montant_attendu ? 'PAYEE' : echPaye > 0 ? 'PARTIELLEMENT_PAYEE' : 'EN_ATTENTE';
+                                                                                return { ...ech, montant_paye: echPaye, statut };
+                                                                            });
+                                                                            // Re-sort back to original order for display
+                                                                            const displayEcheances = f.echeances.map(orig =>
+                                                                                cascaded.find(c => c.echeance_id === orig.echeance_id) || orig
+                                                                            );
+                                                                            return (
                                                                             <div style={{ background: '#f8fafc', padding: '0 20px 16px 20px', borderBottom: '1px solid #e2e8f0' }}>
                                                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '8px' }}>
                                                                                     <p style={{ margin: '0 0 4px', fontSize: '12px', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Détail des tranches</p>
-                                                                                    {f.echeances.map((ech, j) => {
+                                                                                    {displayEcheances.map((ech, j) => {
                                                                                         const echPct = ech.montant_attendu > 0 ? Math.round(ech.montant_paye / ech.montant_attendu * 100) : 0;
                                                                                         return (
                                                                                             <div key={j} style={{
@@ -980,7 +1055,8 @@ export default function PortailParent() {
                                                                                     })}
                                                                                 </div>
                                                                             </div>
-                                                                        )}
+                                                                        ); })()}
+
                                                                     </div>
                                                                 );
                                                             })}
@@ -1002,49 +1078,57 @@ export default function PortailParent() {
                                                         </div>
                                                     ) : (
                                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                                                            {child.paiements.map((p, i) => (
-                                                                <div key={i} style={{
-                                                                    padding: '16px', borderRadius: '12px', border: '1px solid #e2e8f0',
-                                                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                                                    transition: 'border-color 0.2s, box-shadow 0.2s',
-                                                                }}
-                                                                onMouseOver={e => { e.currentTarget.style.borderColor = '#6366f1'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(99,102,241,0.1)'; }}
-                                                                onMouseOut={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.boxShadow = 'none'; }}>
-                                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                                                                        <div style={{
-                                                                            width: '42px', height: '42px', borderRadius: '12px',
-                                                                            background: p.mode === 'MOBILE_MONEY' ? '#fef3c7' : p.mode === 'ESPECES' ? '#d1fae5' : '#ede9fe',
-                                                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                                        }}>
-                                                                            {p.mode === 'MOBILE_MONEY' ? <Phone size={18} color="#f59e0b" /> :
-                                                                             p.mode === 'ESPECES' ? <Wallet size={18} color={primaryColor} /> :
-                                                                             <CreditCard size={18} color="#6366f1" />}
+                                                            {(() => {
+                                                                const grouped = Object.values(child.paiements.reduce((acc, p) => {
+                                                                    if (!acc[p.numero_recu]) acc[p.numero_recu] = { ...p, total: 0 };
+                                                                    acc[p.numero_recu].total += p.montant;
+                                                                    return acc;
+                                                                }, {} as Record<string, any>)).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                                                                
+                                                                return grouped.map((p, i) => (
+                                                                    <div key={i} style={{
+                                                                        padding: '16px', borderRadius: '12px', border: '1px solid #e2e8f0',
+                                                                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                                                        transition: 'border-color 0.2s, box-shadow 0.2s',
+                                                                    }}
+                                                                    onMouseOver={e => { e.currentTarget.style.borderColor = '#6366f1'; e.currentTarget.style.boxShadow = '0 2px 8px rgba(99,102,241,0.1)'; }}
+                                                                    onMouseOut={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.boxShadow = 'none'; }}>
+                                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                                                            <div style={{
+                                                                                width: '42px', height: '42px', borderRadius: '12px',
+                                                                                background: p.mode === 'MOBILE_MONEY' ? '#fef3c7' : p.mode === 'ESPECES' ? '#d1fae5' : '#ede9fe',
+                                                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                                            }}>
+                                                                                {p.mode === 'MOBILE_MONEY' ? <Phone size={18} color="#f59e0b" /> :
+                                                                                p.mode === 'ESPECES' ? <Wallet size={18} color={primaryColor} /> :
+                                                                                <CreditCard size={18} color="#6366f1" />}
+                                                                            </div>
+                                                                            <div>
+                                                                                <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>Reçu: {p.numero_recu}</p>
+                                                                                <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
+                                                                                    {p.mode.replace('_', ' ')} • {p.date ? new Date(p.date).toLocaleDateString('fr-FR') : '—'}
+                                                                                </p>
+                                                                            </div>
                                                                         </div>
-                                                                        <div>
-                                                                            <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#1e293b' }}>Reçu: {p.numero_recu}</p>
-                                                                            <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
-                                                                                {p.mode.replace('_', ' ')} • {p.date ? new Date(p.date).toLocaleDateString('fr-FR') : '—'}
-                                                                            </p>
+                                                                        <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                                            <div>
+                                                                                <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: primaryColor }}>
+                                                                                    {formatGNF(p.total)}
+                                                                                </p>
+                                                                                <span style={{
+                                                                                    fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '8px',
+                                                                                    background: '#d1fae5', color: '#15803d',
+                                                                                }}>{p.statut}</span>
+                                                                            </div>
+                                                                            <button onClick={(e) => downloadRecuPDF(e, p.paiement_id, p.numero_recu)}
+                                                                                title="Télécharger le reçu"
+                                                                                style={{ border: '1px solid #e2e8f0', background: 'white', borderRadius: '10px', width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+                                                                                <Download size={15} color="#64748b" />
+                                                                            </button>
                                                                         </div>
                                                                     </div>
-                                                                    <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                                                        <div>
-                                                                            <p style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: primaryColor }}>
-                                                                                {formatGNF(p.montant)}
-                                                                            </p>
-                                                                            <span style={{
-                                                                                fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '8px',
-                                                                                background: '#d1fae5', color: '#15803d',
-                                                                            }}>{p.statut}</span>
-                                                                        </div>
-                                                                        <button onClick={(e) => downloadRecuPDF(e, p.paiement_id, p.numero_recu)}
-                                                                            title="Télécharger le reçu"
-                                                                            style={{ border: '1px solid #e2e8f0', background: 'white', borderRadius: '10px', width: '34px', height: '34px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-                                                                            <Download size={15} color="#64748b" />
-                                                                        </button>
-                                                                    </div>
-                                                                </div>
-                                                            ))}
+                                                                ));
+                                                            })()}
                                                         </div>
                                                     )}
                                             </div>
@@ -1075,6 +1159,7 @@ export default function PortailParent() {
                                                         <p style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 600 }}>Emploi du temps non disponible</p>
                                                     </div>
                                                 ) : (
+                                                    <div className="table-scroll">
                                                     <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
                                                         <thead>
                                                             <tr>
@@ -1121,6 +1206,7 @@ export default function PortailParent() {
                                                             })}
                                                         </tbody>
                                                     </table>
+                                                    </div>
                                                 )}
                                             </div>
                                         </div>
@@ -1154,7 +1240,7 @@ export default function PortailParent() {
                                                 ) : (
                                                     <>
                                                         {/* KPI Summary */}
-                                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
                                                             {[
                                                                 { label: 'Moyenne', value: bulletinData.moyenne_generale !== null ? `${bulletinData.moyenne_generale}/20` : '—', color: bulletinData.moyenne_generale >= 10 ? '#10b981' : '#ef4444' },
                                                                 { label: 'Rang', value: (bulletinData.rang && bulletinData.effectif_classe) ? `${bulletinData.rang}e / ${bulletinData.effectif_classe}` : '—', color: '#6366f1' },
@@ -1168,7 +1254,8 @@ export default function PortailParent() {
                                                             ))}
                                                         </div>
                                                         {/* Grades Table */}
-                                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                        <div className="table-scroll">
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '480px' }}>
                                                             <thead>
                                                                 <tr style={{ background: 'linear-gradient(135deg, #064e3b, #059669)' }}>
                                                                     {['Matière', 'Coef', 'Moy. Élève', 'Moy. Cl.', 'Min', 'Max', 'Appréciation'].map(h => (
@@ -1195,6 +1282,7 @@ export default function PortailParent() {
                                                                 ))}
                                                             </tbody>
                                                         </table>
+                                                        </div>
                                                         {/* Decision */}
                                                         {bulletinData.decision && (
                                                             <div style={{ marginTop: '16px', padding: '14px 18px', borderRadius: '12px', background: '#fef3c7', border: '1px solid #fbbf24' }}>
@@ -1634,7 +1722,7 @@ export default function PortailParent() {
                                                     </div>
                                                 </div>
                                                 {/* Summary stat cards */}
-                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
                                                     {[
                                                         { label: 'Notes', value: String(child.nb_notes), icon: <PenLine size={20} />, color: '#6366f1', bg: '#ede9fe' },
                                                         { label: 'Présences', value: String(child.nb_present), icon: <CheckCircle2 size={20} />, color: primaryColor, bg: '#d1fae5' },
@@ -1929,15 +2017,16 @@ export default function PortailParent() {
                                                             input.type = 'file'; input.accept = 'image/jpeg,image/png,image/webp';
                                                             input.onchange = async (e: any) => {
                                                                 const file = e.target.files?.[0]; if (!file) return;
-                                                                setPhotoUploading(data.parent.parent_id);
+                                                                const key = `parent:${data.parent.parent_id}`;
+                                                                setPhotoUploading(key);
                                                                 try {
                                                                     const fd = new FormData(); fd.append('fichier', file);
                                                                     await api.post(`/api/photos/parent-upload/parent/${data.parent.parent_id}?parent_id=${data.parent.parent_id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-                                                                    
+
                                                                       setPhotoSuccess('Photo envoyée et en attente de validation !');
                                                                       setTimeout(() => setPhotoSuccess(null), 4000);
                                                                       // Refresh pending
-                                                                      setPendingPhotos(prev => new Set(prev).add(data.parent.parent_id));
+                                                                      setPendingPhotos(prev => new Set(prev).add(key));
 
                                                                     const dash = await api.get(`/api/portail-parent/${data.parent.parent_id}/dashboard`);
                                                                     setData(dash.data);
@@ -1945,9 +2034,9 @@ export default function PortailParent() {
                                                                 finally { setPhotoUploading(null); }
                                                             };
                                                             input.click();
-                                                        }} disabled={photoUploading === data.parent.parent_id}
+                                                        }} disabled={photoUploading === `parent:${data.parent.parent_id}`}
                                                             style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 700, background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                            {photoUploading === data.parent.parent_id ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={14} />}
+                                                            {photoUploading === `parent:${data.parent.parent_id}` ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Camera size={14} />}
                                                             {data.parent.photo_url ? 'Modifier ma photo' : 'Envoyer ma photo'}
                                                         </button>
                                                         {photoSuccess && <p style={{ margin: '8px 0 0', fontSize: '12px', color: primaryColor, fontWeight: 600 }}>{photoSuccess}</p>}
@@ -2023,7 +2112,8 @@ export default function PortailParent() {
                                             input.onchange = async (e: any) => {
                                                 const file = e.target.files?.[0];
                                                 if (!file) return;
-                                                setPhotoUploading(id);
+                                                const key = `${type}:${id}`;
+                                                setPhotoUploading(key);
                                                 try {
                                                     const fd = new FormData();
                                                     fd.append('fichier', file);
@@ -2034,7 +2124,7 @@ export default function PortailParent() {
                                                     );
                                                     setPhotoSuccess(`Photo de ${name} envoyée avec succès !`);
                                                     // Mark this entity as pending admin approval
-                                                    setPendingPhotos(prev => new Set(prev).add(id));
+                                                    setPendingPhotos(prev => new Set(prev).add(key));
                                                     setTimeout(() => setPhotoSuccess(null), 4000);
                                                     const dash = await api.get(`/api/portail-parent/${data.parent.parent_id}/dashboard`);
                                                     if (dash.data?.parent?.photo_url) dash.data.parent.photo_url += '?t=' + Date.now();
@@ -2044,14 +2134,14 @@ export default function PortailParent() {
                                                         const r = await api.get(`/api/portail-parent/${data.parent.parent_id}/profil`);
                                                         if (r.data?.photo_url) {
                                                             r.data.photo_url += '?t=' + Date.now();
-                                                            setPendingPhotos(prev => { const n = new Set(prev); n.delete(id); return n; });
+                                                            setPendingPhotos(prev => { const n = new Set(prev); n.delete(key); return n; });
                                                         }
                                                         setProfilData(r.data);
                                                     }
                                                     if (type === 'eleve') {
                                                         const updatedChild = dash.data.enfants.find((e: any) => e.eleve_id === id);
                                                         if (updatedChild?.photo_url) {
-                                                            setPendingPhotos(prev => { const n = new Set(prev); n.delete(id); return n; });
+                                                            setPendingPhotos(prev => { const n = new Set(prev); n.delete(key); return n; });
                                                         }
                                                     }
                                                 } catch {
@@ -2129,7 +2219,7 @@ export default function PortailParent() {
                                                     <div style={{ flex: 1 }}>
                                                         <p style={{ margin: '0 0 4px', fontWeight: 700, fontSize: '15px' }}>{data.parent.prenom} {data.parent.nom}</p>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
-                                                            {pendingPhotos.has(data.parent.parent_id)
+                                                            {pendingPhotos.has(`parent:${data.parent.parent_id}`)
                                                                 ? <><Clock size={14} color="#d97706" /><span style={{ fontSize: '12px', color: '#d97706', fontWeight: 600 }}>En attente de validation</span></>
                                                                 : data.parent.photo_url
                                                                     ? <><CheckCircle size={14} color={accentColor} /><span style={{ fontSize: '12px', color: accentColor, fontWeight: 600 }}>Photo validée</span></>
@@ -2137,19 +2227,19 @@ export default function PortailParent() {
                                                             }
                                                         </div>
                                                         <button onClick={() => handlePhotoUpload('parent', data.parent.parent_id, `${data.parent.prenom} ${data.parent.nom}`)}
-                                                            disabled={photoUploading === data.parent.parent_id || pendingPhotos.has(data.parent.parent_id)}
+                                                            disabled={photoUploading === `parent:${data.parent.parent_id}` || pendingPhotos.has(`parent:${data.parent.parent_id}`)}
                                                             style={{
                                                                 display: 'inline-flex', alignItems: 'center', gap: '8px',
-                                                                padding: '10px 20px', borderRadius: '10px', border: 'none', cursor: pendingPhotos.has(data.parent.parent_id) ? 'not-allowed' : 'pointer',
-                                                                background: pendingPhotos.has(data.parent.parent_id)
+                                                                padding: '10px 20px', borderRadius: '10px', border: 'none', cursor: pendingPhotos.has(`parent:${data.parent.parent_id}`) ? 'not-allowed' : 'pointer',
+                                                                background: pendingPhotos.has(`parent:${data.parent.parent_id}`)
                                                                     ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                                                                     : data.parent.photo_url ? '#f1f5f9' : 'linear-gradient(135deg, #6366f1, #818cf8)',
-                                                                color: pendingPhotos.has(data.parent.parent_id) ? 'white' : data.parent.photo_url ? '#475569' : 'white',
+                                                                color: pendingPhotos.has(`parent:${data.parent.parent_id}`) ? 'white' : data.parent.photo_url ? '#475569' : 'white',
                                                                 fontSize: '13px', fontWeight: 700,
                                                             }}>
-                                                            {photoUploading === data.parent.parent_id
+                                                            {photoUploading === `parent:${data.parent.parent_id}`
                                                                 ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Envoi en cours...</>
-                                                                : pendingPhotos.has(data.parent.parent_id)
+                                                                : pendingPhotos.has(`parent:${data.parent.parent_id}`)
                                                                     ? <><Clock size={14} /> En attente de validation...</>
                                                                     : <><Camera size={14} /> {data.parent.photo_url ? 'Modifier ma photo' : 'Envoyer ma photo'}</>
                                                             }
@@ -2203,7 +2293,7 @@ export default function PortailParent() {
                                                                     {enf.classe} • {enf.matricule}
                                                                 </p>
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                                    {pendingPhotos.has(enf.eleve_id)
+                                                                    {pendingPhotos.has(`eleve:${enf.eleve_id}`)
                                                                         ? <><Clock size={12} color="#d97706" /><span style={{ fontSize: '11px', color: '#d97706', fontWeight: 600 }}>En attente de validation</span></>
                                                                         : enf.photo_url
                                                                             ? <><CheckCircle size={12} color={accentColor} /><span style={{ fontSize: '11px', color: accentColor, fontWeight: 600 }}>Photo validée</span></>
@@ -2212,20 +2302,20 @@ export default function PortailParent() {
                                                                 </div>
                                                             </div>
                                                             <button onClick={() => handlePhotoUpload('eleve', enf.eleve_id, enf.prenom)}
-                                                                disabled={photoUploading === enf.eleve_id || pendingPhotos.has(enf.eleve_id)}
+                                                                disabled={photoUploading === `eleve:${enf.eleve_id}` || pendingPhotos.has(`eleve:${enf.eleve_id}`)}
                                                                 style={{
                                                                     display: 'inline-flex', alignItems: 'center', gap: '6px',
                                                                     padding: '10px 16px', borderRadius: '10px', border: 'none',
-                                                                    cursor: pendingPhotos.has(enf.eleve_id) ? 'not-allowed' : 'pointer',
-                                                                    background: pendingPhotos.has(enf.eleve_id)
+                                                                    cursor: pendingPhotos.has(`eleve:${enf.eleve_id}`) ? 'not-allowed' : 'pointer',
+                                                                    background: pendingPhotos.has(`eleve:${enf.eleve_id}`)
                                                                         ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                                                                         : enf.photo_url ? '#f1f5f9' : `linear-gradient(135deg, ${primaryColor}, #34d399)`,
-                                                                    color: pendingPhotos.has(enf.eleve_id) ? 'white' : enf.photo_url ? '#475569' : 'white',
+                                                                    color: pendingPhotos.has(`eleve:${enf.eleve_id}`) ? 'white' : enf.photo_url ? '#475569' : 'white',
                                                                     fontSize: '12px', fontWeight: 700,
                                                                 }}>
-                                                                {photoUploading === enf.eleve_id
+                                                                {photoUploading === `eleve:${enf.eleve_id}`
                                                                     ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                                                                    : pendingPhotos.has(enf.eleve_id)
+                                                                    : pendingPhotos.has(`eleve:${enf.eleve_id}`)
                                                                         ? <><Clock size={14} /> En attente</>
                                                                         : <>{enf.photo_url ? <Camera size={14} /> : <Upload size={14} />} {enf.photo_url ? 'Modifier' : 'Envoyer'}</>
                                                                 }

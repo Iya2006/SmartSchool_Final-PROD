@@ -229,7 +229,7 @@ button {
    ============================================ */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 20px;
 }
 
@@ -288,6 +288,73 @@ button {
   display: grid;
   grid-template-columns: 2fr 3fr;
   gap: 20px;
+}
+
+/* ============================================
+   Fondations responsive — un seul jeu de breakpoints
+   (480 / 768 / 1024 / 1280, meme echelle que login.module.css),
+   classes partagees a adopter plutot que dupliquer par page.
+   ============================================ */
+
+/* Base de securite : n'empeche pas le zoom iOS Safari au focus d'un
+   champ (le seuil est 16px). Les champs qui fixent deja leur propre
+   taille inline restent prioritaires — voir aussi le correctif dans
+   les formulaires nouveau/modifier qui portent le vrai probleme. */
+input, select, textarea {
+  font-size: 16px;
+}
+
+/* Grille de formulaire a 2 colonnes qui se replie sur mobile — remplace
+   le motif `gridTemplateColumns: '1fr 1fr'` duplique dans les
+   formulaires nouveau/modifier. */
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+}
+
+/* Defilement horizontal pour un tableau qui deborde — jamais
+   `overflow: hidden` (tronque silencieusement des colonnes). Motif deja
+   prouve dans comptabilite/depenses/page.tsx, generalise ici. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+/* Modale generique — l'exterieur est deja majoritairement protege dans
+   le projet (`maxWidth: 95vw`), le vrai probleme mobile est le padding
+   interne fixe qui mange l'ecran. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal-box {
+  background: white;
+  border-radius: 20px;
+  padding: 32px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+@media (max-width: 480px) {
+  .modal-box {
+    padding: 18px;
+    border-radius: 16px;
+    max-height: 85vh;
+  }
+}
+
+@media (max-width: 768px) {
+  .grid-2, .grid-3, .grid-60-40, .grid-40-60 {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ============================================

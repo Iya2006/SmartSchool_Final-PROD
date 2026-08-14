@@ -135,32 +135,96 @@
     white-space: nowrap;
 }
 
-.sidebarSettings {
+/* ── Carte utilisateur en bas du sidebar ── */
+.sidebarUserCard {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 10px;
-    padding: 16px 18px;
-    border-top: 1px solid rgba(226, 232, 240, 0.95);
-    background: rgba(248, 250, 252, 0.85);
+    padding: 12px 14px;
+    margin: 0 8px 10px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.07), rgba(99, 102, 241, 0.05));
+    border: 1px solid rgba(37, 99, 235, 0.12);
     flex-shrink: 0;
+    transition: all 0.2s ease;
+    overflow: hidden;
 }
 
-.settingsIcon {
-    color: #64748b;
-    transition: all 0.2s ease;
+.userCardAvatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 10px;
-    border-radius: 12px;
-    background: #fff;
-    border: 1px solid #e2e8f0;
+    color: white;
+    font-size: 13px;
+    font-weight: 800;
+    flex-shrink: 0;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3);
 }
 
-.settingsIcon:hover {
-    color: var(--brand-secondary);
-    box-shadow: 0 12px 20px rgba(15, 23, 42, 0.06);
+.userCardInfo {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.userCardName {
+    margin: 0;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+}
+
+.userCardRole {
+    margin: 0;
+    font-size: 10.5px;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.userCardActions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.userCardActionBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+}
+
+.userCardActionBtn:hover {
+    background: #f1f5f9;
+    color: var(--brand-primary);
+    border-color: var(--brand-primary);
+}
+
+.userCardLogout:hover {
+    background: #fef2f2 !important;
+    color: #ef4444 !important;
+    border-color: #fca5a5 !important;
 }
 
 .commLink {
@@ -224,12 +288,90 @@
     margin-left: 0;
 }
 
-.sidebarCollapsed .sidebarSettings {
+.sidebarCollapsed .sidebarUserCard {
     flex-direction: column;
-    padding: 14px 10px;
+    padding: 10px 6px;
+    margin: 0 4px 8px;
+    gap: 6px;
+    justify-content: center;
+}
+
+.sidebarCollapsed .userCardInfo {
+    display: none;
+}
+
+.sidebarCollapsed .userCardActions {
+    flex-direction: column;
 }
 
 @keyframes badgePulse {
     0%, 100% { transform: scale(1); }
     50% { transform: scale(1.08); }
+}
+
+/* ── Tiroir mobile (< 768px) — motif deja prouve dans
+   portail-eleve.module.css, reproduit ici pour le shell admin.
+   sidebarWrapper.mobileOpen est ajoute par Sidebar.tsx en consommant
+   l'etat deja existant (mais jusque-la jamais branche) de UIContext. ── */
+@media (max-width: 768px) {
+    .sidebarWrapper {
+        width: min(280px, 84vw);
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+        padding-left: env(safe-area-inset-left);
+        padding-top: env(safe-area-inset-top);
+        padding-bottom: env(safe-area-inset-bottom);
+        box-sizing: border-box;
+    }
+
+    .sidebarWrapper.mobileOpen {
+        transform: translateX(0);
+        box-shadow: 10px 0 34px rgba(15, 23, 42, 0.18);
+    }
+
+    /* Sur mobile, la sidebar est soit cachee soit grande ouverte — jamais
+       le rail icone-seule desktop, meme si sidebarCollapsed est actif
+       (preference desktop qui ne doit pas s'appliquer ici). */
+    .sidebarWrapper.sidebarCollapsed {
+        width: min(280px, 84vw);
+    }
+
+    .sidebarWrapper.sidebarCollapsed .logoText,
+    .sidebarWrapper.sidebarCollapsed .menuText,
+    .sidebarWrapper.sidebarCollapsed .titleText {
+        opacity: 1;
+        width: auto;
+    }
+
+    .sidebarWrapper.sidebarCollapsed .appBrand {
+        padding: 0 18px;
+        justify-content: flex-start;
+    }
+
+    .sidebarWrapper.sidebarCollapsed .logoLink {
+        justify-content: flex-start;
+        gap: 12px;
+        flex: 1;
+    }
+
+    .sidebarWrapper.sidebarCollapsed .sidebarMenu li a {
+        justify-content: flex-start;
+        padding: 12px 14px;
+    }
+
+    .sidebarWrapper.sidebarCollapsed .sidebarUserCard {
+        flex-direction: row;
+        padding: 12px 14px;
+        margin: 0 8px 10px;
+        gap: 10px;
+        justify-content: flex-start;
+    }
+
+    .sidebarWrapper.sidebarCollapsed .userCardInfo {
+        display: block;
+    }
+
+    .sidebarWrapper.sidebarCollapsed .userCardActions {
+        flex-direction: row;
+    }
 }

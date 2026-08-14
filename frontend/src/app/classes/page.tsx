@@ -8,6 +8,7 @@ import { Users, X, Eye, Edit, ChevronRight, ChevronLeft, Loader2, BookOpen, User
 import api from '@/lib/api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import Pagination from '@/components/Pagination';
 
 interface Classe {
     classe_id: number;
@@ -42,6 +43,8 @@ export default function ClassesPage() {
     const { etablissementId, anneeId } = useApp();
     const [search, setSearch] = useState('');
     const router = useRouter();
+    const [currentPage, setCurrentPage] = useState(1);
+    const pageSize = 50;
 
     // Modal state
     const [selectedClass, setSelectedClass] = useState<Classe | null>(null);
@@ -57,14 +60,33 @@ export default function ClassesPage() {
     // arrière-plan, au lieu d'un fetch unique à l'ancien useEffect qui ne se
     // rejouait jamais tant que le composant restait monté (voir le correctif
     // de dépendances manquantes fait plus tôt cette session).
-    const { data: classes = [], isLoading: loading } = useQuery({
-        queryKey: ['classes', etablissementId, anneeId],
+    //
+    // Paginée côté serveur (recherche envoyée en paramètre, plus filtrée en
+    // mémoire) — un établissement à grand nombre de classes ne doit jamais
+    // tout charger d'un coup. Le total réel vient de X-Total-Count, comme
+    // useEleves.ts (même convention pour les listes React Query de ce projet).
+    const { data, isLoading: loading } = useQuery({
+        queryKey: ['classes', etablissementId, anneeId, currentPage, search],
         queryFn: async () => {
-            const res = await api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
-            return res.data as Classe[];
+            const skip = (currentPage - 1) * pageSize;
+            const res = await api.get('/api/classes', {
+                params: {
+                    etablissement_id: etablissementId, annee_id: anneeId,
+                    skip, limit: pageSize, search: search || undefined,
+                },
+            });
+            return {
+                classes: res.data as Classe[],
+                total: Number(res.headers?.['x-total-count'] ?? res.data.length),
+            };
         },
         enabled: !!etablissementId && !!anneeId,
     });
+    const classes = data?.classes ?? [];
+    const total = data?.total ?? 0;
+
+    // Recherche : revenir à la page 1 pour éviter une page vide après filtrage
+    useEffect(() => { setCurrentPage(1); }, [search]);
 
     // Auto-scroll carousel
     useEffect(() => {
@@ -125,17 +147,26 @@ export default function ClassesPage() {
         setSelectedClass(null);
     };
 
-    // Filtered classes based on search
-    const filteredClasses = search.trim()
-        ? classes.filter(c =>
-            c.libelle.toLowerCase().includes(search.toLowerCase()) ||
-            c.code.toLowerCase().includes(search.toLowerCase())
-        )
-        : classes;
+    // La recherche part désormais au serveur (voir queryFn ci-dessus) — la
+    // page affichée est déjà filtrée, plus besoin de refiltrer côté client.
+    const filteredClasses = classes;
 
-    const totalStudents = classes.reduce((sum, c) => sum + (c.effectif_actuel || 0), 0);
-    const totalCapacity = classes.reduce((sum, c) => sum + (c.capacite_max || 1), 0);
-    const occupationRate = classes.length > 0 ? Math.round((totalStudents / totalCapacity) * 100) : 0;
+    // Agrégats globaux (toutes les classes de l'école, pas seulement la page
+    // affichée) — sinon "Effectif Global"/"Taux d'Occupation" n'auraient
+    // reflété que les 50 classes visibles à l'écran au lieu de l'école entière.
+    const { data: statsData } = useQuery({
+        queryKey: ['classes-stats', etablissementId, anneeId],
+        queryFn: async () => {
+            const res = await api.get('/api/classes/stats', {
+                params: { etablissement_id: etablissementId, annee_id: anneeId },
+            });
+            return res.data as { total_classes: number; total_effectif: number; total_capacite: number };
+        },
+        enabled: !!etablissementId && !!anneeId,
+    });
+    const totalStudents = statsData?.total_effectif ?? 0;
+    const totalCapacity = statsData?.total_capacite || 1;
+    const occupationRate = total > 0 ? Math.round((totalStudents / totalCapacity) * 100) : 0;
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -197,7 +228,7 @@ export default function ClassesPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div>
                             <p className="kpi-label" style={{ fontSize: '11px', margin: '0 0 2px' }}>Total Classes</p>
-                            <p className="kpi-value" style={{ fontSize: '22px', margin: 0 }}>{classes.length}</p>
+                            <p className="kpi-value" style={{ fontSize: '22px', margin: 0 }}>{statsData?.total_classes ?? total}</p>
                         </div>
                         <div style={{ width: '38px', height: '38px', borderRadius: '10px', background: '#3b82f615', color: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             <BookOpen size={18} />
@@ -260,7 +291,7 @@ export default function ClassesPage() {
                 </div>
                 {search && (
                     <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 500 }}>
-                        {filteredClasses.length} résultat{filteredClasses.length !== 1 ? 's' : ''}
+                        {total} résultat{total !== 1 ? 's' : ''}
                     </span>
                 )}
             </div>
@@ -474,6 +505,10 @@ export default function ClassesPage() {
                     </div>
                 )}
             </div>
+
+            {!loading && classes.length > 0 && (
+                <Pagination page={currentPage} pageSize={pageSize} total={total} onPageChange={setCurrentPage} />
+            )}
 
             {/* ═══ Student List Modal ═══ */}
             <AnimatePresence>

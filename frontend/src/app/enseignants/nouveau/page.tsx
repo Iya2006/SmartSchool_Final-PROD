@@ -242,7 +242,7 @@ export default function NouveauEnseignant() {
                     </div>
 
                     <div style={{ padding: '24px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div className="form-grid-2">
 
                             <div>
                                 <label style={labelStyle}>Nom de famille *</label>
@@ -300,7 +300,7 @@ export default function NouveauEnseignant() {
                     </div>
 
                     <div style={{ padding: '24px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div className="form-grid-2">
                             <div>
                                 <label style={labelStyle}>Spécialité *</label>
                                 <input type="text" name="specialite" value={formData.specialite} onChange={handleChange} required placeholder="Ex: Mathématiques" style={inputStyle} />
@@ -343,7 +343,7 @@ export default function NouveauEnseignant() {
                     </div>
 
                     <div style={{ padding: '24px' }}>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div className="form-grid-2">
                             <div>
                                 <label style={labelStyle}>Salaire Mensuel de Base (GNF)</label>
                                 <input type="number" name="salaire_base" value={formData.salaire_base} onChange={handleChange} placeholder="0" style={inputStyle} />
@@ -404,7 +404,7 @@ export default function NouveauEnseignant() {
                             </p>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div className="form-grid-2">
                             <div>
                                 <label style={{ ...labelStyle, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Lock size={14} /> Mot de passe</label>
                                 <div style={{ position: 'relative' }}>

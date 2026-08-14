@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 
 from app.models.academique import (
     Affectation, AnneeScolaire, Classe, CreneauEmploi, Cycle, Depense, Eleve,
-    Enseignant, Etablissement, Facture, Inscription, Matiere, Niveau, TypeFrais,
-    Utilisateur,
+    Enseignant, Etablissement, Facture, Inscription, Matiere, Niveau, Paiement,
+    TypeFrais, Utilisateur,
 )
 from app.services import paie
 
@@ -93,6 +93,40 @@ def _enseignant(db: Session, ecole, *, mode: str, taux=0, salaire=0) -> Enseigna
     )
     db.add(e); db.commit(); db.refresh(e)
     return e
+
+
+def _alimenter_la_caisse(db: Session, ecole, montant: float = 5_000_000) -> None:
+    """Une ecole ne paie pas ses salaires avec une caisse vide.
+
+    Le logiciel refuse desormais un versement superieur au solde disponible
+    (encaissements moins depenses). C'est la bonne regle — mais elle suppose
+    qu'une ecole de test ait encaisse quelque chose avant de payer, ce que
+    ces scenarios ne faisaient pas : ils recrutaient et payaient sans qu'un
+    seul franc soit jamais entre.
+    """
+    eleve = Eleve(
+        matricule=f"CAISSE{_uid()}", nom="Bah", prenom="Tresorerie", sexe="M",
+        date_naissance=date(2010, 1, 1), etablissement_id=ecole["etab"].etablissement_id,
+        statut="ACTIF",
+    )
+    db.add(eleve); db.commit(); db.refresh(eleve)
+    insc = Inscription(
+        eleve_id=eleve.eleve_id, classe_id=ecole["classe"].classe_id,
+        annee_id=ecole["annee"].annee_id, statut="ACTIVE",
+    )
+    db.add(insc); db.commit(); db.refresh(insc)
+    facture = Facture(
+        inscription_id=insc.inscription_id, annee_id=ecole["annee"].annee_id,
+        numero_facture=f"FCAISSE{_uid()}", montant_total=montant, montant_net=montant,
+        montant_paye=montant, montant_restant=0, statut="PAYEE",
+    )
+    db.add(facture); db.commit(); db.refresh(facture)
+    db.add(Paiement(
+        facture_id=facture.facture_id, annee_id=ecole["annee"].annee_id,
+        numero_recu=f"RCAISSE{_uid()}", montant=montant, mode_paiement="ESPECES",
+        date_paiement=date(2025, 10, 1), statut="VALIDE",
+    ))
+    db.commit()
 
 
 def _affecter(db: Session, ecole, ens, matiere, heures, taux=None) -> Affectation:
@@ -351,6 +385,7 @@ class TestPersonneNeDisparaitDeLaPaie:
     ):
         from app.api.finance import payer_group_endpoint
 
+        _alimenter_la_caisse(db, ecole)
         payable = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
         _affecter(db, ecole, payable, ecole["m1"], 5)
         sans_rien = _enseignant(db, ecole, mode="HORAIRE", taux=0, salaire=0)
@@ -370,6 +405,7 @@ class TestPersonneNeDisparaitDeLaPaie:
         dépenses de salaires sur l'année scolaire de la première école."""
         from app.api.finance import payer_group_endpoint
 
+        _alimenter_la_caisse(db, ecole)
         ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
         _affecter(db, ecole, ens, ecole["m1"], 5)
 

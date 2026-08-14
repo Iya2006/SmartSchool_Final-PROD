@@ -173,6 +173,8 @@ function GestionPaiements() {
     const [payLoading, setPayLoading] = useState(false);
     const [payResult, setPayResult] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
     const [selectedFacture, setSelectedFacture] = useState<Facture | null>(null);
+    const [expandedRecentPaiement, setExpandedRecentPaiement] = useState<string | null>(null);
+    const [expandedRecuPaiement, setExpandedRecuPaiement] = useState<string | null>(null);
 
     // ── Modal annulation ──
     const [showCancelModal, setShowCancelModal] = useState(false);
@@ -203,12 +205,17 @@ function GestionPaiements() {
     const [decaisDateDebut, setDecaisDateDebut] = useState('');
     const [decaisDateFin, setDecaisDateFin] = useState('');
 
+    // ── Filtres encaissements ──
+    const [encaisDateDebut, setEncaisDateDebut] = useState('');
+    const [encaisDateFin, setEncaisDateFin] = useState('');
+
     // ── Pagination (paiements & decaissements) ──
     const pageSize = 25;
     const [pagePaiements, setPagePaiements] = useState(1);
     const [totalPaiements, setTotalPaiements] = useState(0);
     const [pageDepenses, setPageDepenses] = useState(1);
     const [totalDepenses, setTotalDepenses] = useState(0);
+    const [expandedStudent, setExpandedStudent] = useState<string | null>(null);
 
     /* ═══ CHARGEMENT DES DONNEES ═══ */
     const loadPaiements = useCallback(async (page: number) => {
@@ -470,16 +477,56 @@ function GestionPaiements() {
 
     /* ═══ FILTRES ═══ */
     const filteredPaiements = paiements.filter(p => {
-        // Le filtre par mode manquait : impossible de repondre a « combien est
-        // rentre en especes ce mois-ci », qui est la question de base d'un
-        // rapprochement de caisse.
+        // Trois filtres qui répondent à trois questions réelles du comptable :
+        // « combien est rentré en espèces » (le mode — il manquait, et sans
+        // lui aucun rapprochement de caisse n'est possible), « sur quelle
+        // période » (les dates), et « où est le reçu de cette famille » (la
+        // recherche, qui porte aussi sur le mode et le montant).
         if (filtreMode && p.mode_paiement !== filtreMode) return false;
+
+        if (p.date_paiement) {
+            const jour = p.date_paiement.split('T')[0];
+            if (encaisDateDebut && jour < encaisDateDebut) return false;
+            if (encaisDateFin && jour > encaisDateFin) return false;
+        }
+
         const term = searchTerm.trim().toLowerCase();
         if (!term) return true;
         return [p.numero_recu, p.eleve_nom, p.eleve_prenom, p.numero_facture,
                 modePaiementLabel(p.mode_paiement), String(p.montant)]
             .some(champ => (champ || '').toLowerCase().includes(term));
     });
+
+    const groupedPaiements = React.useMemo(() => {
+        const groups = new Map<string, {
+            eleve_nom_complet: string;
+            latest_paiement: Paiement;
+            historique: Paiement[];
+        }>();
+
+        filteredPaiements.forEach(p => {
+            const nomComplet = `${p.eleve_prenom} ${p.eleve_nom}`.trim();
+            if (!groups.has(nomComplet)) {
+                groups.set(nomComplet, {
+                    eleve_nom_complet: nomComplet,
+                    latest_paiement: p,
+                    historique: [p]
+                });
+            } else {
+                const group = groups.get(nomComplet)!;
+                group.historique.push(p);
+                if (new Date(p.date_paiement) > new Date(group.latest_paiement.date_paiement)) {
+                    group.latest_paiement = p;
+                }
+            }
+        });
+
+        Array.from(groups.values()).forEach(g => {
+            g.historique.sort((a, b) => new Date(b.date_paiement).getTime() - new Date(a.date_paiement).getTime());
+        });
+
+        return Array.from(groups.values());
+    }, [filteredPaiements]);
 
     const filteredDepenses = depenses.filter(d => {
         if (decaisFilterCat && d.categorie !== decaisFilterCat) return false;
@@ -693,30 +740,59 @@ function GestionPaiements() {
                                     style={{ ...inputStyle, paddingLeft: '36px', fontSize: '13px' }} />
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                {paiements.filter(p => {
-                                    if (filtreMode && p.mode_paiement !== filtreMode) return false;
+                                {groupedPaiements.filter(group => {
+                                    if (filtreMode && group.latest_paiement.mode_paiement !== filtreMode) return false;
                                     const t = rechercheRecents.trim().toLowerCase();
                                     if (!t) return true;
-                                    return [p.numero_recu, p.eleve_nom, p.eleve_prenom, p.numero_facture,
-                                            modePaiementLabel(p.mode_paiement), String(p.montant)]
-                                        .some(c => (c || '').toLowerCase().includes(t));
-                                }).slice(0, 8).map(p => (
-                                    <div key={p.paiement_id} style={{
-                                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                        padding: '10px 14px', borderRadius: '10px', background: '#f8fafc',
-                                        transition: 'background 0.15s', cursor: 'pointer'
-                                    }}>
-                                        <div>
-                                            <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>{p.eleve_prenom} {p.eleve_nom}</p>
-                                            <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#94a3b8' }}>{p.numero_recu} — {formatDate(p.date_paiement)}</p>
+                                    return group.historique.some(p => [
+                                        p.numero_recu, p.eleve_nom, p.eleve_prenom, p.numero_facture,
+                                        modePaiementLabel(p.mode_paiement), String(p.montant),
+                                    ].some(c => (c || '').toLowerCase().includes(t)));
+                                }).slice(0, 5).map(group => {
+                                    const isExpanded = expandedRecentPaiement === group.eleve_nom_complet;
+                                    const latestPaiement = group.latest_paiement;
+                                    const hasMultiple = group.historique.length > 1;
+                                    return (
+                                        <div key={group.eleve_nom_complet}
+                                            onClick={() => hasMultiple && setExpandedRecentPaiement(isExpanded ? null : group.eleve_nom_complet)}
+                                            style={{
+                                                display: 'flex', flexDirection: 'column',
+                                                padding: '10px 14px', borderRadius: '10px', background: '#f8fafc',
+                                                transition: 'background 0.15s', cursor: hasMultiple ? 'pointer' : 'default'
+                                            }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                <div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                        <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>{group.eleve_nom_complet}</p>
+                                                        {hasMultiple && (
+                                                            <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '99px', background: '#e0e7ff', color: '#3730a3' }}>
+                                                                {group.historique.length} paiements
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#94a3b8' }}>{latestPaiement.numero_recu} — {formatDate(latestPaiement.date_paiement)}</p>
+                                                </div>
+                                                <div style={{ textAlign: 'right' }}>
+                                                    <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: latestPaiement.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(latestPaiement.montant)}</p>
+                                                    <Badge statut={latestPaiement.statut} />
+                                                </div>
+                                            </div>
+                                            {isExpanded && hasMultiple && (
+                                                <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed #cbd5e1', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    {group.historique.slice(1).map((payment, i) => (
+                                                        <div key={`${payment.paiement_id}-${i}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                            <div style={{ fontSize: '11px', color: '#64748b' }}>{payment.numero_recu} — {formatDate(payment.date_paiement)}</div>
+                                                            <div style={{ textAlign: 'right' }}>
+                                                                <span style={{ fontSize: '12px', fontWeight: 700, color: payment.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(payment.montant)}</span>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
-                                        <div style={{ textAlign: 'right' }}>
-                                            <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: p.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(p.montant)}</p>
-                                            <Badge statut={p.statut} />
-                                        </div>
-                                    </div>
-                                ))}
-                                {paiements.length === 0 && (
+                                    );
+                                })}
+                                {groupedPaiements.length === 0 && (
                                     <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '13px', padding: '20px 0' }}>Aucun paiement enregistre</p>
                                 )}
                                 {paiements.length > 0 && (rechercheRecents.trim() || filtreMode) &&
@@ -745,11 +821,23 @@ function GestionPaiements() {
                 <div>
                     {/* Barre d'actions */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-                        <div style={{ position: 'relative', flex: '1 1 300px', maxWidth: '400px' }}>
-                            <Search size={16} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                            <input placeholder="Rechercher par eleve, N recu, N facture..."
-                                value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-                                style={{ ...inputStyle, paddingLeft: '38px' }} />
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', flex: '1 1 auto' }}>
+                            <div style={{ position: 'relative', minWidth: '250px', maxWidth: '350px' }}>
+                                <Search size={16} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                                <input placeholder="Rechercher par eleve, N recu, N facture..."
+                                    value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                                    style={{ ...inputStyle, paddingLeft: '38px', width: '100%' }} />
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <input type="date" value={encaisDateDebut} onChange={e => setEncaisDateDebut(e.target.value)} style={inputStyle} title="Date début" />
+                                <span style={{ color: '#94a3b8' }}>-</span>
+                                <input type="date" value={encaisDateFin} onChange={e => setEncaisDateFin(e.target.value)} style={inputStyle} title="Date fin" />
+                                {(encaisDateDebut || encaisDateFin) && (
+                                    <button style={{...btnSecondary, padding: '8px', color: '#ef4444'}} onClick={() => { setEncaisDateDebut(''); setEncaisDateFin(''); }} title="Effacer les dates">
+                                        <X size={16} />
+                                    </button>
+                                )}
+                            </div>
                         </div>
                         <div style={{ display: 'flex', gap: '10px' }}>
                             <button style={btnPrimary} onClick={() => setShowPayModal(true)}>
@@ -761,9 +849,15 @@ function GestionPaiements() {
                         </div>
                     </div>
 
-                    {/* Tableau des paiements */}
+                    {/* Tableau des paiements — `overflow: hidden` sur cette carte
+                        tronquait silencieusement les colonnes qui ne
+                        tenaient pas dans la largeur au lieu de les rendre
+                        défilables. Le défilement horizontal vit maintenant
+                        sur un wrapper interne dédié, la carte garde son
+                        `overflow: hidden` pour les coins arrondis. */}
                     <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                        <div className="table-scroll">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '820px' }}>
                             <thead>
                                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                                     {['N Recu', 'Date', 'Eleve', 'Montant', 'Mode', 'N Facture', 'Statut', 'Actions'].map(h => (
@@ -772,43 +866,94 @@ function GestionPaiements() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {filteredPaiements.map(p => (
-                                    <tr key={p.paiement_id} style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.15s' }}
-                                        onMouseOver={e => (e.currentTarget.style.background = '#f8fafc')}
-                                        onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
-                                        <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a' }}>{p.numero_recu}</td>
-                                        <td style={{ padding: '12px 16px', color: '#64748b' }}>{formatDate(p.date_paiement)}</td>
-                                        <td style={{ padding: '12px 16px', fontWeight: 500, color: '#0f172a' }}>{p.eleve_prenom} {p.eleve_nom}</td>
-                                        <td style={{ padding: '12px 16px', fontWeight: 700, color: p.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(p.montant)}</td>
-                                        <td style={{ padding: '12px 16px', color: '#475569' }}>{modePaiementLabel(p.mode_paiement)}</td>
-                                        <td style={{ padding: '12px 16px', color: '#3b82f6', fontWeight: 500 }}>{p.numero_facture}</td>
-                                        <td style={{ padding: '12px 16px' }}><Badge statut={p.statut} /></td>
-                                        <td style={{ padding: '12px 16px' }}>
-                                            <div style={{ display: 'flex', gap: '6px' }}>
-                                                <button title="Telecharger Recu PDF" onClick={() => downloadRecuPDF(p.paiement_id, p.numero_recu)}
-                                                    style={{ background: '#eff6ff', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
-                                                    <Download size={14} color="#3b82f6" />
-                                                </button>
-                                                <button title="Imprimer Recu" onClick={() => printRecuPDF(p.paiement_id)}
-                                                    style={{ background: '#f0fdf4', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
-                                                    <Printer size={14} color="#10b981" />
-                                                </button>
-                                                {p.statut === 'VALIDE' && (
-                                                    <button title="Annuler ce paiement"
-                                                        onClick={() => { setCancelPaiementId(p.paiement_id); setShowCancelModal(true); }}
-                                                        style={{ background: '#fef2f2', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
-                                                        <Ban size={14} color="#ef4444" />
+                                {groupedPaiements.map(group => (
+                                    <React.Fragment key={group.eleve_nom_complet}>
+                                        <tr style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.15s', cursor: group.historique.length > 1 ? 'pointer' : 'default' }}
+                                            onClick={() => group.historique.length > 1 && setExpandedStudent(expandedStudent === group.eleve_nom_complet ? null : group.eleve_nom_complet)}
+                                            onMouseOver={e => (e.currentTarget.style.background = '#f8fafc')}
+                                            onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
+                                            <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    {group.historique.length > 1 ? (expandedStudent === group.eleve_nom_complet ? <ChevronDown size={16} color="#94a3b8" /> : <ChevronRight size={16} color="#94a3b8" />) : <div style={{width: 16}} />}
+                                                    {group.latest_paiement.numero_recu}
+                                                </div>
+                                            </td>
+                                            <td style={{ padding: '12px 16px', color: '#64748b' }}>{formatDate(group.latest_paiement.date_paiement)}</td>
+                                            <td style={{ padding: '12px 16px', fontWeight: 500, color: '#0f172a' }}>{group.eleve_nom_complet}</td>
+                                            <td style={{ padding: '12px 16px', fontWeight: 700, color: group.latest_paiement.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(group.latest_paiement.montant)}</td>
+                                            <td style={{ padding: '12px 16px', color: '#475569' }}>{modePaiementLabel(group.latest_paiement.mode_paiement)}</td>
+                                            <td style={{ padding: '12px 16px', color: '#3b82f6', fontWeight: 500 }}>{group.latest_paiement.numero_facture}</td>
+                                            <td style={{ padding: '12px 16px' }}><Badge statut={group.latest_paiement.statut} /></td>
+                                            <td style={{ padding: '12px 16px' }}>
+                                                <div style={{ display: 'flex', gap: '6px' }} onClick={e => e.stopPropagation()}>
+                                                    <button title="Telecharger Recu PDF" onClick={() => downloadRecuPDF(group.latest_paiement.paiement_id, group.latest_paiement.numero_recu)}
+                                                        style={{ background: '#eff6ff', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
+                                                        <Download size={14} color="#3b82f6" />
                                                     </button>
-                                                )}
-                                            </div>
-                                        </td>
-                                    </tr>
+                                                    <button title="Imprimer Recu" onClick={() => printRecuPDF(group.latest_paiement.paiement_id)}
+                                                        style={{ background: '#f0fdf4', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
+                                                        <Printer size={14} color="#10b981" />
+                                                    </button>
+                                                    {group.latest_paiement.statut === 'VALIDE' && (
+                                                        <button title="Annuler ce paiement"
+                                                            onClick={() => { setCancelPaiementId(group.latest_paiement.paiement_id); setShowCancelModal(true); }}
+                                                            style={{ background: '#fef2f2', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
+                                                            <Ban size={14} color="#ef4444" />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                        {expandedStudent === group.eleve_nom_complet && group.historique.length > 1 && (
+                                            <tr style={{ background: '#f8fafc' }}>
+                                                <td colSpan={8} style={{ padding: '16px', borderBottom: '1px solid #e2e8f0' }}>
+                                                    <div style={{ background: 'white', borderRadius: '8px', padding: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                                                        <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', color: '#64748b' }}>Historique des paiements ({group.historique.length})</h4>
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                                                            <tbody>
+                                                                {group.historique.map(hp => hp.paiement_id !== group.latest_paiement.paiement_id ? (
+                                                                    <tr key={hp.paiement_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                        <td style={{ padding: '8px', fontWeight: 600 }}>{hp.numero_recu}</td>
+                                                                        <td style={{ padding: '8px', color: '#64748b' }}>{formatDate(hp.date_paiement)}</td>
+                                                                        <td style={{ padding: '8px', fontWeight: 600, color: hp.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(hp.montant)}</td>
+                                                                        <td style={{ padding: '8px' }}>{modePaiementLabel(hp.mode_paiement)}</td>
+                                                                        <td style={{ padding: '8px', color: '#3b82f6' }}>{hp.numero_facture}</td>
+                                                                        <td style={{ padding: '8px' }}><Badge statut={hp.statut} /></td>
+                                                                        <td style={{ padding: '8px', textAlign: 'right' }}>
+                                                                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                                                                                <button title="Telecharger Recu PDF" onClick={() => downloadRecuPDF(hp.paiement_id, hp.numero_recu)}
+                                                                                    style={{ background: '#eff6ff', border: 'none', borderRadius: '6px', padding: '4px', cursor: 'pointer' }}>
+                                                                                    <Download size={12} color="#3b82f6" />
+                                                                                </button>
+                                                                                <button title="Imprimer Recu" onClick={() => printRecuPDF(hp.paiement_id)}
+                                                                                    style={{ background: '#f0fdf4', border: 'none', borderRadius: '6px', padding: '4px', cursor: 'pointer' }}>
+                                                                                    <Printer size={12} color="#10b981" />
+                                                                                </button>
+                                                                                {hp.statut === 'VALIDE' && (
+                                                                                    <button title="Annuler ce paiement"
+                                                                                        onClick={() => { setCancelPaiementId(hp.paiement_id); setShowCancelModal(true); }}
+                                                                                        style={{ background: '#fef2f2', border: 'none', borderRadius: '6px', padding: '4px', cursor: 'pointer' }}>
+                                                                                        <Ban size={12} color="#ef4444" />
+                                                                                    </button>
+                                                                                )}
+                                                                            </div>
+                                                                        </td>
+                                                                    </tr>
+                                                                ) : null)}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </React.Fragment>
                                 ))}
-                                {filteredPaiements.length === 0 && (
+                                {groupedPaiements.length === 0 && (
                                     <tr><td colSpan={8} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>Aucun paiement trouve</td></tr>
                                 )}
                             </tbody>
                         </table>
+                        </div>
                         <Pagination page={pagePaiements} pageSize={pageSize} total={totalPaiements} onPageChange={setPagePaiements} />
                     </div>
                 </div>
@@ -871,29 +1016,64 @@ function GestionPaiements() {
                             </h3>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                            {paiements.filter(p => p.statut === 'VALIDE').slice(0, 20).map(p => (
-                                <div key={p.paiement_id} style={{
-                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                    padding: '12px 16px', borderRadius: '10px', background: '#f8fafc',
-                                }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#ecfdf5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                            <Receipt size={16} color="#10b981" />
+                            {groupedPaiements.filter(g => g.historique.some(p => p.statut === 'VALIDE')).slice(0, 10).map(group => {
+                                const isExpanded = expandedRecuPaiement === group.eleve_nom_complet;
+                                const validHistory = group.historique.filter(p => p.statut === 'VALIDE');
+                                const latestPaiement = validHistory[0];
+                                const hasMultiple = validHistory.length > 1;
+                                return (
+                                    <div key={group.eleve_nom_complet} style={{
+                                        display: 'flex', flexDirection: 'column',
+                                        padding: '12px 16px', borderRadius: '10px', background: '#f8fafc',
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#ecfdf5', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                    <Receipt size={16} color="#10b981" />
+                                                </div>
+                                                <div>
+                                                    <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>{latestPaiement.numero_recu}</p>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '2px 0 0' }}>
+                                                        <span style={{ fontSize: '11px', color: '#94a3b8' }}>{group.eleve_nom_complet} — {formatDate(latestPaiement.date_paiement)}</span>
+                                                        {hasMultiple && (
+                                                            <span onClick={() => setExpandedRecuPaiement(isExpanded ? null : group.eleve_nom_complet)}
+                                                                style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '99px', background: '#e0e7ff', color: '#3730a3', cursor: 'pointer' }}>
+                                                                {validHistory.length} reçus {isExpanded ? '↑' : '↓'}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                <span style={{ fontSize: '14px', fontWeight: 700, color: '#059669' }}>{formatMoney(latestPaiement.montant)}</span>
+                                                <button onClick={() => downloadRecuPDF(latestPaiement.paiement_id, latestPaiement.numero_recu)}
+                                                    style={{ ...btnSecondary, padding: '6px 12px', fontSize: '12px' }}>
+                                                    <Download size={14} /> PDF
+                                                </button>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>{p.numero_recu}</p>
-                                            <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#94a3b8' }}>{p.eleve_prenom} {p.eleve_nom} — {formatDate(p.date_paiement)}</p>
-                                        </div>
+                                        {isExpanded && hasMultiple && (
+                                            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px dashed #cbd5e1', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                                {validHistory.slice(1).map(payment => (
+                                                    <div key={payment.paiement_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingLeft: '48px' }}>
+                                                        <div>
+                                                            <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: '#475569' }}>{payment.numero_recu}</p>
+                                                            <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>{formatDate(payment.date_paiement)}</p>
+                                                        </div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                                            <span style={{ fontSize: '13px', fontWeight: 700, color: '#059669' }}>{formatMoney(payment.montant)}</span>
+                                                            <button onClick={() => downloadRecuPDF(payment.paiement_id, payment.numero_recu)}
+                                                                style={{ background: 'none', border: 'none', padding: '4px', cursor: 'pointer' }}>
+                                                                <Download size={14} color="#3b82f6" />
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <span style={{ fontSize: '14px', fontWeight: 700, color: '#059669' }}>{formatMoney(p.montant)}</span>
-                                        <button onClick={() => downloadRecuPDF(p.paiement_id, p.numero_recu)}
-                                            style={{ ...btnSecondary, padding: '6px 12px', fontSize: '12px' }}>
-                                            <Download size={14} /> PDF
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                 </div>
@@ -1078,9 +1258,11 @@ function GestionPaiements() {
                         })}
                     </div>
 
-                    {/* Tableau des decaissements */}
+                    {/* Tableau des decaissements — meme correctif que le tableau
+                        des paiements ci-dessus. */}
                     <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                        <div className="table-scroll">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '760px' }}>
                             <thead>
                                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                                     {['Date', 'Categorie', 'Description', 'Fournisseur', 'Reference', 'Montant', 'Statut'].map(h => (
@@ -1123,6 +1305,7 @@ function GestionPaiements() {
                                 )}
                             </tbody>
                         </table>
+                        </div>
                         <Pagination page={pageDepenses} pageSize={pageSize} total={totalDepenses} onPageChange={setPageDepenses} />
                     </div>
 

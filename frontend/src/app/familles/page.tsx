@@ -242,7 +242,8 @@ export default function FamillesPage() {
                         </div>
                     ) : (
                         <>
-                            <table className="sp-table">
+                            <div className="table-scroll">
+                            <table className="sp-table" style={{ minWidth: '640px' }}>
                                 <thead>
                                     <tr>
                                         <th>#</th>
@@ -316,6 +317,7 @@ export default function FamillesPage() {
                                     ))}
                                 </tbody>
                             </table>
+                            </div>
 
                             <Pagination page={currentPage} pageSize={pageSize} total={total} onPageChange={setCurrentPage} />
                         </>

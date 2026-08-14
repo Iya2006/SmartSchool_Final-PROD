@@ -7,6 +7,7 @@ import Link from 'next/link';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { getRoleInterfaceSummary } from '@/lib/roleAccess';
+import Pagination from '@/components/Pagination';
 import {
     Activity,
     AlertTriangle,
@@ -135,6 +136,8 @@ interface Stats {
     role: string;
     total: number;
     masse_salariale: number;
+    actifs: number;
+    avec_acces: number;
 }
 
 function formatMoney(n: number) {
@@ -186,11 +189,17 @@ export default function PersonnelPage() {
     const [deleteTarget, setDeleteTarget] = useState<PersonnelMember | null>(null);
     const [actionLoading, setActionLoading] = useState<number | null>(null);
     const [openMenu, setOpenMenu] = useState<number | null>(null);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [total, setTotal] = useState(0);
+    const pageSize = 50;
 
+    // Paginé côté serveur — un établissement à grand effectif ne doit jamais
+    // tout charger d'un coup (avant, /api/personnel n'avait aucune limite).
     const loadAll = useCallback(async () => {
         if (!etablissementId) return;
         setLoading(true);
         try {
+            const skip = (currentPage - 1) * pageSize;
             const [pRes, sRes] = await Promise.all([
                 api.get('/api/personnel', {
                     params: {
@@ -198,22 +207,29 @@ export default function PersonnelPage() {
                         role: filterRole || undefined,
                         statut: filterStatut || undefined,
                         q: searchQ || undefined,
+                        skip,
+                        limit: pageSize,
                     }
                 }),
                 api.get('/api/personnel/stats', { params: { etablissement_id: etablissementId } })
             ]);
             setPersonnel(pRes.data);
+            const totalCount = pRes.headers?.['x-total-count'];
+            setTotal(totalCount !== undefined ? Number(totalCount) : pRes.data.length);
             setStats(sRes.data);
         } catch (e) {
             console.error(e);
         } finally {
             setLoading(false);
         }
-    }, [etablissementId, filterRole, filterStatut, searchQ]);
+    }, [etablissementId, filterRole, filterStatut, searchQ, currentPage]);
 
     useEffect(() => {
         loadAll();
     }, [loadAll]);
+
+    // Recherche/filtre : revenir à la page 1 pour éviter une page vide après filtrage
+    useEffect(() => { setCurrentPage(1); }, [filterRole, filterStatut, searchQ]);
 
     const handleToggleStatut = async (p: PersonnelMember) => {
         setActionLoading(p.utilisateur_id);
@@ -240,17 +256,24 @@ export default function PersonnelPage() {
         }
     };
 
+    // Agrégats calculés sur `stats` (toujours global, un total par rôle sur
+    // TOUT l'établissement) et non plus sur `personnel` (désormais une seule
+    // page de 50 lignes) — sinon ces chiffres n'auraient reflété que la page
+    // affichée à l'écran au lieu de l'effectif réel de l'école.
     const totalPersonnel = stats.reduce((s, r) => s + r.total, 0);
     const totalMasse = stats.reduce((s, r) => s + r.masse_salariale, 0);
-    const totalActifs = personnel.filter((p) => p.statut === 'ACTIF').length;
-    const totalInactifs = personnel.filter((p) => p.statut !== 'ACTIF').length;
-    const totalAvecAcces = personnel.filter((p) => !!p.nom_utilisateur).length;
+    const totalActifs = stats.reduce((s, r) => s + (r.actifs || 0), 0);
+    const totalInactifs = totalPersonnel - totalActifs;
+    const totalAvecAcces = stats.reduce((s, r) => s + (r.avec_acces || 0), 0);
     const totalSansAcces = totalPersonnel - totalAvecAcces;
-    const totalSansInterface = personnel.filter((p) => !getRoleInterfaceSummary(p.role).hasSystemAccess).length;
-    const totalPortailsMetier = personnel.filter((p) => {
-        const summary = getRoleInterfaceSummary(p.role);
-        return summary.hasSystemAccess && summary.redirectPath !== '/dashboard' && !summary.redirectPath.startsWith('/portail-parent') && !summary.redirectPath.startsWith('/portail-eleve') && !summary.redirectPath.startsWith('/portail-enseignant');
-    }).length;
+    const totalSansInterface = stats.reduce((s, r) => {
+        return s + (!getRoleInterfaceSummary(r.role).hasSystemAccess ? r.total : 0);
+    }, 0);
+    const totalPortailsMetier = stats.reduce((s, r) => {
+        const summary = getRoleInterfaceSummary(r.role);
+        const estPortailMetier = summary.hasSystemAccess && summary.redirectPath !== '/dashboard' && !summary.redirectPath.startsWith('/portail-parent') && !summary.redirectPath.startsWith('/portail-eleve') && !summary.redirectPath.startsWith('/portail-enseignant');
+        return s + (estPortailMetier ? r.total : 0);
+    }, 0);
 
     const getRoleConfig = (role: string) => ROLES_CONFIG[role] || ROLES_CONFIG.AUTRE;
 
@@ -784,6 +807,10 @@ export default function PersonnelPage() {
                         })}
                     </AnimatePresence>
                 </section>
+            )}
+
+            {!loading && personnel.length > 0 && (
+                <Pagination page={currentPage} pageSize={pageSize} total={total} onPageChange={setCurrentPage} />
             )}
 
             <AnimatePresence>

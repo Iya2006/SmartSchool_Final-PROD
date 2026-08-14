@@ -7,6 +7,7 @@ Points sensibles couverts : les deux routes de scan QR résolvaient le
 matricule sur TOUTE la plateforme (badge d'une autre école accepté), et la
 galerie photos exposait l'annuaire complet (élèves, enseignants, parents).
 """
+import io
 from datetime import date
 
 import pytest
@@ -17,7 +18,8 @@ from app.core.security import hash_password
 from app.models.academique import (
     ActiviteJour, AnneeScolaire, Classe, Cycle, Devoir, Eleve, EleveParent,
     Enseignant, Etablissement, Evenement, FournitureScolaire, Incident,
-    Inscription, Matiere, Niveau, Parent, PointageEleve, Utilisateur,
+    Inscription, Matiere, Niveau, Parent, PhotoEnAttente, PointageEleve,
+    Utilisateur,
 )
 
 _COUNTER = 0
@@ -230,13 +232,16 @@ class TestPhotosIsolation:
         eleve_b, _ = b.eleve_inscrit(db)
         headers = _headers(client, a.admin.nom_utilisateur)
 
-        resp = client.get("/api/photos/galerie/all", headers=headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["stats"]["total_eleves"] == 1
-        assert data["stats"]["total_enseignants"] == 1
-        tous_eleves = [e for cl in data["eleves_par_classe"] for e in cl["eleves"]]
-        assert all(e["eleve_id"] != eleve_b.eleve_id for e in tous_eleves)
+        meta = client.get("/api/photos/galerie/meta", headers=headers)
+        assert meta.status_code == 200
+        assert meta.json()["stats"]["total_eleves"] == 1
+        assert meta.json()["stats"]["total_enseignants"] == 1
+
+        eleves = client.get("/api/photos/galerie/eleves", headers=headers)
+        assert eleves.status_code == 200
+        ids = {e["eleve_id"] for e in eleves.json()}
+        assert eleve_a.eleve_id in ids
+        assert eleve_b.eleve_id not in ids
 
     def test_get_photo_cross_ecole_404(self, client: TestClient, db: Session):
         a, b = Ecole(db, "PHA"), Ecole(db, "PHB")
@@ -252,6 +257,99 @@ class TestPhotosIsolation:
 
         resp = client.delete(f"/api/photos/enseignant/{b.enseignant.enseignant_id}", headers=headers)
         assert resp.status_code == 404
+
+    def test_login_portail_parent_puis_upload_photo_enfant(self, client: TestClient, db: Session):
+        """Régression : POST /api/portail-parent/login (la route réellement
+        utilisée par le frontend parent, distincte de POST /api/auth/login)
+        omettait `etablissement_id` dans le token émis, ce qui faisait
+        échouer en 403 ("Établissement non déterminé") tout appel protégé
+        par `require_etablissement` — dont l'upload de photo de l'enfant.
+        Reproduit le parcours réel : vrai login parent, puis vrai upload."""
+        a = Ecole(db, "PPL")
+        eleve, _ = a.eleve_inscrit(db)
+        parent = a.parent_de(db, eleve)
+
+        login = client.post("/api/portail-parent/login", json={
+            "telephone": parent.telephone_1, "mot_de_passe": "motdepasse123",
+        })
+        assert login.status_code == 200, login.text
+        token = login.json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        fichier = {"fichier": ("enfant.jpg", io.BytesIO(b"\xff\xd8\xff\xe0fake-jpeg-bytes"), "image/jpeg")}
+        resp = client.post(
+            f"/api/photos/parent-upload/eleve/{eleve.eleve_id}?parent_id={parent.parent_id}",
+            files=fichier, headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["photo_url"]
+
+    def test_parent_envoie_sa_propre_photo_admin_valide(self, client: TestClient, db: Session):
+        """Régression : `_entite_appartient_a_etablissement` vérifiait
+        l'appartenance d'un `parent` à l'établissement via une jointure
+        indirecte EleveParent -> Eleve (motif du Lot 5, avant que `Parent`
+        n'ait sa propre colonne `etablissement_id` NOT NULL, migration
+        2026_08_multi_01). Reproduit le parcours réel signalé par
+        l'utilisateur : le parent envoie SA PROPRE photo (pas celle d'un
+        enfant), l'admin la valide — la colonne directe doit suffire, sans
+        dépendre d'un lien EleveParent particulier."""
+        a = Ecole(db, "PPP")
+        eleve, _ = a.eleve_inscrit(db)
+        parent = a.parent_de(db, eleve)
+        admin_headers = _headers(client, a.admin.nom_utilisateur)
+
+        login = client.post("/api/portail-parent/login", json={
+            "telephone": parent.telephone_1, "mot_de_passe": "motdepasse123",
+        })
+        assert login.status_code == 200, login.text
+        parent_headers = {"Authorization": f"Bearer {login.json()['token']}"}
+
+        fichier = {"fichier": ("moi.jpg", io.BytesIO(b"\xff\xd8\xff\xe0fake-jpeg-parent"), "image/jpeg")}
+        up = client.post(
+            f"/api/photos/parent-upload/parent/{parent.parent_id}?parent_id={parent.parent_id}",
+            files=fichier, headers=parent_headers,
+        )
+        assert up.status_code == 200, up.text
+
+        pending = db.query(PhotoEnAttente).filter_by(
+            entity_type="parent", entity_id=parent.parent_id, statut="EN_ATTENTE",
+        ).first()
+        assert pending is not None
+
+        val = client.post(f"/api/photos/validate/{pending.photo_id}", headers=admin_headers)
+        assert val.status_code == 200, val.text
+        db.refresh(parent)
+        assert parent.photo_url
+
+    def test_modifier_photo_deja_validee_produit_une_url_differente(self, client: TestClient, db: Session):
+        """Régression : le nom de fichier final était stable
+        (`{type}_{id}.ext`) — en modifiant une photo déjà validée, la
+        nouvelle image portait exactement la même URL que l'ancienne, et le
+        navigateur affichait la version mise en cache (l'ancienne),
+        donnant l'impression qu'aucune modification n'avait eu lieu
+        ("je valide mais rien ne se passe"). Vérifie que deux validations
+        successives du même élève produisent deux URLs distinctes."""
+        a = Ecole(db, "PMU")
+        eleve, _ = a.eleve_inscrit(db)
+        headers = _headers(client, a.admin.nom_utilisateur)
+
+        def _upload_et_valider(contenu: bytes) -> str:
+            fichier = {"fichier": ("photo.jpg", io.BytesIO(contenu), "image/jpeg")}
+            up = client.post(f"/api/photos/upload/eleve/{eleve.eleve_id}", files=fichier, headers=headers)
+            assert up.status_code == 200, up.text
+            pending = db.query(PhotoEnAttente).filter_by(
+                entity_type="eleve", entity_id=eleve.eleve_id, statut="EN_ATTENTE",
+            ).first()
+            assert pending is not None
+            val = client.post(f"/api/photos/validate/{pending.photo_id}", headers=headers)
+            assert val.status_code == 200, val.text
+            db.refresh(eleve)
+            return eleve.photo_url
+
+        url_1 = _upload_et_valider(b"\xff\xd8\xff\xe0fake-jpeg-bytes-v1")
+        url_2 = _upload_et_valider(b"\xff\xd8\xff\xe0fake-jpeg-bytes-v2")
+        assert url_1 and url_2
+        assert url_1 != url_2
 
 
 # ══════════════════════════════════════════════════════════════
@@ -471,4 +569,4 @@ class TestSuperAdminPlateformeRefuse:
 
         assert client.get("/api/fournitures", headers=headers).status_code == 403
         assert client.get("/api/evenements", headers=headers).status_code == 403
-        assert client.get("/api/photos/galerie/all", headers=headers).status_code == 403
+        assert client.get("/api/photos/galerie/meta", headers=headers).status_code == 403

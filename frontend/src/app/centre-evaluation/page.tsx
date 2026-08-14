@@ -355,8 +355,8 @@ export default function CentreEvaluationPage() {
                     </div>
 
                     {showManquants && suivi.manquants.length > 0 && (
-                        <div style={{ borderTop: '1px solid var(--border-light)', maxHeight: '360px', overflowY: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                        <div style={{ borderTop: '1px solid var(--border-light)', maxHeight: '360px', overflow: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '480px' }}>
                                 <thead>
                                     <tr style={{ background: '#f8fafc' }}>
                                         {['MATIÈRE', 'ENSEIGNANT', 'CLASSES', ''].map(h => (

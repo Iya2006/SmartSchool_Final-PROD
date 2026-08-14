@@ -249,7 +249,8 @@ export default function EleveArchivePage() {
                                     <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>Historique des Inscriptions</h3>
                                     <span className="no-print" style={{ fontSize: 12, color: '#94a3b8' }}>Cliquez une ligne pour ouvrir son dossier</span>
                                 </div>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <div className="table-scroll">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '700px' }}>
                                     <thead>
                                         <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                                             <th style={{ padding: '16px 24px', fontSize: '13px', color: '#64748b', fontWeight: 700 }}>Année Scolaire</th>
@@ -289,6 +290,7 @@ export default function EleveArchivePage() {
                                         )}
                                     </tbody>
                                 </table>
+                                </div>
                             </div>
                         </motion.div>
                     )}
@@ -305,7 +307,8 @@ export default function EleveArchivePage() {
                                 {dossierLoading ? (
                                     <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}><Loader2 size={24} className="animate-spin" color="#3b82f6" /></div>
                                 ) : dossier && dossier.bulletins.length > 0 ? (
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '600px' }}>
                                         <thead>
                                             <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                                                 <th style={{ padding: '14px 24px', fontSize: '13px', color: '#64748b', fontWeight: 700 }}>Trimestre</th>
@@ -336,6 +339,7 @@ export default function EleveArchivePage() {
                                             ))}
                                         </tbody>
                                     </table>
+                                    </div>
                                 ) : (
                                     <div style={{ padding: '48px', textAlign: 'center', color: '#64748b' }}>
                                         <FileText size={48} style={{ margin: '0 auto 16px', opacity: 0.3, color: '#3b82f6' }} />
