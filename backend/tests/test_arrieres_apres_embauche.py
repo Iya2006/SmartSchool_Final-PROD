@@ -112,12 +112,11 @@ class TestLaListeDesArrieres:
                        headers=h)
         assert r.status_code == 200, r.text
         d = r.json()
-        # Aucun mois antérieur à son arrivée ne lui est dû. Les mois proposés
-        # sont ceux de l'année scolaire (octobre → juin dans ce test), tous
-        # antérieurs à l'embauche du jour : la liste est donc vide, et l'écran
-        # sait dire pourquoi.
-        assert d["mois_du"] == []
-        assert d["total_du"] == 0
+        # Seul le mois de son arrivée peut lui être dû. Tous les mois de
+        # l'année scolaire qui le précèdent sont écartés, et l'écran sait
+        # dire pourquoi la liste est si courte.
+        assert [m["mois_concerne"] for m in d["mois_du"]] == [date.today().strftime("%Y-%m")]
+        assert d["total_du"] == 1000000
         assert d["mois_avant_embauche"] >= 9
         assert d["date_embauche"] == str(date.today())
 
@@ -138,9 +137,16 @@ class TestLaListeDesArrieres:
         assert r.status_code == 200
         d = r.json()
         assert d["mois_avant_embauche"] == 0
-        # Les neuf mois de l'année scolaire (octobre → juin) lui sont dus.
-        assert len(d["mois_du"]) == 9
-        assert d["total_du"] == 9 * 1400000
+        # Tous les mois de l'année scolaire lui sont dus, jusqu'au mois en
+        # cours inclus : le personnel reste employé après juin, et l'école le
+        # paie. Le nombre exact dépend de la date du jour ; ce qui compte,
+        # c'est qu'aucun mois de l'année ne manque et qu'aucun n'aille
+        # au-delà d'aujourd'hui.
+        mois = [m["mois_concerne"] for m in d["mois_du"]]
+        assert mois[0] == "2025-10"
+        assert mois[-1] <= date.today().strftime("%Y-%m")
+        assert len(mois) >= 9
+        assert d["total_du"] == len(mois) * 1400000
 
 
 class TestOnNePaiePasAvantL_arrivee:
