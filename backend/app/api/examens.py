@@ -7,9 +7,12 @@ API pour le module Examens & Évaluations
 
 import os
 import shutil
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import (
+    APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile,
+)
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -18,7 +21,7 @@ from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import (
     SujetExamen, EmploiExamen, CreneauExamen, DemandeEmploi,
     Message, Enseignant, Matiere, Classe, Cycle, ClasseMatiere, Affectation,
-    Trimestre, AnneeScolaire
+    Trimestre, AnneeScolaire, TypeEvaluation
 )
 
 router = APIRouter(prefix="/api/examens", tags=["Examens"])
@@ -292,10 +295,14 @@ async def upload_sujet(
 
 @router.get("/sujets")
 def get_sujets(
+    response: Response,
     enseignant_id: Optional[int] = None,
     trimestre_id: Optional[int] = None,
     trimestre: Optional[int] = None,
     statut: Optional[str] = None,
+    q: Optional[str] = Query(None, description="Recherche titre / matière / classe / enseignant"),
+    skip: int = 0,
+    limit: int = Query(100, le=500),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     etablissement_id: int = Depends(require_etablissement),
@@ -309,14 +316,32 @@ def get_sujets(
 
     `trimestre_id` filtre sur la période réelle ; `trimestre` (numéro) reste
     accepté pour les appelants non mis à jour.
+
+    POURQUOI LA PAGE NE CHARGEAIT PLUS
+    ----------------------------------
+    Cette route renvoyait TOUS les sujets de l'école, et pour chacun d'eux
+    rechargeait l'enseignant, la matière et la classe — une requête chacun.
+    Sur une année complète (2 674 sujets), cela faisait plus de huit mille
+    allers-retours en base pour un seul affichage : le Centre des Examens
+    tournait indéfiniment sans jamais s'afficher.
+
+    Les trois libellés sont maintenant chargés en trois requêtes groupées,
+    quel que soit le nombre de sujets, et la liste est paginée. Le total réel
+    part dans l'en-tête `X-Total-Count`, comme sur les autres listes.
     """
     query = db.query(SujetExamen).join(Enseignant, Enseignant.enseignant_id == SujetExamen.enseignant_id).filter(
         Enseignant.etablissement_id == etablissement_id
     )
     if current_user.get("role") not in ADMIN_TIER_ROLES and current_user.get("type") == "enseignant":
         query = query.filter(SujetExamen.enseignant_id == current_user.get("sub"))
-    elif enseignant_id:
-        query = query.filter(SujetExamen.enseignant_id == enseignant_id)
+    else:
+        # Un brouillon n'est pas un dépôt : l'enseignant ne l'a pas encore
+        # envoyé. L'écran les écartait déjà à l'affichage, mais le total, lui,
+        # les comptait — et une page entière de brouillons paraissait vide
+        # alors que le compteur annonçait des sujets.
+        query = query.filter(SujetExamen.statut != "BROUILLON")
+        if enseignant_id:
+            query = query.filter(SujetExamen.enseignant_id == enseignant_id)
     if trimestre_id:
         query = query.filter(SujetExamen.trimestre_id == trimestre_id)
     elif trimestre:
@@ -324,7 +349,28 @@ def get_sujets(
     if statut:
         query = query.filter(SujetExamen.statut == statut)
 
-    sujets = query.order_by(SujetExamen.date_depot.desc()).all()
+    # La recherche porte sur TOUTE la base, pas sur la page affichée : filtrer
+    # côté navigateur ne trouvait un sujet que s'il était déjà à l'écran, ce
+    # qui rend la loupe trompeuse dès la deuxième page.
+    if q and q.strip():
+        terme = f"%{q.strip()}%"
+        query = (
+            query.outerjoin(Matiere, Matiere.matiere_id == SujetExamen.matiere_id)
+            .outerjoin(Classe, Classe.classe_id == SujetExamen.classe_id)
+            .filter(or_(
+                SujetExamen.titre.ilike(terme),
+                Matiere.libelle.ilike(terme),
+                Classe.libelle.ilike(terme),
+                Enseignant.nom.ilike(terme),
+                Enseignant.prenom.ilike(terme),
+            ))
+        )
+
+    response.headers["X-Total-Count"] = str(query.count())
+    sujets = query.order_by(SujetExamen.date_depot.desc()).offset(skip).limit(limit).all()
+    if not sujets:
+        return []
+
     # Libellés des périodes en une requête : la boucle ci-dessous en émettait
     # déjà trois par sujet, inutile d'en ajouter une quatrième. Restreinte à
     # l'école appelante : `Trimestre` sans filtre chargeait le calendrier de
@@ -336,11 +382,30 @@ def get_sujets(
         .filter(AnneeScolaire.etablissement_id == etablissement_id)
         .all()
     }
+    # Enseignants, matières et classes de la page : trois requêtes au total,
+    # au lieu de trois PAR SUJET.
+    enseignants = {
+        e.enseignant_id: e for e in db.query(Enseignant).filter(
+            Enseignant.enseignant_id.in_({s.enseignant_id for s in sujets})
+        ).all()
+    }
+    matieres = {
+        m.matiere_id: m for m in db.query(Matiere).filter(
+            Matiere.matiere_id.in_({s.matiere_id for s in sujets})
+        ).all()
+    }
+    classe_ids = {s.classe_id for s in sujets if s.classe_id}
+    classes = {
+        c.classe_id: c for c in db.query(Classe).filter(
+            Classe.classe_id.in_(classe_ids)
+        ).all()
+    } if classe_ids else {}
+
     result = []
     for s in sujets:
-        ens = db.query(Enseignant).filter(Enseignant.enseignant_id == s.enseignant_id).first()
-        mat = db.query(Matiere).filter(Matiere.matiere_id == s.matiere_id).first()
-        cls = db.query(Classe).filter(Classe.classe_id == s.classe_id).first() if s.classe_id else None
+        ens = enseignants.get(s.enseignant_id)
+        mat = matieres.get(s.matiere_id)
+        cls = classes.get(s.classe_id) if s.classe_id else None
         result.append({
             "sujet_id": s.sujet_id,
             "demande_id": s.demande_id,
@@ -817,6 +882,11 @@ class DemandeSujets(BaseModel):
     trimestre_id: int
     titre: Optional[str] = None
     description: Optional[str] = None
+    # De quelle épreuve on parle : 2ᵉ évaluation, composition du semestre...
+    # Une année ne contient pas que des compositions.
+    type_eval_id: Optional[int] = None
+    # « avant le 7 novembre » : c'est l'échéance qui fait déposer à l'heure.
+    date_limite: Optional[date] = None
 
 
 @router.post("/sujets/demander", status_code=201)
@@ -837,10 +907,36 @@ def demander_sujets(
     """
     periode = _resoudre_periode(db, data.trimestre_id, None, etablissement_id)
 
-    titre = data.titre or f"Dépôt des sujets d'examen — {periode.libelle}"
+    # NOMMER L'ÉPREUVE, PAS SEULEMENT LA PÉRIODE
+    # « Merci de déposer vos sujets pour le 1er Semestre » reçu en novembre
+    # puis en décembre ne dit pas à l'enseignant s'il s'agit de la même chose.
+    # Une année compte quatre évaluations et trois compositions : chacune a
+    # ses sujets.
+    type_eval = None
+    if data.type_eval_id:
+        type_eval = db.query(TypeEvaluation).filter(
+            TypeEvaluation.type_eval_id == data.type_eval_id,
+            TypeEvaluation.etablissement_id == etablissement_id,
+        ).first()
+        if not type_eval:
+            raise HTTPException(404, "Type d'épreuve non trouvé")
+
+    if data.date_limite and data.date_limite < date.today():
+        raise HTTPException(
+            400,
+            "La date limite est déjà passée : les enseignants ne pourraient pas "
+            "la respecter.",
+        )
+
+    quoi = f"{type_eval.libelle} — {periode.libelle}" if type_eval else periode.libelle
+    titre = data.titre or f"Dépôt des sujets — {quoi}"
+    echeance = (
+        f" Merci de les déposer avant le {data.date_limite.strftime('%d/%m/%Y')}."
+        if data.date_limite else ""
+    )
     description = data.description or (
-        f"Merci de déposer vos sujets d'examen pour {periode.libelle} "
-        "depuis votre portail enseignant, onglet Examens."
+        f"Merci de déposer vos sujets de {quoi} depuis votre portail enseignant, "
+        f"onglet Examens.{echeance}"
     )
 
     demande = DemandeEmploi(
@@ -850,6 +946,8 @@ def demander_sujets(
         objet_type="EXAMENS",
         classes_concernees="TOUTES",
         trimestre=periode.numero,
+        type_eval_id=type_eval.type_eval_id if type_eval else None,
+        date_limite=data.date_limite,
     )
     db.add(demande)
     db.flush()
@@ -865,9 +963,11 @@ def demander_sujets(
     ))
     db.commit()
     return {
-        "message": "Demande envoyée à tous les enseignants.",
+        "message": f"Demande envoyée à tous les enseignants — {quoi}.",
         "demande_id": demande.demande_id,
         "periode": periode.libelle,
+        "epreuve": type_eval.libelle if type_eval else None,
+        "date_limite": str(data.date_limite) if data.date_limite else None,
     }
 
 
@@ -881,6 +981,10 @@ class EmploiExamenCreate(BaseModel):
     date_debut: str  # YYYY-MM-DD
     date_fin: str
     demande_id: Optional[int] = None
+    # De quelle épreuve ce calendrier porte les dates : 2ᵉ évaluation,
+    # composition du semestre... Deux calendriers du même semestre étaient
+    # indiscernables sans lire leurs créneaux.
+    type_eval_id: Optional[int] = None
 
 class CreneauExamenCreate(BaseModel):
     classe_id: int
@@ -896,20 +1000,44 @@ class CreneauExamenCreate(BaseModel):
 
 @router.post("/emploi", status_code=201)
 def creer_emploi_examen(data: EmploiExamenCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Créer un emploi du temps d'examen."""
-    from datetime import date as date_type
+    """Créer le calendrier d'une épreuve : ses dates, ses salles, ses surveillants.
+
+    Il porte les dates d'UNE épreuve — la 2ᵉ évaluation, la composition du
+    1er semestre — pas d'un semestre entier. Une année compte quatre
+    évaluations et trois compositions : sans le type, deux calendriers du même
+    semestre sont indiscernables.
+    """
+    type_eval = None
+    if data.type_eval_id:
+        type_eval = db.query(TypeEvaluation).filter(
+            TypeEvaluation.type_eval_id == data.type_eval_id,
+            TypeEvaluation.etablissement_id == etablissement_id,
+        ).first()
+        if not type_eval:
+            raise HTTPException(404, "Type d'épreuve non trouvé")
+
+    debut = datetime.strptime(data.date_debut, "%Y-%m-%d").date()
+    fin = datetime.strptime(data.date_fin, "%Y-%m-%d").date()
+    if fin < debut:
+        raise HTTPException(400, "La date de fin précède la date de début.")
+
     emploi = EmploiExamen(
         etablissement_id=etablissement_id,
         demande_id=data.demande_id,
         trimestre=data.trimestre,
+        type_eval_id=type_eval.type_eval_id if type_eval else None,
         titre=data.titre,
-        date_debut=datetime.strptime(data.date_debut, "%Y-%m-%d").date(),
-        date_fin=datetime.strptime(data.date_fin, "%Y-%m-%d").date(),
+        date_debut=debut,
+        date_fin=fin,
     )
     db.add(emploi)
     db.commit()
     db.refresh(emploi)
-    return {"message": "Emploi d'examen créé.", "emploi_examen_id": emploi.emploi_examen_id}
+    return {
+        "message": f"Calendrier « {emploi.titre} » créé.",
+        "emploi_examen_id": emploi.emploi_examen_id,
+        "epreuve": type_eval.libelle if type_eval else None,
+    }
 
 
 @router.get("/emploi")
@@ -919,12 +1047,21 @@ def lister_emplois_examen(trimestre: Optional[int] = None, db: Session = Depends
     if trimestre:
         q = q.filter(EmploiExamen.trimestre == trimestre)
     emplois = q.order_by(EmploiExamen.date_creation.desc()).all()
+    # Libellés des types en une requête : la boucle en émettrait un par
+    # calendrier sinon.
+    types = {
+        t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
+        ).all()
+    }
     result = []
     for e in emplois:
         nb = db.query(CreneauExamen).filter(CreneauExamen.emploi_examen_id == e.emploi_examen_id).count()
         result.append({
             "emploi_examen_id": e.emploi_examen_id,
             "trimestre": e.trimestre,
+            "type_eval_id": e.type_eval_id,
+            "type_epreuve": types.get(e.type_eval_id),
             "titre": e.titre,
             "date_debut": str(e.date_debut),
             "date_fin": str(e.date_fin),

@@ -6,7 +6,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import {
     PlusCircle, Trash2, Edit2, CheckCircle2, AlertTriangle, XCircle,
-    Search, RefreshCw, FileText, DollarSign, Users, Calendar,
+    Search, RefreshCw, FileText, Users, Calendar,
     ChevronDown, ChevronRight, Banknote, CreditCard, Smartphone, X, Coins, Lightbulb, Loader2
 } from 'lucide-react';
 import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';

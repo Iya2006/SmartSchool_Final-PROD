@@ -4,11 +4,34 @@ import React, { useState, useEffect } from 'react';
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
 import { motion, AnimatePresence } from 'framer-motion';
+import Link from 'next/link';
 import {
   Shield, Key, Clock, FileText, Save, Loader2, Plus, Trash2, CheckCircle, Lock, Users,
-  AlertTriangle
+  AlertTriangle, UserPlus
 } from 'lucide-react';
 import styles from './Securite.module.css';
+
+// ── LES ESPACES QU'UN RÔLE CRÉÉ PEUT REPRENDRE ───────────────────────────────
+// Une école ne parle pas de « DIRECTEUR_NIVEAU » mais de censeur, de
+// surveillant général, de caissier. Elle doit pouvoir donner ces noms-là à ses
+// agents — sans que cela crée un pouvoir nouveau. Le rôle créé reprend donc
+// l'espace d'un rôle existant, et n'obtient jamais plus que lui.
+// Miroir de `app/core/auth.py::ROLES_ATTRIBUABLES`.
+const ESPACES_DISPONIBLES = [
+  { code: 'DIRECTEUR_NIVEAU', libelle: 'Direction des études', detail: 'Évaluations, notes, bulletins, résultats de fin d’année, examens, archive. Pas la comptabilité.' },
+  { code: 'ADMIN', libelle: 'Administration complète', detail: 'Tous les écrans, comptabilité comprise.' },
+  { code: 'DG', libelle: 'Direction générale', detail: 'Pilotage de l’école, comptabilité comprise.' },
+  { code: 'FONDATEUR', libelle: 'Fondateur', detail: 'Vision exécutive sur toute la plateforme.' },
+  { code: 'COMPTABLE', libelle: 'Comptabilité', detail: 'Encaissements, dépenses, salaires, rapports. Rien de pédagogique.' },
+  { code: 'SURVEILLANT', libelle: 'Surveillance', detail: 'Discipline, présences, remontées terrain.' },
+  { code: 'OPERATEUR', libelle: 'Secrétariat / opérations', detail: 'Accueil, inscriptions, saisie courante.' },
+  { code: 'BIBLIOTHECAIRE', libelle: 'Bibliothèque', detail: 'Fonds documentaire, prêts et retours.' },
+  { code: 'INFORMATICIEN', libelle: 'Informatique', detail: 'Équipements, incidents, support technique.' },
+  { code: 'AGENT_ENTRETIEN', libelle: 'Entretien (sans accès logiciel)', detail: 'Aucun écran : la personne existe en RH et à la paie, sans compte.' },
+  { code: 'GARDIEN', libelle: 'Gardiennage (sans accès logiciel)', detail: 'Aucun écran : la personne existe en RH et à la paie, sans compte.' },
+  { code: 'CHAUFFEUR', libelle: 'Transport (sans accès logiciel)', detail: 'Aucun écran : la personne existe en RH et à la paie, sans compte.' },
+  { code: 'AUTRE', libelle: 'Autre (sans accès logiciel)', detail: 'Aucun écran : la personne existe en RH et à la paie, sans compte.' },
+] as const;
 
 const TABS = [
   { id: 'roles', label: 'Rôles & Permissions', Icon: Shield },
@@ -19,12 +42,35 @@ const TABS = [
 
 type TabId = typeof TABS[number]['id'];
 
+interface Titulaire {
+  utilisateur_id: number;
+  nom: string;
+  prenom: string;
+  nom_utilisateur: string | null;
+  telephone: string | null;
+  email: string | null;
+  statut: string;
+  salaire_base: number;
+  peut_se_connecter: boolean;
+}
+
 interface RoleItem {
-  role_id: number;
+  /** null pour un poste du système : rien à modifier ni à supprimer dessus. */
+  role_id: number | null;
   code: string;
   libelle: string;
   description: string;
   est_systeme: boolean;
+  /** Espace de travail dont ce rôle hérite ses accès. */
+  role_base?: string | null;
+  /** Salaire de référence du poste : pré-remplit la fiche à l'embauche. */
+  salaire_mensuel?: number | null;
+  prime_mensuelle?: number | null;
+  /** Les personnes qui occupent ce poste, avec leur identifiant de connexion. */
+  titulaires?: Titulaire[];
+  nb_titulaires?: number;
+  nb_actifs?: number;
+  attribuable?: boolean;
   permissions: Array<{ module: string; action: string; est_autorise: boolean }>;
 }
 
@@ -47,7 +93,9 @@ export default function SecuritePage() {
 
   // Data states
   const [roles, setRoles] = useState<RoleItem[]>([]);
-  const [selectedRoleId, setSelectedRoleId] = useState<number | null>(null);
+  // Le poste est designe par son code, pas par role_id : les postes du
+  // systeme n'en ont pas, et deux d'entre eux se confondraient sur `null`.
+  const [selectedRoleCode, setSelectedRoleCode] = useState<string | null>(null);
   const [modules, setModules] = useState<Array<{ code: string; libelle: string }>>([]);
   const [actions, setActions] = useState<string[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditItem[]>([]);
@@ -68,6 +116,15 @@ export default function SecuritePage() {
   const [newRoleCode, setNewRoleCode] = useState('');
   const [newRoleLibelle, setNewRoleLibelle] = useState('');
   const [newRoleDesc, setNewRoleDesc] = useState('');
+  // L'espace dont le nouveau rôle hérite. Sans lui, le rôle créé n'ouvrait
+  // aucun écran : la matrice de permissions ne fait que RETIRER des accès,
+  // elle n'en ouvre jamais. Une école obtenait un rôle décoratif.
+  const [newRoleBase, setNewRoleBase] = useState('DIRECTEUR_NIVEAU');
+  // Salaire de RÉFÉRENCE du poste : « un surveillant, c'est 1 400 000 ». Il
+  // pré-remplit la fiche à l'embauche et ne fait pas foi pour la paie — deux
+  // surveillants ne sont pas payés pareil (ancienneté, temps partiel).
+  const [newRoleSalaire, setNewRoleSalaire] = useState('');
+  const [newRolePrime, setNewRolePrime] = useState('');
 
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => {
     setToast({ msg, type });
@@ -83,16 +140,16 @@ export default function SecuritePage() {
     try {
       const [modulesRes, rolesRes, settingsRes, auditRes] = await Promise.all([
         api.get('/api/securite/modules').catch(() => ({ data: { modules: [], actions: [] } })),
-        api.get('/api/securite/roles?etablissement_id=1').catch(() => ({ data: [] })),
-        api.get('/api/parametrage/settings?etablissement_id=1&categorie=SECURITE').catch(() => ({ data: [] })),
-        api.get('/api/securite/audit-log?etablissement_id=1&limit=50').catch(() => ({ data: { items: [] } })),
+        api.get('/api/securite/roles').catch(() => ({ data: [] })),
+        api.get('/api/parametrage/settings?categorie=SECURITE').catch(() => ({ data: [] })),
+        api.get('/api/securite/audit-log?limit=50').catch(() => ({ data: { items: [] } })),
       ]);
 
       setModules(modulesRes.data.modules || []);
       setActions(modulesRes.data.actions || []);
       setRoles(rolesRes.data || []);
       if (rolesRes.data && rolesRes.data.length > 0) {
-        setSelectedRoleId(rolesRes.data[0].role_id);
+        setSelectedRoleCode(rolesRes.data[0].code);
       }
       setAuditLogs(auditRes.data.items || []);
 
@@ -120,17 +177,25 @@ export default function SecuritePage() {
     e.preventDefault();
     if (!newRoleCode || !newRoleLibelle) return;
     try {
+      // `etablissement_id` n'est plus envoyé : le serveur prend celui du
+      // compte connecte. La valeur 1 ecrite ici designait la premiere ecole
+      // inscrite, pas celle de l'utilisateur.
       await api.post('/api/securite/roles', {
         code: newRoleCode,
         libelle: newRoleLibelle,
         description: newRoleDesc,
-        etablissement_id: 1
+        role_base: newRoleBase,
+        salaire_mensuel: newRoleSalaire === '' ? null : Number(newRoleSalaire),
+        prime_mensuelle: newRolePrime === '' ? null : Number(newRolePrime),
       });
       showToast('Rôle créé avec succès');
       setShowRoleModal(false);
       setNewRoleCode('');
       setNewRoleLibelle('');
       setNewRoleDesc('');
+      setNewRoleBase('DIRECTEUR_NIVEAU');
+      setNewRoleSalaire('');
+      setNewRolePrime('');
       loadAllData();
     } catch (err: any) {
       showToast(err.response?.data?.detail || 'Erreur lors de la création du rôle', 'error');
@@ -149,9 +214,10 @@ export default function SecuritePage() {
   };
 
   const togglePermission = async (moduleCode: string, actionCode: string, currentVal: boolean) => {
-    if (!selectedRoleId) return;
+    const role = roles.find(r => r.code === selectedRoleCode);
+    if (!role?.role_id) return;
     const updatedRoles = roles.map(r => {
-      if (r.role_id === selectedRoleId) {
+      if (r.code === selectedRoleCode) {
         const perms = r.permissions.map(p => {
           if (p.module === moduleCode && p.action === actionCode) {
             return { ...p, est_autorise: !currentVal };
@@ -166,7 +232,7 @@ export default function SecuritePage() {
 
     // Immediate API persist for permissions matrix
     try {
-      await api.put(`/api/securite/roles/${selectedRoleId}/permissions`, {
+      await api.put(`/api/securite/roles/${role.role_id}/permissions`, {
         permissions: [{ module: moduleCode, action: actionCode, est_autorise: !currentVal ? 'O' : 'N' }]
       });
       showToast('Permission mise à jour');
@@ -188,7 +254,7 @@ export default function SecuritePage() {
         { etablissement_id: 1, categorie: 'SECURITE', cle: 'securite.session_single_login', valeur: String(singleSession), type_valeur: 'BOOLEAN' },
         { etablissement_id: 1, categorie: 'SECURITE', cle: 'securite.audit_log_active', valeur: String(auditActive), type_valeur: 'BOOLEAN' },
       ];
-      await api.put('/api/parametrage/settings?etablissement_id=1', payload);
+      await api.put('/api/parametrage/settings', payload);
       showToast('Paramètres de sécurité enregistrés avec succès');
       setHasChanges(false);
     } catch (e) {
@@ -198,7 +264,7 @@ export default function SecuritePage() {
     }
   };
 
-  const selectedRole = roles.find(r => r.role_id === selectedRoleId);
+  const selectedRole = roles.find(r => r.code === selectedRoleCode);
 
   return (
     <SettingsLayout
@@ -266,18 +332,76 @@ export default function SecuritePage() {
               <div className={styles.rolesGrid}>
                 {roles.map(role => (
                   <div
-                    key={role.role_id}
-                    className={`${styles.roleCard} ${selectedRoleId === role.role_id ? styles.roleCardActive : ''}`}
-                    onClick={() => setSelectedRoleId(role.role_id)}
+                    key={role.code}
+                    className={`${styles.roleCard} ${selectedRoleCode === role.code ? styles.roleCardActive : ''}`}
+                    onClick={() => setSelectedRoleCode(role.code)}
                   >
                     <div className={styles.roleCardHeader}>
                       <span className={styles.roleTitle}>{role.libelle}</span>
                       {role.est_systeme && <span className={styles.badgeSystem}>Système</span>}
                     </div>
                     <p className={styles.roleDesc}>{role.description || role.code}</p>
-                    {!role.est_systeme && (
+
+                    {/* L'espace où travaille ce rôle, et ce que le poste coûte.
+                        Sans ça, la carte ne dit ni ce que la personne pourra
+                        faire, ni combien elle sera payée. */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                      {role.role_base && (
+                        <span style={{ padding: '2px 9px', borderRadius: 999, background: '#eef2ff', color: '#4338ca', fontSize: '0.7rem', fontWeight: 700 }}>
+                          Espace : {ESPACES_DISPONIBLES.find(e => e.code === role.role_base)?.libelle || role.role_base}
+                        </span>
+                      )}
+                      {role.salaire_mensuel ? (
+                        <span style={{ padding: '2px 9px', borderRadius: 999, background: '#ecfdf5', color: '#047857', fontSize: '0.7rem', fontWeight: 700 }}>
+                          {Number(role.salaire_mensuel).toLocaleString('fr-FR')} GNF / mois
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {/* QUI OCCUPE CE POSTE
+                        Un rôle sans personne derrière est une ligne de
+                        configuration ; avec ses titulaires, c'est un poste.
+                        Chaque nom porte son identifiant de connexion — celui
+                        avec lequel la personne entre réellement. */}
+                    <div style={{ marginTop: 10, borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
+                      {(role.titulaires || []).length === 0 ? (
+                        <p style={{ margin: 0, fontSize: '0.75rem', color: '#94a3b8' }}>
+                          Personne n’occupe encore ce poste.
+                        </p>
+                      ) : (
+                        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          {(role.titulaires || []).slice(0, 4).map((t: any) => (
+                            <li key={t.utilisateur_id} style={{ fontSize: '0.75rem', color: '#334155', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                              <span style={{ fontWeight: 600 }}>
+                                {t.prenom} {t.nom}
+                                {t.statut !== 'ACTIF' && (
+                                  <span style={{ color: '#b45309', fontWeight: 500 }}> — {t.statut.toLowerCase()}</span>
+                                )}
+                              </span>
+                              <span style={{ color: t.peut_se_connecter ? '#64748b' : '#b45309', fontFamily: 'monospace' }}>
+                                {t.nom_utilisateur || 'sans compte'}
+                              </span>
+                            </li>
+                          ))}
+                          {(role.titulaires || []).length > 4 && (
+                            <li style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                              + {(role.titulaires || []).length - 4} autre(s)
+                            </li>
+                          )}
+                        </ul>
+                      )}
+                      <Link
+                        href={`/personnel/nouveau?role=${encodeURIComponent(role.code)}`}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8, fontSize: '0.75rem', fontWeight: 700, color: '#4f46e5', textDecoration: 'none' }}
+                      >
+                        <UserPlus size={13} /> Enregistrer une personne à ce poste
+                      </Link>
+                    </div>
+
+                    {!role.est_systeme && role.role_id != null && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteRole(role.role_id); }}
+                        onClick={(e) => { e.stopPropagation(); handleDeleteRole(role.role_id!); }}
                         style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', marginTop: 8, alignSelf: 'flex-end' }}
                         title="Supprimer le rôle"
                       >
@@ -288,8 +412,19 @@ export default function SecuritePage() {
                 ))}
               </div>
 
+              {/* Un poste du système n'a pas de matrice : ses accès sont ceux
+                  du logiciel. Décocher une case n'aurait rien enregistré. */}
+              {selectedRole && selectedRole.role_id == null && (
+                <div style={{ margin: '24px 0 0', padding: '14px 16px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, fontSize: '0.85rem', color: '#475569', lineHeight: 1.6 }}>
+                  <strong>{selectedRole.libelle}</strong> est un poste du système : ses accès
+                  sont ceux du logiciel et ne se règlent pas ici.
+                  {' '}Pour un poste au nom de votre école, avec des accès que vous restreignez
+                  vous-même, créez un rôle qui reprend cet espace.
+                </div>
+              )}
+
               {/* Permissions Matrix */}
-              {selectedRole && (
+              {selectedRole && selectedRole.role_id != null && (
                 <div>
                   <h4 style={{ margin: '24px 0 12px 0', fontSize: '1rem', fontWeight: 700 }}>
                     Matrice de permissions pour : <span style={{ color: '#4f46e5' }}>{selectedRole.libelle}</span>
@@ -566,12 +701,22 @@ export default function SecuritePage() {
         {showRoleModal && (
           <div style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+            background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            padding: 16,
           }}>
-            <div style={{ background: 'white', borderRadius: 12, padding: 24, width: 420, maxWidth: '90%' }}>
-              <h3 style={{ margin: '0 0 16px 0', fontSize: '1.2rem', fontWeight: 700 }}>Créer un nouveau rôle</h3>
-              <form onSubmit={handleCreateRole}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Le formulaire a grandi (espace de travail, salaire, prime) et la
+                boîte, elle, ne bougeait pas : sur un écran d'ordinateur portable
+                « Créer le rôle » tombait sous le bord et rien ne défilait — le
+                rôle ne pouvait tout simplement pas être enregistré. Le corps
+                défile désormais, les deux boutons restent visibles. */}
+            <div style={{
+              background: 'white', borderRadius: 12, width: 420, maxWidth: '100%',
+              maxHeight: '90vh', display: 'flex', flexDirection: 'column',
+            }}>
+              <h3 style={{ margin: 0, padding: '24px 24px 16px', fontSize: '1.2rem', fontWeight: 700 }}>Créer un nouveau rôle</h3>
+              <form onSubmit={handleCreateRole}
+                style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 24px', overflowY: 'auto', flex: 1 }}>
                   <div>
                     <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Code (ex: CENSEUR)</label>
                     <input
@@ -597,6 +742,64 @@ export default function SecuritePage() {
                     />
                   </div>
                   <div>
+                    <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>
+                      Espace de travail
+                    </label>
+                    <select
+                      className={styles.inputFancy}
+                      style={{ width: '100%', marginTop: 4 }}
+                      value={newRoleBase}
+                      onChange={(e) => setNewRoleBase(e.target.value)}
+                      required
+                    >
+                      {ESPACES_DISPONIBLES.map(esp => (
+                        <option key={esp.code} value={esp.code}>{esp.libelle}</option>
+                      ))}
+                    </select>
+                    <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.5 }}>
+                      Le nouveau rôle travaille dans cet espace, avec exactement les
+                      mêmes accès — jamais plus. Vous pourrez ensuite lui en retirer
+                      dans la matrice ci-dessous, mais pas lui en ajouter.
+                      <br />
+                      <strong style={{ color: '#334155' }}>
+                        {ESPACES_DISPONIBLES.find(e => e.code === newRoleBase)?.detail}
+                      </strong>
+                    </p>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>
+                        Salaire mensuel (GNF)
+                      </label>
+                      <input
+                        type="number" min={0} step={10000}
+                        className={styles.inputFancy}
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={newRoleSalaire}
+                        onChange={(e) => setNewRoleSalaire(e.target.value)}
+                        placeholder="1 400 000"
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>
+                        Prime mensuelle (GNF)
+                      </label>
+                      <input
+                        type="number" min={0} step={10000}
+                        className={styles.inputFancy}
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={newRolePrime}
+                        onChange={(e) => setNewRolePrime(e.target.value)}
+                        placeholder="100 000"
+                      />
+                    </div>
+                  </div>
+                  <p style={{ margin: '-4px 0 0', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.5 }}>
+                    Montant de référence du poste. Il remplit la fiche à l’embauche ;
+                    c’est la fiche de la personne qui fait foi pour la paie — deux
+                    surveillants ne sont pas toujours payés pareil.
+                  </p>
+                  <div>
                     <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Description</label>
                     <textarea
                       className={styles.inputFancy}
@@ -607,7 +810,11 @@ export default function SecuritePage() {
                     />
                   </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'flex-end', gap: 8,
+                  padding: '16px 24px 20px', borderTop: '1px solid #e2e8f0',
+                  background: 'white', borderRadius: '0 0 12px 12px', flexShrink: 0,
+                }}>
                   <button
                     type="button"
                     className={styles.cancelBtn}

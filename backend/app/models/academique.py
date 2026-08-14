@@ -21,8 +21,13 @@ class Utilisateur(Base):
     __tablename__ = "ss_utilisateurs"
     utilisateur_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
-    nom_utilisateur = Column(String(100), unique=True, nullable=False, index=True)
-    mot_de_passe = Column(String(255), nullable=False)
+    # Facultatifs : un gardien, un agent d'entretien ou un chauffeur n'a aucun
+    # écran à consulter, mais il doit exister en base — il faut le payer.
+    # L'absence de mot de passe signifie exactement ce qu'elle dit : pas
+    # d'accès. Voir app/core/security.py::verify_password, qui n'accepte plus
+    # de passe-partout, et la migration 2026_08_personnel_01_compte_facultatif.
+    nom_utilisateur = Column(String(100), unique=True, nullable=True, index=True)
+    mot_de_passe = Column(String(255), nullable=True)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
     email = Column(String(150))
@@ -945,6 +950,15 @@ class DemandeEmploi(Base):
     classes_concernees = Column(Text)  # JSON array of classe_ids, or "TOUTES"
     statut = Column(String(30), default="EN_COURS")  # EN_COURS, CLOTUREE, EMPLOIS_GENERES, PUBLIEE
     trimestre = Column(Integer, nullable=True)  # 1, 2, 3 pour le système guinéen
+    # DE QUELLE ÉPREUVE PARLE-T-ON
+    # Une année ne contient pas que des compositions : à TrillionX, quatre
+    # évaluations et trois compositions. « Déposez vos sujets pour le 1er
+    # Semestre » reçu deux fois en deux mois ne dit pas s'il s'agit de la même
+    # épreuve. Nullable : une campagne peut viser toute la période.
+    # Voir migrations/2026_08_examens_01_type_epreuve.py
+    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=True)
+    # « avant le 7 novembre » : sans échéance, une relance ne s'appuie sur rien.
+    date_limite = Column(Date, nullable=True)
     date_creation = Column(DateTime, server_default=func.now())
     date_cloture = Column(DateTime, nullable=True)
 
@@ -1040,6 +1054,10 @@ class EmploiExamen(Base):
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
     trimestre = Column(Integer, nullable=False)
+    # Le calendrier porte les dates d'UNE épreuve : la 2ᵉ évaluation, la
+    # composition du 1er semestre. Deux calendriers du même semestre étaient
+    # indiscernables sans lire leurs créneaux.
+    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=True)
     titre = Column(String(255), nullable=False)
     date_debut = Column(Date, nullable=False)
     date_fin = Column(Date, nullable=False)
@@ -1392,12 +1410,27 @@ class Avance(Base):
     statut = Column(String(20), default="EN_ATTENTE") # EN_ATTENTE / DEDUITE
 
 class AbsencePersonnel(Base):
+    """Absence d'un membre du personnel, et ce qu'elle coûte.
+
+    Constater et décider sont deux gestes différents. Le surveillant voit
+    qu'un professeur n'est pas venu ; c'est la direction qui décide si cela
+    se retient sur la paie. Sans cette séparation, seule la comptabilité
+    pouvait saisir une absence — et elle n'était pas dans la cour à 8 h.
+    """
     __tablename__ = "ss_absences_personnel"
     absence_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
     date_absence = Column(Date, nullable=False)
     motif = Column(String(200), nullable=True)
     est_justifie = Column(String(1), default="N") # Y / N
+    # SIGNALE : constatée, sans effet sur la paie tant que rien n'est tranché.
+    # VALIDE  : confirmée, la retenue s'applique.
+    # ECARTE  : écartée après vérification, aucune retenue.
+    statut = Column(String(20), default="VALIDE")
+    signale_par = Column(String(120), nullable=True)
+    valide_par = Column(String(120), nullable=True)
+    date_signalement = Column(DateTime, server_default=func.now())
+    date_decision = Column(DateTime, nullable=True)
 
 class Prime(Base):
     __tablename__ = "ss_primes"
@@ -1420,7 +1453,13 @@ class BulletinPaie(Base):
     date_paiement = Column(Date, nullable=True)
     mode_paiement = Column(String(50), nullable=True) # Cash / Mobile Money
     statut = Column(String(20), default="BROUILLON") # BROUILLON / PAYE
-    details_absences = Column(String(500), nullable=True) # Explication textuelle des absences QR et manuelles
+    # TEXT et non VARCHAR(500) : ce champ porte la justification ligne par
+    # ligne d'une retenue — date, horaire, matière, classe, taux de chaque
+    # heure non assurée. Un professeur absent une journée chargée dépassait la
+    # limite, et le paiement de son salaire échouait en erreur serveur. Une
+    # retenue se conteste : son justificatif ne se tronque pas.
+    # Voir migrations/2026_08_paie_01_details_absences_texte.py
+    details_absences = Column(Text, nullable=True)
 
 
 
@@ -1447,6 +1486,22 @@ class Role(Base):
     libelle = Column(String(100), nullable=False)
     description = Column(String(255))
     est_systeme = Column(String(1), default="N")
+    # Le rôle standard dont ce rôle hérite son espace et ses accès.
+    # « Censeur des études » se base sur DIRECTEUR_NIVEAU, « Caissier » sur
+    # COMPTABLE. Sans base, le rôle n'ouvre rien : la matrice de permissions
+    # ne peut que RETIRER un accès, jamais en créer un — c'est ce qui empêche
+    # qu'une case cochée en base donne la finance à un enseignant.
+    # Voir migrations/2026_08_roles_01_role_base.py
+    role_base = Column(String(30), nullable=True)
+    # Salaire de REFERENCE du poste : « un surveillant, c'est 1 400 000 ».
+    # Il pré-remplit la fiche à l'embauche et ne fait PAS foi pour la paie —
+    # deux surveillants ne sont pas payés pareil (ancienneté, temps partiel).
+    # Le montant réel vit sur `Utilisateur.salaire_base`, et lui seul est lu
+    # au moment de payer. Sinon modifier la grille réécrirait en silence la
+    # paie de gens dont le contrat dit autre chose.
+    # Voir migrations/2026_08_roles_02_grille_salariale.py
+    salaire_mensuel = Column(Numeric(15, 2), nullable=True)
+    prime_mensuelle = Column(Numeric(15, 2), nullable=True)
     created_date = Column(DateTime, server_default=func.now())
 
 class Permission(Base):

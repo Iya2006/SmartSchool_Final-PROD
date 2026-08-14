@@ -13,12 +13,19 @@ import api from '@/lib/api';
 import Link from 'next/link';
 
 interface Classe { classe_id: number; libelle: string; }
+// Périodes réelles de l'école : deux semestres, trois trimestres ou tout
+// autre découpage. Rien n'est supposé ici.
+interface Periode { trimestre_id: number; numero: number; libelle: string; statut: string; }
 interface Matiere { matiere_id: number; code: string; libelle: string; }
 interface Enseignant { enseignant_id: number; nom: string; prenom: string; specialite: string | null; }
 interface EmploiExam {
     emploi_examen_id: number; trimestre: number; titre: string;
     date_debut: string; date_fin: string; statut: string; nb_creneaux: number;
+    // De quelle épreuve ce calendrier porte les dates. Sans ça, deux
+    // calendriers du même semestre sont indiscernables.
+    type_eval_id?: number | null; type_epreuve?: string | null;
 }
+interface TypeEpreuve { type_eval_id: number; libelle: string; statut: string; }
 interface Creneau {
     creneau_examen_id: number; classe_id: number; classe_libelle: string;
     matiere_id: number; matiere_libelle: string; matiere_code: string;
@@ -42,10 +49,18 @@ export default function EmploiExamenPage() {
     const showSuccess = (m: string) => { setSuccessMsg(m); setTimeout(() => setSuccessMsg(null), 3500); };
     const showError = (m: string) => { setErrorMsg(m); setTimeout(() => setErrorMsg(null), 4000); };
 
+    // Périodes réelles de l'établissement : le formulaire proposait « T1 T2 T3 »
+    // figés dans le code, donc un T3 inexistant pour une école à deux semestres.
+    const [periodes, setPeriodes] = useState<Periode[]>([]);
+
     // Create form
     const [showCreate, setShowCreate] = useState(false);
     const [newTitre, setNewTitre] = useState('');
     const [newTrimestre, setNewTrimestre] = useState(1);
+    // Une année compte quatre évaluations et trois compositions : le
+    // calendrier porte les dates de l'UNE d'elles, pas d'un semestre entier.
+    const [typesEpreuve, setTypesEpreuve] = useState<TypeEpreuve[]>([]);
+    const [newTypeEpreuve, setNewTypeEpreuve] = useState<number | null>(null);
     const [newDateDebut, setNewDateDebut] = useState('');
     const [newDateFin, setNewDateFin] = useState('');
     const [creating, setCreating] = useState(false);
@@ -72,21 +87,38 @@ export default function EmploiExamenPage() {
 
     const loadData = useCallback(async () => {
         try {
-            const [empR, clR, matR, ensR] = await Promise.all([
+            const [empR, clR, matR, ensR, perR, typR] = await Promise.all([
                 api.get('/api/examens/emploi'),
                 api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
                 api.get('/api/matieres').catch(() => ({ data: [] })),
                 api.get(`/api/enseignants?etablissement_id=${etablissementId}`).catch(() => ({ data: [] })),
+                api.get('/api/examens/periodes').catch(() => ({ data: [] })),
+                api.get('/api/evaluations/types').catch(() => ({ data: [] })),
             ]);
             setEmplois(empR.data);
             setClasses(clR.data);
             setMatieres(matR.data);
             setEnseignants(ensR.data);
+            setPeriodes(perR.data || []);
+            const actifs = (typR.data || []).filter((t: any) => t.statut === 'ACTIF');
+            setTypesEpreuve(actifs);
+            if (actifs.length) setNewTypeEpreuve(actifs[0].type_eval_id);
+            // La période proposée par défaut est une période RÉELLE de l'école,
+            // pas le numéro 1 supposé exister.
+            if (perR.data?.length) {
+                const enCours = perR.data.find((p: Periode) => p.statut === 'EN_COURS');
+                setNewTrimestre((enCours || perR.data[0]).numero);
+            }
             if (clR.data.length > 0) setCrClasse(clR.data[0].classe_id);
             if (matR.data.length > 0) setCrMatiere(matR.data[0].matiere_id);
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
     }, []);
+
+    // Le nom de la période tel que l'école l'a défini : « 1er Semestre » et non
+    // « T1 ». Une école à deux semestres ne se reconnaît pas dans « T3 ».
+    const nomPeriode = (numero: number) =>
+        periodes.find(p => p.numero === numero)?.libelle || `Période ${numero}`;
 
     useEffect(() => { loadData(); }, [loadData]);
 
@@ -95,9 +127,11 @@ export default function EmploiExamenPage() {
         try {
             setCreating(true);
             const res = await api.post('/api/examens/emploi', {
-                trimestre: newTrimestre, titre: newTitre, date_debut: newDateDebut, date_fin: newDateFin,
+                trimestre: newTrimestre, titre: newTitre,
+                date_debut: newDateDebut, date_fin: newDateFin,
+                type_eval_id: newTypeEpreuve,
             });
-            showSuccess('Emploi des examens créé !');
+            showSuccess("Calendrier d'épreuves créé !");
             setShowCreate(false);
             setNewTitre(''); setNewDateDebut(''); setNewDateFin('');
             loadData();
@@ -186,7 +220,7 @@ export default function EmploiExamenPage() {
                 <div className="breadcrumb">
                     <Link href="/">Accueil</Link><ChevronRight size={14} />
                     <Link href="/centre-evaluation">Centre des Examens</Link><ChevronRight size={14} />
-                    <span>Emploi des Examens</span>
+                    <span>Calendrier des épreuves</span>
                 </div>
                 <Link href="/centre-evaluation" style={{
                     display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px',
@@ -213,8 +247,8 @@ export default function EmploiExamenPage() {
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ padding: '14px', borderRadius: '16px', background: 'rgba(255,255,255,0.2)' }}><Calendar size={28} /></div>
                         <div>
-                            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 800 }}>Emploi des Examens</h1>
-                            <p style={{ margin: '4px 0 0', fontSize: '14px', opacity: 0.9 }}>Planification des examens : salles, surveillants, horaires</p>
+                            <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 800 }}>Calendrier des épreuves</h1>
+                            <p style={{ margin: '4px 0 0', fontSize: '14px', opacity: 0.9 }}>Évaluations, compositions et examens : dates, salles, surveillants, horaires</p>
                         </div>
                     </div>
                     <button onClick={() => setShowCreate(true)} style={{
@@ -253,7 +287,7 @@ export default function EmploiExamenPage() {
                                     }}>{e.statut === 'PUBLIE' ? 'Publié' : 'Brouillon'}</span>
                                 </div>
                                 <div style={{ display: 'flex', gap: '14px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Calendar size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> T{e.trimestre}</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><Calendar size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {nomPeriode(e.trimestre)}{e.type_epreuve ? ` · ${e.type_epreuve}` : ''}</span>
                                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><ClipboardList size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> {e.nb_creneaux} créneaux</span>
                                     <span>{e.date_debut} → {e.date_fin}</span>
                                 </div>
@@ -270,7 +304,7 @@ export default function EmploiExamenPage() {
                         <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%)', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div>
                                 <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>{selectedEmploi.titre}</h3>
-                                <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>T{selectedEmploi.trimestre} • {selectedEmploi.date_debut} → {selectedEmploi.date_fin} • {creneaux.length} créneaux</p>
+                                <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>{nomPeriode(selectedEmploi.trimestre)} • {selectedEmploi.date_debut} → {selectedEmploi.date_fin} • {creneaux.length} créneaux</p>
                             </div>
                             <div className="no-print" style={{ display: 'flex', gap: '8px' }}>
                                 {selectedEmploi.statut === 'BROUILLON' && (
@@ -358,25 +392,58 @@ export default function EmploiExamenPage() {
                             style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '480px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }}
                             onClick={e => e.stopPropagation()}>
                             <div style={{ padding: '20px 24px', background: 'linear-gradient(135deg, #7c3aed, #a78bfa)', color: 'white' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Calendar size={18} /><h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Créer un Emploi d&apos;Examens</h3></div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><Calendar size={18} /><h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Nouveau calendrier d&apos;épreuves</h3></div>
                             </div>
                             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                                 <div>
-                                    <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Trimestre *</label>
-                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                        {[1, 2, 3].map(t => (
-                                            <button key={t} onClick={() => setNewTrimestre(t)} style={{
-                                                flex: 1, padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-                                                background: newTrimestre === t ? 'linear-gradient(135deg, #7c3aed, #a78bfa)' : '#f8fafc',
-                                                color: newTrimestre === t ? 'white' : '#64748b',
-                                                border: newTrimestre === t ? 'none' : '1px solid var(--border-light)', cursor: 'pointer'
-                                            }}>T{t}</button>
-                                        ))}
-                                    </div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Période *</label>
+                                    {periodes.length === 0 ? (
+                                        <div style={{ padding: '12px 14px', borderRadius: '10px', background: '#fffbeb', border: '1px solid #fde68a', fontSize: '12.5px', color: '#92400e' }}>
+                                            Aucune période n&apos;est encore définie pour l&apos;année en cours.
+                                            Créez-les dans <strong>Paramètres &gt; Calendrier scolaire</strong> — deux
+                                            semestres, trois trimestres ou tout autre découpage, selon votre école.
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                            {periodes.map(p => (
+                                                <button key={p.trimestre_id} onClick={() => setNewTrimestre(p.numero)} style={{
+                                                    flex: '1 1 140px', padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                                                    background: newTrimestre === p.numero ? 'linear-gradient(135deg, #7c3aed, #a78bfa)' : '#f8fafc',
+                                                    color: newTrimestre === p.numero ? 'white' : '#64748b',
+                                                    border: newTrimestre === p.numero ? 'none' : '1px solid var(--border-light)', cursor: 'pointer'
+                                                }}>{p.libelle}</button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Épreuve *</label>
+                                    {typesEpreuve.length === 0 ? (
+                                        <div style={{ padding: '10px 12px', borderRadius: '10px', background: '#fffbeb', border: '1px solid #fde68a', fontSize: '12.5px', color: '#92400e' }}>
+                                            Aucun type d&apos;épreuve configuré. Créez-les dans
+                                            <strong> Paramètres &gt; Notation</strong>.
+                                        </div>
+                                    ) : (
+                                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                            {typesEpreuve.map(t => (
+                                                <button key={t.type_eval_id} onClick={() => setNewTypeEpreuve(t.type_eval_id)} style={{
+                                                    flex: '1 1 120px', padding: '10px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                                                    background: newTypeEpreuve === t.type_eval_id ? 'linear-gradient(135deg, #7c3aed, #a78bfa)' : '#f8fafc',
+                                                    color: newTypeEpreuve === t.type_eval_id ? 'white' : '#64748b',
+                                                    border: newTypeEpreuve === t.type_eval_id ? 'none' : '1px solid var(--border-light)', cursor: 'pointer'
+                                                }}>{t.libelle}</button>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <p style={{ margin: '6px 0 0', fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                                        Ce calendrier porte les dates d&apos;UNE épreuve. Une année compte
+                                        plusieurs évaluations et plusieurs compositions : sans cette
+                                        précision, deux calendriers du même semestre se ressemblent.
+                                    </p>
                                 </div>
                                 <div>
                                     <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>Titre *</label>
-                                    <input value={newTitre} onChange={e => setNewTitre(e.target.value)} placeholder="Ex: Examens du 1er Trimestre 2025-2026"
+                                    <input value={newTitre} onChange={e => setNewTitre(e.target.value)} placeholder={`Ex : ${typesEpreuve.find(t => t.type_eval_id === newTypeEpreuve)?.libelle || 'Composition'} du ${nomPeriode(newTrimestre)}`}
                                         style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', outline: 'none' }} />
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>

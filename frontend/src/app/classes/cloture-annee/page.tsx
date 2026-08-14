@@ -273,6 +273,75 @@ export default function ClotureAnneePage() {
         }
     };
 
+    /* ═══ IMPORTER LE FICHIER DU MINISTÈRE ═══
+       Saisir 198 candidats à la main pour une seule école est un travail
+       d'après-midi, et une occasion de se tromper 198 fois. Le fichier officiel
+       s'importe donc ici aussi, avec les mêmes appels que l'écran Résultats
+       annuels — analyse d'abord, rien n'est écrit ; confirmation ensuite, sur
+       le rapport tel qu'il a été affiché. Un résultat déjà saisi n'est jamais
+       remplacé sans que l'école ait vu ce qui allait changer. */
+    const fichierRef = useRef<HTMLInputElement>(null);
+    const [rapportImport, setRapportImport] = useState<any>(null);
+    const [importEnCours, setImportEnCours] = useState(false);
+
+    const telechargerModele = async () => {
+        if (!selectedClasse) return;
+        try {
+            const res = await api.get(
+                `/api/promotion/classe/${selectedClasse.classe_id}/resultats-officiels/modele`,
+                { responseType: 'blob' });
+            const url = URL.createObjectURL(new Blob([res.data]));
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `resultats_${selectedClasse.libelle}.csv`.replace(/ /g, '_');
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (e: any) {
+            showMsg(e.response?.data?.detail || 'Échec du téléchargement du modèle.', 'error');
+        }
+    };
+
+    const analyserFichierOfficiel = async (fichier: File) => {
+        if (!selectedClasse) return;
+        setImportEnCours(true);
+        const form = new FormData();
+        form.append('fichier', fichier);
+        try {
+            const res = await api.post(
+                `/api/promotion/classe/${selectedClasse.classe_id}/resultats-officiels/import?dry_run=true`,
+                form, { headers: { 'Content-Type': 'multipart/form-data' } });
+            setRapportImport(res.data);
+        } catch (e: any) {
+            showMsg(e.response?.data?.detail || 'Fichier illisible.', 'error');
+        }
+        setImportEnCours(false);
+        if (fichierRef.current) fichierRef.current.value = '';
+    };
+
+    const confirmerImportOfficiel = async () => {
+        if (!rapportImport) return;
+        setImportEnCours(true);
+        try {
+            await api.post('/api/promotion/resultats-officiels/bulk', {
+                resultats: rapportImport.details.map((d: any) => ({
+                    inscription_id: d.inscription_id,
+                    resultat: d.resultat,
+                    observation: d.observation,
+                })),
+            });
+            showMsg(`${rapportImport.details.length} résultat(s) importé(s).`, 'success');
+            setRapportImport(null);
+            if (selectedClasse && anneeCibleId) {
+                await api.post(`/api/promotion/classe/${selectedClasse.classe_id}/calculer-resultats`, { annee_cible_id: anneeCibleId });
+            }
+            await rafraichirApercu();
+            await loadEtatPromotion();
+        } catch (e: any) {
+            showMsg(e.response?.data?.detail || "Échec de l'import.", 'error');
+        }
+        setImportEnCours(false);
+    };
+
     const calculerResultats = async (classeId: number) => {
         if (!anneeCibleId) { showMsg('Sélectionnez d’abord une année cible.', 'error'); return; }
         setCalculating(true);
@@ -871,9 +940,23 @@ export default function ClotureAnneePage() {
                                     <div style={{ padding: '16px', border: '2px dashed #fb923c', borderRadius: '12px', marginBottom: '16px', background: '#fffbf5' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
                                             <div style={{ fontWeight: 800, fontSize: '14px', color: '#7c2d12' }}>
-                                                Saisie des résultats officiels du Ministère
+                                                Résultats officiels du Ministère
+                                                <span style={{ display: 'block', fontWeight: 500, fontSize: '12px', color: '#9a3412', marginTop: 2 }}>
+                                                    Importez le fichier officiel, ou saisissez ligne par ligne.
+                                                </span>
                                             </div>
-                                            <div style={{ display: 'flex', gap: '8px' }}>
+                                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                                <button type="button" onClick={telechargerModele}
+                                                    style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #d1d5db', background: 'white', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
+                                                    Modèle CSV
+                                                </button>
+                                                <input ref={fichierRef} type="file" accept=".csv,.xlsx,.xls,.txt"
+                                                    onChange={e => { const f = e.target.files?.[0]; if (f) analyserFichierOfficiel(f); }}
+                                                    style={{ display: 'none' }} />
+                                                <button type="button" onClick={() => fichierRef.current?.click()} disabled={importEnCours}
+                                                    style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #fb923c', background: 'white', color: '#c2410c', fontSize: '12px', fontWeight: 700, cursor: importEnCours ? 'wait' : 'pointer' }}>
+                                                    {importEnCours ? 'Lecture…' : 'Importer le fichier'}
+                                                </button>
                                                 <button type="button" onClick={() => {
                                                     const tous: Record<number, string> = {};
                                                     apercu.eleves.forEach(el => { tous[el.inscription_id] = 'ADMIS'; });
@@ -888,6 +971,57 @@ export default function ClotureAnneePage() {
                                                 </button>
                                             </div>
                                         </div>
+
+                                        {/* Ce que l'import ferait, avant de le faire. */}
+                                        {rapportImport && (
+                                            <div style={{ marginBottom: 14, padding: 14, borderRadius: 10, background: 'white', border: '1px solid #fdba74' }}>
+                                                <div style={{ fontSize: 13, fontWeight: 700, color: '#7c2d12', marginBottom: 8 }}>
+                                                    {rapportImport.fichier} — {rapportImport.lignes_lues} ligne(s) lue(s)
+                                                </div>
+                                                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12.5, color: '#334155', marginBottom: 10 }}>
+                                                    <span><strong>{rapportImport.a_appliquer}</strong> à appliquer</span>
+                                                    <span style={{ color: '#15803d' }}><strong>{rapportImport.admis}</strong> admis</span>
+                                                    <span style={{ color: '#b91c1c' }}><strong>{rapportImport.non_admis}</strong> non admis</span>
+                                                    {rapportImport.remplacements > 0 && (
+                                                        <span style={{ color: '#b45309' }}>
+                                                            <strong>{rapportImport.remplacements}</strong> résultat(s) déjà saisi(s) seraient remplacé(s)
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                {(rapportImport.ignorees || []).length > 0 && (
+                                                    <div style={{ padding: 10, borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', marginBottom: 10 }}>
+                                                        <div style={{ fontSize: 12, fontWeight: 700, color: '#991b1b', marginBottom: 4 }}>
+                                                            {rapportImport.ignorees.length} ligne(s) non reprise(s) — elles ne seront pas importées :
+                                                        </div>
+                                                        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#7f1d1d' }}>
+                                                            {rapportImport.ignorees.slice(0, 8).map((ig: any, i: number) => (
+                                                                <li key={i}>Ligne {ig.ligne} — {ig.eleve} : {ig.raison}</li>
+                                                            ))}
+                                                            {rapportImport.ignorees.length > 8 && (
+                                                                <li>+ {rapportImport.ignorees.length - 8} autre(s)</li>
+                                                            )}
+                                                        </ul>
+                                                    </div>
+                                                )}
+                                                {(rapportImport.eleves_sans_resultat || []).length > 0 && (
+                                                    <div style={{ fontSize: 12, color: '#b45309', marginBottom: 10 }}>
+                                                        {rapportImport.eleves_sans_resultat.length} élève(s) de la classe n&apos;apparaissent pas dans le fichier :
+                                                        la validation restera bloquée tant qu&apos;ils n&apos;ont pas de résultat.
+                                                    </div>
+                                                )}
+                                                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                                                    <button type="button" onClick={() => setRapportImport(null)}
+                                                        style={{ padding: '7px 14px', borderRadius: 8, border: '1px solid #e2e8f0', background: 'white', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', color: '#475569' }}>
+                                                        Annuler
+                                                    </button>
+                                                    <button type="button" onClick={confirmerImportOfficiel} disabled={importEnCours || !rapportImport.a_appliquer}
+                                                        style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: '#ea580c', color: 'white', fontSize: 12.5, fontWeight: 700, cursor: importEnCours ? 'wait' : 'pointer', opacity: rapportImport.a_appliquer ? 1 : 0.5 }}>
+                                                        Appliquer ces {rapportImport.a_appliquer} résultat(s)
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+
                                         <div>
                                             {apercu.eleves
                                                 .slice((officielsPage - 1) * OFFICIELS_PAGE_SIZE, officielsPage * OFFICIELS_PAGE_SIZE)

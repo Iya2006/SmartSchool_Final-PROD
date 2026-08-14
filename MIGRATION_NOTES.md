@@ -436,9 +436,72 @@ Les index lèvent le premier plafond, pas les suivants :
 
 À décider quand la courbe réelle sera connue, pas avant.
 
+### Recette du moteur, jouée sur les données réelles (14/08/2026)
+
+Recalcul **à la main**, indépendant du moteur, sur un élève de 10ème Année A
+(classe d'examen), école 3 — les trois étages concordent au centime :
+
+| | À la main | Moteur |
+|---|---|---|
+| 12 moyennes de matière | 2,77 → 8,56 | identiques |
+| Moyenne générale de période | 6,12 | 6,12 (rang 27/28) |
+| Moyenne annuelle | 5,92 | 5,92 |
+
+Volumétrie réellement traversée : **2 semestres** (et non trois — le nombre de
+périodes libre est donc exercé, pas seulement codé), 78 750 notes, 238
+compositions groupées, 2 000 bulletins de période, 1 000 bulletins annuels, 7
+classes d'examen et 198 résultats officiels saisis.
+
+Répartition obtenue : médiane 11,32/20, 65 % au-dessus de 10. Réussite aux
+examens nationaux : 82 % au CEE, 64 % au BEPC, 55 % au BAC. Chiffres plausibles
+pour un établissement guinéen — le moteur ne produit ni notes tassées ni
+classements aberrants.
+
+Reste ouvert : la recette par un **vrai** établissement pilote, sur ses propres
+élèves. Celle-ci prouve le calcul, pas l'adéquation aux usages d'une école
+donnée.
+
+---
+
+## 5. La scolarité suit l'élève (14/08/2026)
+
+Deux défauts trouvés en vérifiant le parcours d'inscription. Couverts par
+`tests/test_scolarite_suit_l_eleve.py` (10 tests).
+
+**L'inscription d'un nouvel élève ne facturait rien.** L'écran préchargeait les
+montants depuis `ss_types_frais.montant_defaut` — le défaut d'établissement, qui
+vaut **0** dans une école tarifant par classe (le cas de l'école 3 : 68 tarifs
+configurés, tous les défauts à 0). Le formulaire envoyait donc `montant: 0`, et
+le serveur faisait `if montant <= 0: continue`. L'élève était créé, inscrit,
+assis dans sa classe… et ne devait rien. Aucune facture, aucune erreur, aucun
+message. L'école perdait la scolarité en silence.
+
+Corrigé des deux côtés :
+- *Serveur* — sans montants envoyés, la grille obligatoire de la classe
+  s'applique d'elle-même, via `_generer_frais_reinscription` (la règle n'est
+  écrite qu'à un seul endroit). Un frais coché à 0 alors que la classe a un
+  tarif prend le tarif : un 0 venu d'un écran n'est pas une gratuité.
+- *Écran* — choisir une classe charge sa grille réelle
+  (`GET /api/finance/tarifs-classe`), affiche le total des frais obligatoires,
+  et signale explicitement une classe sans tarif au lieu de laisser croire que
+  tout est en ordre.
+
+Inchangé : un montant client qui **contredit** la grille reste refusé (400).
+
+**La réinscription plantait en 500.** `_generer_frais_reinscription` lisait
+`etablissement_id` comme s'il venait du contexte alors qu'il n'était pas un
+paramètre : `NameError` sur la toute première facture. Invisible jusque-là parce
+que la fonction sort avant (`if not tarifs: return 0`) quand la classe cible n'a
+aucun tarif — donc seule une école qui a posé sa grille tombait dessus, c'est-à-
+dire une école qui travaille pour de vrai. `etablissement_id` est désormais un
+paramètre explicite.
+
+---
+
 ### Reste à faire
 
 - [ ] Recette fonctionnelle par l'établissement pilote sur une classe réelle
+      (le calcul lui-même est vérifié, cf. section 4)
 - [ ] Purge éventuelle de `poids_pourcentage` (UI et colonne) une fois la refonte stabilisée
 - [x] ~~Uniformiser `etablissement_id` dans le reste de l'application~~ — fait par le
       chantier multi-écoles (13 lots) puis étendu à nos 33 routes lors de la fusion

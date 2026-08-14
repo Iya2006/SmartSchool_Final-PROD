@@ -88,3 +88,6 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Dumps de base pris avant une migration : des donnees d ecole, pas du code.
+backups/

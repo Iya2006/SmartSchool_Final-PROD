@@ -97,6 +97,48 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 app.add_middleware(SecurityHeadersMiddleware)
 
 
+# ── Combien de requêtes ce processus traite-t-il vraiment en même temps ? ──
+#
+# Toutes nos routes sont synchrones (`def`, pas `async def`) : FastAPI les
+# exécute dans un pool de fils d'exécution qui en accepte 40 par défaut. Le
+# pool de connexions à la base, lui, en offrait 10. Trente requêtes attendaient
+# donc une connexion qui ne venait pas, et finissaient en erreur 500 au bout du
+# délai d'attente — pas en lenteur, en panne.
+#
+# On aligne les deux. Une requête de trop attend alors son tour ICI, sans
+# détenir de connexion à la base, et repart dès qu'une place se libère. C'est
+# une file d'attente équitable au lieu d'une bousculade qui expire.
+#
+# `DB_CAPACITE` vient de app/core/database.py : c'est pool_size + max_overflow.
+# Changer l'un sans l'autre recréerait exactement le déséquilibre corrigé ici,
+# d'où la valeur unique et partagée.
+@app.on_event("startup")
+def _aligner_capacite_de_traitement() -> None:
+    # `logging` plutôt qu'un `logger` de module : ce fichier n'en définit pas,
+    # et un garde-fou qui journalise avec un nom inexistant empêche le
+    # démarrage au lieu de le protéger — c'est exactement ce qui s'est produit
+    # à la première écriture de cette fonction.
+    import logging
+
+    import anyio.to_thread
+
+    from app.core.database import DB_CAPACITE
+
+    journal = logging.getLogger("smartschool.capacite")
+    try:
+        limiteur = anyio.to_thread.current_default_thread_limiter()
+        limiteur.total_tokens = DB_CAPACITE
+        journal.info(
+            "Capacite du processus : %d requetes simultanees, alignee sur le "
+            "pool de connexions.", DB_CAPACITE,
+        )
+    except Exception as exc:  # pragma: no cover - dépend de la version d'anyio
+        # Ne jamais empêcher le démarrage pour un réglage de performance : sans
+        # cet alignement l'application fonctionne, elle encaisse simplement
+        # moins de monde.
+        journal.warning("Alignement de la capacite impossible : %s", exc)
+
+
 # ── CORS ──
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3100,http://127.0.0.1:3100,http://localhost:3300,http://127.0.0.1:3300")
 app.add_middleware(
@@ -139,10 +181,21 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 from fastapi import Depends
 from app.core.auth import get_current_user, require_module, require_roles, ADMIN_TIER_ROLES
 
-# Rôles autorisés sur les modules Finance / Comptabilité :
-# l'équipe de direction (ADMIN_TIER_ROLES) + le rôle COMPTABLE dédié.
-# Aucun rôle externe (ENSEIGNANT, PARENT, ELEVE) ne doit jamais y avoir accès.
-FINANCE_ROLES = (*ADMIN_TIER_ROLES, "COMPTABLE")
+# Rôles autorisés sur les modules Finance / Comptabilité.
+#
+# LA CAISSE N'EST PAS UN DROIT QUI SE DÉLÈGUE AVEC LE RESTE
+# Le DIRECTEUR_NIVEAU est le bras pédagogique de la direction : l'école lui
+# confie les évaluations, la centralisation des notes, les bulletins, les
+# résultats de fin d'année, le centre des examens et l'archive scolaire. Il a
+# donc les mêmes droits que l'administrateur — SAUF la comptabilité. Cet
+# écran-là reste à l'administrateur, à la direction générale et au comptable,
+# et à personne d'autre.
+#
+# Il faisait partie de FINANCE_ROLES par simple héritage d'ADMIN_TIER_ROLES :
+# le frontend lui fermait /comptabilite, mais l'API lui ouvrait les
+# encaissements, les salaires et le grand livre à qui savait appeler la route.
+# Un blocage qui n'existe que dans le navigateur n'est pas un blocage.
+FINANCE_ROLES = ("SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "COMPTABLE")
 
 # RH / Personnel : direction + rôles métiers internes autorisés à consulter leur espace.
 PERSONNEL_ROLES = (

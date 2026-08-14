@@ -432,8 +432,12 @@ class TestSecuriteIsolation:
 
         resp = client.post(
             "/api/securite/roles",
+            # `role_base` est devenu obligatoire depuis : un rôle qui ne
+            # reprend l'espace d'aucun rôle standard n'ouvre aucun écran, et
+            # l'écran fabriquait des rôles décoratifs. Ce test-ci ne porte pas
+            # sur cette règle, mais sur l'école à laquelle le rôle se rattache.
             json={"etablissement_id": b.etab.etablissement_id, "code": f"NEW{_uid()}",
-                  "libelle": "Nouveau rôle"},
+                  "libelle": "Nouveau rôle", "role_base": "SURVEILLANT"},
             headers=headers,
         )
         assert resp.status_code == 201, resp.text

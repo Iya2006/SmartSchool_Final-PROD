@@ -52,6 +52,8 @@ const STATUT_CONFIG: Record<string, { label: string; color: string; bg: string; 
     REJETE: { label: 'Rejeté', color: '#dc2626', bg: '#fee2e2', icon: XCircle },
 };
 
+const SUJETS_PAR_PAGE = 50;
+
 export default function CentreEvaluationPage() {
     const [loading, setLoading] = useState(true);
     const [sujets, setSujets] = useState<SujetItem[]>([]);
@@ -67,8 +69,18 @@ export default function CentreEvaluationPage() {
     const [demandeOuverte, setDemandeOuverte] = useState(false);
     const [demandePeriode, setDemandePeriode] = useState<number | null>(null);
     const [demandeMessage, setDemandeMessage] = useState('');
+    // DE QUELLE ÉPREUVE PARLE-T-ON
+    // Une année ne contient pas que des compositions : à TrillionX, quatre
+    // évaluations et trois compositions. « Déposez vos sujets pour le 1er
+    // Semestre » reçu deux fois en deux mois ne dit pas à l'enseignant s'il
+    // s'agit de la même chose.
+    const [typesEpreuve, setTypesEpreuve] = useState<{ type_eval_id: number; libelle: string }[]>([]);
+    const [demandeType, setDemandeType] = useState<number | null>(null);
+    const [demandeEcheance, setDemandeEcheance] = useState('');
     const [envoiDemande, setEnvoiDemande] = useState(false);
     const [searchQ, setSearchQ] = useState('');
+    const [page, setPage] = useState(0);
+    const [totalSujets, setTotalSujets] = useState(0);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
     const [previewSujet, setPreviewSujet] = useState<SujetItem | null>(null);
@@ -89,29 +101,64 @@ export default function CentreEvaluationPage() {
             link.click();
             link.remove();
             window.URL.revokeObjectURL(url);
-        } catch {
-            alert('Erreur lors du téléchargement du fichier.');
+        } catch (err: any) {
+            // « Erreur lors du téléchargement » ne disait pas si le fichier
+            // manquait, si l'accès était refusé ou si le serveur était
+            // injoignable — trois causes, trois gestes différents.
+            // La réponse est un blob (responseType: 'blob') : il faut le lire
+            // en texte pour retrouver le message du serveur.
+            let raison = '';
+            const statut = err?.response?.status;
+            try {
+                const corps = err?.response?.data;
+                if (corps instanceof Blob) raison = JSON.parse(await corps.text())?.detail || '';
+                else raison = corps?.detail || '';
+            } catch { /* réponse illisible : on retombe sur le statut */ }
+
+            if (!statut) showError("Serveur injoignable — le sujet n'a pas pu être demandé.");
+            else if (statut === 404) showError(raison || "Ce sujet n'a aucun fichier sur le serveur.");
+            else if (statut === 403) showError(raison || "Vous n'avez pas accès à ce sujet.");
+            else showError(raison || `Téléchargement refusé (erreur ${statut}).`);
         }
     };
 
+    // Le filtre, la recherche et la pagination partent au serveur. Filtrer
+    // 2 674 sujets dans le navigateur demandait de tous les charger d'abord :
+    // la page tournait sans jamais s'afficher, et la loupe ne trouvait de
+    // toute façon que ce qui était déjà à l'écran.
     const loadData = useCallback(async () => {
         try {
             const filtre = filterTrimestre ? `?trimestre_id=${filterTrimestre}` : '';
-            const [sujR, statsR, perR, suiviR] = await Promise.all([
-                api.get('/api/examens/sujets'),
+            const params: Record<string, string | number> = {
+                skip: page * SUJETS_PAR_PAGE, limit: SUJETS_PAR_PAGE,
+            };
+            if (filterTrimestre) params.trimestre_id = filterTrimestre;
+            if (filterStatut) params.statut = filterStatut;
+            if (searchQ.trim()) params.q = searchQ.trim();
+
+            const [sujR, statsR, perR, suiviR, typesR] = await Promise.all([
+                api.get('/api/examens/sujets', { params }),
                 api.get(`/api/examens/admin/stats${filtre}`),
                 api.get('/api/examens/periodes').catch(() => ({ data: [] })),
                 api.get(`/api/examens/sujets/suivi${filtre}`).catch(() => ({ data: null })),
+                api.get('/api/evaluations/types').catch(() => ({ data: [] })),
             ]);
             setSujets(sujR.data);
+            setTotalSujets(Number(sujR.headers?.['x-total-count'] ?? sujR.data.length));
             setStats(statsR.data);
             setPeriodes(perR.data || []);
             setSuivi(suiviR.data);
+            setTypesEpreuve((typesR.data || []).filter((t: any) => t.statut === 'ACTIF'));
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
-    }, [filterTrimestre]);
+    }, [filterTrimestre, filterStatut, searchQ, page]);
 
     useEffect(() => { loadData(); }, [loadData]);
+
+    // Changer de filtre remet à la première page : rester en page 7 d'une
+    // liste qui n'en compte plus que 2 affiche un tableau vide, qu'on lit
+    // comme « aucun sujet ».
+    useEffect(() => { setPage(0); }, [filterTrimestre, filterStatut, searchQ]);
 
     // Réclamer les sujets se faisait uniquement depuis l'écran Communication :
     // le Centre des Examens, seul endroit où l'on constate l'absence, n'offrait
@@ -123,6 +170,8 @@ export default function CentreEvaluationPage() {
         try {
             const res = await api.post('/api/examens/sujets/demander', {
                 trimestre_id: periodeId,
+                type_eval_id: demandeType || undefined,
+                date_limite: demandeEcheance || undefined,
                 description: demandeMessage || undefined,
             });
             showSuccess(res.data.message || 'Demande envoyée aux enseignants.');
@@ -171,17 +220,10 @@ export default function CentreEvaluationPage() {
         return (bytes / 1048576).toFixed(1) + ' MB';
     };
 
-    // Filter sujets - only show ENVOYE and above for admin
-    const adminSujets = sujets.filter(s => s.statut !== 'BROUILLON');
-    const filtered = adminSujets.filter(s => {
-        if (filterStatut && s.statut !== filterStatut) return false;
-        if (filterTrimestre && s.trimestre_id !== filterTrimestre) return false;
-        if (searchQ) {
-            const q = searchQ.toLowerCase();
-            return s.enseignant_nom.toLowerCase().includes(q) || s.matiere_libelle.toLowerCase().includes(q) || s.titre.toLowerCase().includes(q);
-        }
-        return true;
-    });
+    // Le tri est fait par le serveur (statut, période, recherche, brouillons
+    // écartés) : ce qui arrive ici est déjà la page à afficher.
+    const filtered = sujets;
+    const nbPages = Math.max(1, Math.ceil(totalSujets / SUJETS_PAR_PAGE));
 
     if (loading) return (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '70vh', flexDirection: 'column', gap: '16px' }}>
@@ -242,7 +284,7 @@ export default function CentreEvaluationPage() {
                             background: 'rgba(255,255,255,0.2)', backdropFilter: 'blur(10px)', color: 'white',
                             textDecoration: 'none', fontSize: '13px', fontWeight: 700, border: '1px solid rgba(255,255,255,0.3)'
                         }}>
-                            <Clock size={15} /> Emploi des Examens
+                            <Clock size={15} /> Calendrier des épreuves
                         </Link>
                     </div>
                 </div>
@@ -484,6 +526,29 @@ export default function CentreEvaluationPage() {
                         })}
                     </div>
                 )}
+
+                {/* Combien il y en a vraiment, et où on en est dedans. Sans ça
+                    l'écran laisse croire que l'école n'a reçu que 50 sujets. */}
+                {totalSujets > 0 && (
+                    <div style={{ marginTop: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                            {totalSujets} sujet{totalSujets > 1 ? 's' : ''} déposé{totalSujets > 1 ? 's' : ''}
+                            {nbPages > 1 && <> — page {page + 1} sur {nbPages}</>}
+                        </span>
+                        {nbPages > 1 && (
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
+                                    style={{ padding: '8px 16px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'white', fontSize: '13px', fontWeight: 600, cursor: page === 0 ? 'not-allowed' : 'pointer', opacity: page === 0 ? 0.45 : 1 }}>
+                                    ← Précédent
+                                </button>
+                                <button onClick={() => setPage(p => Math.min(nbPages - 1, p + 1))} disabled={page >= nbPages - 1}
+                                    style={{ padding: '8px 16px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'white', fontSize: '13px', fontWeight: 600, cursor: page >= nbPages - 1 ? 'not-allowed' : 'pointer', opacity: page >= nbPages - 1 ? 0.45 : 1 }}>
+                                    Suivant →
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                )}
             </motion.div>
 
             {/* Reject Modal */}
@@ -553,6 +618,28 @@ export default function CentreEvaluationPage() {
                                             <option key={p.trimestre_id} value={p.trimestre_id}>{p.libelle}</option>
                                         ))}
                                     </select>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>ÉPREUVE</label>
+                                        <select value={demandeType ?? ''} onChange={e => setDemandeType(Number(e.target.value) || null)}
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13.5px', fontWeight: 600 }}>
+                                            <option value="">Toute la période</option>
+                                            {typesEpreuve.map(t => (
+                                                <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>À DÉPOSER AVANT LE</label>
+                                        <input type="date" value={demandeEcheance} onChange={e => setDemandeEcheance(e.target.value)}
+                                            min={new Date().toISOString().slice(0, 10)}
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13.5px', fontWeight: 600 }} />
+                                    </div>
+                                </div>
+                                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '-6px' }}>
+                                    Sans échéance, une relance ne s’appuie sur rien. Sans épreuve
+                                    précisée, la demande vaut pour toute la période.
                                 </div>
                                 <div>
                                     <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>MESSAGE (FACULTATIF)</label>

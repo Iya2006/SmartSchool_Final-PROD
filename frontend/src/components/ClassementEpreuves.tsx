@@ -52,7 +52,9 @@ interface Props {
      *  `/api/portail-parent/3/enfant/12`. L'identifiant vient toujours du
      *  contexte d'authentification, jamais d'une saisie. */
     baseUrl: string;
-    trimestreId: number;
+    // Peut être null tant que les périodes de l'école ne sont pas chargées :
+    // le serveur choisit alors celle en cours plutôt qu'un identifiant deviné.
+    trimestreId: number | null;
     couleur: string;
     /** Libellé de la période, pour que l'écran dise « 2ème Trimestre » et non « 2 ». */
     periodeLibelle?: string;
@@ -71,7 +73,7 @@ export default function ClassementEpreuves({ baseUrl, trimestreId, couleur, peri
         let annule = false;
         setChargementListe(true);
         setErreur(null);
-        api.get(`${baseUrl}/epreuves?trimestre_id=${trimestreId}`)
+        api.get(`${baseUrl}/epreuves${trimestreId ? `?trimestre_id=${trimestreId}` : ''}`)
             .then(res => {
                 if (annule) return;
                 const liste: Epreuve[] = res.data?.epreuves || [];
@@ -93,7 +95,7 @@ export default function ClassementEpreuves({ baseUrl, trimestreId, couleur, peri
         setChargementResultat(true);
         setErreur(null);
         const ids = epreuve.evaluation_ids.join(',');
-        api.get(`${baseUrl}/classement?trimestre_id=${trimestreId}&evaluation_ids=${ids}`)
+        api.get(`${baseUrl}/classement?evaluation_ids=${ids}${trimestreId ? `&trimestre_id=${trimestreId}` : ''}`)
             .then(res => setResultat(res.data))
             .catch(err => {
                 setResultat(null);

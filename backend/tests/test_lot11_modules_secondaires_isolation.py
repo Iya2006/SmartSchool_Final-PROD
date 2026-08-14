@@ -249,7 +249,13 @@ class TestBibliothequeIsolation:
             headers=headers,
         )
         assert resp.status_code == 404
-        assert db.query(Emprunt).count() == 0
+        # Ce qui compte : la demande refusee n'a cree AUCUN pret sur cet
+        # exemplaire. Compter les emprunts de toute la base rendait ce test
+        # dependant des fichiers joues avant lui — il echouait des qu'un autre
+        # test de bibliotheque avait laisse un pret derriere lui.
+        assert db.query(Emprunt).filter(
+            Emprunt.exemplaire_id == ex_b.exemplaire_id
+        ).count() == 0
         db.refresh(ex_b)
         assert ex_b.statut == "DISPONIBLE"
 

@@ -661,6 +661,12 @@ class PaiementBase(BaseModel):
     montant: float
     mode_paiement: str
     reference_externe: Optional[str] = None
+    # Le jour où l'argent est REELLEMENT entré en caisse. Absent = aujourd'hui.
+    # Sans ce champ, le comptable qui saisit mardi les recettes de lundi les
+    # datait de mardi : la recette du jour, le rapport mensuel et le journal
+    # comptable portaient tous une date fausse, et le rapprochement de caisse
+    # ne tombait jamais juste.
+    date_paiement: Optional[date] = None
 
 class PaiementCreate(PaiementBase): pass
 class PaiementOut(OrmBase):
@@ -707,11 +713,22 @@ class PresenceBase(BaseModel):
     demi_journee: str
     statut_presence: str
     motif: Optional[str] = None
+    # « Justifiée ou non » est la seule chose qui distingue une absence
+    # ordinaire d'une absence dont l'école doit s'inquiéter — c'est ce que
+    # compte le tableau du surveillant. Le champ existait en base et dans la
+    # réponse, mais pas dans ce qu'on pouvait ENVOYER : une absence saisie
+    # restait donc systématiquement « non justifiée », même avec un mot des
+    # parents en main.
+    est_justifie: Optional[str] = "N"
+    # Au collège et au lycée l'appel se fait par matière : le pointage se
+    # rattache alors à la séance de ce créneau-là. Au primaire, un seul maître
+    # tient la classe toute la journée et le pointage porte sur la
+    # demi-journée — d'où l'absence de séance.
+    seance_id: Optional[int] = None
 
 class PresenceCreate(PresenceBase): pass
 class PresenceOut(OrmBase, PresenceBase):
     presence_id: int
-    est_justifie: str = "N"
 
 class IncidentBase(BaseModel):
     eleve_id: int

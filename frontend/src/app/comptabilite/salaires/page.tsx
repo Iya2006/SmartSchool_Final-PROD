@@ -95,6 +95,14 @@ function SalairesContent() {
     });
 
     const [paydayDate, setPaydayDate] = useState('');
+    // Combien de jours nous separent du versement. Negatif = la date est
+    // passee et le personnel attend : c'est ce que l'ecran doit crier.
+    const joursAvantPaie = useMemo(() => {
+        if (!paydayDate) return null;
+        const jour = new Date(paydayDate); jour.setHours(0, 0, 0, 0);
+        const aujourdhui = new Date(); aujourdhui.setHours(0, 0, 0, 0);
+        return Math.round((jour.getTime() - aujourdhui.getTime()) / 86400000);
+    }, [paydayDate]);
     const [savingPayday, setSavingPayday] = useState(false);
 
     // Primes / avances / absences
@@ -135,9 +143,12 @@ function SalairesContent() {
 
     // ─── Le personnel ────────────────────────────────────────────────────
     const { data: employesRaw, isLoading: empLoading } = useQuery({
-        queryKey: ['salaires-employes', etablissementId],
+        queryKey: ['salaires-employes', etablissementId, selectedMonth],
         queryFn: async () => {
-            const res = await api.get(`/api/finance/salaires/employes?etablissement_id=${etablissementId}`);
+            // Le mois est transmis : sans lui, « payé ce mois » se calculait
+            // sur le mois en cours et non sur celui que le comptable regarde.
+            const res = await api.get(
+                `/api/finance/salaires/employes?etablissement_id=${etablissementId}&mois=${selectedMonth}`);
             return (res.data || []).map((emp: any) => ({
                 ...emp, employe_id: emp.id, poste: emp.role_label,
             }));
@@ -146,13 +157,39 @@ function SalairesContent() {
     });
     const employes: any[] = useMemo(() => employesRaw || [], [employesRaw]);
 
+    // ── DEUX METIERS, DEUX LISTES ────────────────────────────────────────
+    // Un enseignant du secondaire est payé aux heures qu'il assure ; un
+    // surveillant, un comptable, un gardien touchent un montant fixe par mois.
+    // Mélangés dans un seul tableau, le comptable ne peut ni recouper la masse
+    // salariale enseignante ni vérifier que tout le personnel est passé — et
+    // la colonne « heures » n'a de sens que pour une moitié des lignes.
+    const groupes = useMemo(() => {
+        const enseignants = employes.filter(e => e.type_employe === 'ENSEIGNANT');
+        const personnel = employes.filter(e => e.type_employe !== 'ENSEIGNANT');
+        const somme = (l: any[]) => l.reduce((t, e) => t + (Number(e.salaire_base) || 0), 0);
+        return [
+            {
+                cle: 'ENSEIGNANT', titre: 'Enseignants', lignes: enseignants,
+                total: somme(enseignants),
+                payes: enseignants.filter(e => e.paye_ce_mois).length,
+                note: "Au collège et au lycée, le salaire se calcule sur les heures de l'emploi du temps.",
+            },
+            {
+                cle: 'PERSONNEL', titre: 'Personnel non enseignant', lignes: personnel,
+                total: somme(personnel),
+                payes: personnel.filter(e => e.paye_ce_mois).length,
+                note: 'Direction, comptabilité, surveillance, entretien : salaire mensuel fixe.',
+            },
+        ].filter(g => g.lignes.length > 0);
+    }, [employes]);
+
     useEffect(() => {
         if (employes.length > 0) setTargetEmpId(prev => prev || String(employes[0].employe_id));
     }, [employes]);
 
     const invalidateEmployes = useCallback(
-        () => queryClient.invalidateQueries({ queryKey: ['salaires-employes', etablissementId] }),
-        [etablissementId, queryClient]);
+        () => queryClient.invalidateQueries({ queryKey: ['salaires-employes', etablissementId, selectedMonth] }),
+        [etablissementId, selectedMonth, queryClient]);
 
     // ─── Le calcul du mois ───────────────────────────────────────────────
     const { data: salairesData, isFetching: salLoading } = useQuery({
@@ -256,7 +293,7 @@ function SalairesContent() {
             `Total : ${fmt(bilan.resteAVerser)}`
         )) return;
         try {
-            const res = await api.post(`/api/finance/salaires/payer-group?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}&mode_paiement=Cash`);
+            const res = await api.post(`/api/finance/salaires/payer-group?etablissement_id=${etablissementId}&mois_concerne=${selectedMonth}&mode_paiement=ESPECES`);
             const echecs = res.data?.echecs || [];
             showMsg(res.data?.message || 'Paiements effectués', echecs.length ? 'error' : 'success');
             invalidateSalaires(); invalidateEmployes();
@@ -264,6 +301,40 @@ function SalairesContent() {
         } catch (err: any) {
             showMsg(err.response?.data?.detail || 'Erreur lors du paiement groupé', 'error');
         }
+    };
+
+    /* PAYER UNE PERSONNE — sur place.
+       Ce bouton renvoyait vers le module « Décaissement », qui rouvrait la
+       liste complète des 46 employés dans une fenêtre de 600 px : pour payer
+       Oumar, le comptable revoyait tout le monde, et cette liste-là lisait
+       `etablissement_id=1` en dur — donc le personnel d'une AUTRE école.
+       Le comptable a déjà la ligne sous les yeux : il lui faut la confirmation
+       de ce qu'il verse, pas un second écran. */
+    const [aPayer, setAPayer] = useState<any>(null);
+    const [paiementEnCours, setPaiementEnCours] = useState(false);
+
+    const ficheDeLaPersonne = useMemo(
+        () => (aPayer ? employes.find(e => e.employe_id === aPayer.employe_id) : null),
+        [aPayer, employes]);
+
+    const confirmerPaiement = async () => {
+        if (!aPayer) return;
+        setPaiementEnCours(true);
+        try {
+            const res = await api.post('/api/finance/salaires/payer', {
+                // L'école vient du jeton, jamais du corps de la requête.
+                enseignant_id: aPayer.employe_id,
+                mois: selectedMonth,
+                mode_paiement: 'ESPECES',
+            });
+            showMsg(res.data?.message || `${aPayer.prenom} ${aPayer.nom} payé(e) pour ${selectedMonth}`, 'success');
+            setAPayer(null);
+            invalidateSalaires(); invalidateEmployes();
+            queryClient.invalidateQueries({ queryKey: ['depenses'] });
+        } catch (err: any) {
+            showMsg(err.response?.data?.detail || 'Erreur lors du paiement', 'error');
+        }
+        setPaiementEnCours(false);
     };
 
     const apresMouvement = () => {
@@ -408,43 +479,78 @@ function SalairesContent() {
                     </p>
 
                     <div style={{ display: 'grid', gridTemplateColumns: selectedEmpDetail ? 'minmax(0,1fr) minmax(0,1fr)' : '1fr', gap: 16 }}>
-                        <div style={{ ...carte, overflow: 'hidden' }}>
-                            <div style={{ overflowX: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                                    <thead>
-                                        <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                                            <th style={th}>Nom</th>
-                                            <th style={th}>Poste</th>
-                                            <th style={th}>Rémunération</th>
-                                            <th style={th}>Salaire du mois</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {empLoading ? (
-                                            <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center' }}>
-                                                <Loader2 size={22} className="animate-spin" color="#10b981" />
-                                            </td></tr>
-                                        ) : employes.length === 0 ? (
-                                            <tr><td colSpan={4} style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Aucun employé enregistré</td></tr>
-                                        ) : employes.map(emp => (
-                                            <tr key={emp.employe_id} onClick={() => handleSelectEmp(emp)}
-                                                style={{
-                                                    borderBottom: '1px solid #f1f5f9', cursor: 'pointer',
-                                                    background: selectedEmpDetail?.employe_id === emp.employe_id ? '#f0fdf4' : 'transparent',
-                                                }}>
-                                                <td style={{ ...td, fontWeight: 600 }}>{emp.prenom} {emp.nom}</td>
-                                                <td style={{ ...td, color: '#3b82f6', fontWeight: 500 }}>{emp.poste}</td>
-                                                <td style={td}><BadgeMode mode={emp.mode_remuneration} /></td>
-                                                <td style={{ ...td, fontWeight: 700 }}>
-                                                    {(emp.salaire_base || 0) > 0 ? fmt(emp.salaire_base) : (
-                                                        <span style={{ color: '#b45309', fontWeight: 600, fontSize: 12 }}>À compléter</span>
-                                                    )}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            {empLoading ? (
+                                <div style={{ ...carte, padding: 40, textAlign: 'center' }}>
+                                    <Loader2 size={22} className="animate-spin" color="#10b981" />
+                                </div>
+                            ) : groupes.length === 0 ? (
+                                <div style={{ ...carte, padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+                                    Aucun employé enregistré
+                                </div>
+                            ) : groupes.map(groupe => (
+                                <div key={groupe.cle} style={{ ...carte, overflow: 'hidden' }}>
+                                    <div style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', background: '#fbfdfc' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+                                            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: '#0f172a' }}>
+                                                {groupe.titre}
+                                                <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 600, color: '#64748b' }}>
+                                                    {groupe.lignes.length}
+                                                </span>
+                                            </h3>
+                                            <span style={{ fontSize: 13, fontWeight: 700, color: '#10b981' }}>
+                                                {fmt(groupe.total)} / mois
+                                            </span>
+                                        </div>
+                                        <p style={{ margin: '4px 0 0', fontSize: 12, color: '#64748b' }}>{groupe.note}</p>
+                                        <p style={{ margin: '6px 0 0', fontSize: 12, fontWeight: 600, color: groupe.payes === groupe.lignes.length ? '#059669' : '#b45309' }}>
+                                            {groupe.payes} / {groupe.lignes.length} payé{groupe.payes > 1 ? 's' : ''} pour {selectedMonth}
+                                        </p>
+                                    </div>
+                                    <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                            <thead>
+                                                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                                                    <th style={th}>Nom</th>
+                                                    <th style={th}>Poste</th>
+                                                    <th style={th}>Rémunération</th>
+                                                    <th style={th}>Salaire du mois</th>
+                                                    <th style={th}>{selectedMonth}</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {groupe.lignes.map((emp: any) => (
+                                                    <tr key={emp.employe_id} onClick={() => handleSelectEmp(emp)}
+                                                        style={{
+                                                            borderBottom: '1px solid #f1f5f9', cursor: 'pointer',
+                                                            background: selectedEmpDetail?.employe_id === emp.employe_id ? '#f0fdf4' : 'transparent',
+                                                        }}>
+                                                        <td style={{ ...td, fontWeight: 600 }}>{emp.prenom} {emp.nom}</td>
+                                                        <td style={{ ...td, color: '#3b82f6', fontWeight: 500 }}>{emp.poste}</td>
+                                                        <td style={td}><BadgeMode mode={emp.mode_remuneration} /></td>
+                                                        <td style={{ ...td, fontWeight: 700 }}>
+                                                            {(emp.salaire_base || 0) > 0 ? fmt(emp.salaire_base) : (
+                                                                <span style={{ color: '#b45309', fontWeight: 600, fontSize: 12 }}>À compléter</span>
+                                                            )}
+                                                        </td>
+                                                        {/* Un mois payé ne se repaie pas : l'écran doit le
+                                                            dire avant que le comptable ne clique. */}
+                                                        <td style={td}>
+                                                            <span style={{
+                                                                padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700,
+                                                                background: emp.paye_ce_mois ? '#dcfce7' : '#fef3c7',
+                                                                color: emp.paye_ce_mois ? '#166534' : '#92400e',
+                                                            }}>
+                                                                {emp.paye_ce_mois ? 'Payé' : 'À payer'}
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
 
                         {selectedEmpDetail && (
@@ -545,6 +651,26 @@ function SalairesContent() {
                     {/* Le bilan avant le tableau : ce qui reste à verser, et ce qui
                         bloque. Le total seul laissait croire que tout était prêt. */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+                        {/* LE JOUR DE PAIE, EN PREMIER
+                            « Qui l'école paie, combien, et ce qui a déjà été versé »
+                            manquait de la seule information qui déclenche le geste :
+                            QUAND. Le comptable avait le montant sous les yeux sans
+                            savoir si le versement est pour aujourd'hui, dans dix
+                            jours, ou en retard. */}
+                        <div style={{ ...carte, padding: 16, borderColor: joursAvantPaie !== null && joursAvantPaie < 0 ? '#fecaca' : '#e2e8f0', background: joursAvantPaie !== null && joursAvantPaie < 0 ? '#fef2f2' : '#fff' }}>
+                            <p style={{ fontSize: 10.5, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase' }}>Jour de paie</p>
+                            <p style={{ fontSize: 20, fontWeight: 800, color: joursAvantPaie !== null && joursAvantPaie < 0 ? '#b91c1c' : '#0f172a', marginTop: 4 }}>
+                                {paydayDate
+                                    ? new Date(paydayDate).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
+                                    : '—'}
+                            </p>
+                            <p style={{ fontSize: 12, color: joursAvantPaie !== null && joursAvantPaie < 0 ? '#991b1b' : '#64748b' }}>
+                                {!paydayDate ? 'À fixer ci-dessous'
+                                    : joursAvantPaie === 0 ? "C'est aujourd'hui"
+                                    : joursAvantPaie! > 0 ? `Dans ${joursAvantPaie} jour${joursAvantPaie! > 1 ? 's' : ''}`
+                                    : `Dépassé de ${Math.abs(joursAvantPaie!)} jour${Math.abs(joursAvantPaie!) > 1 ? 's' : ''}`}
+                            </p>
+                        </div>
                         <div style={{ ...carte, padding: 16 }}>
                             <p style={{ fontSize: 10.5, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase' }}>Reste à verser</p>
                             <p style={{ fontSize: 20, fontWeight: 800, color: '#10b981', marginTop: 4 }}>{fmt(bilan.resteAVerser)}</p>
@@ -659,7 +785,7 @@ function SalairesContent() {
                                                             <Check size={14} /> Payé
                                                         </span>
                                                     ) : (sal.net_a_payer || 0) > 0 ? (
-                                                        <button onClick={() => router.push(`/comptabilite/paiements?tab=fournisseurs&payerSalaire=${sal.employe_id}&mois=${selectedMonth}`)}
+                                                        <button onClick={() => setAPayer(sal)}
                                                             style={{ padding: '6px 14px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
                                                             Payer
                                                         </button>
@@ -881,8 +1007,11 @@ function SalairesContent() {
                                             <td style={td}>{b.date_paiement || '—'}</td>
                                             <td style={td}>{b.mode_paiement || '—'}</td>
                                             <td style={{ ...td, textAlign: 'right' }}>
+                                                {/* La route attend un depense_id : lui passer le
+                                                    bulletin_id affichait le bulletin d'une AUTRE
+                                                    personne — deux numerotations independantes. */}
                                                 {b.bulletin_id ? (
-                                                    <button onClick={() => viewBulletinDetail(b.bulletin_id)}
+                                                    <button onClick={() => viewBulletinDetail(b.depense_id)}
                                                         style={{ padding: '6px 12px', background: '#eff6ff', color: '#3b82f6', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                                                         <Eye size={14} /> Fiche de paie
                                                     </button>
@@ -1015,6 +1144,81 @@ function SalairesContent() {
                                     </div>
                                 </div>
                             ) : null}
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ── CONFIRMER UN VERSEMENT ──────────────────────────────────────
+                Qui l'école paie, combien, et ce qui a déjà été versé. Rien
+                d'autre : ni la liste des collègues, ni un montant à ressaisir. */}
+            <AnimatePresence>
+                {aPayer && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={() => !paiementEnCours && setAPayer(null)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16 }}>
+                        <motion.div initial={{ scale: 0.96, y: 8 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, y: 8 }}
+                            onClick={e => e.stopPropagation()}
+                            style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 440, overflow: 'hidden' }}>
+
+                            <div style={{ padding: '18px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#0f172a' }}>
+                                        {aPayer.prenom} {aPayer.nom}
+                                    </h3>
+                                    <p style={{ margin: '3px 0 0', fontSize: 12.5, color: '#64748b' }}>
+                                        {aPayer.poste}
+                                        {ficheDeLaPersonne?.telephone ? ` · ${ficheDeLaPersonne.telephone}` : ''}
+                                    </p>
+                                </div>
+                                <button onClick={() => setAPayer(null)} disabled={paiementEnCours}
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 2 }}>
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+                                <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+                                    Salaire de {moisDisponibles.find(m => m.valeur === selectedMonth)?.libelle || selectedMonth}
+                                </p>
+                                {[
+                                    ['Salaire de base', fmt(aPayer.salaire_base), '#0f172a'],
+                                    ...((aPayer.total_primes || 0) > 0
+                                        ? [['Primes', `+${fmt(aPayer.total_primes)}`, '#10b981'] as const] : []),
+                                    ...((aPayer.total_absences || 0) > 0
+                                        ? [['Retenue absences', `−${fmt(aPayer.total_absences)}`, '#ef4444'] as const] : []),
+                                    ...((aPayer.total_avances || 0) > 0
+                                        ? [['Avances déjà remises', `−${fmt(aPayer.total_avances)}`, '#ef4444'] as const] : []),
+                                ].map(([libelle, montant, couleur]: any) => (
+                                    <div key={libelle} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5 }}>
+                                        <span style={{ color: '#475569' }}>{libelle}</span>
+                                        <span style={{ fontWeight: 600, color: couleur }}>{montant}</span>
+                                    </div>
+                                ))}
+                                <div style={{ borderTop: '1px solid #e2e8f0', marginTop: 4, paddingTop: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                    <span style={{ fontSize: 13.5, fontWeight: 700, color: '#334155' }}>Net à verser</span>
+                                    <span style={{ fontSize: 21, fontWeight: 900, color: '#10b981' }}>{fmt(aPayer.net_a_payer)}</span>
+                                </div>
+                                {ficheDeLaPersonne && (
+                                    <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94a3b8' }}>
+                                        Déjà versé cette année : {fmt(ficheDeLaPersonne.total_paye_annee)}
+                                        {(ficheDeLaPersonne.nb_paiements || 0) > 0
+                                            ? ` sur ${ficheDeLaPersonne.nb_paiements} mois` : ''}
+                                    </p>
+                                )}
+                            </div>
+
+                            <div style={{ padding: '14px 22px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                                <button onClick={() => setAPayer(null)} disabled={paiementEnCours}
+                                    style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#475569', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                                    Annuler
+                                </button>
+                                <button onClick={confirmerPaiement} disabled={paiementEnCours}
+                                    style={{ padding: '9px 20px', borderRadius: 8, border: 'none', background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 700, cursor: paiementEnCours ? 'not-allowed' : 'pointer', opacity: paiementEnCours ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 7 }}>
+                                    {paiementEnCours && <Loader2 size={15} className="animate-spin" />}
+                                    Verser {fmt(aPayer.net_a_payer)}
+                                </button>
+                            </div>
                         </motion.div>
                     </motion.div>
                 )}

@@ -1,7 +1,7 @@
 'use client';
 
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import api from '@/lib/api';
@@ -18,7 +18,7 @@ import {
     ChevronRight,
     Copy,
     Crown,
-    DollarSign,
+    Banknote,
     Eye,
     EyeOff,
     FileText as FileTextIcon,
@@ -45,9 +45,9 @@ import {
 const ROLES_CONFIG = [
     { value: 'FONDATEUR', label: 'Fondateur', icon: Crown, color: '#7c3aed', bg: '#f5f3ff', hasAccess: true, desc: 'Propriétaire et fondateur de l\'établissement' },
     { value: 'DG', label: 'Directeur Général', icon: Building2, color: '#1d4ed8', bg: '#eff6ff', hasAccess: true, desc: 'Direction générale de l\'établissement' },
-    { value: 'DIRECTEUR_NIVEAU', label: 'Directeur de Niveau', icon: GraduationCap, color: '#0369a1', bg: '#f0f9ff', hasAccess: true, desc: 'Responsable d\'un cycle ou niveau scolaire' },
+    { value: 'DIRECTEUR_NIVEAU', label: 'Directeur des Études', icon: GraduationCap, color: '#0369a1', bg: '#f0f9ff', hasAccess: true, desc: 'Délégué pédagogique de la direction : évaluations, notes, bulletins, résultats de fin d\'année, examens, archive. Pas la comptabilité.' },
     { value: 'ADMIN', label: 'Administrateur', icon: Shield, color: '#0f766e', bg: '#f0fdfa', hasAccess: true, desc: 'Accès complet à l\'administration' },
-    { value: 'COMPTABLE', label: 'Comptable', icon: DollarSign, color: '#b45309', bg: '#fffbeb', hasAccess: true, desc: 'Gestion financière et comptabilité' },
+    { value: 'COMPTABLE', label: 'Comptable', icon: Banknote, color: '#b45309', bg: '#fffbeb', hasAccess: true, desc: 'Gestion financière et comptabilité' },
     { value: 'BIBLIOTHECAIRE', label: 'Bibliothécaire', icon: BookOpen, color: '#7e22ce', bg: '#faf5ff', hasAccess: true, desc: 'Gestion de la bibliothèque scolaire' },
     { value: 'INFORMATICIEN', label: 'Informaticien', icon: Monitor, color: '#0284c7', bg: '#f0f9ff', hasAccess: true, desc: 'Support technique et informatique' },
     { value: 'SURVEILLANT', label: 'Surveillant', icon: UserCheck, color: '#16a34a', bg: '#f0fdf4', hasAccess: true, desc: 'Surveillance et discipline scolaire' },
@@ -105,7 +105,69 @@ export default function NouveauPersonnel() {
         mot_de_passe: '',
     });
 
-    const selectedRoleConfig = ROLES_CONFIG.find((r) => r.value === form.role);
+    // ── LES RÔLES QUE L'ÉCOLE A CRÉÉS ELLE-MÊME ──────────────────────────
+    // « Censeur des études », « Caissier », « Surveillant général » : créés
+    // dans Paramètres > Sécurité, ils héritent chacun de l'espace d'un rôle
+    // standard. Le formulaire ne proposait que la liste figée ci-dessus, si
+    // bien qu'un rôle fraîchement créé restait inutilisable.
+    const [rolesEcole, setRolesEcole] = useState<any[]>([]);
+    useEffect(() => {
+        api.get('/api/securite/roles')
+            .then(res => {
+                const perso = (res.data || []).filter((r: any) => !r.est_systeme && r.attribuable);
+                setRolesEcole(perso);
+
+                // Arrivé depuis « Enregistrer une personne à ce poste » : le
+                // rôle est déjà choisi, et son salaire de référence remplit la
+                // fiche. La direction n'a plus à se souvenir du montant du
+                // poste — elle le corrige si le contrat dit autre chose.
+                const voulu = new URLSearchParams(window.location.search).get('role');
+                if (!voulu) return;
+                const grille = perso.find((r: any) => r.code === voulu);
+                setForm(prev => ({
+                    ...prev,
+                    role: voulu,
+                    salaire_base: grille?.salaire_mensuel ?? prev.salaire_base,
+                    prime_mensuelle: grille?.prime_mensuelle ?? prev.prime_mensuelle,
+                }));
+            })
+            .catch(() => setRolesEcole([]));
+    }, []);
+
+    // Changer de rôle en cours de saisie propose le salaire de ce poste-là,
+    // tant que la direction n'a pas encore inscrit de montant à la main.
+    const choisirRole = (code: string) => {
+        const grille = rolesEcole.find((r: any) => r.code === code);
+        setForm(prev => ({
+            ...prev,
+            role: code,
+            salaire_base: (!prev.salaire_base && grille?.salaire_mensuel)
+                ? grille.salaire_mensuel : prev.salaire_base,
+            prime_mensuelle: (!prev.prime_mensuelle && grille?.prime_mensuelle)
+                ? grille.prime_mensuelle : prev.prime_mensuelle,
+        }));
+    };
+
+    // Les deux listes réunies, chacune sachant dans quel espace elle travaille.
+    const tousLesRoles = useMemo(() => ([
+        ...ROLES_CONFIG.map(r => ({
+            value: r.value, label: r.label, desc: r.desc, icon: r.icon,
+            color: r.color, bg: r.bg, hasAccess: r.hasAccess,
+            espace: r.value, cree: false,
+        })),
+        ...rolesEcole.map((r: any) => {
+            const base = ROLES_CONFIG.find(x => x.value === r.role_base);
+            return {
+                value: r.code, label: r.libelle,
+                desc: r.description || `Travaille dans l'espace ${base?.label || r.role_base}.`,
+                icon: base?.icon || Users, color: base?.color || '#6b7280',
+                bg: base?.bg || '#f9fafb', hasAccess: base?.hasAccess ?? true,
+                espace: r.role_base, cree: true,
+            };
+        }),
+    ]), [rolesEcole]);
+
+    const selectedRoleConfig = tousLesRoles.find((r) => r.value === form.role);
     const selectedInterface = getRoleInterfaceSummary(form.role || null);
     const monthlyCost = Number(form.salaire_base || 0) + Number(form.prime_mensuelle || 0);
 
@@ -452,7 +514,7 @@ export default function NouveauPersonnel() {
                                     {sectionHdr(<Users size={20} />, 'Sélection du rôle principal', 'Choisissez la mission principale du membre et les accès attendus.', 'linear-gradient(135deg, #ede9fe, #dbeafe)')}
                                     <div style={{ padding: '24px' }}>
                                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '12px' }}>
-                                            {ROLES_CONFIG.map((r) => {
+                                            {tousLesRoles.map((r) => {
                                                 const Icon = r.icon;
                                                 const isSelected = form.role === r.value;
                                                 const roleInterface = getRoleInterfaceSummary(r.value);
@@ -461,7 +523,7 @@ export default function NouveauPersonnel() {
                                                         key={r.value}
                                                         whileHover={{ y: -4 }}
                                                         whileTap={{ scale: 0.99 }}
-                                                        onClick={() => ch('role', r.value)}
+                                                        onClick={() => choisirRole(r.value)}
                                                         style={{ padding: '18px', borderRadius: '22px', border: '1.5px solid', borderColor: isSelected ? r.color : '#e2e8f0', background: isSelected ? `linear-gradient(135deg, ${r.bg}, white)` : 'white', cursor: 'pointer', textAlign: 'left', boxShadow: isSelected ? `0 16px 30px ${r.color}22` : '0 8px 18px rgba(15,23,42,0.04)' }}
                                                     >
                                                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '10px', marginBottom: '12px' }}>
@@ -494,7 +556,7 @@ export default function NouveauPersonnel() {
                                                     prise en compte est immédiate à sa prochaine connexion.
                                                 </p>
                                                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                                                    {ROLES_CONFIG.filter((r) => r.value !== form.role).map((r) => {
+                                                    {tousLesRoles.filter((r) => r.value !== form.role).map((r) => {
                                                         const isChosen = form.roles_secondaires.includes(r.value);
                                                         return (
                                                             <button key={r.value} type="button" onClick={() => toggleRoleSecondaire(r.value)} style={{ padding: '7px 12px', borderRadius: '999px', border: '1.5px solid', borderColor: isChosen ? r.color : '#e2e8f0', background: isChosen ? r.bg : 'white', color: isChosen ? r.color : '#64748b', cursor: 'pointer', fontSize: '12px', fontWeight: 700 }}>

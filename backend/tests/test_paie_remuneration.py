@@ -14,8 +14,9 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.models.academique import (
-    Affectation, AnneeScolaire, Classe, Cycle, Depense, Eleve, Enseignant,
-    Etablissement, Facture, Inscription, Matiere, Niveau, TypeFrais, Utilisateur,
+    Affectation, AnneeScolaire, Classe, CreneauEmploi, Cycle, Depense, Eleve,
+    Enseignant, Etablissement, Facture, Inscription, Matiere, Niveau, Paiement,
+    TypeFrais, Utilisateur,
 )
 from app.services import paie
 
@@ -62,6 +63,7 @@ def ecole(db: Session):
 
     db.rollback()
     for modele, colonne, valeur in (
+        (CreneauEmploi, CreneauEmploi.annee_id, annee.annee_id),
         (Facture, Facture.annee_id, annee.annee_id),
         (Inscription, Inscription.annee_id, annee.annee_id),
         (Eleve, Eleve.etablissement_id, etab.etablissement_id),
@@ -91,6 +93,40 @@ def _enseignant(db: Session, ecole, *, mode: str, taux=0, salaire=0) -> Enseigna
     )
     db.add(e); db.commit(); db.refresh(e)
     return e
+
+
+def _alimenter_la_caisse(db: Session, ecole, montant: float = 5_000_000) -> None:
+    """Une ecole ne paie pas ses salaires avec une caisse vide.
+
+    Le logiciel refuse desormais un versement superieur au solde disponible
+    (encaissements moins depenses). C'est la bonne regle — mais elle suppose
+    qu'une ecole de test ait encaisse quelque chose avant de payer, ce que
+    ces scenarios ne faisaient pas : ils recrutaient et payaient sans qu'un
+    seul franc soit jamais entre.
+    """
+    eleve = Eleve(
+        matricule=f"CAISSE{_uid()}", nom="Bah", prenom="Tresorerie", sexe="M",
+        date_naissance=date(2010, 1, 1), etablissement_id=ecole["etab"].etablissement_id,
+        statut="ACTIF",
+    )
+    db.add(eleve); db.commit(); db.refresh(eleve)
+    insc = Inscription(
+        eleve_id=eleve.eleve_id, classe_id=ecole["classe"].classe_id,
+        annee_id=ecole["annee"].annee_id, statut="ACTIVE",
+    )
+    db.add(insc); db.commit(); db.refresh(insc)
+    facture = Facture(
+        inscription_id=insc.inscription_id, annee_id=ecole["annee"].annee_id,
+        numero_facture=f"FCAISSE{_uid()}", montant_total=montant, montant_net=montant,
+        montant_paye=montant, montant_restant=0, statut="PAYEE",
+    )
+    db.add(facture); db.commit(); db.refresh(facture)
+    db.add(Paiement(
+        facture_id=facture.facture_id, annee_id=ecole["annee"].annee_id,
+        numero_recu=f"RCAISSE{_uid()}", montant=montant, mode_paiement="ESPECES",
+        date_paiement=date(2025, 10, 1), statut="VALIDE",
+    ))
+    db.commit()
 
 
 def _affecter(db: Session, ecole, ens, matiere, heures, taux=None) -> Affectation:
@@ -349,6 +385,7 @@ class TestPersonneNeDisparaitDeLaPaie:
     ):
         from app.api.finance import payer_group_endpoint
 
+        _alimenter_la_caisse(db, ecole)
         payable = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
         _affecter(db, ecole, payable, ecole["m1"], 5)
         sans_rien = _enseignant(db, ecole, mode="HORAIRE", taux=0, salaire=0)
@@ -368,6 +405,7 @@ class TestPersonneNeDisparaitDeLaPaie:
         dépenses de salaires sur l'année scolaire de la première école."""
         from app.api.finance import payer_group_endpoint
 
+        _alimenter_la_caisse(db, ecole)
         ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
         _affecter(db, ecole, ens, ecole["m1"], 5)
 
@@ -564,3 +602,100 @@ class TestFacturesRattacheesARien:
                 db=db, etablissement_id=ecole["etab"].etablissement_id + 99_999,
             )
         assert e.value.status_code == 404
+
+
+class TestHeuresManqueesAuSecondaire:
+    """Un vacataire n'est pas payé pour être là, mais pour les heures qu'il donne.
+
+    La retenue d'absence valait partout `salaire ÷ 26 × jours absents`. Pour un
+    instituteur au mois c'est juste. Pour un professeur du collège ou du lycée,
+    ça retenait la même somme un mardi à deux heures de cours et un jeudi à six.
+    """
+
+    def _creneau(self, db: Session, ecole, ens, matiere, jour, debut, fin):
+        from app.models.academique import CreneauEmploi
+
+        c = CreneauEmploi(
+            classe_id=ecole["classe"].classe_id, matiere_id=matiere.matiere_id,
+            enseignant_id=ens.enseignant_id, jour=jour,
+            heure_debut=debut, heure_fin=fin,
+            annee_id=ecole["annee"].annee_id, statut="ACTIVE",
+        )
+        db.add(c); db.commit()
+        return c
+
+    def test_la_retenue_vaut_les_heures_du_jour_manque(self, db: Session, ecole):
+        from app.services.paie import heures_manquees
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, ens, ecole["m1"], 4)
+        # Mardi : deux heures. Jeudi : une seule.
+        self._creneau(db, ecole, ens, ecole["m1"], "MARDI", "08:00", "09:00")
+        self._creneau(db, ecole, ens, ecole["m1"], "MARDI", "09:00", "10:00")
+        self._creneau(db, ecole, ens, ecole["m1"], "JEUDI", "10:00", "11:00")
+
+        mardi = date(2026, 3, 3)   # un mardi
+        jeudi = date(2026, 3, 5)   # un jeudi
+        assert heures_manquees(db, ens.enseignant_id, [mardi],
+                               ecole["annee"].annee_id)["montant"] == 20_000
+        assert heures_manquees(db, ens.enseignant_id, [jeudi],
+                               ecole["annee"].annee_id)["montant"] == 10_000
+
+    def test_un_creneau_de_deux_heures_compte_pour_deux(self, db: Session, ecole):
+        """08:00–10:00 vaut deux heures. Compter « un créneau » en retiendrait
+        la moitié."""
+        from app.services.paie import heures_manquees
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, ens, ecole["m1"], 2)
+        self._creneau(db, ecole, ens, ecole["m1"], "LUNDI", "08:00", "10:00")
+
+        r = heures_manquees(db, ens.enseignant_id, [date(2026, 3, 2)],
+                            ecole["annee"].annee_id)
+        assert r["heures"] == 2
+        assert r["montant"] == 20_000
+
+    def test_le_tarif_specifique_de_la_classe_est_celui_retenu(
+        self, db: Session, ecole
+    ):
+        """Une heure de Terminale ne se retient pas au prix d'une heure de 7ᵉ."""
+        from app.services.paie import heures_manquees
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, ens, ecole["m2"], 2, taux=30_000)
+        self._creneau(db, ecole, ens, ecole["m2"], "LUNDI", "08:00", "09:00")
+
+        r = heures_manquees(db, ens.enseignant_id, [date(2026, 3, 2)],
+                            ecole["annee"].annee_id)
+        assert r["montant"] == 30_000
+
+    def test_absent_un_jour_sans_cours_ne_coute_rien(self, db: Session, ecole):
+        """Le taux journalier retenait une journée entière même quand le
+        professeur n'avait aucun cours ce jour-là."""
+        from app.services.paie import heures_manquees
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, ens, ecole["m1"], 2)
+        self._creneau(db, ecole, ens, ecole["m1"], "LUNDI", "08:00", "09:00")
+
+        r = heures_manquees(db, ens.enseignant_id, [date(2026, 3, 4)],  # mercredi
+                            ecole["annee"].annee_id)
+        assert r["heures"] == 0
+        assert r["montant"] == 0
+
+    def test_la_retenue_est_detaillee_ligne_par_ligne(self, db: Session, ecole):
+        """Une retenue de salaire se conteste : sans détail, elle n'est pas
+        vérifiable."""
+        from app.services.paie import heures_manquees
+
+        ens = _enseignant(db, ecole, mode="HORAIRE", taux=10_000)
+        _affecter(db, ecole, ens, ecole["m1"], 2)
+        self._creneau(db, ecole, ens, ecole["m1"], "MARDI", "08:00", "09:00")
+
+        r = heures_manquees(db, ens.enseignant_id, [date(2026, 3, 3)],
+                            ecole["annee"].annee_id)
+        assert len(r["lignes"]) == 1
+        ligne = r["lignes"][0]
+        assert ligne["classe"] and ligne["matiere"]
+        assert ligne["creneau"] == "08:00–09:00"
+        assert ligne["taux_horaire"] == 10_000

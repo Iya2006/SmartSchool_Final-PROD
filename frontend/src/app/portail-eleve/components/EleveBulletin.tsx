@@ -7,8 +7,12 @@ import { BulletinData } from '../types';
 
 interface EleveBulletinProps {
     bulletinData: BulletinData | null;
-    bulletinTrimestre: number;
+    // Périodes réelles de l'école : « Trimestre 1 / 2 / 3 » était écrit dans
+    // le code, donc faux pour une école à deux semestres — et le numéro
+    // affiché était envoyé comme identifiant de période.
+    bulletinTrimestre: number | null;
     setBulletinTrimestre: (trimId: number) => void;
+    periodes: { trimestre_id: number; libelle: string; statut: string }[];
     loading: boolean;
     couleurPortail: string;
 }
@@ -17,6 +21,7 @@ export default function EleveBulletin({
     bulletinData,
     bulletinTrimestre,
     setBulletinTrimestre,
+    periodes,
     loading,
     couleurPortail,
 }: EleveBulletinProps) {
@@ -40,24 +45,24 @@ export default function EleveBulletin({
                     <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>Téléchargez et imprimez vos bulletins scolaires officiels.</p>
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                    {[1, 2, 3].map(t => (
-                        <button 
-                            key={t} 
-                            onClick={() => setBulletinTrimestre(t)}
-                            style={{ 
-                                padding: '8px 16px', 
-                                borderRadius: '10px', 
-                                border: 'none', 
-                                cursor: 'pointer', 
-                                fontWeight: 700, 
+                    {periodes.map(p => (
+                        <button
+                            key={p.trimestre_id}
+                            onClick={() => setBulletinTrimestre(p.trimestre_id)}
+                            style={{
+                                padding: '8px 16px',
+                                borderRadius: '10px',
+                                border: 'none',
+                                cursor: 'pointer',
+                                fontWeight: 700,
                                 fontSize: '13px',
-                                background: bulletinTrimestre === t ? couleurPortail : '#f1f5f9',
-                                color: bulletinTrimestre === t ? 'white' : '#64748b',
+                                background: bulletinTrimestre === p.trimestre_id ? couleurPortail : '#f1f5f9',
+                                color: bulletinTrimestre === p.trimestre_id ? 'white' : '#64748b',
                                 transition: 'all 0.2s',
-                                boxShadow: bulletinTrimestre === t ? `0 4px 12px ${couleurPortail}25` : 'none'
+                                boxShadow: bulletinTrimestre === p.trimestre_id ? `0 4px 12px ${couleurPortail}25` : 'none'
                             }}
                         >
-                            Trimestre {t}
+                            {p.libelle}
                         </button>
                     ))}
                 </div>

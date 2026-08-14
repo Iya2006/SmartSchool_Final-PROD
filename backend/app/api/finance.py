@@ -6,13 +6,14 @@ import uuid
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 from datetime import date as date_type
 from app.core.annee_courante import resoudre_annee
 from app.core.numerotation import generer_numero_facture, generer_numero_recu
+from app.core.modes_paiement import exiger_mode_paiement
 from app.core.database import get_db
 from app.core.auth import require_etablissement
 from app.models.academique import (
@@ -1281,9 +1282,26 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
     # reçu déjà remis à un parent. Deux pièces portant le même numéro, c'est un
     # litige que la comptabilité ne peut pas trancher.
     settings = get_finance_settings(db, etablissement_id)
+    # « Especes », « ESPECES » et « Cash » etaient trois modes differents pour
+    # la base : le panneau « Repartition par Mode » affichait 0 GNF partout,
+    # faute de retrouver ses codes. On normalise a l'ecriture, pas a
+    # l'affichage — un total ne se repare pas apres coup.
+    mode_normalise = exiger_mode_paiement(
+        data.mode_paiement, settings.get("modes_paiement")
+    )
     numero_recu = generer_numero_recu(
         db, etablissement_id, facture.annee_id, settings.get("recu_prefixe") or "REC"
     )
+
+    # Un encaissement porte la date a laquelle l'argent est entre, pas celle de
+    # la saisie. Une date future serait en revanche une faute de frappe : on
+    # n'encaisse pas demain.
+    jour_encaissement = data.date_paiement or date_type.today()
+    if jour_encaissement > date_type.today():
+        raise HTTPException(
+            status_code=400,
+            detail="Un paiement ne peut pas etre date dans le futur.",
+        )
 
     paiement = Paiement(
         facture_id=data.facture_id,
@@ -1291,8 +1309,9 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         echeance_id=data.echeance_id,
         numero_recu=numero_recu,
         montant=data.montant,
-        mode_paiement=data.mode_paiement,
+        mode_paiement=mode_normalise,
         reference_externe=data.reference_externe,
+        date_paiement=jour_encaissement,
         devise=settings.get("devise") or "GNF",
         statut="VALIDE"
     )
@@ -1309,7 +1328,7 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
 
     # Comptabilité générale : encaissement réel (Debit trésorerie / Credit 4111 Élèves)
     insc = db.query(Inscription).filter(Inscription.inscription_id == facture.inscription_id).first()
-    compte_tresorerie, journal_tresorerie = compte_tresorerie_pour_mode(data.mode_paiement)
+    compte_tresorerie, journal_tresorerie = compte_tresorerie_pour_mode(mode_normalise)
     # `eleve_id` n'est posé QUE sur la ligne 4111 (compte élève) — c'est elle
     # qui identifie le compte auxiliaire de l'élève. La poser aussi sur la
     # ligne de trésorerie (comme c'était le cas avant ce correctif) fausse le
@@ -1321,7 +1340,7 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
     # solde réellement dû (symptôme observé : "Facturé"/"Réglé" identiques,
     # toujours "Soldé", quel que soit le montant réellement facturé).
     generer_ecriture_auto(
-        db, date_ecriture=date_type.today(), journal_code=journal_tresorerie,
+        db, date_ecriture=jour_encaissement, journal_code=journal_tresorerie,
         libelle=f"Encaissement scolarité — {numero_recu}",
         reference=numero_recu,
         lignes=[
@@ -3655,6 +3674,10 @@ def list_employes_salaires(
 
     from app.services import paie as _paie
     _annee_paie = _paie.annee_courante_id(db, etablissement_id)
+    # Meme raison que dans preparer_la_paie : un seul appel pour toute la liste.
+    _salaires = _paie.salaires_enseignants(
+        db, [e.enseignant_id for e in enseignants], _annee_paie
+    )
 
     result = []
     # --- Traitement des Enseignants ---
@@ -3662,7 +3685,9 @@ def list_employes_salaires(
         # Le salaire affiche ici doit etre celui que la paie versera. Pour un
         # vacataire il se calcule a partir des heures ; la colonne
         # `ens.salaire_base` vaut 0 et ne veut rien dire.
-        _r = _paie.salaire_enseignant(db, ens.enseignant_id, _annee_paie)
+        _r = _salaires.get(ens.enseignant_id) or {
+            "base": 0.0, "mode": "MENSUEL", "total_heures": 0.0, "lignes": []
+        }
         depenses = (
             db.query(Depense)
             .filter(
@@ -3796,11 +3821,14 @@ def payer_salaire_employe(data: dict, db: Session = Depends(get_db), etablisseme
     """
     employe_id_str = data.get("enseignant_id")
     mois = data.get("mois", "")
-    mode_paiement = data.get("mode_paiement", "Cash")
-    # `annee_id` par défaut vient de l'établissement authentifié, jamais d'un
-    # `1` codé en dur (même anti-pattern déjà corrigé sur
-    # payer_plusieurs_mois_endpoint — voir docs/MULTI_ECOLES_REGLES_DEV.md §4).
-    annee_id = data.get("annee_id") or _get_active_annee_id(db, etablissement_id)
+    # Les deux mêmes défauts que le paiement groupé, corrigés là-bas mais pas
+    # ici : « Cash » n'appartient à aucune liste de référence (la dépense
+    # disparaissait du rapprochement de caisse) et `annee_id = 1` faisait
+    # enregistrer la charge sur l'année scolaire d'une AUTRE école
+    # (anti-pattern documenté : docs/MULTI_ECOLES_REGLES_DEV.md §4).
+    mode_paiement = exiger_mode_paiement(data.get("mode_paiement") or "ESPECES")
+    annee_id = resoudre_annee(db, etablissement_id, data.get("annee_id"))
+    date_versement = _lire_date(data.get("date_versement"))
 
     if not employe_id_str or not mois:
         raise HTTPException(status_code=400, detail="Identifiant employé et mois obligatoires")
@@ -3812,7 +3840,8 @@ def payer_salaire_employe(data: dict, db: Session = Depends(get_db), etablisseme
             mois_concerne=mois,
             mode_paiement=mode_paiement,
             etablissement_id=etablissement_id,
-            annee_id=annee_id
+            annee_id=annee_id,
+            date_versement=date_versement,
         )
         return result
     except HTTPException:
@@ -3873,6 +3902,7 @@ def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int)
             "prime_mensuelle": float(ens.prime_mensuelle or 0),
             "type_contrat": ens.type_contrat or "PERMANENT", "mobile_money": None,
             "type_agent": "ENSEIGNANT", "agent_id": emp_id,
+            "date_embauche": ens.date_embauche,
             "mode_remuneration": _r["mode"],
             "total_heures": _r["total_heures"],
             "explication_salaire": _r.get("explication", ""),
@@ -3889,6 +3919,9 @@ def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int)
             "prime_mensuelle": float(pers.prime_mensuelle or 0),
             "type_contrat": pers.type_contrat or "PERMANENT", "mobile_money": None,
             "type_agent": "PERSONNEL", "agent_id": emp_id,
+            # On ne doit rien a quelqu'un pour les mois qui precedent son
+            # arrivee : voir `_avant_embauche`.
+            "date_embauche": pers.date_embauche,
             # Un comptable, un surveillant, un gardien ne sont pas payes a
             # l'heure de cours : leur salaire est fixe, par mois.
             "mode_remuneration": "MENSUEL",
@@ -3973,39 +4006,112 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
     )
     total_primes = float(infos["prime_mensuelle"]) + float(primes_ponctuelles or 0)
 
-    nb_absences_pointage = db.query(func.count(PresenceAgent.presence_id)).filter(
-        PresenceAgent.type_agent == infos["type_agent"],
-        PresenceAgent.agent_id == infos["agent_id"],
-        PresenceAgent.statut == "ABSENT",
-        PresenceAgent.date_presence >= debut_mois,
-        PresenceAgent.date_presence <= fin_mois,
-    ).scalar() or 0
-    nb_absences_manuelles = db.query(func.count(AbsencePersonnel.absence_id)).filter(
-        AbsencePersonnel.employe_id == employe.employe_id,
-        AbsencePersonnel.est_justifie == "N",
-        AbsencePersonnel.date_absence >= debut_mois,
-        AbsencePersonnel.date_absence <= fin_mois,
-    ).scalar() or 0
-    taux_journalier = infos["salaire_base"] / JOURS_OUVRABLES_MOIS if infos["salaire_base"] else 0
-    total_absences = round((nb_absences_pointage + nb_absences_manuelles) * taux_journalier, 2)
-    
+    # On releve les JOURS d'absence, pas seulement leur nombre : pour un
+    # professeur paye a l'heure, ce qui compte est ce qu'il avait a donner ces
+    # jours-la, et ca se lit dans son emploi du temps.
+    jours_pointage = [
+        r[0] for r in db.query(PresenceAgent.date_presence).filter(
+            PresenceAgent.type_agent == infos["type_agent"],
+            PresenceAgent.agent_id == infos["agent_id"],
+            PresenceAgent.statut == "ABSENT",
+            PresenceAgent.date_presence >= debut_mois,
+            PresenceAgent.date_presence <= fin_mois,
+        ).all()
+    ]
+    # SEULES LES ABSENCES TRANCHEES SE RETIENNENT
+    # Une absence constatee par la surveillance est un signalement, pas une
+    # decision : tant que la direction ne l'a pas confirmee, elle ne touche
+    # pas a la paie. Sans ce filtre, celui qui voit deciderait a la place de
+    # celui qui paie.
+    jours_manuels = [
+        r[0] for r in db.query(AbsencePersonnel.date_absence).filter(
+            AbsencePersonnel.employe_id == employe.employe_id,
+            AbsencePersonnel.est_justifie == "N",
+            AbsencePersonnel.statut == "VALIDE",
+            AbsencePersonnel.date_absence >= debut_mois,
+            AbsencePersonnel.date_absence <= fin_mois,
+        ).all()
+    ]
+    nb_absences_pointage = len(jours_pointage)
+    nb_absences_manuelles = len(jours_manuels)
+    jours_absents = sorted(set(jours_pointage) | set(jours_manuels))
+
     details_absences_parts = []
-    if nb_absences_pointage > 0:
-        details_absences_parts.append(f"{nb_absences_pointage} absence(s) pointage QR")
-    if nb_absences_manuelles > 0:
-        details_absences_parts.append(f"{nb_absences_manuelles} absence(s) saisie(s) manuellement (non justifiée)")
+    heures_perdues = 0.0
+
+    if infos.get("mode_remuneration") == "HORAIRE" and infos["type_agent"] == "ENSEIGNANT":
+        # AU COLLEGE ET AU LYCEE, on retient les HEURES REELLEMENT MANQUEES.
+        # Le taux journalier (salaire / 26) retenait la meme somme pour un
+        # mardi a deux heures de cours et un jeudi a six : trop dans un cas,
+        # pas assez dans l'autre, jamais le bon montant. Un vacataire n'est pas
+        # paye pour etre la, il est paye pour les heures qu'il donne.
+        from app.services import paie as _paie
+
+        manque = _paie.heures_manquees(
+            db, infos["agent_id"], jours_absents,
+            _paie.annee_courante_id(db, etablissement_id),
+        )
+        total_absences = round(manque["montant"], 2)
+        heures_perdues = manque["heures"]
+        if heures_perdues:
+            details_absences_parts.append(
+                f"{heures_perdues:g} h de cours non assurees sur "
+                f"{len(jours_absents)} jour(s) d'absence"
+            )
+            details_absences_parts.extend(
+                f"{l['date']} {l['creneau']} {l['matiere']} ({l['classe']}) — "
+                f"{l['heures']:g} h x {l['taux_horaire']:,.0f}"
+                for l in manque["lignes"][:8]
+            )
+        elif jours_absents:
+            # Absent un jour ou il n'avait pas cours : rien a retenir, et il
+            # faut le dire plutot que de laisser croire a un oubli.
+            details_absences_parts.append(
+                f"{len(jours_absents)} jour(s) d'absence sans cours prevu — aucune retenue"
+            )
+    else:
+        # Au primaire et pour le personnel : le salaire est mensuel, la presence
+        # est due tous les jours. Le taux journalier est alors le bon calcul.
+        taux_journalier = infos["salaire_base"] / JOURS_OUVRABLES_MOIS if infos["salaire_base"] else 0
+        total_absences = round(len(jours_absents) * taux_journalier, 2)
+        if nb_absences_pointage > 0:
+            details_absences_parts.append(f"{nb_absences_pointage} absence(s) pointage QR")
+        if nb_absences_manuelles > 0:
+            details_absences_parts.append(f"{nb_absences_manuelles} absence(s) saisie(s) manuellement (non justifiée)")
     
     details_absences_texte = None
     if details_absences_parts:
         details_absences_texte = " | ".join(details_absences_parts) + f" — Retenue totale: {total_absences} GNF"
 
-    avances_en_attente = db.query(func.coalesce(func.sum(Avance.montant), 0)).filter(
+    # TOUT CE QUI A ÉTÉ PRIS DEPUIS LA DERNIÈRE PAIE SE DÉDUIT ICI
+    # Une avance ne se rattachait qu'au mois inscrit à la main sur sa fiche.
+    # Une avance prise le 15 mars et étiquetée « avril » par erreur — ou par
+    # habitude — n'était donc jamais déduite en mars, et le comptable versait
+    # le salaire entier sans s'en apercevoir.
+    #
+    # La règle est celle de la caisse : une avance reste due tant qu'elle n'a
+    # pas été retenue. Toute avance encore EN_ATTENTE à la fin du mois payé
+    # est donc déduite maintenant, quelle que soit l'étiquette qu'elle porte.
+    # Elle passe ensuite en DEDUITE et ne peut plus revenir.
+    fin_du_mois = _jour_de_versement(mois_concerne)
+    avances_dues = db.query(Avance).filter(
         Avance.employe_id == employe.employe_id,
-        Avance.mois_concerne == mois_concerne,
         Avance.statut == "EN_ATTENTE",
-    ).scalar()
-    total_avances = float(avances_en_attente or 0)
+        or_(Avance.date_avance.is_(None), Avance.date_avance <= fin_du_mois),
+    ).all()
+    total_avances = float(sum(float(a.montant or 0) for a in avances_dues))
+    detail_avances = " | ".join(
+        f"{a.date_avance.strftime('%d/%m/%Y') if a.date_avance else 'sans date'} : "
+        f"{float(a.montant):,.0f} GNF"
+        for a in avances_dues
+    ) or None
 
+    # On ne doit rien a quelqu'un pour les mois qui precedent son arrivee.
+    avant_arrivee = _avant_embauche(infos.get("date_embauche"), mois_concerne)
+
+    # Une retenue superieure au salaire donnerait un net negatif — un
+    # « paiement » que l'ecole devrait recevoir de son employe.
+    total_absences = min(total_absences, infos["salaire_base"] + total_primes)
     net_a_payer = round(infos["salaire_base"] + total_primes - total_absences - total_avances, 2)
 
     return {
@@ -4016,8 +4122,16 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
         "total_primes": total_primes,
         "total_absences": total_absences,
         "total_avances": total_avances,
-        "net_a_payer": max(net_a_payer, 0),
-        "statut": "NON_PAYE",
+        "net_a_payer": 0 if avant_arrivee else max(net_a_payer, 0),
+        # « Ce mois précède son arrivée » n'est pas la même chose que « rien à
+        # verser » : l'écran doit pouvoir le dire, pas juste afficher zéro.
+        "avant_embauche": avant_arrivee,
+        # Le detail de ce qui est retenu : une avance se conteste comme une
+        # retenue d'absence, elle doit se justifier ligne par ligne.
+        "details_avances": detail_avances,
+        "nb_avances": len(avances_dues),
+        "date_embauche": str(infos["date_embauche"]) if infos.get("date_embauche") else None,
+        "statut": "AVANT_EMBAUCHE" if avant_arrivee else "NON_PAYE",
         "bulletin_id": None,
         "nom_complet": f"{infos['prenom']} {infos['nom']}",
         "details_absences": details_absences_texte,
@@ -4056,15 +4170,97 @@ def _lister_employes_actifs(db: Session, etablissement_id: int):
     return refs
 
 
-def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: str, mode_paiement: str, etablissement_id: int, annee_id: int) -> dict:
+def _avant_embauche(date_embauche: Optional[date_type], mois_concerne: str) -> bool:
+    """Ce mois précède-t-il l'arrivée de la personne ?
+
+    ON NE DOIT RIEN À QUELQU'UN AVANT SON ARRIVÉE
+    La liste des arriérés parcourait les douze derniers mois glissants et
+    calculait un salaire pour chacun, sans jamais regarder la date d'embauche.
+    Un comptable recruté aujourd'hui apparaissait donc avec « Mois en retard
+    (12) — Total dû : 12 000 000 GNF », et un clic suffisait à lui verser une
+    année de salaire pour du travail qu'il n'a pas fourni.
+
+    Le mois d'arrivée est dû en entier : découper un salaire au prorata des
+    jours est une décision d'école, pas une règle du logiciel — et la trancher
+    ici en silence serait pire que de la laisser à la direction.
+    """
+    if not date_embauche or not mois_concerne:
+        return False
+    return mois_concerne < date_embauche.strftime("%Y-%m")
+
+
+def _lire_date(valeur) -> Optional[date_type]:
+    """« 2025-10-31 » -> date. Vide ou absent -> None. Illisible -> 400.
+
+    Ces endpoints reçoivent un `dict` brut, pas un schéma Pydantic : sans cette
+    lecture explicite, une date mal formée arriverait telle quelle en base ou
+    passerait silencieusement à la trappe.
+    """
+    if not valeur:
+        return None
+    if isinstance(valeur, date_type):
+        return valeur
+    try:
+        return date_type.fromisoformat(str(valeur)[:10])
+    except ValueError:
+        raise HTTPException(400, f"Date illisible : « {valeur} ». Format attendu : AAAA-MM-JJ.")
+
+
+def _jour_de_versement(mois_concerne: str, date_versement: Optional[date_type] = None) -> date_type:
+    """Date à porter sur la dépense, l'écriture et le bulletin de paie.
+
+    UN SALAIRE D'OCTOBRE SE DATE EN OCTOBRE
+    Ces trois dates étaient figées à `date.today()`. Payer en retard la paie
+    d'octobre — cas ordinaire dans une école qui attend les scolarités — la
+    faisait tomber dans le mois de la saisie. La courbe de trésorerie montrait
+    alors neuf mois de salaires versés le même jour, et le compte de résultat
+    chargeait un seul mois de toute l'année.
+
+    Règle : la date fournie si l'école la précise ; sinon le dernier jour du
+    mois concerné, qui est la pratique — on paie en fin de mois. Jamais une
+    date postérieure à aujourd'hui : on n'enregistre pas un versement qui
+    n'a pas encore eu lieu.
+    """
+    if date_versement:
+        if date_versement > date_type.today():
+            raise HTTPException(400, "Date de versement dans le futur : "
+                                     "un salaire ne s'enregistre pas à l'avance.")
+        return date_versement
+    try:
+        annee, mois = (int(x) for x in mois_concerne.split("-")[:2])
+    except (ValueError, AttributeError):
+        return date_type.today()
+    dernier = calendar.monthrange(annee, mois)[1]
+    return min(date_type(annee, mois, dernier), date_type.today())
+
+
+def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: str, mode_paiement: str, etablissement_id: int, annee_id: int, date_versement: Optional[date_type] = None) -> dict:
     """Exécute réellement le paiement calculé (Dépense + Bulletin + écriture comptable + avances soldées).
 
     `etablissement_id` provient toujours de l'établissement authentifié de
     l'appelant (Depends(require_etablissement)), jamais d'une valeur par
     défaut ni d'un champ fourni par le client."""
+    # ON NE PAIE PAS UN MOIS QUI N'EST PAS ENCORE ARRIVÉ
+    # « On paie par mois, et ça bloque tant que le mois prochain n'est pas
+    # venu. » Sans ce contrôle, régler septembre en août revient à verser un
+    # salaire pour du travail qui n'a pas encore eu lieu — et à priver l'école
+    # du seul garde-fou qu'elle avait : le calendrier.
+    if mois_concerne > date_type.today().strftime("%Y-%m"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Le mois {mois_concerne} n'est pas encore arrivé : "
+                   f"un salaire ne se verse pas à l'avance.",
+        )
+
     calc = _calculer_salaire(db, employe_id_str, mois_concerne, etablissement_id)
     if calc["statut"] == "PAYE":
         raise HTTPException(status_code=400, detail=f"{calc['nom_complet']} est déjà payé(e) pour {mois_concerne}")
+    if calc.get("avant_embauche"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{calc['nom_complet']} a été embauché(e) le "
+                   f"{calc['date_embauche']} : rien n'est dû pour {mois_concerne}.",
+        )
     if calc["net_a_payer"] <= 0:
         raise HTTPException(status_code=400, detail="Le net à payer calculé est nul ou négatif")
         
@@ -4075,10 +4271,11 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
             detail=f"Solde en caisse insuffisant pour payer ce salaire. Disponible : {solde_disponible:,.0f} GNF".replace(',', ' ')
         )
 
+    jour = _jour_de_versement(mois_concerne, date_versement)
     libelle = f"Salaire {calc['nom_complet']} — {mois_concerne}"
     dep = Depense(
         etablissement_id=etablissement_id, annee_id=annee_id, categorie="SALAIRES",
-        libelle=libelle[:300], montant=calc["net_a_payer"], date_depense=date_type.today(),
+        libelle=libelle[:300], montant=calc["net_a_payer"], date_depense=jour,
         fournisseur=employe_id_str, statut="VALIDE",
     )
     db.add(dep)
@@ -4099,7 +4296,7 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
         employe_id=calc["employe_pk"], mois_concerne=mois_concerne,
         salaire_base=calc["salaire_base"], total_primes=calc["total_primes"],
         total_absences=calc["total_absences"], total_avances=calc["total_avances"],
-        net_a_payer=calc["net_a_payer"], date_paiement=date_type.today(),
+        net_a_payer=calc["net_a_payer"], date_paiement=jour,
         mode_paiement=mode_paiement, statut="PAYE",
         details_absences=calc.get("details_absences")
     )
@@ -4107,11 +4304,15 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
     db.flush()
     dep.reference = str(bulletin.bulletin_id)  # lien pour pouvoir annuler proprement plus tard
 
+    # Les avances soldees sont celles qui viennent d etre retenues : memes
+    # conditions que le calcul, sinon une avance deduite du net resterait
+    # EN_ATTENTE et serait retenue une seconde fois le mois suivant.
     db.query(Avance).filter(
         Avance.employe_id == calc["employe_pk"],
-        Avance.mois_concerne == mois_concerne,
         Avance.statut == "EN_ATTENTE",
-    ).update({"statut": "DEDUITE"})
+        or_(Avance.date_avance.is_(None),
+            Avance.date_avance <= _jour_de_versement(mois_concerne)),
+    ).update({"statut": "DEDUITE"}, synchronize_session=False)
 
     db.commit()
     _invalidate_dashboard_cache(etablissement_id, annee_id)
@@ -4220,7 +4421,13 @@ def put_date_paie_endpoint(data: dict, db: Session = Depends(get_db), etablissem
 @router.post("/salaires/payer-group")
 def payer_group_endpoint(
     mois_concerne: str = None,
-    mode_paiement: str = "Cash",
+    # « Cash » n'appartient a aucune liste de reference : ce defaut ecrivait un
+    # mode que les totaux par mode ne savaient pas classer, et la depense
+    # salariale disparaissait du rapprochement de caisse.
+    mode_paiement: str = "ESPECES",
+    # Jour réel du versement. Sans lui, la paie d'un mois passé se datait du
+    # jour de la saisie : voir `_jour_de_versement`.
+    date_versement: Optional[date_type] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
@@ -4231,6 +4438,7 @@ def payer_group_endpoint(
     # salaires sur l'annee scolaire n°1, qui appartient a la premiere ecole
     # inscrite. C'est l'annee EN COURS DE CETTE ECOLE qui fait foi.
     annee_id = resoudre_annee(db, etablissement_id, None)
+    mode_paiement = exiger_mode_paiement(mode_paiement)
 
     refs = _lister_employes_actifs(db, etablissement_id)
     payes, ignores, echecs = [], [], []
@@ -4251,6 +4459,7 @@ def payer_group_endpoint(
                 mode_paiement=mode_paiement,
                 etablissement_id=etablissement_id,
                 annee_id=annee_id,
+                date_versement=date_versement,
             )
             payes.append({"nom": calc["nom_complet"], "montant": calc["net_a_payer"]})
         except Exception as e:
@@ -4311,12 +4520,37 @@ def _mois_periode_paie(db: Session, etablissement_id: int, nb_mois_fallback: int
     """
     Période sur laquelle les salaires sont considérés dus, telle que configurée dans
     Paramètres > Finance & Comptabilité > Salaires (ss_parametres, finance.salaires_mois_*).
-    Sans configuration, on retombe sur les `nb_mois_fallback` derniers mois glissants
-    (comportement précédent).
+
+    UNE ANNÉE SCOLAIRE NE FAIT PAS DOUZE MOIS
+    Sans configuration, on retombait sur douze mois glissants. Or l'année de
+    TrillionX va d'octobre à juin : neuf mois. Le comptable se voyait donc
+    proposer juillet, août et septembre — des mois où l'école ne paie personne —
+    et un employé arrivé en cours d'année réclamait des salaires antérieurs à
+    la rentrée elle-même.
+
+    À défaut de réglage explicite, on borne donc sur l'ANNÉE SCOLAIRE EN COURS
+    de cette école, et jamais au-delà du mois d'aujourd'hui. Les douze mois
+    glissants ne servent plus que d'ultime repli, quand aucune année n'est
+    ouverte.
     """
     settings = get_finance_settings(db, etablissement_id)
     mois_debut = (settings.get("salaires_mois_debut") or "").strip()
     if not mois_debut:
+        annee = db.query(AnneeScolaire).filter(
+            AnneeScolaire.etablissement_id == etablissement_id,
+            AnneeScolaire.est_courante == "O",
+        ).first()
+        if annee and annee.date_debut and annee.date_fin:
+            debut = annee.date_debut.strftime("%Y-%m")
+            # La fenêtre court jusqu'au MOIS EN COURS, même passé la fin de
+            # l'année scolaire : le personnel reste employé en juillet et août,
+            # et l'école le paie. La borner à juin faisait disparaître le mois
+            # que le comptable a sous les yeux — l'écran proposait « Payer ce
+            # mois » pendant que la liste des arriérés répondait « à jour ».
+            fin = max(annee.date_fin.strftime("%Y-%m"),
+                      date_type.today().strftime("%Y-%m"))
+            fin = min(fin, date_type.today().strftime("%Y-%m"))
+            return _mois_entre(debut, fin) if debut <= fin else []
         return _derniers_mois(nb_mois_fallback)
     mois_fin = (settings.get("salaires_mois_fin") or "").strip() or date_type.today().strftime("%Y-%m")
     mois_courant = date_type.today().strftime("%Y-%m")
@@ -4340,13 +4574,25 @@ def arrieres_salaire_endpoint(
     NON payés avec un net à payer positif — permet au comptable de régler un ou
     plusieurs mois de retard manuellement, ou la totalité en un clic, plutôt que d'être
     limité au seul mois actuellement sélectionné dans le calendrier de paie.
+
+    LES MOIS D'AVANT L'ARRIVÉE NE SONT PAS DES ARRIÉRÉS
+    Cette liste parcourait les douze derniers mois sans jamais regarder la date
+    d'embauche. Un comptable recruté le jour même s'affichait avec « Mois en
+    retard (12) — Total dû : 12 000 000 GNF », et un clic suffisait à lui
+    verser une année de salaire pour du travail qu'il n'a pas fourni.
     """
     mois_du = []
     total_du = 0.0
+    ignores_avant_embauche = 0
+    embauche = None
     for mois in _mois_periode_paie(db, etablissement_id, nb_mois):
         try:
             calc = _calculer_salaire(db, employe_id_str, mois, etablissement_id)
         except HTTPException:
+            continue
+        if calc.get("avant_embauche"):
+            ignores_avant_embauche += 1
+            embauche = calc.get("date_embauche")
             continue
         if calc["statut"] != "PAYE" and calc["net_a_payer"] > 0:
             mois_du.append({
@@ -4358,7 +4604,15 @@ def arrieres_salaire_endpoint(
                 "net_a_payer": calc["net_a_payer"],
             })
             total_du += calc["net_a_payer"]
-    return {"mois_du": mois_du, "total_du": round(total_du, 2)}
+    return {
+        "mois_du": mois_du,
+        "total_du": round(total_du, 2),
+        # L'écran doit pouvoir expliquer pourquoi la liste est courte : « 11
+        # mois écartés, arrivé le 14/08/2026 » vaut mieux qu'une liste vide
+        # dont on se demande si elle est juste.
+        "mois_avant_embauche": ignores_avant_embauche,
+        "date_embauche": embauche,
+    }
 
 
 @router.post("/salaires/payer-plusieurs-mois")
@@ -4371,16 +4625,16 @@ def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db), eta
     """
     employe_id_str = data.get("enseignant_id") or data.get("employe_id")
     mois_list = data.get("mois_list") or []
-    mode_paiement = data.get("mode_paiement", "Cash")
+    # Mêmes corrections que sur le paiement individuel : mode normalisé et
+    # année scolaire de CETTE école.
+    #
     # `etablissement_id` vient du paramètre injecté par `require_etablissement`
     # (dérivé du JWT) — ne JAMAIS le réécrire depuis `data` (corps client),
     # règle absolue du chantier multi-écoles (voir docs/MULTI_ECOLES_REGLES_DEV.md
-    # §1 et §4.2). La résolution HEAD conflictuelle faisait exactement ça
-    # (`data.get("etablissement_id") or _get_default_etablissement_id(db)`,
-    # ce dernier utilisant en plus un `.first()` sur Etablissement — le même
-    # anti-pattern que §4.3, juste appliqué à l'école plutôt qu'au parent) ;
-    # supprimée plutôt que fusionnée.
-    annee_id = data.get("annee_id") or _get_active_annee_id(db, etablissement_id)
+    # §1 et §4.2). `resoudre_annee` ne lit l'année que pour CETTE école-là.
+    mode_paiement = exiger_mode_paiement(data.get("mode_paiement") or "ESPECES")
+    annee_id = resoudre_annee(db, etablissement_id, data.get("annee_id"))
+    date_versement = _lire_date(data.get("date_versement"))
 
     if not employe_id_str or not mois_list:
         raise HTTPException(status_code=400, detail="employe_id et mois_list requis")
@@ -4391,7 +4645,8 @@ def payer_plusieurs_mois_endpoint(data: dict, db: Session = Depends(get_db), eta
         try:
             result = _executer_paiement_salaire(
                 db=db, employe_id_str=employe_id_str, mois_concerne=mois,
-                mode_paiement=mode_paiement, etablissement_id=etablissement_id, annee_id=annee_id
+                mode_paiement=mode_paiement, etablissement_id=etablissement_id,
+                annee_id=annee_id, date_versement=date_versement,
             )
             payes.append({"mois": mois, "net_a_payer": result.get("net_a_payer")})
             total_paye += float(result.get("net_a_payer") or 0)
@@ -4524,8 +4779,70 @@ def historique_salaire_endpoint(employe_id: str, db: Session = Depends(get_db), 
         for dep in historique
     ]
 
+@router.get("/salaires/bulletin/{bulletin_id}")
+def bulletin_par_son_numero(bulletin_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Le bulletin de paie désigné par SON numéro, sans ambiguïté possible.
+
+    `/salaires/bulletin-detail/{depense_id}` attend le numéro de la DÉPENSE.
+    Les deux séries de numéros sont indépendantes et se recouvrent : le
+    bulletin 553 appartient à Alseny Bah, la dépense 553 à Lansana Baldé.
+    Confondre les deux affichait le salaire d'une personne sur la fiche d'une
+    autre — ce qui est arrivé.
+
+    Cette route lève l'ambiguïté : celui qui tient un `bulletin_id` l'appelle,
+    et retrouve la dépense correspondante plutôt que celle qui porte le même
+    numéro par hasard.
+    """
+    bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == bulletin_id).first()
+    if not bulletin:
+        raise HTTPException(status_code=404, detail="Bulletin introuvable")
+
+    # L'appartenance se lit par l'employé du bulletin : un bulletin d'une
+    # autre école ne doit pas se consulter en devinant son numéro.
+    employe = db.query(Employe).filter(
+        Employe.employe_id == bulletin.employe_id,
+        Employe.etablissement_id == etablissement_id,
+    ).first()
+    if not employe:
+        raise HTTPException(status_code=404, detail="Bulletin introuvable")
+
+    dep = db.query(Depense).filter(
+        Depense.etablissement_id == etablissement_id,
+        Depense.categorie == "SALAIRES",
+        Depense.reference == str(bulletin.bulletin_id),
+    ).first()
+    if not dep:
+        raise HTTPException(
+            status_code=404,
+            detail="Aucune dépense ne correspond à ce bulletin.",
+        )
+    return bulletin_detail_endpoint(dep.depense_id, db, etablissement_id)
+
+
 @router.get("/salaires/bulletin-detail/{depense_id}")
 def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Bulletin de paie d'un versement, désigné par sa DÉPENSE.
+
+    DEUX NUMÉROTATIONS QU'IL NE FAUT PAS CONFONDRE
+    Cette route attend un `depense_id`. L'écran lui envoyait un `bulletin_id` :
+    deux séries de numéros indépendantes. Demander le bulletin n°152 affichait
+    donc la dépense n°152 — celle d'une autre personne, avec son poste et son
+    salaire. Le fondateur a ouvert le bulletin de son comptable et y a lu le
+    salaire d'une agente d'entretien.
+
+    Ce n'est pas seulement un affichage faux : c'est la rémunération de
+    quelqu'un montrée à la place d'une autre.
+
+    On ne peut pas rattraper l'erreur ici : les deux numéros sont valides
+    chacun dans son espace, et rien ne permet de deviner lequel l'appelant a
+    voulu. Le bulletin 553 appartient à Alseny Bah, la dépense 553 à Lansana
+    Baldé — les deux existent. C'est donc l'appelant qui a été corrigé, et
+    `GET /salaires/bulletin/{bulletin_id}` existe désormais pour ceux qui
+    tiennent le numéro du bulletin.
+
+    Reste ici un garde-fou contre toute incohérence future entre la dépense et
+    le bulletin qu'elle référence.
+    """
     dep = db.query(Depense).filter(
         Depense.depense_id == depense_id, Depense.etablissement_id == etablissement_id
     ).first()
@@ -4537,6 +4854,19 @@ def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db), eta
         bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == int(dep.reference)).first()
 
     infos = _identifier_employe(dep.fournisseur, db, etablissement_id)
+
+    # LE GARDE-FOU : la dépense et le bulletin doivent parler de la MÊME
+    # personne. Sans ce contrôle, n'importe quel décalage entre les deux
+    # numérotations affiche le salaire d'autrui sans que rien ne le signale.
+    if bulletin:
+        employe_de_la_depense = _get_or_sync_employe_paie(
+            db, dep.fournisseur, infos, etablissement_id
+        )
+        if bulletin.employe_id != employe_de_la_depense.employe_id:
+            raise HTTPException(
+                status_code=404,
+                detail="Ce bulletin ne correspond pas à ce paiement.",
+            )
     
     if bulletin:
         employe_id = bulletin.employe_id
@@ -4642,9 +4972,13 @@ def absences_source_endpoint(
             })
             total_retenue += retenue
 
+        # Meme regle que le calcul du salaire : la source des retenues ne
+        # montre que ce qui a ete tranche, sinon le comptable justifierait
+        # une retenue qui n'a pas ete decidee.
         manuelles = db.query(AbsencePersonnel).filter(
             AbsencePersonnel.employe_id == employe.employe_id,
             AbsencePersonnel.est_justifie == "N",
+            AbsencePersonnel.statut == "VALIDE",
             AbsencePersonnel.date_absence >= debut_mois,
             AbsencePersonnel.date_absence <= fin_mois,
         ).order_by(AbsencePersonnel.date_absence).all()
@@ -4848,11 +5182,23 @@ def preparer_la_paie(
     annee_id = _paie.annee_courante_id(db, etablissement_id)
     lignes = []
 
-    for ens in db.query(Enseignant).filter(
+    enseignants = db.query(Enseignant).filter(
         Enseignant.etablissement_id == etablissement_id,
         Enseignant.statut == "ACTIF",
-    ).order_by(Enseignant.nom, Enseignant.prenom).all():
-        r = _paie.salaire_enseignant(db, ens.enseignant_id, annee_id)
+    ).order_by(Enseignant.nom, Enseignant.prenom).all()
+
+    # Un appel pour tout le monde, pas un par personne : la version en boucle
+    # lancait quatre requetes par enseignant, soit plus de deux cents sur un
+    # etablissement de cinquante employes — 1,6 seconde d'affichage quand les
+    # autres ecrans repondent en 200 ms. Le cout ne depend plus de l'effectif.
+    salaires = _paie.salaires_enseignants(
+        db, [e.enseignant_id for e in enseignants], annee_id
+    )
+
+    for ens in enseignants:
+        r = salaires.get(ens.enseignant_id) or {
+            "mode": _paie.MODE_HORAIRE, "base": 0.0, "total_heures": 0.0, "lignes": []
+        }
         lignes.append({
             "type": "ENSEIGNANT",
             "id": ens.enseignant_id,

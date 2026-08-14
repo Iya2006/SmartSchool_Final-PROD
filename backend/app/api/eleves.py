@@ -528,8 +528,33 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
         # TarifClasse existe, c'est LUI la source de vérité (même correction
         # que generer_factures_classe, Phase 1 de la refonte tarifs) — évite
         # qu'un montant incohérent soit facturé à l'inscription.
+        # LA GRILLE DE LA CLASSE S'APPLIQUE D'ELLE-MÊME
+        # -------------------------------------------------------------------
+        # L'écran d'inscription préchargeait les montants depuis
+        # `TypeFrais.montant_defaut`, le défaut d'établissement. Or dans une
+        # école qui tarifie par classe — le cas courant, et celui de nos
+        # données réelles — ce défaut vaut 0 : le montant vit dans
+        # `TarifClasse`, pas là. Le formulaire envoyait donc 0, et ce `0`
+        # tombait dans un `continue` silencieux. L'élève était inscrit, assis
+        # dans sa classe... et ne devait rien. Aucune facture, aucune erreur,
+        # aucun message : l'école perdait la scolarité sans que personne
+        # puisse le voir depuis l'écran.
+        #
+        # Désormais, quand l'appelant n'envoie rien, la grille obligatoire de
+        # la classe s'applique — exactement la règle de la réinscription, et
+        # la même fonction, pour qu'il n'y ait qu'un seul endroit où cette
+        # règle est écrite.
         factures_generees = 0
-        if inscription and data.frais_scolaires:
+        if inscription and not data.frais_scolaires:
+            from app.api.reinscription import _generer_frais_reinscription
+            classe_cible = db.query(Classe).filter(
+                Classe.classe_id == data.classe_id
+            ).first()
+            if classe_cible is not None:
+                factures_generees = _generer_frais_reinscription(
+                    db, inscription, classe_cible, etablissement_id
+                )
+        elif inscription and data.frais_scolaires:
             # Le type de frais appartient a une ecole depuis la migration
             # 2026_08_compta_01. Sans ce controle, un client pouvait envoyer
             # l'identifiant du type de frais d'un autre etablissement : la
@@ -540,20 +565,28 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
                 ).all()
             }
             for frais in data.frais_scolaires:
-                if frais.montant <= 0:
-                    continue
                 if frais.type_frais_id not in types_de_l_ecole:
                     raise HTTPException(404, "Type de frais non trouvé")
                 tarif = db.query(TarifClasse).filter(
                     TarifClasse.classe_id == data.classe_id, TarifClasse.type_frais_id == frais.type_frais_id
                 ).first()
-                montant = float(tarif.montant) if tarif is not None else frais.montant
-                if tarif is not None and abs(float(tarif.montant) - frais.montant) > 0.01:
-                    raise HTTPException(
-                        400,
-                        f"Le montant envoyé ({frais.montant:,.0f} GNF) ne correspond pas au tarif configuré "
-                        f"pour cette classe ({float(tarif.montant):,.0f} GNF).",
-                    )
+
+                # Un frais coché à 0 alors que la classe a un tarif, ce n'est
+                # pas « gratuit » : c'est un écran qui ne connaissait pas le
+                # montant. C'est le tarif qui vaut. Sans tarif configuré et
+                # sans montant, il n'y a rien à facturer — on passe.
+                if frais.montant <= 0:
+                    if tarif is None:
+                        continue
+                    montant = float(tarif.montant)
+                else:
+                    montant = float(tarif.montant) if tarif is not None else frais.montant
+                    if tarif is not None and abs(float(tarif.montant) - frais.montant) > 0.01:
+                        raise HTTPException(
+                            400,
+                            f"Le montant envoyé ({frais.montant:,.0f} GNF) ne correspond pas au tarif configuré "
+                            f"pour cette classe ({float(tarif.montant):,.0f} GNF).",
+                        )
 
                 # Ce numéro venait d'un COMPTAGE de factures : supprimez-en
                 # une, et la suivante réutilisait un numéro déjà attribué.

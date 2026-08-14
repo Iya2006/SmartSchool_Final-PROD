@@ -19,7 +19,10 @@ from pydantic import BaseModel
 import hashlib
 
 from app.core.database import get_db
-from app.core.auth import require_etablissement, get_current_user
+from app.core.auth import (
+    ADMIN_TIER_ROLES, get_current_user, require_etablissement, require_roles,
+    roles_du_compte,
+)
 from app.models.academique import Utilisateur
 from app.schemas.schemas import PersonnelCreate, PersonnelUpdate, PersonnelOut
 from app.core.security import hash_password, verify_password
@@ -35,6 +38,99 @@ ROLES_AVEC_ACCES = {
 }
 
 ROLES_SANS_ACCES = {"AGENT_ENTRETIEN", "GARDIEN", "CHAUFFEUR", "AUTRE"}
+
+
+def resoudre_role(db: Session, role: str, etablissement_id: int) -> tuple:
+    """(rôle retenu, espace hérité) — accepte les rôles créés par l'école.
+
+    Une école nomme ses postes comme elle les vit : « censeur », « surveillant
+    général », « caissier ». Ces rôles-là sont créés dans Paramètres >
+    Sécurité et désignent l'espace d'un rôle standard. Le formulaire du
+    personnel ne connaissait que la liste figée dans le code : un censeur
+    fraîchement créé n'était donc jamais proposé, et s'il était forcé par
+    l'API, son compte n'ouvrait aucun écran.
+
+    Retourne l'espace hérité pour que l'appelant sache s'il doit générer un
+    login — un rôle basé sur GARDIEN n'a pas plus d'écran que le gardien.
+    """
+    from app.models.academique import Role
+
+    code = (role or "").upper()
+    if code in ROLES_AVEC_ACCES or code in ROLES_SANS_ACCES:
+        return code, code
+
+    perso = db.query(Role).filter(
+        Role.etablissement_id == etablissement_id, Role.code == code
+    ).first()
+    if not perso:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Rôle « {code} » inconnu. Créez-le d'abord dans "
+                   f"Paramètres > Sécurité, ou choisissez un rôle existant.",
+        )
+    if not perso.role_base:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Le rôle « {perso.libelle} » n'a pas d'espace : personne ne "
+                   f"pourrait s'en servir. Indiquez de quel rôle il hérite.",
+        )
+    return code, perso.role_base
+
+# ── QUI TOUCHE AUX FICHES DU PERSONNEL ───────────────────────────────────────
+#
+# Le module entier était ouvert à PERSONNEL_ROLES, c'est-à-dire aussi au
+# comptable, au surveillant, au bibliothécaire, à l'informaticien et à
+# l'opérateur. Chacun d'eux pouvait donc :
+#   créer un compte ADMIN à son nom,
+#   changer le salaire de n'importe qui, y compris le sien,
+#   désactiver le directeur,
+#   et — c'est le cas qui a fait trouver le trou — se RÉACTIVER lui-même
+#   après que la direction l'a désactivé à la clôture de l'année.
+#
+# Une désactivation que la personne désactivée peut annuler n'est pas une
+# désactivation. Écrire sur une fiche du personnel est donc réservé à la
+# direction, et à elle seule.
+_direction_seule = require_roles(*ADMIN_TIER_ROLES)
+
+# Lire une fiche reste ouvert aux rôles internes (l'annuaire sert à tout le
+# monde), mais la rémunération et les pièces d'identité n'en font pas partie :
+# un surveillant n'a pas à connaître le salaire du comptable. Seules la
+# direction et la comptabilité — qui prépare la paie — les voient.
+ROLES_VOIENT_LA_REMUNERATION = set(ADMIN_TIER_ROLES) | {"COMPTABLE"}
+CHAMPS_CONFIDENTIELS = (
+    "salaire_base", "taux_horaire", "prime_mensuelle", "rib",
+    "numero_cni", "date_naissance", "lieu_naissance", "adresse",
+)
+
+
+def _voit_la_remuneration(current_user: dict) -> bool:
+    return bool(roles_du_compte(current_user) & ROLES_VOIENT_LA_REMUNERATION)
+
+
+def _masquer(fiche: dict) -> dict:
+    """Retire d'une fiche ce qui ne regarde que la direction et la paie."""
+    allege = dict(fiche)
+    for champ in CHAMPS_CONFIDENTIELS:
+        allege.pop(champ, None)
+    return allege
+
+
+def generer_nom_utilisateur(db: Session, prenom: str, nom: str) -> str:
+    """Login proposé à la création : « ma.sylla », puis « ma.sylla2 », etc.
+
+    Fonction partagée plutôt que règle recopiée : le scénario de recette crée
+    du personnel par le même chemin que l'écran, sinon il vérifierait une
+    logique qui n'est pas celle en production.
+
+    L'unicité est cherchée sur TOUTE la plateforme, pas dans l'école seule :
+    `auth.py` identifie par login sans savoir de quelle école on vient.
+    """
+    base = f"{(prenom or '')[:2].lower()}.{(nom or '').lower()}".strip(".")
+    base = base or "utilisateur"
+    existants = db.query(func.count(Utilisateur.utilisateur_id)).filter(
+        Utilisateur.nom_utilisateur.ilike(f"{base}%")
+    ).scalar() or 0
+    return base if existants == 0 else f"{base}{existants + 1}"
 
 
 def _row_to_dict(p: Utilisateur) -> dict:
@@ -79,6 +175,7 @@ def list_personnel(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
 ):
     """Retourne la liste du personnel non-enseignant avec filtres optionnels,
     paginée (skip/limit) — un établissement à grand effectif ne doit jamais
@@ -100,18 +197,33 @@ def list_personnel(
                 Utilisateur.telephone.ilike(search)
             )
         )
+    # La liste est paginée (sinon une école de 200 agents renvoie tout à
+    # chaque ouverture d'écran), ET la rémunération reste masquée pour qui
+    # n'a pas à la voir. Les deux règles s'appliquent ensemble : paginer ne
+    # doit pas rouvrir la fiche de paie, masquer ne doit pas ramener toute
+    # la table.
     response.headers["X-Total-Count"] = str(query.count())
     personnel = query.order_by(Utilisateur.role, Utilisateur.nom).offset(skip).limit(limit).all()
-    return [_row_to_dict(p) for p in personnel]
+    fiches = [_row_to_dict(p) for p in personnel]
+    if _voit_la_remuneration(current_user):
+        return fiches
+    return [_masquer(f) for f in fiches]
 
 
 # ─── Récapitulatif par rôle ────────────────────────────────────────────────────
-@router.get("/stats", summary="Statistiques du personnel par rôle")
+@router.get("/stats", summary="Statistiques du personnel par rôle",
+            dependencies=[Depends(_direction_seule)])
 def stats_personnel(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Compte le nombre de membres par rôle principal, le total des salaires,
-    et les actifs/avec accès système — en agrégats SQL, jamais en comptant
-    la page actuellement affichée côté frontend (qui est paginée depuis
-    l'ajout de skip/limit sur `list_personnel`)."""
+    """Compte le nombre de membres par rôle, le total des salaires, les actifs
+    et ceux qui ont un accès système.
+
+    Les totaux sont des agrégats SQL, jamais un décompte de la page affichée
+    côté frontend — celle-ci est paginée, et compter ses lignes donnerait
+    l'effectif de la page pour l'effectif de l'école.
+
+    Réservé à la direction : la masse salariale par rôle se déduit d'un simple
+    total, et un effectif de 2 suffit à retrouver deux salaires individuels.
+    """
     rows = db.query(
         Utilisateur.role,
         func.count(Utilisateur.utilisateur_id).label("total"),
@@ -133,17 +245,28 @@ def stats_personnel(db: Session = Depends(get_db), etablissement_id: int = Depen
 
 # ─── DÉTAIL d'un membre du personnel ──────────────────────────────────────────
 @router.get("/{personnel_id}", summary="Détail d'un membre du personnel")
-def get_personnel(personnel_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def get_personnel(
+    personnel_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
+):
     p = db.query(Utilisateur).filter(
         Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
     ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
-    return _row_to_dict(p)
+    fiche = _row_to_dict(p)
+    # Sa propre fiche se lit en entier : chacun a le droit de connaître son
+    # salaire et ce que l'école a enregistré sur lui.
+    if _voit_la_remuneration(current_user) or str(current_user.get("sub")) == str(personnel_id):
+        return fiche
+    return _masquer(fiche)
 
 
 # ─── CRÉER un nouveau membre du personnel ─────────────────────────────────────
-@router.post("", status_code=201, summary="Créer un membre du personnel")
+@router.post("", status_code=201, summary="Créer un membre du personnel",
+             dependencies=[Depends(_direction_seule)])
 def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """
     Crée un nouveau membre du personnel.
@@ -156,15 +279,14 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etabl
     n'importe quel client pouvait choisir librement l'école propriétaire du
     compte créé.
     """
+    # Le rôle peut être un rôle créé par l'école (« CENSEUR ») : on résout
+    # l'espace dont il hérite pour savoir s'il ouvre un accès.
+    role_retenu, espace = resoudre_role(db, data.role, etablissement_id)
+
     # Génération du login si non fourni mais rôle avec accès
     nom_utilisateur = data.nom_utilisateur
-    if data.role in ROLES_AVEC_ACCES and not nom_utilisateur and data.mot_de_passe:
-        base = f"{data.prenom[:2].lower()}.{data.nom.lower()}"
-        # Vérifie unicité
-        count = db.query(func.count(Utilisateur.utilisateur_id)).filter(
-            Utilisateur.nom_utilisateur.ilike(f"{base}%")
-        ).scalar() or 0
-        nom_utilisateur = base if count == 0 else f"{base}{count + 1}"
+    if espace in ROLES_AVEC_ACCES and not nom_utilisateur and data.mot_de_passe:
+        nom_utilisateur = generer_nom_utilisateur(db, data.prenom, data.nom)
 
     # Vérifie unicité du login si fourni
     if nom_utilisateur:
@@ -184,6 +306,7 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etabl
 
     payload = data.model_dump(exclude={"nom_utilisateur", "mot_de_passe"})
     payload["etablissement_id"] = etablissement_id
+    payload["role"] = role_retenu
     mot_de_passe_hashed = hash_password(data.mot_de_passe) if data.mot_de_passe else None
 
     p = Utilisateur(
@@ -197,11 +320,16 @@ def create_personnel(data: PersonnelCreate, db: Session = Depends(get_db), etabl
     result = _row_to_dict(p)
     # Retourner le mot de passe en clair (une seule fois) si créé
     result["mot_de_passe_clair"] = data.mot_de_passe if data.mot_de_passe else None
+    # L'espace où cette personne atterrira en se connectant : la direction doit
+    # pouvoir le vérifier au moment où elle crée le compte, pas le découvrir
+    # quand l'intéressé se plaint de tomber sur un écran vide.
+    result["espace"] = espace
     return result
 
 
 # ─── METTRE À JOUR un membre du personnel ────────────────────────────────────
-@router.put("/{personnel_id}", summary="Modifier un membre du personnel")
+@router.put("/{personnel_id}", summary="Modifier un membre du personnel",
+            dependencies=[Depends(_direction_seule)])
 def update_personnel(personnel_id: int, data: PersonnelUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     p = db.query(Utilisateur).filter(
         Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
@@ -238,38 +366,95 @@ def update_personnel(personnel_id: int, data: PersonnelUpdate, db: Session = Dep
 
 
 # ─── ARCHIVER / Changer le statut ─────────────────────────────────────────────
-@router.patch("/{personnel_id}/statut", summary="Changer le statut d'un membre")
+STATUTS_PERSONNEL = {"ACTIF", "INACTIF", "SUSPENDU", "CONGE"}
+
+
+@router.patch("/{personnel_id}/statut", summary="Changer le statut d'un membre",
+              dependencies=[Depends(_direction_seule)])
 def change_statut(
     personnel_id: int,
     statut: str = Query(..., description="ACTIF, INACTIF, SUSPENDU, CONGE"),
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
+):
+    """Active ou désactive un compte du personnel.
+
+    C'est le geste que la direction pose à la clôture de l'année : le compte
+    comptable est désactivé une fois les comptes arrêtés, et réactivé à la
+    réouverture. `auth.py` refuse la connexion de tout compte dont le statut
+    n'est pas ACTIF, donc désactiver ferme réellement la porte — ce n'est pas
+    un simple libellé.
+    """
+    statut = (statut or "").strip().upper()
+    if statut not in STATUTS_PERSONNEL:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Statut invalide. Valeurs acceptées : {', '.join(sorted(STATUTS_PERSONNEL))}",
+        )
+
+    p = db.query(Utilisateur).filter(
+        Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
+    ).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
+
+    if statut != "ACTIF":
+        # Se désactiver soi-même verrouille l'école dehors : plus personne pour
+        # rouvrir le compte, et le support doit intervenir en base.
+        if str(current_user.get("sub")) == str(personnel_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Vous ne pouvez pas désactiver votre propre compte : "
+                       "plus personne ne pourrait le réactiver.",
+            )
+        # Même raison pour le dernier compte de direction actif de l'école.
+        if p.role in ADMIN_TIER_ROLES and p.statut == "ACTIF":
+            restants = db.query(func.count(Utilisateur.utilisateur_id)).filter(
+                Utilisateur.etablissement_id == etablissement_id,
+                Utilisateur.role.in_(list(ADMIN_TIER_ROLES)),
+                Utilisateur.statut == "ACTIF",
+                Utilisateur.utilisateur_id != personnel_id,
+            ).scalar() or 0
+            if restants == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="C'est le dernier compte de direction actif de l'école. "
+                           "Le désactiver fermerait l'accès à tout le monde.",
+                )
+
+    p.statut = statut
+    db.commit()
+    return {"message": f"Statut mis à jour : {statut}", "utilisateur_id": personnel_id,
+            "statut": statut}
+
+
+# ─── SUPPRIMER un membre du personnel ─────────────────────────────────────────
+@router.delete("/{personnel_id}", summary="Supprimer un membre du personnel",
+               dependencies=[Depends(_direction_seule)])
+def delete_personnel(
+    personnel_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
 ):
     p = db.query(Utilisateur).filter(
         Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
     ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
-    p.statut = statut
-    db.commit()
-    return {"message": f"Statut mis à jour : {statut}", "utilisateur_id": personnel_id}
-
-
-# ─── SUPPRIMER un membre du personnel ─────────────────────────────────────────
-@router.delete("/{personnel_id}", summary="Supprimer un membre du personnel")
-def delete_personnel(personnel_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    p = db.query(Utilisateur).filter(
-        Utilisateur.utilisateur_id == personnel_id, Utilisateur.etablissement_id == etablissement_id
-    ).first()
-    if not p:
-        raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
+    if str(current_user.get("sub")) == str(personnel_id):
+        raise HTTPException(status_code=400, detail="Vous ne pouvez pas supprimer votre propre compte.")
     db.delete(p)
     db.commit()
     return {"message": "Membre supprimé avec succès"}
 
 
 # ─── LISTE pour le paiement des salaires ──────────────────────────────────────
-@router.get("/salaires/liste", summary="Liste du personnel avec salaires pour la comptabilité")
+# Réservée à la direction et à la comptabilité : c'est la liste des salaires
+# nominatifs de toute l'école.
+@router.get("/salaires/liste", summary="Liste du personnel avec salaires pour la comptabilité",
+            dependencies=[Depends(require_roles(*ADMIN_TIER_ROLES, "COMPTABLE"))])
 def liste_salaires(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Retourne uniquement les membres avec un salaire > 0, pour le Centre de Décaissement."""
     rows = db.query(Utilisateur).filter(

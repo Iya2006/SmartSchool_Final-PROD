@@ -55,6 +55,9 @@ export default function EmploiDuTempsPage() {
     const [showModal, setShowModal] = useState(false);
     const [editCreneau, setEditCreneau] = useState<Creneau | null>(null);
     const [formJour, setFormJour] = useState('LUNDI');
+    // L'heure de fin etait DEDUITE de la liste des creneaux : en saisie libre,
+    // c'est l'ecole qui la donne.
+    const [formHeureFin, setFormHeureFin] = useState('09:00');
     const [formHeure, setFormHeure] = useState('08:00');
     const [formMatiereId, setFormMatiereId] = useState<number | null>(null);
     const [formEnseignantId, setFormEnseignantId] = useState<number | null>(null);
@@ -105,6 +108,22 @@ export default function EmploiDuTempsPage() {
         if (selectedClasseId) loadEmploi(selectedClasseId);
     }, [selectedClasseId, loadEmploi]);
 
+    // Les lignes de la grille ne peuvent plus etre une liste figee : depuis que
+    // les heures se saisissent librement, un cours a 07:30 ou un TP de 14:00 a
+    // 16:00 doit apparaitre. On part des heures reellement posees, completees
+    // par les creneaux habituels pour que la grille d'une classe vide reste
+    // lisible.
+    const lignesHoraires = React.useMemo(() => {
+        const debuts = new Map<string, string>();
+        HEURES.forEach(h => debuts.set(h.debut, h.fin));
+        creneaux.forEach(c => {
+            if (c.heure_debut) debuts.set(c.heure_debut, c.heure_fin || '');
+        });
+        return Array.from(debuts.entries())
+            .map(([debut, fin]) => ({ debut, fin }))
+            .sort((a, b) => a.debut.localeCompare(b.debut));
+    }, [creneaux]);
+
     // Get creneau for a specific cell
     const getCreneau = (jour: string, heure: string): Creneau | undefined => {
         return creneaux.find(c => c.jour === jour && c.heure_debut === heure);
@@ -116,6 +135,7 @@ export default function EmploiDuTempsPage() {
             setEditCreneau(existing);
             setFormJour(existing.jour);
             setFormHeure(existing.heure_debut);
+            setFormHeureFin(existing.heure_fin);
             setFormMatiereId(existing.matiere_id);
             setFormEnseignantId(existing.enseignant?.enseignant_id || null);
             setFormSalle(existing.salle || '');
@@ -123,6 +143,8 @@ export default function EmploiDuTempsPage() {
             setEditCreneau(null);
             setFormJour(jour);
             setFormHeure(heure);
+            // Une heure par defaut, modifiable : on propose la case cliquee.
+            setFormHeureFin(HEURES.find(h => h.debut === heure)?.fin || heure);
             setFormMatiereId(matieres.length > 0 ? matieres[0].matiere_id : null);
             setFormEnseignantId(null);
             setFormSalle('');
@@ -137,21 +159,29 @@ export default function EmploiDuTempsPage() {
             showError("Veuillez sélectionner une matière.");
             return;
         }
-        const heureSlot = HEURES.find(h => h.debut === formHeure);
-        if (!heureSlot) return;
+        if (!formHeure || !formHeureFin) {
+            showError("Indiquez l'heure de debut et l'heure de fin.");
+            return;
+        }
+        // Un cours qui finit avant de commencer passait sans broncher tant que
+        // les heures venaient d'une liste figee ; en saisie libre, il faut le dire.
+        if (formHeureFin <= formHeure) {
+            showError("L'heure de fin doit etre apres l'heure de debut.");
+            return;
+        }
 
         try {
             setSaving(true);
             if (editCreneau) {
                 await api.put(`/api/emploi-du-temps/${editCreneau.creneau_id}`, {
-                    jour: formJour, heure_debut: formHeure, heure_fin: heureSlot.fin,
+                    jour: formJour, heure_debut: formHeure, heure_fin: formHeureFin,
                     matiere_id: formMatiereId, enseignant_id: formEnseignantId, salle: formSalle
                 });
                 showSuccess("Créneau modifié !");
             } else {
                 await api.post('/api/emploi-du-temps', {
                     classe_id: selectedClasseId, matiere_id: formMatiereId,
-                    jour: formJour, heure_debut: formHeure, heure_fin: heureSlot.fin,
+                    jour: formJour, heure_debut: formHeure, heure_fin: formHeureFin,
                     enseignant_id: formEnseignantId, salle: formSalle
                 });
                 showSuccess("Créneau créé !");
@@ -329,7 +359,7 @@ export default function EmploiDuTempsPage() {
                             </thead>
                             <tbody>
                                 {/* PAUSE indicator before afternoon */}
-                                {HEURES.map((h, hi) => {
+                                {lignesHoraires.map((h, hi) => {
                                     const isPause = h.debut === '14:00';
                                     return (
                                         <React.Fragment key={`slot-${h.debut}`}>
@@ -499,12 +529,19 @@ export default function EmploiDuTempsPage() {
                                             {JOURS.map(j => <option key={j} value={j}>{JOURS_LABEL[j]}</option>)}
                                         </select>
                                     </div>
+                                    {/* Les heures se SAISISSENT. La liste deroulante n'offrait que
+                                        sept creneaux d'une heure pile : impossible de poser un cours
+                                        de 7h30, un TP de deux heures, ou la moindre horaire propre a
+                                        l'ecole. Chaque etablissement a son rythme. */}
                                     <div style={{ flex: 1 }}>
-                                        <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Heure</label>
-                                        <select value={formHeure} onChange={(e) => setFormHeure(e.target.value)}
-                                            style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', outline: 'none' }}>
-                                            {HEURES.map(h => <option key={h.debut} value={h.debut}>{h.debut} - {h.fin}</option>)}
-                                        </select>
+                                        <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Début</label>
+                                        <input type="time" value={formHeure} onChange={(e) => setFormHeure(e.target.value)}
+                                            style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', outline: 'none' }} />
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Fin</label>
+                                        <input type="time" value={formHeureFin} onChange={(e) => setFormHeureFin(e.target.value)}
+                                            style={{ width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13px', outline: 'none' }} />
                                     </div>
                                 </div>
 

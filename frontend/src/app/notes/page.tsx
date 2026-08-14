@@ -171,6 +171,17 @@ export default function CentralisationNotesPage() {
                 ]);
                 setClasses(clsRes.data);
                 setTrimestres(triRes.data);
+                // La période sélectionnée était figée à 1 : l'identifiant de la
+                // toute première période créée sur la plateforme, donc celle
+                // d'une AUTRE école pour toutes sauf la première inscrite.
+                // « Calculer les moyennes » travaillait alors sur une période
+                // où cette école n'a aucune évaluation, et créait des bulletins
+                // vides en annonçant sa réussite. On part de la période en
+                // cours de l'école, sinon de la première qu'elle a définie.
+                if (triRes.data?.length) {
+                    const enCours = triRes.data.find((t: any) => t.statut === 'EN_COURS');
+                    setSelectedTrimestre((enCours || triRes.data[0]).trimestre_id);
+                }
                 setStats(statsRes.data);
                 setMoisAnnee(moisRes.data?.mois || []);
                 const actifs = (typesRes.data || []).filter((t: TypeEvalInfo) => t.statut === 'ACTIF');

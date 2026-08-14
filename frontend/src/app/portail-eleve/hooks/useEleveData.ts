@@ -25,7 +25,10 @@ export function useEleveData(eleveId: number | null) {
 
     const [bulletinData, setBulletinData] = useState<BulletinData | null>(null);
     const [bulletinLoading, setBulletinLoading] = useState(false);
-    const [bulletinTrimestre, setBulletinTrimestre] = useState<number>(1);
+    // Aucune période supposée : la liste vient de l'école de l'élève, et tant
+    // qu'elle n'est pas chargée le serveur choisit la période en cours.
+    const [bulletinTrimestre, setBulletinTrimestre] = useState<number | null>(null);
+    const [periodes, setPeriodes] = useState<{ trimestre_id: number; libelle: string; statut: string }[]>([]);
 
     const [messagesData, setMessagesData] = useState<MessagesData | null>(null);
     const [messagesLoading, setMessagesLoading] = useState(false);
@@ -103,10 +106,11 @@ export function useEleveData(eleveId: number | null) {
     }, []);
 
     // Fetch Bulletin
-    const fetchBulletin = useCallback(async (id: number, trimId: number) => {
+    const fetchBulletin = useCallback(async (id: number, trimId: number | null) => {
         setBulletinLoading(true);
         try {
-            const res = await api.get(`/api/portail-eleve/${id}/bulletin?trimestre_id=${trimId}`);
+            const res = await api.get(
+                `/api/portail-eleve/${id}/bulletin${trimId ? `?trimestre_id=${trimId}` : ''}`);
             setBulletinData(res.data);
         } catch {
             setBulletinData(null);
@@ -230,6 +234,18 @@ export function useEleveData(eleveId: number | null) {
         }
     }, [eleveId, bulletinTrimestre, fetchBulletin]);
 
+    // Périodes réelles de l'école de l'élève, chargées une fois.
+    useEffect(() => {
+        if (!eleveId) return;
+        api.get(`/api/portail-eleve/${eleveId}/periodes`)
+            .then(res => {
+                setPeriodes(res.data || []);
+                const enCours = (res.data || []).find((p: any) => p.statut === 'EN_COURS');
+                setBulletinTrimestre((enCours || res.data?.[0])?.trimestre_id ?? null);
+            })
+            .catch(() => setPeriodes([]));
+    }, [eleveId]);
+
     return {
         dashboardData,
         dashboardLoading,
@@ -245,6 +261,7 @@ export function useEleveData(eleveId: number | null) {
         bulletinLoading,
         bulletinTrimestre,
         setBulletinTrimestre,
+        periodes,
         messagesData,
         messagesLoading,
         fournituresData,

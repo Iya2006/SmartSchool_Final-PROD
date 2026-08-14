@@ -145,6 +145,51 @@ def require_etablissement(current_user: dict = Depends(get_current_user)) -> int
 ADMIN_TIER_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "DIRECTEUR_NIVEAU"}
 
 
+# ── LES ESPACES QU'UN RÔLE PERSONNALISÉ PEUT REPRENDRE ───────────────────────
+#
+# Une école ne parle pas de « DIRECTEUR_NIVEAU » mais de « censeur », de
+# « surveillant général », de « caissier ». Elle doit pouvoir donner ces noms-là
+# à ses agents — sans que cela crée un pouvoir nouveau.
+#
+# Un rôle personnalisé désigne donc un rôle standard dont il hérite l'espace :
+# « Censeur des études » se base sur DIRECTEUR_NIVEAU, « Caissier » sur
+# COMPTABLE. Il n'obtient JAMAIS plus que sa base, et la matrice de permissions
+# continue de ne faire que restreindre.
+#
+# SUPER_ADMIN n'y figure pas : c'est le compte de l'éditeur de la plateforme,
+# pas un poste qu'une école attribue.
+ROLES_ATTRIBUABLES = (
+    "FONDATEUR", "DG", "DIRECTEUR_NIVEAU", "ADMIN", "COMPTABLE",
+    "BIBLIOTHECAIRE", "INFORMATICIEN", "SURVEILLANT", "OPERATEUR",
+    "AGENT_ENTRETIEN", "GARDIEN", "CHAUFFEUR", "AUTRE",
+)
+
+# Comment ces postes se nomment à l'écran.
+#
+# Ces libellés n'existaient que côté frontend, dans l'assistant de création de
+# rôle. L'écran « Rôles » ne listait donc QUE les rôles créés à la main par
+# l'école : une direction qui ouvrait cet écran voyait « Personne n'occupe
+# encore ce poste » en face de la comptabilité, alors que son comptable est en
+# poste, se connecte tous les jours et touche un salaire. Les postes du système
+# doivent apparaître dans la même liste, avec leurs titulaires.
+LIBELLES_DES_ROLES = {
+    "SUPER_ADMIN":      ("Éditeur de la plateforme", "Compte de maintenance : n'est pas un poste de l'école."),
+    "FONDATEUR":        ("Fondateur", "Vision exécutive sur toute la plateforme."),
+    "DG":               ("Direction générale", "Pilotage de l'école, comptabilité comprise."),
+    "ADMIN":            ("Administration complète", "Tous les écrans, comptabilité comprise."),
+    "DIRECTEUR_NIVEAU": ("Direction des études", "Évaluations, notes, bulletins, résultats de fin d'année, examens, archive. Pas la comptabilité."),
+    "COMPTABLE":        ("Comptabilité", "Encaissements, dépenses, salaires, rapports. Rien de pédagogique."),
+    "SURVEILLANT":      ("Surveillance", "Discipline, présences, remontées terrain."),
+    "OPERATEUR":        ("Secrétariat / opérations", "Accueil, inscriptions, saisie courante."),
+    "BIBLIOTHECAIRE":   ("Bibliothèque", "Fonds documentaire, prêts et retours."),
+    "INFORMATICIEN":    ("Informatique", "Équipements, incidents, support technique."),
+    "AGENT_ENTRETIEN":  ("Entretien", "Aucun écran : la personne existe en RH et à la paie, sans compte."),
+    "GARDIEN":          ("Gardiennage", "Aucun écran : la personne existe en RH et à la paie, sans compte."),
+    "CHAUFFEUR":        ("Transport", "Aucun écran : la personne existe en RH et à la paie, sans compte."),
+    "AUTRE":            ("Autre", "Aucun écran : la personne existe en RH et à la paie, sans compte."),
+}
+
+
 def roles_du_compte(current_user: dict) -> set:
     """Role principal + roles secondaires declares sur la fiche.
 
@@ -162,6 +207,13 @@ def roles_du_compte(current_user: dict) -> set:
     secondaires = current_user.get("roles_secondaires") or []
     if isinstance(secondaires, (list, tuple, set)):
         roles.update(r for r in secondaires if isinstance(r, str) and r)
+    # Rôle personnalisé (« CENSEUR ») : il vaut son rôle de base et rien de
+    # plus. Le jeton le porte, résolu à la connexion, pour éviter une requête
+    # à chaque appel. Un jeton émis avant ce champ n'en a pas et se comporte
+    # exactement comme avant.
+    base = current_user.get("role_base")
+    if isinstance(base, str) and base:
+        roles.add(base)
     return roles
 
 

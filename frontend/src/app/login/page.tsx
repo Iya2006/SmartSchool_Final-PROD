@@ -10,7 +10,9 @@ import {
     ArrowRight, BarChart3, Download, Eye, EyeOff, Info, LayoutGrid, Loader2,
     Lock, Mail, Sparkles, AlertTriangle, Users, X,
 } from 'lucide-react';
-import api from '@/lib/api';
+// `API_BASE_URL` sert au message d'erreur : distinguer « serveur injoignable »
+// de « identifiants incorrects » suppose de pouvoir nommer l'adresse appelée.
+import api, { API_BASE_URL } from '@/lib/api';
 import SmartSchoolMark from '@/components/SmartSchoolMark';
 import styles from './login.module.css';
 
@@ -64,10 +66,32 @@ export default function LoginPage() {
             });
             login(res.data.token, res.data.user);
         } catch (err: unknown) {
-            const message = typeof err === 'object' && err !== null && 'response' in err
-                ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                : undefined;
-            setError(message || 'Impossible de vous connecter avec ces identifiants.');
+            // « Identifiants incorrects » s'affichait AUSSI quand le serveur ne
+            // répondait pas : origine CORS refusée, backend arrêté, mauvais
+            // port. On cherche alors son mot de passe pendant que la panne est
+            // ailleurs. Un problème de réseau doit se dire comme tel.
+            const e = err as {
+                response?: { status?: number; data?: { detail?: string } };
+                code?: string;
+            };
+            const statut = e?.response?.status;
+            const detail = e?.response?.data?.detail;
+
+            if (!e?.response) {
+                setError(
+                    e?.code === 'ECONNABORTED'
+                        ? "Le serveur met trop de temps à répondre. Réessayez dans un instant."
+                        : `Serveur injoignable (${API_BASE_URL}). Vérifiez qu'il est démarré.`
+                );
+            } else if (statut === 401) {
+                setError(detail || 'Identifiant ou mot de passe incorrect.');
+            } else if (statut === 403) {
+                setError(detail || "Ce compte n'a pas accès à l'application.");
+            } else if (statut === 429) {
+                setError('Trop de tentatives. Patientez une minute avant de réessayer.');
+            } else {
+                setError(detail || `Le serveur a refusé la connexion (erreur ${statut}).`);
+            }
             setLoading(false);
         }
     };

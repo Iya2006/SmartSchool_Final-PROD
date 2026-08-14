@@ -60,30 +60,42 @@ def taux_effectif(affectation: Affectation, taux_enseignant) -> Decimal:
     return _dec(taux_enseignant)
 
 
-def detail_heures_enseignant(
-    db: Session, enseignant_id: int, annee_id: Optional[int] = None
-) -> List[dict]:
-    """Ligne par ligne : ce que l'enseignant assure, et à quel tarif.
+def detail_heures_par_enseignant(
+    db: Session, enseignant_ids, annee_id: Optional[int] = None
+) -> Dict[int, List[dict]]:
+    """Le détail des heures de PLUSIEURS enseignants, en quatre requêtes.
 
-    C'est ce détail que le bulletin de paie doit montrer. Un total sans son
-    détail n'est pas contestable, donc pas vérifiable.
+    LE PROBLÈME QUE ÇA RÈGLE
+    La version qui traitait un enseignant à la fois faisait cinq requêtes par
+    personne : sa fiche, ses affectations, les classes, les matières. Sur un
+    établissement de 46 employés, la préparation de paie en lançait donc plus
+    de deux cents et mettait 1,6 seconde — quand tous les autres écrans
+    répondent en moins de 200 ms. À 500 employés l'écran devient inutilisable,
+    et le coût grandit avec l'effectif au lieu de rester stable.
 
-    Préchargement en lot : un enseignant a rarement plus de dix affectations,
-    mais la préparation de paie boucle sur tout l'établissement.
+    Ici, quatre requêtes quel que soit le nombre d'enseignants.
     """
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        return []
+    ids = list({int(i) for i in enseignant_ids})
+    if not ids:
+        return {}
+
+    enseignants = {
+        e.enseignant_id: e for e in db.query(Enseignant).filter(
+            Enseignant.enseignant_id.in_(ids)
+        ).all()
+    }
 
     requete = db.query(Affectation).filter(
-        Affectation.enseignant_id == enseignant_id,
+        Affectation.enseignant_id.in_(ids),
         Affectation.statut == "ACTIVE",
     )
     if annee_id:
         requete = requete.filter(Affectation.annee_id == annee_id)
     affectations = requete.all()
+
+    resultat: Dict[int, List[dict]] = {i: [] for i in ids}
     if not affectations:
-        return []
+        return resultat
 
     classes = {
         c.classe_id: c for c in db.query(Classe).filter(
@@ -96,12 +108,14 @@ def detail_heures_enseignant(
         ).all()
     }
 
-    lignes = []
     for a in affectations:
+        ens = enseignants.get(a.enseignant_id)
+        if ens is None:
+            continue
         heures = _dec(a.nb_heures_semaine)
         taux = taux_effectif(a, ens.taux_horaire)
         cl, mat = classes.get(a.classe_id), matieres.get(a.matiere_id)
-        lignes.append({
+        resultat[a.enseignant_id].append({
             "affectation_id": a.affectation_id,
             "classe": cl.libelle if cl else "?",
             "matiere": mat.libelle if mat else "?",
@@ -110,23 +124,68 @@ def detail_heures_enseignant(
             "taux_specifique": a.taux_horaire is not None,
             "montant_mensuel": float(heures * taux * SEMAINES_PAR_MOIS),
         })
-    return sorted(lignes, key=lambda l: (l["classe"], l["matiere"]))
+
+    for lignes in resultat.values():
+        lignes.sort(key=lambda l: (l["classe"], l["matiere"]))
+    return resultat
 
 
-def salaire_enseignant(
+def detail_heures_enseignant(
     db: Session, enseignant_id: int, annee_id: Optional[int] = None
-) -> dict:
-    """Rémunération mensuelle d'un enseignant, avec son détail."""
-    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
-    if not ens:
-        return {"base": 0.0, "mode": MODE_HORAIRE, "lignes": [], "total_heures": 0.0}
+) -> List[dict]:
+    """Ligne par ligne : ce que l'enseignant assure, et à quel tarif.
+
+    C'est ce détail que le bulletin de paie doit montrer. Un total sans son
+    détail n'est pas contestable, donc pas vérifiable.
+
+    Un seul enseignant : passe par la version en lot, pour qu'il n'existe
+    qu'une implémentation de la règle.
+    """
+    return detail_heures_par_enseignant(db, [enseignant_id], annee_id).get(
+        enseignant_id, []
+    )
+
+
+def salaires_enseignants(
+    db: Session, enseignant_ids, annee_id: Optional[int] = None
+) -> Dict[int, dict]:
+    """Rémunération de PLUSIEURS enseignants, en un nombre fixe de requêtes.
+
+    C'est ce que doit appeler tout écran qui liste du personnel : préparation
+    de paie, liste des employés, arriérés. Boucler sur `salaire_enseignant`
+    rouvrirait quatre requêtes par personne.
+    """
+    ids = list({int(i) for i in enseignant_ids})
+    if not ids:
+        return {}
+    enseignants = {
+        e.enseignant_id: e for e in db.query(Enseignant).filter(
+            Enseignant.enseignant_id.in_(ids)
+        ).all()
+    }
+    details = detail_heures_par_enseignant(db, ids, annee_id)
+    return {
+        i: _composer_salaire(enseignants.get(i), details.get(i, []))
+        for i in ids
+    }
+
+
+def _composer_salaire(ens: Optional[Enseignant], lignes: List[dict]) -> dict:
+    """La règle de rémunération, écrite une seule fois.
+
+    Les versions « un enseignant » et « en lot » passent toutes deux par ici :
+    deux copies de cette règle finiraient par diverger, et deux écrans
+    afficheraient deux salaires différents pour la même personne.
+    """
+    if ens is None:
+        return {"base": 0.0, "mode": MODE_HORAIRE, "lignes": [], "total_heures": 0.0,
+                "explication": "Enseignant introuvable."}
 
     mode = (ens.mode_remuneration or MODE_HORAIRE).upper()
 
     if mode == MODE_MENSUEL:
         # Le détail des heures reste affiché : l'école doit pouvoir voir la
         # charge réelle d'un instituteur, même si elle ne détermine pas sa paie.
-        lignes = detail_heures_enseignant(db, enseignant_id, annee_id)
         return {
             "base": float(_dec(ens.salaire_base)),
             "mode": MODE_MENSUEL,
@@ -135,7 +194,6 @@ def salaire_enseignant(
             "explication": "Salaire mensuel fixe — les heures sont indicatives.",
         }
 
-    lignes = detail_heures_enseignant(db, enseignant_id, annee_id)
     total = sum(_dec(l["montant_mensuel"]) for l in lignes)
     heures = sum(_dec(l["heures_semaine"]) for l in lignes)
 
@@ -171,6 +229,138 @@ def salaire_enseignant(
             "rien à verser tant que l'un des deux n'est pas renseigné."
         ),
     }
+
+
+def salaire_enseignant(
+    db: Session, enseignant_id: int, annee_id: Optional[int] = None
+) -> dict:
+    """Rémunération mensuelle d'UN enseignant, avec son détail.
+
+    Ne jamais appeler dans une boucle : c'est `salaires_enseignants` qu'il faut
+    pour une liste, sinon chaque personne rouvre quatre requêtes.
+    """
+    return salaires_enseignants(db, [enseignant_id], annee_id).get(
+        enseignant_id,
+        {"base": 0.0, "mode": MODE_HORAIRE, "lignes": [], "total_heures": 0.0},
+    )
+
+
+def heures_manquees(
+    db: Session, enseignant_id: int, jours_absents, annee_id: Optional[int] = None
+) -> dict:
+    """Ce qu'un professeur payé À L'HEURE a réellement manqué, et ce que ça coûte.
+
+    POURQUOI LE TAUX JOURNALIER EST FAUX ICI
+    La retenue d'absence se calculait partout de la même façon :
+    `salaire ÷ 26 jours × nombre de jours absents`. Pour un instituteur payé au
+    mois, c'est juste — il doit sa présence tous les jours, quel que soit son
+    programme.
+
+    Pour un vacataire du collège ou du lycée, ça n'a aucun sens. Il n'est pas
+    payé pour être là : il est payé pour les heures qu'il donne. Un mardi où il
+    avait deux heures de cours ne coûte pas comme un jeudi où il en avait six.
+    Le taux journalier lui retenait la même somme dans les deux cas — trop dans
+    un cas, pas assez dans l'autre, jamais le bon montant.
+
+    L'emploi du temps existe désormais : un professeur absent un mardi manque
+    EXACTEMENT les créneaux qu'il avait ce mardi-là. La retenue vaut ces heures
+    multipliées par le tarif de chacune — le tarif de l'affectation concernée,
+    pas une moyenne.
+
+    Renvoie le détail : un montant sans son détail n'est pas contestable, et
+    une retenue de salaire se conteste.
+    """
+    from app.models.academique import CreneauEmploi
+
+    jours = [j for j in (jours_absents or []) if j]
+    if not jours:
+        return {"heures": 0.0, "montant": 0.0, "lignes": []}
+
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    if not ens:
+        return {"heures": 0.0, "montant": 0.0, "lignes": []}
+
+    # Le jour de la semaine, dans le vocabulaire de l'emploi du temps.
+    noms = ["LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI", "SAMEDI", "DIMANCHE"]
+    par_jour_semaine = {}
+    for j in jours:
+        par_jour_semaine.setdefault(noms[j.weekday()], []).append(j)
+
+    requete = db.query(CreneauEmploi).filter(
+        CreneauEmploi.enseignant_id == enseignant_id,
+        CreneauEmploi.statut == "ACTIVE",
+        CreneauEmploi.jour.in_(list(par_jour_semaine)),
+    )
+    if annee_id:
+        requete = requete.filter(CreneauEmploi.annee_id == annee_id)
+    creneaux = requete.all()
+    if not creneaux:
+        return {"heures": 0.0, "montant": 0.0, "lignes": []}
+
+    # Le tarif se lit sur l'affectation qui couvre ce cours : une heure de
+    # Terminale ne se retient pas au prix d'une heure de 7ᵉ.
+    affectations = {
+        (a.classe_id, a.matiere_id): a
+        for a in db.query(Affectation).filter(
+            Affectation.enseignant_id == enseignant_id,
+            Affectation.statut == "ACTIVE",
+        ).all()
+    }
+    classes = {
+        c.classe_id: c for c in db.query(Classe).filter(
+            Classe.classe_id.in_({c.classe_id for c in creneaux})
+        ).all()
+    }
+    matieres = {
+        m.matiere_id: m for m in db.query(Matiere).filter(
+            Matiere.matiere_id.in_({c.matiere_id for c in creneaux})
+        ).all()
+    }
+
+    lignes = []
+    total_heures = Decimal("0")
+    total_montant = Decimal("0")
+    for creneau in creneaux:
+        aff = affectations.get((creneau.classe_id, creneau.matiere_id))
+        taux = taux_effectif(aff, ens.taux_horaire) if aff else _dec(ens.taux_horaire)
+        # Un créneau dure ce qu'il dure : 08:00–10:00 vaut deux heures, pas une.
+        duree = _duree_creneau(creneau.heure_debut, creneau.heure_fin)
+        for jour in par_jour_semaine.get(creneau.jour, []):
+            montant = duree * taux
+            total_heures += duree
+            total_montant += montant
+            cl, mat = classes.get(creneau.classe_id), matieres.get(creneau.matiere_id)
+            lignes.append({
+                "date": jour.isoformat(),
+                "jour": creneau.jour,
+                "creneau": f"{creneau.heure_debut}–{creneau.heure_fin}",
+                "classe": cl.libelle if cl else "?",
+                "matiere": mat.libelle if mat else "?",
+                "heures": float(duree),
+                "taux_horaire": float(taux),
+                "montant": float(montant),
+            })
+
+    lignes.sort(key=lambda l: (l["date"], l["creneau"]))
+    return {
+        "heures": float(total_heures),
+        "montant": float(total_montant),
+        "lignes": lignes,
+    }
+
+
+def _duree_creneau(debut: Optional[str], fin: Optional[str]) -> Decimal:
+    """Durée d'un créneau, en heures. Une heure par défaut si l'horaire manque —
+    ne jamais retenir zéro faute d'information : ce serait ne rien retenir."""
+    try:
+        h1, m1 = (int(x) for x in (debut or "").split(":")[:2])
+        h2, m2 = (int(x) for x in (fin or "").split(":")[:2])
+    except (ValueError, TypeError):
+        return Decimal("1")
+    minutes = (h2 * 60 + m2) - (h1 * 60 + m1)
+    if minutes <= 0:
+        return Decimal("1")
+    return Decimal(minutes) / Decimal(60)
 
 
 def salaire_personnel(db: Session, utilisateur_id: int) -> dict:

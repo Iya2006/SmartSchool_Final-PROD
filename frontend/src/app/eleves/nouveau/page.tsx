@@ -4,7 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, DollarSign, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock } from 'lucide-react';
+import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
@@ -56,6 +56,12 @@ export default function NouveauEleve() {
     });
 
     const [fraisFacturation, setFraisFacturation] = useState<Record<number, { selectionne: boolean, montant: number }>>({});
+    // Ce que coûte VRAIMENT la classe choisie. L'écran chargeait les montants
+    // par défaut de l'établissement, qui valent 0 dans une école qui tarifie
+    // par classe : l'élève arrivait sans scolarité. Le montant vit dans la
+    // grille de la classe, on va donc le chercher là.
+    const [tarifsClasse, setTarifsClasse] = useState<Record<number, number> | null>(null);
+    const [tarifsLoading, setTarifsLoading] = useState(false);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -84,6 +90,39 @@ export default function NouveauEleve() {
         };
         fetchData();
     }, []);
+
+    // Choisir une classe, c'est connaître sa scolarité. Tant qu'aucune classe
+    // n'est choisie, on n'affiche aucun montant : on ne sait pas encore.
+    useEffect(() => {
+        const classeId = formData.classe_id ? parseInt(formData.classe_id) : null;
+        if (!classeId) { setTarifsClasse(null); return; }
+
+        let annule = false;
+        setTarifsLoading(true);
+        api.get(`/api/finance/tarifs-classe?classe_id=${classeId}`)
+            .then((res) => {
+                if (annule) return;
+                const grille: Record<number, number> = {};
+                (res.data as Array<{ type_frais_id: number; montant: number }>)
+                    .forEach((t) => { grille[t.type_frais_id] = t.montant; });
+                setTarifsClasse(grille);
+                // Les montants affichés deviennent ceux de la classe. Le
+                // serveur refuse de toute façon un montant qui contredit sa
+                // grille — autant que l'écran dise la vérité tout de suite.
+                setFraisFacturation((prev) => {
+                    const suite = { ...prev };
+                    Object.entries(grille).forEach(([id, montant]) => {
+                        const k = Number(id);
+                        if (suite[k]) suite[k] = { ...suite[k], montant };
+                    });
+                    return suite;
+                });
+            })
+            .catch(() => { if (!annule) setTarifsClasse(null); })
+            .finally(() => { if (!annule) setTarifsLoading(false); });
+
+        return () => { annule = true; };
+    }, [formData.classe_id]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -448,6 +487,57 @@ export default function NouveauEleve() {
                         </div>
                     </div>
                     <div style={{ padding: '28px' }}>
+                        {/* CE QUE DOIT L'ÉLÈVE, DIT AVANT D'ENREGISTRER
+                            Le montant ne se devine pas : il vient de la grille
+                            de la classe choisie, et c'est le serveur qui
+                            tranche. L'écran le montre pour qu'on ne découvre
+                            pas la scolarité après coup. */}
+                        {!formData.classe_id ? (
+                            <div style={{ marginBottom: '20px', padding: '14px 18px', borderRadius: '12px', background: '#f8fafc', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <GraduationCap size={18} color="#64748b" />
+                                <span style={{ fontSize: '13.5px', color: '#475569', fontWeight: 600 }}>
+                                    Choisissez la classe : la scolarité qui s&apos;applique en découle.
+                                </span>
+                            </div>
+                        ) : tarifsLoading ? (
+                            <div style={{ marginBottom: '20px', padding: '14px 18px', borderRadius: '12px', background: '#f8fafc', border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <Loader2 size={16} className="animate-spin" color="#64748b" />
+                                <span style={{ fontSize: '13.5px', color: '#475569', fontWeight: 600 }}>
+                                    Lecture de la grille tarifaire de la classe…
+                                </span>
+                            </div>
+                        ) : tarifsClasse && Object.keys(tarifsClasse).length > 0 ? (
+                            <div style={{ marginBottom: '20px', padding: '14px 18px', borderRadius: '12px', background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                                    <Banknote size={18} color="#16a34a" />
+                                    <span style={{ fontSize: '13.5px', color: '#166534', fontWeight: 800 }}>
+                                        Grille de cette classe — montants appliqués automatiquement
+                                    </span>
+                                </div>
+                                <p style={{ margin: 0, fontSize: '12.5px', color: '#15803d' }}>
+                                    Total des frais obligatoires :{' '}
+                                    <strong>
+                                        {typesFrais
+                                            .filter(tf => tf.est_obligatoire === 'O' && tarifsClasse[tf.type_frais_id])
+                                            .reduce((s, tf) => s + tarifsClasse[tf.type_frais_id], 0)
+                                            .toLocaleString('fr-FR')} GNF
+                                    </strong>
+                                </p>
+                            </div>
+                        ) : (
+                            <div style={{ marginBottom: '20px', padding: '14px 18px', borderRadius: '12px', background: '#fffbeb', border: '1px solid #fde68a' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <AlertTriangle size={18} color="#b45309" />
+                                    <span style={{ fontSize: '13.5px', color: '#92400e', fontWeight: 700 }}>
+                                        Aucun tarif configuré pour cette classe.
+                                    </span>
+                                </div>
+                                <p style={{ margin: '6px 0 0', fontSize: '12.5px', color: '#a16207' }}>
+                                    L&apos;élève sera inscrit sans facture. Posez la grille dans
+                                    Comptabilité → Frais pour que la scolarité suive.
+                                </p>
+                            </div>
+                        )}
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
                             {typesFrais.map(tf => {
                                 const state = fraisFacturation[tf.type_frais_id];
@@ -489,7 +579,7 @@ export default function NouveauEleve() {
                                         </div>
                                         
                                         <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <DollarSign size={16} color="#64748b" />
+                                            <Banknote size={16} color="#64748b" />
                                             <input 
                                                 type="number" 
                                                 value={state.montant}

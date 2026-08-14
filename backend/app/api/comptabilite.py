@@ -81,13 +81,36 @@ class EcritureCreate(BaseModel):
 
 # --- UTILITAIRES ---
 
-def init_comptabilite_globals(db: Session):
+# ── POURQUOI CES DEUX FONCTIONS PRENNENT UN `commit` ─────────────────────────
+#
+# Elles sont appelées de deux endroits qui n'ont pas du tout les mêmes
+# besoins :
+#
+#   * depuis une route de consultation (journaux, comptes, exercices), où
+#     rien d'autre n'est en cours : le seed doit être écrit pour de bon,
+#     sinon il recommence à chaque appel ;
+#
+#   * depuis `generer_ecriture_auto`, donc AU MILIEU d'une opération métier
+#     déjà commencée — un encaissement, une dépense de salaire. Là, un
+#     `commit` valide tout ce qui précède dans la même transaction, et si la
+#     suite échoue, le `rollback` de l'appelant n'a plus rien à reprendre.
+#
+# Constaté sur la paie : deux dépenses de salaire enregistrées en
+# comptabilité SANS bulletin de paie correspondant. De l'argent sorti des
+# comptes sans trace de qui l'a reçu. `generer_ecriture_auto` promet dans sa
+# docstring qu'elle ne commite pas ; c'était son propre premier appel qui
+# rompait la promesse.
+
+def init_comptabilite_globals(db: Session, commit: bool = True):
     """Seed des référentiels GLOBAUX (partagés par toutes les écoles) : codes
     journaux SYSCOHADA et plan comptable OHADA de base. Ne dépend d'aucun
     établissement — voir la classification GLOBAL/TENANT du chantier
     multi-écoles (.ai/MULTI_TENANT_PLAN.md, section E). JournalComptable et
     CompteComptable restent volontairement globaux dans ce chantier (décision
-    produit validée : référentiel SYSCOHADA/OHADA partagé)."""
+    produit validée : référentiel SYSCOHADA/OHADA partagé).
+
+    `commit=False` quand on est déjà dans une transaction métier : voir la
+    note d'atomicité ci-dessus."""
     if db.query(JournalComptable).count() == 0:
         db.add_all([
             JournalComptable(code='AC', nom='Achats', type_journal='ACHAT'),
@@ -106,10 +129,10 @@ def init_comptabilite_globals(db: Session):
             CompteComptable(numero_compte="7011", libelle="Ventes de marchandises", type_compte="PRODUIT"),
             CompteComptable(numero_compte="7061", libelle="Prestations de services (Scolarité)", type_compte="PRODUIT"),
         ])
-    db.commit()
+    db.commit() if commit else db.flush()
 
 
-def init_comptabilite_tenant_defaults(db: Session, etablissement_id: int):
+def init_comptabilite_tenant_defaults(db: Session, etablissement_id: int, commit: bool = True):
     """Seed des données TENANT propres à un établissement : PIN d'accès et
     exercice comptable par défaut. Avant le Lot 1 du chantier multi-écoles,
     ces deux éléments étaient uniques pour TOUTE la plateforme (un seul PIN,
@@ -148,7 +171,7 @@ def init_comptabilite_tenant_defaults(db: Session, etablissement_id: int):
             statut="ACTIF",
         ))
 
-    db.commit()
+    db.commit() if commit else db.flush()
 
 
 def _get_exercice(db: Session, etablissement_id: int, exercice_id: Optional[int] = None) -> ExerciceComptable:
@@ -264,8 +287,9 @@ def generer_ecriture_auto(
     if not etablissement_id:
         return None
 
-    init_comptabilite_globals(db)
-    init_comptabilite_tenant_defaults(db, etablissement_id)
+    # `commit=False` : on est au milieu de l'opération métier de l'appelant.
+    init_comptabilite_globals(db, commit=False)
+    init_comptabilite_tenant_defaults(db, etablissement_id, commit=False)
 
     exo = db.query(ExerciceComptable).filter(
         ExerciceComptable.statut == "OUVERT",

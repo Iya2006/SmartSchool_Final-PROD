@@ -48,14 +48,27 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         description: 'Conduite opérationnelle et pilotage de la performance de l\'école.',
         interfaceLabel: 'Centre de pilotage exécutif',
     },
+    // LE DÉLÉGUÉ PÉDAGOGIQUE DE LA DIRECTION
+    // L'administrateur ne peut pas tout tenir seul : il confie à un membre du
+    // personnel déjà en poste les évaluations, la centralisation des notes, les
+    // bulletins, les résultats de fin d'année, le centre des examens et
+    // l'archive scolaire. Ce rôle a donc les mêmes droits que l'administrateur,
+    // À UNE EXCEPTION PRÈS : la comptabilité, qui reste à l'administrateur, à
+    // la direction générale et au comptable. Cette exception est appliquée
+    // côté serveur (`main.py::FINANCE_ROLES`), pas seulement ici — un blocage
+    // qui n'existe que dans le navigateur n'est pas un blocage.
     DIRECTEUR_NIVEAU: {
         role: 'DIRECTEUR_NIVEAU',
-        label: 'Directeur de Niveau',
+        label: 'Directeur des Études',
         redirectPath: '/dashboard',
-        allowedPrefixes: ['/dashboard', '/personnel', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/salle-des-profs', '/monitoring', '/profil', '/vie-scolaire'],
+        // Réunion des deux listes : le délégué garde ses écrans pédagogiques
+        // (archive, fournitures, galerie, centre d'évaluation, activités) et
+        // gagne ceux ajoutés depuis (son profil, la vie scolaire). Aucune ne
+        // touche à /comptabilite — c'est le seul interdit du poste.
+        allowedPrefixes: ['/dashboard', '/personnel', '/classes', '/eleves', '/enseignants', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/monitoring', '/profil', '/vie-scolaire'],
         tier: 'full-admin',
         hasSystemAccess: true,
-        description: 'Coordination pédagogique et suivi d\'un niveau ou cycle scolaire.',
+        description: 'Délégué pédagogique de la direction : évaluations, notes, bulletins, résultats de fin d\'année, examens et archive. Pas d\'accès à la comptabilité.',
         interfaceLabel: 'Dashboard de coordination académique',
     },
     ADMIN: {
@@ -72,7 +85,10 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         role: 'COMPTABLE',
         label: 'Comptable',
         redirectPath: '/comptabilite/dashboard',
-        allowedPrefixes: ['/comptabilite'],
+        // Le comptable applique les retenues : il doit pouvoir voir ce qui
+        // a ete tranche, et trancher lui-meme. Cette page-la uniquement —
+        // le reste de la vie scolaire ne le regarde pas.
+        allowedPrefixes: ['/comptabilite', '/vie-scolaire/absences-enseignants'],
         tier: 'finance',
         hasSystemAccess: true,
         description: 'Suivi financier, encaissements, rapports et clôtures.',
@@ -192,19 +208,36 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
 
 export const DEFAULT_ROLE_REDIRECT = '/dashboard';
 
-export const getRoleAccessConfig = (role?: string | null): RoleAccessConfig | null => {
-    if (!role) return null;
-    return ROLE_ACCESS_CONFIG[role] || null;
+/**
+ * Un rôle créé par l'école — « CENSEUR », « CAISSIER » — n'a pas d'entrée
+ * ici : il désigne l'espace d'un rôle standard (`role_base`, résolu par le
+ * serveur à la connexion). Sans cette résolution, un censeur était renvoyé
+ * vers le tableau de bord par défaut, où toutes ses requêtes échouaient.
+ *
+ * `roleBase` n'ouvre jamais plus que ce que ce rôle standard ouvre déjà :
+ * on ne crée pas un accès, on lui donne le nom que l'école emploie.
+ */
+export const getRoleAccessConfig = (
+    role?: string | null,
+    roleBase?: string | null,
+): RoleAccessConfig | null => {
+    if (role && ROLE_ACCESS_CONFIG[role]) return ROLE_ACCESS_CONFIG[role];
+    if (roleBase && ROLE_ACCESS_CONFIG[roleBase]) return ROLE_ACCESS_CONFIG[roleBase];
+    return null;
 };
 
-export const getRedirectPathForRole = (role?: string | null): string => {
-    const config = getRoleAccessConfig(role);
+export const getRedirectPathForRole = (
+    role?: string | null, roleBase?: string | null,
+): string => {
+    const config = getRoleAccessConfig(role, roleBase);
     if (!config) return DEFAULT_ROLE_REDIRECT;
     return config.hasSystemAccess ? config.redirectPath : '/login';
 };
 
-export const canAccessPathForRole = (role: string | undefined | null, pathname: string): boolean => {
-    const config = getRoleAccessConfig(role);
+export const canAccessPathForRole = (
+    role: string | undefined | null, pathname: string, roleBase?: string | null,
+): boolean => {
+    const config = getRoleAccessConfig(role, roleBase);
     if (!config) return pathname.startsWith(DEFAULT_ROLE_REDIRECT);
     if (!config.hasSystemAccess) return pathname === '/login';
     return config.allowedPrefixes.some((prefix) => pathname.startsWith(prefix));
@@ -214,8 +247,8 @@ export const isAdminSystemRole = (role?: string | null) => {
     return !!role && ADMIN_SYSTEM_ROLES.includes(role as typeof ADMIN_SYSTEM_ROLES[number]);
 };
 
-export const getRoleInterfaceSummary = (role?: string | null) => {
-    const config = getRoleAccessConfig(role);
+export const getRoleInterfaceSummary = (role?: string | null, roleBase?: string | null) => {
+    const config = getRoleAccessConfig(role, roleBase);
     if (!config) {
         return {
             hasSystemAccess: true,

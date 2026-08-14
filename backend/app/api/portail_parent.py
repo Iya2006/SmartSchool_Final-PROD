@@ -120,12 +120,22 @@ def login_parent(request: Request, data: LoginParentRequest, db: Session = Depen
     if not parent:
         raise HTTPException(404, "Aucun parent trouvé avec ce numéro")
 
-    # Vérifier mot de passe si le parent en a un
-    if parent.mot_de_passe:
-        if not data.mot_de_passe:
-            raise HTTPException(401, "Mot de passe requis")
-        if not verify_password(data.mot_de_passe, parent.mot_de_passe):
-            raise HTTPException(401, "Mot de passe incorrect")
+    # UN NUMÉRO DE TÉLÉPHONE N'EST PAS UNE PREUVE D'IDENTITÉ
+    # Le mot de passe n'était vérifié QUE si le parent en avait un. Un parent
+    # sans mot de passe entrait donc avec son seul numéro — que l'école
+    # possède, que les autres parents connaissent, et qui circule dans les
+    # groupes de classe. Notes des enfants, factures, messages avec l'école :
+    # tout s'ouvrait à qui composait le bon numéro.
+    if not parent.mot_de_passe:
+        raise HTTPException(
+            403,
+            "Ce compte n'a pas encore de mot de passe. "
+            "L'administration de l'école doit lui en attribuer un.",
+        )
+    if not data.mot_de_passe:
+        raise HTTPException(401, "Mot de passe requis")
+    if not verify_password(data.mot_de_passe, parent.mot_de_passe):
+        raise HTTPException(401, "Mot de passe incorrect")
 
     # Générer un token JWT pour le portail parent — etablissement_id est
     # OBLIGATOIRE ici : `require_etablissement` (utilisé par exemple par
@@ -576,9 +586,54 @@ def _inscription_enfant(db: Session, parent_id: int, eleve_id: int) -> Inscripti
     return inscription
 
 
+def _periode(db: Session, inscription: Inscription, trimestre_id):
+    """La période demandée, ou celle en cours DANS L'ÉCOLE DE L'ENFANT.
+
+    Ces routes prenaient `trimestre_id = 1` par défaut : la première période
+    créée sur la plateforme, donc celle d'une autre école pour toutes les
+    écoles sauf la première inscrite. Le parent ouvrait le bulletin de son
+    enfant et trouvait un écran vide, sans explication.
+    """
+    from app.services.notation import periode_courante
+
+    if trimestre_id:
+        return trimestre_id
+    courante = periode_courante(db, inscription.annee_id)
+    return courante.trimestre_id if courante else None
+
+
+@router.get("/{parent_id}/enfant/{eleve_id}/periodes")
+def get_periodes_enfant(
+    parent_id: int, eleve_id: int,
+    _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
+):
+    """Périodes réelles de l'école de l'enfant, pour le sélecteur de bulletin.
+
+    Le portail affichait « 1er / 2ème / 3ème Trimestre » écrits dans le code,
+    et envoyait 1, 2 ou 3 comme `trimestre_id`. Deux erreurs superposées : un
+    découpage supposé — une école à deux semestres n'a pas de 3ème trimestre —
+    et un NUMÉRO de période transmis à la place de son IDENTIFIANT. Le parent
+    demandait donc le bulletin d'une période appartenant à une autre école, et
+    l'écran restait vide sans rien expliquer.
+    """
+    inscription = _inscription_enfant(db, parent_id, eleve_id)
+    periodes = db.query(Trimestre).filter(
+        Trimestre.annee_id == inscription.annee_id
+    ).order_by(Trimestre.numero, Trimestre.date_debut).all()
+    return [
+        {
+            "trimestre_id": p.trimestre_id,
+            "numero": p.numero,
+            "libelle": p.libelle,
+            "statut": p.statut,
+        }
+        for p in periodes
+    ]
+
+
 @router.get("/{parent_id}/enfant/{eleve_id}/epreuves")
 def get_epreuves_enfant(
-    parent_id: int, eleve_id: int, trimestre_id: int = 1,
+    parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None,
     _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
 ):
     """Épreuves consultables pour cet enfant sur la période.
@@ -589,15 +644,16 @@ def get_epreuves_enfant(
     from app.services.notation import epreuves_consultables
 
     inscription = _inscription_enfant(db, parent_id, eleve_id)
+    trimestre_id = _periode(db, inscription, trimestre_id)
     return {
         "trimestre_id": trimestre_id,
-        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id),
+        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id) if trimestre_id else [],
     }
 
 
 @router.get("/{parent_id}/enfant/{eleve_id}/classement")
 def get_classement_enfant(
-    parent_id: int, eleve_id: int, trimestre_id: int = 1,
+    parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None,
     evaluation_ids: Optional[str] = None,
     _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
 ):
@@ -611,6 +667,7 @@ def get_classement_enfant(
     from app.services.notation import resultat_eleve_sur_epreuves
 
     inscription = _inscription_enfant(db, parent_id, eleve_id)
+    trimestre_id = _periode(db, inscription, trimestre_id)
     ids = _parse_ids(evaluation_ids)
 
     classe = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()

@@ -24,8 +24,9 @@ from app.models.academique import (
 
 router = APIRouter(prefix="/api/portail-eleve", tags=["Portail Élève"])
 
-# Mot de passe par défaut — configurable via variable d'environnement
-DEFAULT_PASSWORD = os.getenv("ELEVE_DEFAULT_PASSWORD", "smartschool")
+# Un mot de passe par défaut commun à toute la plateforme vivait ici. Il a été
+# retiré : voir le commentaire de `login_eleve`. Un compte sans mot de passe ne
+# s'ouvre plus, l'administration doit lui en attribuer un.
 
 
 # Rôles qui peuvent consulter le portail d'un autre — dans leur école.
@@ -90,15 +91,26 @@ def login_eleve(request: Request, data: LoginEleveRequest, db: Session = Depends
     if not eleve:
         raise HTTPException(404, "Aucun élève trouvé avec ce matricule")
 
+    # UN MATRICULE N'EST PAS UN SECRET
+    # Cette entrée acceptait un mot de passe par défaut — le même pour toute la
+    # plateforme — dès qu'un élève n'en avait pas encore choisi un. Or le
+    # matricule est imprimé sur les bulletins, appelé en classe et connu de
+    # tous les camarades : il suffisait de le lire et de taper ce mot commun
+    # pour entrer dans l'espace de n'importe quel élève. Sur la base réelle,
+    # 45 élèves étaient dans ce cas.
+    #
+    # Tant que l'administration n'a pas attribué un mot de passe, le compte ne
+    # s'ouvre pas. Le message le dit, pour que l'élève cesse de chercher et
+    # que l'école sache quoi faire.
     mdp_saisi = data.mot_de_passe or ""
-    if eleve.mot_de_passe:
-        # Mot de passe personnalisé — vérification bcrypt
-        if not verify_password(mdp_saisi, eleve.mot_de_passe):
-            raise HTTPException(401, "Mot de passe incorrect")
-    else:
-        # Aucun MDP défini → mot de passe par défaut
-        if mdp_saisi != DEFAULT_PASSWORD:
-            raise HTTPException(401, "Mot de passe incorrect")
+    if not eleve.mot_de_passe:
+        raise HTTPException(
+            403,
+            "Ce compte n'a pas encore de mot de passe. "
+            "L'administration de l'école doit lui en attribuer un.",
+        )
+    if not verify_password(mdp_saisi, eleve.mot_de_passe):
+        raise HTTPException(401, "Mot de passe incorrect")
 
     token = create_access_token({
         "sub": str(eleve.eleve_id),
@@ -430,24 +442,65 @@ def _inscription_active(db: Session, eleve_id: int) -> Inscription:
     return inscription
 
 
+def _periode(db: Session, inscription: Inscription, trimestre_id):
+    """La période demandée, ou celle en cours DANS L'ÉCOLE DE L'ÉLÈVE.
+
+    Ces routes prenaient `trimestre_id = 1` par défaut : la première période
+    créée sur la plateforme, c'est-à-dire celle d'une autre école pour tous
+    sauf la première inscrite. L'élève ouvrait son bulletin et ne voyait rien,
+    sans qu'aucune erreur ne lui soit signalée.
+    """
+    from app.services.notation import periode_courante
+
+    if trimestre_id:
+        return trimestre_id
+    courante = periode_courante(db, inscription.annee_id)
+    return courante.trimestre_id if courante else None
+
+
+@router.get("/{eleve_id}/periodes")
+def get_periodes_eleve(
+    eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
+):
+    """Périodes réelles de l'école de l'élève, pour le sélecteur de bulletin.
+
+    Voir `portail_parent.get_periodes_enfant` : le découpage de l'année ne se
+    devine pas, il se lit.
+    """
+    inscription = _inscription_active(db, eleve_id)
+    periodes = db.query(Trimestre).filter(
+        Trimestre.annee_id == inscription.annee_id
+    ).order_by(Trimestre.numero, Trimestre.date_debut).all()
+    return [
+        {
+            "trimestre_id": p.trimestre_id,
+            "numero": p.numero,
+            "libelle": p.libelle,
+            "statut": p.statut,
+        }
+        for p in periodes
+    ]
+
+
 @router.get("/{eleve_id}/epreuves")
 def get_epreuves_eleve(
-    eleve_id: int, trimestre_id: int = 1,
+    eleve_id: int, trimestre_id: Optional[int] = None,
     _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
 ):
     """Épreuves consultables sur la période (uniquement celles centralisées)."""
     from app.services.notation import epreuves_consultables
 
     inscription = _inscription_active(db, eleve_id)
+    trimestre_id = _periode(db, inscription, trimestre_id)
     return {
         "trimestre_id": trimestre_id,
-        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id),
+        "epreuves": epreuves_consultables(db, inscription.classe_id, trimestre_id) if trimestre_id else [],
     }
 
 
 @router.get("/{eleve_id}/classement")
 def get_classement_eleve(
-    eleve_id: int, trimestre_id: int = 1,
+    eleve_id: int, trimestre_id: Optional[int] = None,
     evaluation_ids: Optional[str] = None,
     _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
 ):
@@ -464,6 +517,7 @@ def get_classement_eleve(
     from app.services.notation import resultat_eleve_sur_epreuves
 
     inscription = _inscription_active(db, eleve_id)
+    trimestre_id = _periode(db, inscription, trimestre_id)
     ids = None
     if evaluation_ids:
         try:
@@ -488,13 +542,14 @@ def get_classement_eleve(
 # BULLETIN
 # ================================================================
 @router.get("/{eleve_id}/bulletin")
-def get_bulletin_eleve(eleve_id: int, trimestre_id: int = 1, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
+def get_bulletin_eleve(eleve_id: int, trimestre_id: Optional[int] = None, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
     """Bulletin publié de l'élève."""
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
     ).first()
     if not inscription:
         return None
+    trimestre_id = _periode(db, inscription, trimestre_id)
 
     bulletin = db.query(Bulletin).filter(
         Bulletin.inscription_id == inscription.inscription_id,
