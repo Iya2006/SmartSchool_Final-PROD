@@ -1410,12 +1410,27 @@ class Avance(Base):
     statut = Column(String(20), default="EN_ATTENTE") # EN_ATTENTE / DEDUITE
 
 class AbsencePersonnel(Base):
+    """Absence d'un membre du personnel, et ce qu'elle coûte.
+
+    Constater et décider sont deux gestes différents. Le surveillant voit
+    qu'un professeur n'est pas venu ; c'est la direction qui décide si cela
+    se retient sur la paie. Sans cette séparation, seule la comptabilité
+    pouvait saisir une absence — et elle n'était pas dans la cour à 8 h.
+    """
     __tablename__ = "ss_absences_personnel"
     absence_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
     date_absence = Column(Date, nullable=False)
     motif = Column(String(200), nullable=True)
     est_justifie = Column(String(1), default="N") # Y / N
+    # SIGNALE : constatée, sans effet sur la paie tant que rien n'est tranché.
+    # VALIDE  : confirmée, la retenue s'applique.
+    # ECARTE  : écartée après vérification, aucune retenue.
+    statut = Column(String(20), default="VALIDE")
+    signale_par = Column(String(120), nullable=True)
+    valide_par = Column(String(120), nullable=True)
+    date_signalement = Column(DateTime, server_default=func.now())
+    date_decision = Column(DateTime, nullable=True)
 
 class Prime(Base):
     __tablename__ = "ss_primes"

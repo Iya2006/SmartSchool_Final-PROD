@@ -191,6 +191,8 @@ type FeuilleAppel = {
 
 type ClasseAppel = { classe_id: number; libelle: string };
 
+type ProfOption = { enseignant_id: number; nom: string; prenom: string; matiere?: string | null };
+
 type EleveOption = {
     eleve_id: number;
     matricule?: string | null;
@@ -966,6 +968,42 @@ function SurveillantPortal() {
         }
     };
 
+    /* ═══ SIGNALER L'ABSENCE D'UN ENSEIGNANT ═══
+       Le surveillant constate qu'un professeur n'a pas assure son cours. Il ne
+       pouvait rien en faire : la seule route qui enregistre une absence
+       d'enseignant vit dans le module financier, ou il n'a pas acces (403).
+       C'etait donc le comptable qui decidait qu'un professeur etait absent —
+       et cette decision retire de l'argent sur sa paie, alors qu'il n'etait pas
+       dans la cour a 8 h. Ici on CONSTATE ; la direction TRANCHE. */
+    const [profs, setProfs] = useState<ProfOption[]>([]);
+    const [signalement, setSignalement] = useState({
+        enseignant_id: '',
+        date_absence: new Date().toISOString().slice(0, 10),
+        motif: '',
+    });
+    const [signalEnCours, setSignalEnCours] = useState(false);
+
+    const envoyerSignalement = async (event: React.FormEvent<HTMLFormElement>) => {
+        event.preventDefault();
+        if (!signalement.enseignant_id) return;
+        setSignalEnCours(true);
+        setError(null);
+        setSuccess(null);
+        try {
+            const res = await api.post('/api/vie-scolaire/absences-enseignant', {
+                employe_id: `ENS_${signalement.enseignant_id}`,
+                date_absence: signalement.date_absence,
+                motif: signalement.motif.trim() || null,
+            });
+            setSuccess(`${res.data?.employe || 'Enseignant'} — ${res.data?.message || 'Signalement transmis.'}`);
+            setSignalement((v) => ({ ...v, enseignant_id: '', motif: '' }));
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setSignalEnCours(false);
+        }
+    };
+
     const bilanAppel = useMemo(() => {
         const l = feuille?.eleves || [];
         return {
@@ -979,14 +1017,16 @@ function SurveillantPortal() {
         setLoading(true);
         setError(null);
         try {
-            const [presenceRes, incidentStatsRes, incidentsRes, elevesRes, classesRes] = await Promise.all([
+            const [presenceRes, incidentStatsRes, incidentsRes, elevesRes, classesRes, profsRes] = await Promise.all([
                 api.get<PresenceStats>(`/api/vie-scolaire/presences/stats?etablissement_id=${etablissementId}`),
                 api.get<IncidentStats>(`/api/vie-scolaire/incidents/stats?etablissement_id=${etablissementId}`),
                 api.get<IncidentItem[]>(`/api/vie-scolaire/incidents?etablissement_id=${etablissementId}&limit=30`),
                 api.get<EleveOption[]>(`/api/eleves?etablissement_id=${etablissementId}&annee_id=${anneeId}&statut=ACTIF&limit=120`),
                 api.get<ClasseAppel[]>(`/api/classes?annee_id=${anneeId}&limit=200`),
+                api.get<ProfOption[]>(`/api/enseignants?limit=200`),
             ]);
             setClasses(classesRes.data || []);
+            setProfs(Array.isArray(profsRes.data) ? profsRes.data : []);
             setPresenceStats(presenceRes.data || { total: 0, presents: 0, absents: 0, retards: 0, taux_presence: 0 });
             setIncidentStats(incidentStatsRes.data || { total_incidents: 0, par_gravite: [], top_types: [] });
             setIncidents(incidentsRes.data || []);
@@ -1091,6 +1131,56 @@ function SurveillantPortal() {
                             </Link>
                         </aside>
                     </div>
+                </section>
+
+                {/* ═══ SIGNALER L'ABSENCE D'UN ENSEIGNANT ═══
+                    Constater n'est pas decider : ce formulaire cree un
+                    signalement, jamais une retenue. */}
+                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                    <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #fff7ed)' }}>
+                        <p style={{ margin: 0, fontSize: '12px', color: '#b45309', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Corps enseignant</p>
+                        <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Signaler un cours non assuré</h2>
+                        <p style={{ margin: '6px 0 0', fontSize: '13.5px', color: '#64748b', maxWidth: '660px', lineHeight: 1.65 }}>
+                            Vous constatez, la direction tranche. <strong>Aucune retenue n&apos;est appliquée
+                            tant que votre signalement n&apos;a pas été validé</strong> — vous ne décidez
+                            jamais seul de ce qui sera retiré d&apos;un salaire.
+                        </p>
+                    </div>
+
+                    <form onSubmit={envoyerSignalement} style={{ padding: '20px 24px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569', flex: '1 1 240px' }}>
+                            Enseignant
+                            <select required value={signalement.enseignant_id}
+                                onChange={(e) => setSignalement((v) => ({ ...v, enseignant_id: e.target.value }))}
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }}>
+                                <option value="">Choisir…</option>
+                                {profs.map((pr) => (
+                                    <option key={pr.enseignant_id} value={pr.enseignant_id}>
+                                        {pr.nom} {pr.prenom}
+                                    </option>
+                                ))}
+                            </select>
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569' }}>
+                            Jour
+                            <input type="date" required value={signalement.date_absence}
+                                max={new Date().toISOString().slice(0, 10)}
+                                onChange={(e) => setSignalement((v) => ({ ...v, date_absence: e.target.value }))}
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569', flex: '2 1 280px' }}>
+                            Ce que vous avez constaté
+                            <input value={signalement.motif}
+                                onChange={(e) => setSignalement((v) => ({ ...v, motif: e.target.value }))}
+                                placeholder="Cours de 8h non assuré, classe restée sans professeur…"
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '14px' }} />
+                        </label>
+                        <button type="submit" disabled={signalEnCours || !signalement.enseignant_id}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '14px', border: 'none', background: '#b45309', color: 'white', fontWeight: 900, fontSize: '14px', cursor: signalEnCours ? 'wait' : 'pointer', opacity: signalement.enseignant_id ? 1 : 0.55 }}>
+                            {signalEnCours ? <Loader2 size={17} className="animate-spin" /> : <AlertTriangle size={17} />}
+                            Transmettre à la direction
+                        </button>
+                    </form>
                 </section>
 
                 {(error || success) && (

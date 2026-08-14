@@ -4018,10 +4018,16 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
             PresenceAgent.date_presence <= fin_mois,
         ).all()
     ]
+    # SEULES LES ABSENCES TRANCHEES SE RETIENNENT
+    # Une absence constatee par la surveillance est un signalement, pas une
+    # decision : tant que la direction ne l'a pas confirmee, elle ne touche
+    # pas a la paie. Sans ce filtre, celui qui voit deciderait a la place de
+    # celui qui paie.
     jours_manuels = [
         r[0] for r in db.query(AbsencePersonnel.date_absence).filter(
             AbsencePersonnel.employe_id == employe.employe_id,
             AbsencePersonnel.est_justifie == "N",
+            AbsencePersonnel.statut == "VALIDE",
             AbsencePersonnel.date_absence >= debut_mois,
             AbsencePersonnel.date_absence <= fin_mois,
         ).all()
@@ -4966,9 +4972,13 @@ def absences_source_endpoint(
             })
             total_retenue += retenue
 
+        # Meme regle que le calcul du salaire : la source des retenues ne
+        # montre que ce qui a ete tranche, sinon le comptable justifierait
+        # une retenue qui n'a pas ete decidee.
         manuelles = db.query(AbsencePersonnel).filter(
             AbsencePersonnel.employe_id == employe.employe_id,
             AbsencePersonnel.est_justifie == "N",
+            AbsencePersonnel.statut == "VALIDE",
             AbsencePersonnel.date_absence >= debut_mois,
             AbsencePersonnel.date_absence <= fin_mois,
         ).order_by(AbsencePersonnel.date_absence).all()

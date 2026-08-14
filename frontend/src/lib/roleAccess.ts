@@ -85,7 +85,10 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
         role: 'COMPTABLE',
         label: 'Comptable',
         redirectPath: '/comptabilite/dashboard',
-        allowedPrefixes: ['/comptabilite'],
+        // Le comptable applique les retenues : il doit pouvoir voir ce qui
+        // a ete tranche, et trancher lui-meme. Cette page-la uniquement —
+        // le reste de la vie scolaire ne le regarde pas.
+        allowedPrefixes: ['/comptabilite', '/vie-scolaire/absences-enseignants'],
         tier: 'finance',
         hasSystemAccess: true,
         description: 'Suivi financier, encaissements, rapports et clôtures.',

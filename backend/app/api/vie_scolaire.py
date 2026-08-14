@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
-from datetime import date as date_type
+from datetime import date as date_type, datetime
 from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
-from app.core.auth import require_etablissement
+from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import Presence, Incident, Inscription, Classe, Eleve
 from app.schemas.schemas import (
     PresenceCreate, PresenceOut, IncidentCreate, IncidentOut
@@ -202,6 +202,204 @@ def feuille_appel(
         "deja_pointee": bool(deja),
         "eleves": eleves,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# L'ABSENCE D'UN ENSEIGNANT : CONSTATER N'EST PAS DÉCIDER
+#
+# La seule route qui enregistrait l'absence d'un enseignant vivait dans le
+# module financier, réservé à la direction et au comptable. Or c'est le
+# surveillant qui constate qu'un professeur n'est pas venu — et lui n'y a pas
+# accès. C'était donc le comptable qui décidait qu'un professeur était absent,
+# et cette décision retire de l'argent sur sa paie. Il n'était pas dans la cour
+# à 8 h.
+#
+# Deux gestes séparés : la surveillance SIGNALE, la direction TRANCHE. Tant
+# que rien n'est tranché, la paie ne bouge pas.
+# ═══════════════════════════════════════════════════════════════════════════
+
+DECIDE_DES_RETENUES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "COMPTABLE"}
+CONSTATE_LES_ABSENCES = DECIDE_DES_RETENUES | {"DIRECTEUR_NIVEAU", "SURVEILLANT"}
+
+
+def _peut(current_user: dict, roles: set, message: str) -> None:
+    from app.core.auth import roles_du_compte
+    if not (roles_du_compte(current_user) & roles):
+        raise HTTPException(status_code=403, detail=message)
+
+
+def _qui(current_user: dict) -> str:
+    nom = f"{current_user.get('prenom', '')} {current_user.get('nom', '')}".strip()
+    return nom or str(current_user.get("sub") or "inconnu")
+
+
+@router.post("/absences-enseignant", status_code=201)
+def signaler_absence_enseignant(
+    data: dict,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
+):
+    """La surveillance constate qu'un enseignant n'a pas assuré son cours.
+
+    Cela crée un SIGNALEMENT, pas une retenue : aucun franc ne bouge tant que
+    la direction n'a pas tranché. C'est ce qui permet à celui qui voit de
+    parler sans décider à la place de celui qui paie.
+    """
+    from app.api.finance import _get_or_sync_employe_paie, _identifier_employe
+    from app.models.academique import AbsencePersonnel
+
+    _peut(current_user, CONSTATE_LES_ABSENCES,
+          "Seules la surveillance et la direction signalent une absence d'enseignant.")
+
+    reference = (data.get("employe_id") or "").strip()
+    jour = _lire_jour(data.get("date_absence"))
+    if not reference or not jour:
+        raise HTTPException(400, "L'employé et la date de l'absence sont obligatoires.")
+    if jour > date_type.today():
+        raise HTTPException(400, "On ne constate pas une absence qui n'a pas encore eu lieu.")
+
+    infos = _identifier_employe(reference, db, etablissement_id)
+    employe = _get_or_sync_employe_paie(db, reference, infos, etablissement_id)
+
+    # Deux surveillants qui signalent le même jour ne créent pas deux retenues.
+    deja = db.query(AbsencePersonnel).filter(
+        AbsencePersonnel.employe_id == employe.employe_id,
+        AbsencePersonnel.date_absence == jour,
+    ).first()
+    if deja:
+        raise HTTPException(
+            400,
+            f"Une absence est déjà enregistrée pour {infos['prenom']} {infos['nom']} "
+            f"le {jour.isoformat()} (statut : {deja.statut}).",
+        )
+
+    absence = AbsencePersonnel(
+        employe_id=employe.employe_id,
+        date_absence=jour,
+        motif=(data.get("motif") or "").strip() or None,
+        est_justifie="Y" if data.get("est_justifie") else "N",
+        statut="SIGNALE",
+        signale_par=_qui(current_user),
+    )
+    db.add(absence)
+    db.commit()
+    db.refresh(absence)
+    return {
+        "absence_id": absence.absence_id,
+        "statut": absence.statut,
+        "employe": f"{infos['prenom']} {infos['nom']}",
+        "message": "Signalement transmis à la direction. Aucune retenue n'est appliquée "
+                   "tant qu'il n'a pas été validé.",
+    }
+
+
+@router.get("/absences-enseignant")
+def lister_absences_enseignant(
+    statut: Optional[str] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
+):
+    """Ce qui a été constaté, et où en est chaque signalement."""
+    from app.models.academique import AbsencePersonnel, Employe
+
+    _peut(current_user, CONSTATE_LES_ABSENCES, "Accès réservé à la surveillance et à la direction.")
+
+    q = db.query(AbsencePersonnel, Employe).join(
+        Employe, Employe.employe_id == AbsencePersonnel.employe_id
+    ).filter(Employe.etablissement_id == etablissement_id)
+    if statut:
+        q = q.filter(AbsencePersonnel.statut == statut.upper())
+
+    lignes = q.order_by(AbsencePersonnel.date_absence.desc()).limit(200).all()
+    return {
+        "total": len(lignes),
+        "items": [{
+            "absence_id": a.absence_id,
+            "employe_id": a.employe_id,
+            "employe": f"{e.prenom} {e.nom}".strip(),
+            "poste": e.poste,
+            "date_absence": a.date_absence,
+            "motif": a.motif,
+            "est_justifie": a.est_justifie == "Y",
+            "statut": a.statut,
+            "signale_par": a.signale_par,
+            "valide_par": a.valide_par,
+            # Ce qui distingue un signalement d'une retenue, dit en clair.
+            "retient_sur_la_paie": a.statut == "VALIDE" and a.est_justifie != "Y",
+        } for a, e in lignes],
+    }
+
+
+@router.put("/absences-enseignant/{absence_id}")
+def trancher_absence_enseignant(
+    absence_id: int,
+    data: dict,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
+):
+    """La direction valide le signalement, ou l'écarte.
+
+    Valider applique la retenue au mois concerné ; écarter n'en applique
+    aucune. Dans les deux cas la trace reste, avec le nom de qui a tranché :
+    une retenue se conteste, elle doit pouvoir dire d'où elle vient.
+    """
+    from app.models.academique import AbsencePersonnel, Employe
+
+    _peut(current_user, DECIDE_DES_RETENUES,
+          "Seules la direction et la comptabilité décident d'une retenue sur salaire.")
+
+    decision = (data.get("statut") or "").strip().upper()
+    if decision not in {"VALIDE", "ECARTE"}:
+        raise HTTPException(400, "La décision vaut VALIDE ou ECARTE.")
+
+    ligne = db.query(AbsencePersonnel, Employe).join(
+        Employe, Employe.employe_id == AbsencePersonnel.employe_id
+    ).filter(
+        AbsencePersonnel.absence_id == absence_id,
+        Employe.etablissement_id == etablissement_id,
+    ).first()
+    if not ligne:
+        raise HTTPException(404, "Signalement introuvable")
+    absence, employe = ligne
+
+    absence.statut = decision
+    absence.valide_par = _qui(current_user)
+    absence.date_decision = datetime.utcnow()
+    if "est_justifie" in data:
+        absence.est_justifie = "Y" if data.get("est_justifie") else "N"
+    if data.get("motif"):
+        absence.motif = str(data["motif"]).strip()
+    db.commit()
+
+    retenue = decision == "VALIDE" and absence.est_justifie != "Y"
+    return {
+        "absence_id": absence.absence_id,
+        "statut": absence.statut,
+        "employe": f"{employe.prenom} {employe.nom}".strip(),
+        "retient_sur_la_paie": retenue,
+        "message": (
+            f"Absence confirmée : elle sera retenue sur la paie de "
+            f"{absence.date_absence.strftime('%Y-%m')}."
+            if retenue else
+            "Décision enregistrée : aucune retenue ne sera appliquée."
+        ),
+    }
+
+
+def _lire_jour(valeur) -> Optional[date_type]:
+    """Une date reçue en texte, ou rien. Une date illisible est une erreur de
+    saisie, pas une absence à la date du jour."""
+    if not valeur:
+        return None
+    if isinstance(valeur, date_type):
+        return valeur
+    try:
+        return date_type.fromisoformat(str(valeur)[:10])
+    except ValueError:
+        raise HTTPException(400, f"Date illisible : « {valeur} ». Format attendu AAAA-MM-JJ.")
 
 
 def _demi_journees_de_classe(debut: date_type, fin: date_type) -> int:
