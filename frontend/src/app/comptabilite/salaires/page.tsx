@@ -95,6 +95,14 @@ function SalairesContent() {
     });
 
     const [paydayDate, setPaydayDate] = useState('');
+    // Combien de jours nous separent du versement. Negatif = la date est
+    // passee et le personnel attend : c'est ce que l'ecran doit crier.
+    const joursAvantPaie = useMemo(() => {
+        if (!paydayDate) return null;
+        const jour = new Date(paydayDate); jour.setHours(0, 0, 0, 0);
+        const aujourdhui = new Date(); aujourdhui.setHours(0, 0, 0, 0);
+        return Math.round((jour.getTime() - aujourdhui.getTime()) / 86400000);
+    }, [paydayDate]);
     const [savingPayday, setSavingPayday] = useState(false);
 
     // Primes / avances / absences
@@ -609,6 +617,26 @@ function SalairesContent() {
                     {/* Le bilan avant le tableau : ce qui reste à verser, et ce qui
                         bloque. Le total seul laissait croire que tout était prêt. */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+                        {/* LE JOUR DE PAIE, EN PREMIER
+                            « Qui l'école paie, combien, et ce qui a déjà été versé »
+                            manquait de la seule information qui déclenche le geste :
+                            QUAND. Le comptable avait le montant sous les yeux sans
+                            savoir si le versement est pour aujourd'hui, dans dix
+                            jours, ou en retard. */}
+                        <div style={{ ...carte, padding: 16, borderColor: joursAvantPaie !== null && joursAvantPaie < 0 ? '#fecaca' : '#e2e8f0', background: joursAvantPaie !== null && joursAvantPaie < 0 ? '#fef2f2' : '#fff' }}>
+                            <p style={{ fontSize: 10.5, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase' }}>Jour de paie</p>
+                            <p style={{ fontSize: 20, fontWeight: 800, color: joursAvantPaie !== null && joursAvantPaie < 0 ? '#b91c1c' : '#0f172a', marginTop: 4 }}>
+                                {paydayDate
+                                    ? new Date(paydayDate).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })
+                                    : '—'}
+                            </p>
+                            <p style={{ fontSize: 12, color: joursAvantPaie !== null && joursAvantPaie < 0 ? '#991b1b' : '#64748b' }}>
+                                {!paydayDate ? 'À fixer ci-dessous'
+                                    : joursAvantPaie === 0 ? "C'est aujourd'hui"
+                                    : joursAvantPaie! > 0 ? `Dans ${joursAvantPaie} jour${joursAvantPaie! > 1 ? 's' : ''}`
+                                    : `Dépassé de ${Math.abs(joursAvantPaie!)} jour${Math.abs(joursAvantPaie!) > 1 ? 's' : ''}`}
+                            </p>
+                        </div>
                         <div style={{ ...carte, padding: 16 }}>
                             <p style={{ fontSize: 10.5, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase' }}>Reste à verser</p>
                             <p style={{ fontSize: 20, fontWeight: 800, color: '#10b981', marginTop: 4 }}>{fmt(bilan.resteAVerser)}</p>
@@ -945,8 +973,11 @@ function SalairesContent() {
                                             <td style={td}>{b.date_paiement || '—'}</td>
                                             <td style={td}>{b.mode_paiement || '—'}</td>
                                             <td style={{ ...td, textAlign: 'right' }}>
+                                                {/* La route attend un depense_id : lui passer le
+                                                    bulletin_id affichait le bulletin d'une AUTRE
+                                                    personne — deux numerotations independantes. */}
                                                 {b.bulletin_id ? (
-                                                    <button onClick={() => viewBulletinDetail(b.bulletin_id)}
+                                                    <button onClick={() => viewBulletinDetail(b.depense_id)}
                                                         style={{ padding: '6px 12px', background: '#eff6ff', color: '#3b82f6', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                                                         <Eye size={14} /> Fiche de paie
                                                     </button>

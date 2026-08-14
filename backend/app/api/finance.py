@@ -4669,8 +4669,70 @@ def historique_salaire_endpoint(employe_id: str, db: Session = Depends(get_db), 
         for dep in historique
     ]
 
+@router.get("/salaires/bulletin/{bulletin_id}")
+def bulletin_par_son_numero(bulletin_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Le bulletin de paie désigné par SON numéro, sans ambiguïté possible.
+
+    `/salaires/bulletin-detail/{depense_id}` attend le numéro de la DÉPENSE.
+    Les deux séries de numéros sont indépendantes et se recouvrent : le
+    bulletin 553 appartient à Alseny Bah, la dépense 553 à Lansana Baldé.
+    Confondre les deux affichait le salaire d'une personne sur la fiche d'une
+    autre — ce qui est arrivé.
+
+    Cette route lève l'ambiguïté : celui qui tient un `bulletin_id` l'appelle,
+    et retrouve la dépense correspondante plutôt que celle qui porte le même
+    numéro par hasard.
+    """
+    bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == bulletin_id).first()
+    if not bulletin:
+        raise HTTPException(status_code=404, detail="Bulletin introuvable")
+
+    # L'appartenance se lit par l'employé du bulletin : un bulletin d'une
+    # autre école ne doit pas se consulter en devinant son numéro.
+    employe = db.query(Employe).filter(
+        Employe.employe_id == bulletin.employe_id,
+        Employe.etablissement_id == etablissement_id,
+    ).first()
+    if not employe:
+        raise HTTPException(status_code=404, detail="Bulletin introuvable")
+
+    dep = db.query(Depense).filter(
+        Depense.etablissement_id == etablissement_id,
+        Depense.categorie == "SALAIRES",
+        Depense.reference == str(bulletin.bulletin_id),
+    ).first()
+    if not dep:
+        raise HTTPException(
+            status_code=404,
+            detail="Aucune dépense ne correspond à ce bulletin.",
+        )
+    return bulletin_detail_endpoint(dep.depense_id, db, etablissement_id)
+
+
 @router.get("/salaires/bulletin-detail/{depense_id}")
 def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Bulletin de paie d'un versement, désigné par sa DÉPENSE.
+
+    DEUX NUMÉROTATIONS QU'IL NE FAUT PAS CONFONDRE
+    Cette route attend un `depense_id`. L'écran lui envoyait un `bulletin_id` :
+    deux séries de numéros indépendantes. Demander le bulletin n°152 affichait
+    donc la dépense n°152 — celle d'une autre personne, avec son poste et son
+    salaire. Le fondateur a ouvert le bulletin de son comptable et y a lu le
+    salaire d'une agente d'entretien.
+
+    Ce n'est pas seulement un affichage faux : c'est la rémunération de
+    quelqu'un montrée à la place d'une autre.
+
+    On ne peut pas rattraper l'erreur ici : les deux numéros sont valides
+    chacun dans son espace, et rien ne permet de deviner lequel l'appelant a
+    voulu. Le bulletin 553 appartient à Alseny Bah, la dépense 553 à Lansana
+    Baldé — les deux existent. C'est donc l'appelant qui a été corrigé, et
+    `GET /salaires/bulletin/{bulletin_id}` existe désormais pour ceux qui
+    tiennent le numéro du bulletin.
+
+    Reste ici un garde-fou contre toute incohérence future entre la dépense et
+    le bulletin qu'elle référence.
+    """
     dep = db.query(Depense).filter(
         Depense.depense_id == depense_id, Depense.etablissement_id == etablissement_id
     ).first()
@@ -4682,6 +4744,19 @@ def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db), eta
         bulletin = db.query(BulletinPaie).filter(BulletinPaie.bulletin_id == int(dep.reference)).first()
 
     infos = _identifier_employe(dep.fournisseur, db, etablissement_id)
+
+    # LE GARDE-FOU : la dépense et le bulletin doivent parler de la MÊME
+    # personne. Sans ce contrôle, n'importe quel décalage entre les deux
+    # numérotations affiche le salaire d'autrui sans que rien ne le signale.
+    if bulletin:
+        employe_de_la_depense = _get_or_sync_employe_paie(
+            db, dep.fournisseur, infos, etablissement_id
+        )
+        if bulletin.employe_id != employe_de_la_depense.employe_id:
+            raise HTTPException(
+                status_code=404,
+                detail="Ce bulletin ne correspond pas à ce paiement.",
+            )
     
     if bulletin:
         employe_id = bulletin.employe_id

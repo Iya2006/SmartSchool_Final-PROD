@@ -2712,6 +2712,140 @@ def _recap_paie(db: Session, eid: int) -> None:
           f"— {float(total_dep or 0):,.0f} GNF en charges")
 
 
+# ── étape 14 : les examens nationaux et le passage ──────────────────────
+#
+# DEUX FAÇONS DE PASSER EN CLASSE SUPÉRIEURE, PAS UNE
+# Dans une classe ordinaire, c'est la moyenne annuelle qui décide : au-dessus
+# du seuil on passe, en dessous on redouble. L'école tranche seule.
+#
+# Dans une classe d'examen — 6ᵉ année (CEE), 10ᵉ année (BEPC), Terminale
+# (BAC) — l'école ne décide rien. C'est le Ministère. Un élève à 14 de
+# moyenne qui échoue au BAC redouble ; un élève à 9 qui l'obtient passe.
+# Confondre les deux reviendrait à faire dire à l'école ce qu'elle n'a pas le
+# droit de dire.
+#
+# Le scénario reproduit donc les deux chemins, et laisse le résultat officiel
+# contredire la moyenne interne dans les deux sens : c'est exactement ce qui
+# doit pouvoir arriver.
+TAUX_REUSSITE_EXAMEN = {
+    "CEE": 0.78,    # l'examen de fin de primaire, le plus accessible
+    "BEPC": 0.62,
+    "BAC": 0.51,    # le plus sélectif des trois
+}
+# Une moyenne élevée aide, mais ne garantit rien : c'est tout le sujet.
+BONUS_BONNE_MOYENNE = 0.20
+
+
+def etape_14_examens_nationaux(db: Session) -> None:
+    """Résultats du Ministère pour les classes d'examen, puis le passage."""
+    from app.models.academique import Niveau, ResultatOfficielExamen
+
+    _titre(14, "Examens nationaux, admis et redoublants")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == eid, AnneeScolaire.est_courante == "O"
+    ).first()
+
+    # Les candidats SANS resultat : on complete, on ne recommence pas. Un
+    # resultat deja saisi — par le scenario ou a la main dans l'ecran — est la
+    # saisie du Ministere : la reecrire serait la falsifier.
+    candidats = db.execute(text("""
+        SELECT i.inscription_id, n.examen_national, cl.libelle AS classe,
+               b.moyenne_generale
+        FROM ss_inscriptions i
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        JOIN ss_niveaux n ON n.niveau_id = cl.niveau_id
+        LEFT JOIN ss_bulletins b ON b.inscription_id = i.inscription_id
+                                AND b.type_bulletin = 'ANNUEL'
+        WHERE cl.etablissement_id = :eid AND i.annee_id = :aid
+          AND i.statut = 'ACTIVE' AND n.est_examen = 'O'
+          AND NOT EXISTS (SELECT 1 FROM ss_resultats_officiels_examen r
+                          WHERE r.inscription_id = i.inscription_id)
+        ORDER BY cl.code, i.inscription_id
+    """), {"eid": eid, "aid": annee.annee_id}).fetchall()
+    if not candidats:
+        print("  tous les candidats ont deja leur resultat.")
+        _recap_examens(db, eid, annee)
+        return
+
+    nb = 0
+    for c in candidats:
+        moyenne = float(c.moyenne_generale or 0)
+        chance = TAUX_REUSSITE_EXAMEN.get(c.examen_national, 0.6)
+        # Une bonne moyenne augmente les chances sans jamais les garantir.
+        if moyenne >= 12:
+            chance = min(chance + BONUS_BONNE_MOYENNE, 0.95)
+        elif moyenne < 8:
+            chance = max(chance - BONUS_BONNE_MOYENNE, 0.10)
+        db.add(ResultatOfficielExamen(
+            inscription_id=c.inscription_id,
+            examen_national=c.examen_national,
+            resultat="ADMIS" if random.random() < chance else "NON_ADMIS",
+            date_saisie=date(2026, 7, 20),
+            saisi_par="Direction",
+        ))
+        nb += 1
+    db.commit()
+    print(f"  {nb} resultats du Ministere saisis pour les classes d'examen")
+    _recap_examens(db, eid, annee)
+
+
+def _recap_examens(db: Session, eid: int, annee) -> None:
+    lignes = db.execute(text("""
+        SELECT r.examen_national AS examen, count(*) AS candidats,
+               count(*) FILTER (WHERE r.resultat = 'ADMIS') AS admis,
+               round(avg(b.moyenne_generale)::numeric, 2) AS moyenne
+        FROM ss_resultats_officiels_examen r
+        JOIN ss_inscriptions i ON i.inscription_id = r.inscription_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        LEFT JOIN ss_bulletins b ON b.inscription_id = i.inscription_id
+                                AND b.type_bulletin = 'ANNUEL'
+        WHERE cl.etablissement_id = :eid
+        GROUP BY r.examen_national ORDER BY r.examen_national
+    """), {"eid": eid}).fetchall()
+    print(f"\n  {'EXAMEN':<8}{'CANDIDATS':>11}{'ADMIS':>8}{'TAUX':>8}{'MOY. INTERNE':>14}")
+    for examen, candidats, admis, moyenne in lignes:
+        taux = 100.0 * admis / candidats if candidats else 0
+        print(f"  {examen:<8}{candidats:>11}{admis:>8}{taux:>7.1f}%{str(moyenne):>14}")
+
+    # LE CAS QUI JUSTIFIE TOUT CE CHANTIER
+    # Un elève à 14 de moyenne qui échoue au BAC redouble. Un elève à 9 qui
+    # l'obtient passe. Si ces deux cas n'existent pas dans les données, le
+    # scénario ne prouve rien : il n'aurait testé que des accords entre l'école
+    # et le Ministère.
+    desaccords = db.execute(text("""
+        SELECT r.resultat, b.moyenne_generale, e.prenom || ' ' || e.nom AS qui,
+               cl.libelle AS classe, r.examen_national
+        FROM ss_resultats_officiels_examen r
+        JOIN ss_inscriptions i ON i.inscription_id = r.inscription_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        JOIN ss_eleves e ON e.eleve_id = i.eleve_id
+        JOIN ss_bulletins b ON b.inscription_id = i.inscription_id
+                           AND b.type_bulletin = 'ANNUEL'
+        WHERE cl.etablissement_id = :eid
+          AND ((r.resultat = 'NON_ADMIS' AND b.moyenne_generale >= 12)
+            OR (r.resultat = 'ADMIS' AND b.moyenne_generale < 10))
+        ORDER BY b.moyenne_generale DESC LIMIT 6
+    """), {"eid": eid}).fetchall()
+    print(f"\n  Quand le Ministere ne dit pas la meme chose que l'ecole :")
+    if not desaccords:
+        print("     aucun cas — le scenario n'aurait alors rien prouve.")
+    for resultat, moyenne, qui, classe, examen in desaccords:
+        sens = "recale malgre" if resultat == "NON_ADMIS" else "admis avec"
+        print(f"     {qui[:24]:<25} {classe:<18} {examen:<5} {sens} {float(moyenne):.2f}/20")
+
+    total = db.execute(text("""
+        SELECT count(*) FILTER (WHERE r.resultat = 'ADMIS') AS admis,
+               count(*) AS total
+        FROM ss_resultats_officiels_examen r
+        JOIN ss_inscriptions i ON i.inscription_id = r.inscription_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid
+    """), {"eid": eid}).first()
+    print(f"\n  Au total : {total[0]} admis sur {total[1]} candidats aux examens nationaux.")
+
+
 ETAPES = {
     1: ("Referentiel (cycles, niveaux, matieres, annee, semestres)", etape_1_referentiel),
     2: ("Classes et grille horaire", etape_2_classes),
@@ -2726,6 +2860,7 @@ ETAPES = {
     11: ("Bulletins de periode et bulletins annuels", etape_11_bulletins),
     12: ("Personnel non enseignant : comptes, espaces et salaires", etape_12_personnel),
     13: ("Paie mensuelle d'octobre a juin", etape_13_paie),
+    14: ("Examens nationaux, admis et redoublants", etape_14_examens_nationaux),
 }
 
 
