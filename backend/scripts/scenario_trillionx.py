@@ -3210,6 +3210,517 @@ def etape_15_communications(db: Session) -> None:
     _recap_communications(db, eid)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ÉTAPE 16 — CE QUE CHAQUE ESPACE A À MONTRER
+#
+# Le surveillant, le bibliothécaire et l'informaticien ont un compte, un
+# salaire, un espace de travail... et zéro ligne à l'écran. Leurs tables sont
+# vides : ni ouvrage, ni emprunt, ni équipement, ni incident, ni présence.
+# Un espace vide ne prouve rien — ni que l'écran fonctionne, ni qu'il est
+# utilisable, ni que les chiffres qu'il additionne sont les bons.
+# ═══════════════════════════════════════════════════════════════════════════
+
+CATALOGUE_BIBLIOTHEQUE = [
+    # (titre, auteur, categorie, niveau_cible, exemplaires)
+    ("L'Enfant noir", "Camara Laye", "ROMAN", "College", 12),
+    ("Le Regard du roi", "Camara Laye", "ROMAN", "Lycee", 8),
+    ("Dramouss", "Camara Laye", "ROMAN", "Lycee", 6),
+    ("Les Soleils des independances", "Ahmadou Kourouma", "ROMAN", "Lycee", 8),
+    ("Allah n'est pas oblige", "Ahmadou Kourouma", "ROMAN", "Lycee", 6),
+    ("Une si longue lettre", "Mariama Ba", "ROMAN", "Lycee", 10),
+    ("Sous l'orage", "Seydou Badian", "ROMAN", "College", 10),
+    ("L'Aventure ambigue", "Cheikh Hamidou Kane", "ROMAN", "Lycee", 8),
+    ("Ville cruelle", "Eza Boto", "ROMAN", "College", 8),
+    ("Le Vieux Negre et la Medaille", "Ferdinand Oyono", "ROMAN", "College", 8),
+    ("Contes et legendes de Guinee", "Collectif", "CONTE", "Primaire", 15),
+    ("Le Petit Prince", "Antoine de Saint-Exupery", "CONTE", "Primaire", 20),
+    ("Fables de La Fontaine", "Jean de La Fontaine", "POESIE", "Primaire", 12),
+    ("Grammaire francaise 6e", "Collectif", "MANUEL", "College", 25),
+    ("Mathematiques 6e", "Collectif", "MANUEL", "College", 25),
+    ("Mathematiques 10e", "Collectif", "MANUEL", "College", 20),
+    ("Physique-Chimie Terminale", "Collectif", "MANUEL", "Lycee", 18),
+    ("Sciences de la Vie et de la Terre 1re", "Collectif", "MANUEL", "Lycee", 18),
+    ("Histoire de la Guinee", "Djibril Tamsir Niane", "HISTOIRE", "Lycee", 10),
+    ("Soundjata ou l'epopee mandingue", "Djibril Tamsir Niane", "HISTOIRE", "College", 14),
+    ("Geographie de l'Afrique de l'Ouest", "Collectif", "GEOGRAPHIE", "College", 12),
+    ("Atlas scolaire", "Collectif", "GEOGRAPHIE", "Primaire", 10),
+    ("Dictionnaire Larousse", "Collectif", "DICTIONNAIRE", "Tous", 15),
+    ("Anglais 4e — My English Book", "Collectif", "MANUEL", "College", 20),
+    ("Initiation a l'informatique", "Collectif", "INFORMATIQUE", "Lycee", 12),
+]
+
+MOTIFS_INCIDENTS = [
+    ("RETARD", "MINEUR", "Arrive {n} minutes apres la sonnerie, sans justification."),
+    ("BAVARDAGE", "MINEUR", "Perturbe le cours par des bavardages repetes malgre deux rappels."),
+    ("DEVOIR_NON_FAIT", "MINEUR", "Se presente sans le devoir demande pour la troisieme fois."),
+    ("TENUE", "MINEUR", "Tenue non conforme au reglement interieur."),
+    ("ABSENCE_NON_JUSTIFIEE", "MOYEN", "Absent une demi-journee sans justificatif de la famille."),
+    ("INSOLENCE", "MOYEN", "Repond de maniere irrespectueuse au professeur devant la classe."),
+    ("TELEPHONE", "MOYEN", "Telephone utilise en classe, confisque et remis a la famille."),
+    ("DEGRADATION", "GRAVE", "Table de la salle deterioree ; reparation a la charge de la famille."),
+    ("BAGARRE", "GRAVE", "Altercation physique dans la cour pendant la recreation."),
+    ("TRICHE", "GRAVE", "Surpris avec des notes dissimulees pendant une composition."),
+]
+
+MATERIEL_INFORMATIQUE = [
+    ("ORDINATEUR", "Ordinateur de bureau", "HP", "ProDesk 400"),
+    ("ORDINATEUR", "Ordinateur portable", "Dell", "Latitude 3520"),
+    ("IMPRIMANTE", "Imprimante laser", "Canon", "LBP6030"),
+    ("VIDEOPROJECTEUR", "Videoprojecteur", "Epson", "EB-X06"),
+    ("ONDULEUR", "Onduleur 650 VA", "APC", "BX650"),
+    ("RESEAU", "Point d'acces Wi-Fi", "TP-Link", "EAP225"),
+    ("TABLETTE", "Tablette pedagogique", "Samsung", "Tab A8"),
+]
+
+# Ce que le surveillant constate vraiment : l'absentéisme n'est pas uniforme.
+PART_ELEVES_ASSIDUS = 0.62      # jamais ou presque absents
+PART_ELEVES_IRREGULIERS = 0.30  # quelques absences dans l'année
+# le reste décroche : absences répétées, c'est eux que l'école doit voir
+
+
+def _jours_de_classe(debut: date, fin: date) -> list:
+    """Les jours ouvrés de l'année scolaire. Une école ne travaille pas le
+    dimanche, et le samedi seulement le matin — on le garde, allégé."""
+    from datetime import timedelta
+
+    jours, jour = [], debut
+    while jour <= fin:
+        if jour.weekday() < 5:
+            jours.append(jour)
+        jour += timedelta(days=1)
+    return jours
+
+
+def etape_16_espaces(db: Session) -> None:
+    """Remplit les espaces qui n'avaient rien à montrer."""
+    _titre(16, "Les espaces : bibliotheque, informatique, surveillance")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == eid, AnneeScolaire.est_courante == "O"
+    ).first()
+
+    _salles(db, eid)
+    _bibliotheque(db, eid, annee)
+    _parc_informatique(db, eid)
+    _discipline(db, eid, annee)
+    _presences_eleves(db, eid, annee)
+    _pointage_des_agents(db, eid, annee)
+    _recap_espaces(db, eid)
+
+
+def _salles(db: Session, eid: int) -> None:
+    """Une classe se tient quelque part, un ordinateur est posé quelque part."""
+    from app.models.academique import Salle
+
+    if db.query(Salle).filter(Salle.etablissement_id == eid).count():
+        print("  salles : deja creees.")
+        return
+
+    classes = db.execute(text("""
+        SELECT cl.classe_id, cl.libelle, cl.capacite_max
+        FROM ss_classes cl WHERE cl.etablissement_id = :eid ORDER BY cl.classe_id
+    """), {"eid": eid}).fetchall()
+
+    creees = 0
+    for i, c in enumerate(classes, start=1):
+        salle = Salle(
+            etablissement_id=eid, code=f"S{i:02d}", nom=f"Salle {c.libelle}",
+            capacite=int(c.capacite_max or 40), type_salle="CLASSE", disponible="O",
+        )
+        db.add(salle)
+        db.flush()
+        # Une classe se tient dans SA salle : le lien existe déjà dans le
+        # modèle, il n'était simplement jamais posé.
+        db.execute(text("UPDATE ss_classes SET salle_id = :s WHERE classe_id = :c"),
+                   {"s": salle.salle_id, "c": c.classe_id})
+        creees += 1
+    for code, nom, capacite, genre in [
+        ("INF1", "Salle informatique", 30, "INFORMATIQUE"),
+        ("BIB1", "Bibliotheque", 60, "BIBLIOTHEQUE"),
+        ("LAB1", "Laboratoire de sciences", 30, "LABORATOIRE"),
+        ("ADM1", "Administration", 10, "BUREAU"),
+    ]:
+        db.add(Salle(etablissement_id=eid, code=code, nom=nom,
+                     capacite=capacite, type_salle=genre, disponible="O"))
+        creees += 1
+    db.commit()
+    print(f"  salles : {creees} creees.")
+
+
+def _bibliotheque(db: Session, eid: int, annee) -> None:
+    """Le catalogue, les exemplaires, et une année de prêts."""
+    from datetime import timedelta
+
+    from app.models.academique import Emprunt, Exemplaire, Ouvrage
+
+    if db.query(Ouvrage).filter(Ouvrage.etablissement_id == eid).count():
+        print("  bibliotheque : catalogue deja constitue.")
+        return
+
+    de = random.Random(f"biblio-{eid}")
+    exemplaires = []
+    for rang, (titre, auteur, categorie, niveau, nb) in enumerate(CATALOGUE_BIBLIOTHEQUE, start=1):
+        ouvrage = Ouvrage(
+            etablissement_id=eid, code_interne=f"OUV-{eid}-{rang:03d}",
+            titre=titre, auteur=auteur, categorie=categorie, niveau_cible=niveau,
+            langue="FRANCAIS", nb_exemplaires=nb, nb_disponibles=nb,
+            emplacement=f"Rayon {categorie[:3]}", statut="DISPONIBLE",
+        )
+        db.add(ouvrage)
+        db.flush()
+        for n in range(1, nb + 1):
+            ex = Exemplaire(
+                ouvrage_id=ouvrage.ouvrage_id,
+                code_exemplaire=f"EX-{eid}-{rang:03d}-{n:02d}",
+                # Un fonds vit : quelques exemplaires sont abîmés, un ou deux
+                # ont disparu. Un catalogue où tout est « BON » ne ressemble à
+                # aucune bibliothèque réelle.
+                etat=de.choices(["BON", "BON", "BON", "USE", "ABIME"], k=1)[0],
+                statut="DISPONIBLE", date_acquisition=ANNEE_DEBUT,
+            )
+            db.add(ex)
+            exemplaires.append(ex)
+    db.flush()
+
+    eleves = [r.eleve_id for r in db.execute(text("""
+        SELECT DISTINCT el.eleve_id FROM ss_eleves el
+        JOIN ss_inscriptions i ON i.eleve_id = el.eleve_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid AND i.statut = 'ACTIVE'
+        ORDER BY el.eleve_id
+    """), {"eid": eid}).fetchall()]
+    enseignants = [r.enseignant_id for r in db.execute(text(
+        "SELECT enseignant_id FROM ss_enseignants WHERE etablissement_id = :eid"
+    ), {"eid": eid}).fetchall()]
+
+    jours = _jours_de_classe(ANNEE_DEBUT, ANNEE_FIN)
+    aujourdhui = date.today()
+    en_cours, rendus, en_retard = 0, 0, 0
+    occupes = set()
+
+    for _ in range(520):
+        ex = de.choice(exemplaires)
+        if ex.exemplaire_id in occupes:
+            continue
+        emprunt_le = de.choice(jours[: max(1, len(jours) - 20)])
+        retour_prevu = emprunt_le + timedelta(days=14)
+        pour_un_prof = de.random() < 0.18
+
+        emprunt = Emprunt(
+            exemplaire_id=ex.exemplaire_id,
+            eleve_id=None if pour_un_prof else de.choice(eleves),
+            enseignant_id=de.choice(enseignants) if pour_un_prof else None,
+            date_emprunt=emprunt_le, date_retour_prevue=retour_prevu,
+        )
+
+        # L'année est finie : tout prêt encore sorti est, par construction, en
+        # retard. La proportion doit donc rester celle des livres qu'une école
+        # récupère réellement à la rentrée — pas 20 % du fonds dehors.
+        tirage = de.random()
+        if tirage < 0.94:
+            # Rendu, à l'heure ou avec quelques jours de retard.
+            retard = max(0, de.choice([-3, -1, 0, 0, 1, 4, 9, 21]))
+            rendu_le = retour_prevu + timedelta(days=retard)
+            emprunt.date_retour_effective = min(rendu_le, ANNEE_FIN)
+            emprunt.nb_jours_retard = max(0, (emprunt.date_retour_effective - retour_prevu).days)
+            emprunt.etat_retour = de.choices(["BON", "BON", "USE", "ABIME"], k=1)[0]
+            emprunt.statut = "RENDU"
+            rendus += 1
+        else:
+            # Toujours dehors. C'est cette liste que le bibliothécaire relance.
+            emprunt.statut = "EN_COURS"
+            ex.statut = "EMPRUNTE"
+            occupes.add(ex.exemplaire_id)
+            en_cours += 1
+            if retour_prevu < aujourdhui:
+                emprunt.nb_jours_retard = (aujourdhui - retour_prevu).days
+                emprunt.rappel_envoye = "O" if de.random() < 0.7 else "N"
+                if emprunt.rappel_envoye == "O":
+                    emprunt.date_rappel = retour_prevu + timedelta(days=de.randint(2, 10))
+                en_retard += 1
+        db.add(emprunt)
+
+    # `nb_disponibles` n'est pas une décoration : c'est ce que le
+    # bibliothécaire lit avant de prêter. Il se recalcule depuis les
+    # exemplaires réellement sortis, jamais à la main.
+    db.flush()
+    db.execute(text("""
+        UPDATE ss_ouvrages o SET nb_disponibles = (
+            SELECT count(*) FROM ss_exemplaires e
+            WHERE e.ouvrage_id = o.ouvrage_id AND e.statut = 'DISPONIBLE')
+        WHERE o.etablissement_id = :eid
+    """), {"eid": eid})
+    db.commit()
+    print(f"  bibliotheque : {len(CATALOGUE_BIBLIOTHEQUE)} ouvrages, "
+          f"{len(exemplaires)} exemplaires, {rendus + en_cours} emprunts "
+          f"({en_cours} dehors dont {en_retard} en retard).")
+
+
+def _parc_informatique(db: Session, eid: int) -> None:
+    """Le parc que l'informaticien entretient."""
+    from datetime import timedelta
+
+    from app.models.academique import EquipementInformatique, Salle
+
+    if db.query(EquipementInformatique).filter(
+        EquipementInformatique.etablissement_id == eid
+    ).count():
+        print("  informatique : parc deja inventorie.")
+        return
+
+    de = random.Random(f"parc-{eid}")
+    salles = db.query(Salle).filter(Salle.etablissement_id == eid).all()
+    salle_info = next((s for s in salles if s.type_salle == "INFORMATIQUE"), None)
+
+    cree = 0
+    # La salle informatique : 24 postes, un onduleur, un point d'accès.
+    for n in range(1, 25):
+        # BON / PANNE / A_REMPLACER : c'est le vocabulaire du formulaire de
+        # l'informaticien. En inventer un autre rendrait ces machines
+        # invisibles au compteur « en panne » de son tableau de bord.
+        etat = de.choices(["BON", "PANNE", "A_REMPLACER"], weights=[82, 13, 5], k=1)[0]
+        db.add(EquipementInformatique(
+            etablissement_id=eid, salle_id=salle_info.salle_id if salle_info else None,
+            code=f"PC-{n:03d}", nom=f"Poste eleve {n:02d}",
+            type_equipement="ORDINATEUR", marque="HP", modele="ProDesk 400",
+            numero_serie=f"SN{eid}{n:05d}", etat=etat,
+            statut="HORS_SERVICE" if etat == "A_REMPLACER" else "ACTIF",
+            derniere_maintenance=ANNEE_DEBUT + timedelta(days=de.randint(0, 240)),
+            observation="Ecran a remplacer" if etat == "A_REMPLACER" else None,
+        ))
+        cree += 1
+
+    # Le reste du parc, réparti dans l'école.
+    autres = [s for s in salles if s.type_salle != "INFORMATIQUE"]
+    for n in range(1, 31):
+        genre, nom, marque, modele = de.choice(MATERIEL_INFORMATIQUE)
+        etat = de.choices(["BON", "PANNE", "A_REMPLACER"], weights=[84, 12, 4], k=1)[0]
+        db.add(EquipementInformatique(
+            etablissement_id=eid,
+            salle_id=de.choice(autres).salle_id if autres else None,
+            code=f"EQ-{n:03d}", nom=nom, type_equipement=genre,
+            marque=marque, modele=modele, numero_serie=f"SN{eid}9{n:04d}",
+            etat=etat, statut="HORS_SERVICE" if etat == "A_REMPLACER" else "ACTIF",
+            derniere_maintenance=ANNEE_DEBUT + timedelta(days=de.randint(0, 240)),
+        ))
+        cree += 1
+    db.commit()
+    print(f"  informatique : {cree} equipements inventories.")
+
+
+def _discipline(db: Session, eid: int, annee) -> None:
+    """Ce que les surveillants remontent au fil de l'année."""
+    from app.models.academique import Incident
+
+    if db.query(Incident).filter(Incident.etablissement_id == eid).count():
+        print("  discipline : incidents deja saisis.")
+        return
+
+    de = random.Random(f"discipline-{eid}")
+    surveillants = [f"{r.prenom} {r.nom}" for r in db.execute(text("""
+        SELECT prenom, nom FROM ss_utilisateurs
+        WHERE etablissement_id = :eid AND role IN ('SURVEILLANT', 'DIRECTEUR_NIVEAU')
+          AND statut = 'ACTIF'
+    """), {"eid": eid}).fetchall()] or ["Surveillance generale"]
+
+    # Au primaire on ne tient pas un registre de discipline comme au lycée :
+    # les incidents remontent surtout du collège et du lycée.
+    eleves = db.execute(text("""
+        SELECT el.eleve_id, c.code AS cycle
+        FROM ss_eleves el
+        JOIN ss_inscriptions i ON i.eleve_id = el.eleve_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        JOIN ss_niveaux n ON n.niveau_id = cl.niveau_id
+        JOIN ss_cycles c ON c.cycle_id = n.cycle_id
+        WHERE cl.etablissement_id = :eid AND i.statut = 'ACTIVE' AND c.code <> 'PRM'
+    """), {"eid": eid}).fetchall()
+    if not eleves:
+        print("  discipline : aucun eleve concerne.")
+        return
+
+    jours = _jours_de_classe(ANNEE_DEBUT, min(ANNEE_FIN, date.today()))
+    par_gravite = {"MINEUR": 0, "MOYEN": 0, "GRAVE": 0}
+    for _ in range(240):
+        eleve = de.choice(eleves)
+        genre, gravite, texte = de.choices(
+            MOTIFS_INCIDENTS, weights=[22, 20, 14, 8, 12, 9, 7, 3, 3, 2], k=1)[0]
+        db.add(Incident(
+            eleve_id=eleve.eleve_id, etablissement_id=eid,
+            date_incident=de.choice(jours), type_incident=genre, gravite=gravite,
+            description=texte.format(n=de.choice([5, 10, 15, 20, 25])),
+            signale_par=de.choice(surveillants),
+            # Un incident grave ne reste pas « signalé » : il est traité.
+            statut=("TRAITE" if gravite == "GRAVE" and de.random() < 0.85
+                    else de.choices(["SIGNALE", "TRAITE", "CLASSE"],
+                                    weights=[35, 45, 20], k=1)[0]),
+        ))
+        par_gravite[gravite] += 1
+    db.commit()
+    print(f"  discipline : {sum(par_gravite.values())} incidents "
+          f"({par_gravite['MINEUR']} mineurs, {par_gravite['MOYEN']} moyens, "
+          f"{par_gravite['GRAVE']} graves).")
+
+
+def _presences_eleves(db: Session, eid: int, annee) -> None:
+    """L'absentéisme, tel qu'il se répartit vraiment.
+
+    On n'enregistre que ce qui SORT de l'ordinaire — absences et retards. Poser
+    une ligne « présent » pour 1 000 élèves × 180 jours × 2 demi-journées ferait
+    360 000 lignes qui ne disent rien : la présence est la règle, elle se déduit
+    de l'absence de ligne.
+    """
+    from app.models.academique import Presence
+
+    deja = db.execute(text("""
+        SELECT count(*) FROM ss_presences p
+        JOIN ss_inscriptions i ON i.inscription_id = p.inscription_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid
+    """), {"eid": eid}).scalar()
+    if deja:
+        print(f"  presences eleves : {deja} lignes deja saisies.")
+        return
+
+    de = random.Random(f"presences-{eid}")
+    inscriptions = [r.inscription_id for r in db.execute(text("""
+        SELECT i.inscription_id FROM ss_inscriptions i
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid AND i.statut = 'ACTIVE'
+        ORDER BY i.inscription_id
+    """), {"eid": eid}).fetchall()]
+    jours = _jours_de_classe(ANNEE_DEBUT, min(ANNEE_FIN, date.today()))
+
+    MOTIFS = ["Maladie", "Rendez-vous medical", "Deces dans la famille",
+              "Voyage familial", "Travaux champetres", None]
+    lignes, decrocheurs = [], 0
+    for inscription_id in inscriptions:
+        tirage = de.random()
+        # Calibre sur ce qu'une ecole guineenne constate reellement : un premier
+        # jet donnait 98,9 % d'assiduite sur l'annee, un chiffre qu'aucun
+        # directeur ne reconnaitrait comme le sien.
+        if tirage < PART_ELEVES_ASSIDUS:
+            nb = de.randint(3, 12)
+        elif tirage < PART_ELEVES_ASSIDUS + PART_ELEVES_IRREGULIERS:
+            nb = de.randint(15, 40)
+        else:
+            nb = de.randint(60, 140)
+            decrocheurs += 1
+        for _ in range(nb):
+            statut = de.choices(["ABSENT", "ABSENT", "RETARD"], k=1)[0]
+            justifie = de.random() < (0.62 if statut == "ABSENT" else 0.25)
+            lignes.append({
+                "inscription_id": inscription_id,
+                "date_presence": de.choice(jours),
+                "demi_journee": de.choice(["MATIN", "MATIN", "SOIR"]),
+                "statut_presence": statut,
+                "est_justifie": "O" if justifie else "N",
+                "motif": de.choice(MOTIFS) if justifie else None,
+            })
+
+    db.bulk_insert_mappings(Presence, lignes)
+    db.commit()
+    print(f"  presences eleves : {len(lignes)} absences/retards enregistres, "
+          f"{decrocheurs} eleve(s) en decrochage.")
+
+
+def _pointage_des_agents(db: Session, eid: int, annee) -> None:
+    """Le pointage du personnel — ce que l'écran de présence des agents lit."""
+    from datetime import time as time_type
+
+    from app.models.academique import PresenceAgent
+
+    if db.query(PresenceAgent).filter(PresenceAgent.etablissement_id == eid).count():
+        print("  pointage des agents : deja enregistre.")
+        return
+
+    de = random.Random(f"pointage-{eid}")
+    agents = [(r.utilisateur_id, f"{r.prenom} {r.nom}") for r in db.execute(text("""
+        SELECT utilisateur_id, prenom, nom FROM ss_utilisateurs
+        WHERE etablissement_id = :eid AND statut = 'ACTIF'
+    """), {"eid": eid}).fetchall()]
+    # Deux mois de pointage suffisent à faire vivre l'écran ; l'année entière
+    # pour vingt agents n'apprendrait rien de plus et alourdirait la base.
+    jours = [j for j in _jours_de_classe(ANNEE_DEBUT, ANNEE_FIN)
+             if j.month in (5, 6) and j <= date.today()]
+
+    lignes = []
+    for agent_id, _nom in agents:
+        for jour in jours:
+            tirage = de.random()
+            if tirage < 0.04:
+                continue  # absent : pas de pointage du tout
+            en_retard = tirage < 0.16
+            heure = time_type(de.randint(8, 9) if en_retard else 7,
+                              de.randint(0, 59))
+            lignes.append({
+                "etablissement_id": eid, "type_agent": "PERSONNEL",
+                "agent_id": agent_id, "date_presence": jour,
+                "heure_arrivee": heure,
+                "heure_depart": time_type(de.choice([16, 17, 17, 18]), de.randint(0, 59)),
+                "statut": "RETARD" if en_retard else "PRESENT",
+                "observations": "Arrivee tardive signalee" if en_retard else None,
+            })
+
+    db.bulk_insert_mappings(PresenceAgent, lignes)
+    db.commit()
+    print(f"  pointage des agents : {len(lignes)} pointages sur {len(jours)} jours.")
+
+
+def _recap_espaces(db: Session, eid: int) -> None:
+    print(f"\n  {'ESPACE':<22}{'CE QUE L ECRAN AFFICHE':<52}")
+    mesures = [
+        ("Bibliotheque", """
+            SELECT count(DISTINCT o.ouvrage_id) || ' ouvrages, ' ||
+                   count(DISTINCT e.exemplaire_id) || ' exemplaires, ' ||
+                   (SELECT count(*) FROM ss_emprunts em
+                    JOIN ss_exemplaires ex ON ex.exemplaire_id = em.exemplaire_id
+                    JOIN ss_ouvrages ou2 ON ou2.ouvrage_id = ex.ouvrage_id
+                    WHERE ou2.etablissement_id = :eid AND em.statut = 'EN_COURS')
+                   || ' prets en cours'
+            FROM ss_ouvrages o LEFT JOIN ss_exemplaires e ON e.ouvrage_id = o.ouvrage_id
+            WHERE o.etablissement_id = :eid"""),
+        ("Informatique", """
+            SELECT count(*) || ' equipements, ' ||
+                   count(*) FILTER (WHERE etat IN ('PANNE', 'A_REMPLACER')) || ' en panne'
+            FROM ss_equipements_informatiques WHERE etablissement_id = :eid"""),
+        ("Surveillance", """
+            SELECT count(*) || ' incidents, ' ||
+                   count(*) FILTER (WHERE statut = 'SIGNALE') || ' a traiter'
+            FROM ss_incidents WHERE etablissement_id = :eid"""),
+        ("Vie scolaire", """
+            SELECT count(*) || ' absences/retards, ' ||
+                   count(*) FILTER (WHERE est_justifie = 'N') || ' non justifies'
+            FROM ss_presences p
+            JOIN ss_inscriptions i ON i.inscription_id = p.inscription_id
+            JOIN ss_classes cl ON cl.classe_id = i.classe_id
+            WHERE cl.etablissement_id = :eid"""),
+        ("Personnel", """
+            SELECT count(*) || ' pointages, ' ||
+                   count(*) FILTER (WHERE statut = 'RETARD') || ' en retard'
+            FROM ss_presences_agents WHERE etablissement_id = :eid"""),
+    ]
+    for nom, requete in mesures:
+        print(f"  {nom:<22}{db.execute(text(requete), {'eid': eid}).scalar()}")
+
+    # L'ÉLÈVE QUE L'ÉCOLE DOIT VOIR
+    pire = db.execute(text("""
+        SELECT el.prenom || ' ' || el.nom AS eleve, cl.libelle AS classe,
+               count(*) AS absences,
+               count(*) FILTER (WHERE p.est_justifie = 'N') AS non_justifiees
+        FROM ss_presences p
+        JOIN ss_inscriptions i ON i.inscription_id = p.inscription_id
+        JOIN ss_eleves el ON el.eleve_id = i.eleve_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid AND p.statut_presence = 'ABSENT'
+        GROUP BY el.prenom, el.nom, cl.libelle
+        ORDER BY count(*) DESC LIMIT 1
+    """), {"eid": eid}).first()
+    if pire:
+        print(f"\n  Le dossier le plus lourd : {pire.eleve} ({pire.classe}) — "
+              f"{pire.absences} absences dont {pire.non_justifiees} non justifiees.")
+
+
 def _recap_communications(db: Session, eid: int) -> None:
     lignes = db.execute(text("""
         SELECT expediteur_type AS de, destinataire_type AS vers, objet_type AS objet,
@@ -3268,6 +3779,7 @@ ETAPES = {
     13: ("Paie mensuelle d'octobre a juin", etape_13_paie),
     14: ("Examens nationaux, admis et redoublants", etape_14_examens_nationaux),
     15: ("Communications : relances et echanges parents/instituteurs", etape_15_communications),
+    16: ("Les espaces : bibliotheque, informatique, surveillance, presences", etape_16_espaces),
 }
 
 

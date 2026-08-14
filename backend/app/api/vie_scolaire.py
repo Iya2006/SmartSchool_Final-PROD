@@ -115,35 +115,99 @@ def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depend
     return {"message": f"{count} présences enregistrées"}
 
 
+def _demi_journees_de_classe(debut: date_type, fin: date_type) -> int:
+    """Le nombre de demi-journées ouvrées entre deux dates, samedi et dimanche
+    exclus. C'est le dénominateur d'un taux de présence : sans lui, on ne
+    divise que par ce qui a été saisi."""
+    from datetime import timedelta
+
+    jours, jour = 0, debut
+    while jour <= fin:
+        if jour.weekday() < 5:
+            jours += 1
+        jour += timedelta(days=1)
+    return jours * 2
+
+
 @router.get("/presences/stats")
 def stats_presences(
     classe_id: Optional[int] = None,
+    debut: Optional[date_type] = None,
+    fin: Optional[date_type] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    """L'assiduité sur une période, y compris quand l'école ne note QUE les absences.
+
+    DEUX DÉFAUTS CORRIGÉS ICI
+
+    1. La fenêtre était figée à « les 30 derniers jours », sans que rien ne le
+       dise : une école qui ouvre cet écran en août — donc pendant les
+       vacances — lisait des zéros partout et concluait à une panne. Une école
+       raisonne par année scolaire, pas en jours glissants. La fenêtre est
+       désormais l'année en cours, bornée à aujourd'hui, et se règle.
+
+    2. `taux_presence` valait `presents / lignes saisies`. Or la plupart des
+       écoles ne saisissent QUE les absences : la présence est la règle, elle
+       n'est pas pointée élève par élève. Le taux affiché était alors 0 %
+       avec 6 219 absences enregistrées sur l'année — un chiffre que le
+       surveillant ne pouvait que croire faux. Le dénominateur est maintenant
+       ce qui était ATTENDU : effectif actif × demi-journées ouvrées.
+    """
+    from app.models.academique import AnneeScolaire
+
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == etablissement_id,
+        AnneeScolaire.est_courante == "O",
+    ).first()
+    aujourdhui = date_type.today()
+    debut = debut or (annee.date_debut if annee else aujourdhui.replace(month=1, day=1))
+    fin = fin or min(annee.date_fin if annee else aujourdhui, aujourdhui)
+    if fin < debut:
+        raise HTTPException(400, "La date de fin précède la date de début.")
+
     query = db.query(Presence).join(
         Inscription, Presence.inscription_id == Inscription.inscription_id
     ).join(
         Classe, Inscription.classe_id == Classe.classe_id
     ).filter(
         Classe.etablissement_id == etablissement_id,
-        Presence.date_presence >= func.current_date() - 30
+        Presence.date_presence >= debut,
+        Presence.date_presence <= fin,
+    )
+    effectif = db.query(func.count(Inscription.inscription_id)).join(
+        Classe, Inscription.classe_id == Classe.classe_id
+    ).filter(
+        Classe.etablissement_id == etablissement_id, Inscription.statut == "ACTIVE"
     )
 
     if classe_id:
         query = query.filter(Inscription.classe_id == classe_id)
+        effectif = effectif.filter(Inscription.classe_id == classe_id)
 
-    total = query.count()
-    presents = query.filter(Presence.statut_presence == "PRESENT").count()
+    saisies = query.count()
+    presents_saisis = query.filter(Presence.statut_presence == "PRESENT").count()
     absents = query.filter(Presence.statut_presence == "ABSENT").count()
     retards = query.filter(Presence.statut_presence == "RETARD").count()
+    non_justifiees = query.filter(
+        Presence.statut_presence == "ABSENT", Presence.est_justifie != "O"
+    ).count()
+
+    attendu = (effectif.scalar() or 0) * _demi_journees_de_classe(debut, fin)
+    # Si l'école pointe réellement chaque présence, le total attendu vaut au
+    # moins ce qu'elle a saisi : on ne veut pas d'un taux supérieur à 100 %.
+    attendu = max(attendu, saisies)
 
     return {
-        "total": total,
-        "presents": presents,
+        "debut": debut,
+        "fin": fin,
+        "attendu": attendu,
+        "total": saisies,
+        "presents": max(0, attendu - absents) if attendu else presents_saisis,
         "absents": absents,
+        "absences_non_justifiees": non_justifiees,
         "retards": retards,
-        "taux_presence": round(presents / total * 100, 1) if total > 0 else 0
+        "taux_presence": round((attendu - absents) / attendu * 100, 1) if attendu else 0,
     }
 
 

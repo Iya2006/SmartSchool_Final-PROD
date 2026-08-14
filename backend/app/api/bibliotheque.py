@@ -129,7 +129,19 @@ def stats_bibliotheque(
     total_exemplaires = db.query(func.coalesce(func.sum(Ouvrage.nb_exemplaires), 0)).filter(Ouvrage.etablissement_id == etablissement_id).scalar() or 0
     total_disponibles = db.query(func.coalesce(func.sum(Ouvrage.nb_disponibles), 0)).filter(Ouvrage.etablissement_id == etablissement_id).scalar() or 0
     emprunts_en_cours = db.query(Emprunt).join(Exemplaire).join(Ouvrage).filter(Ouvrage.etablissement_id == etablissement_id, Emprunt.statut.in_(["EN_COURS", "EN_RETARD"])).count()
-    retards = db.query(Emprunt).join(Exemplaire).join(Ouvrage).filter(Ouvrage.etablissement_id == etablissement_id, Emprunt.statut == "EN_RETARD").count()
+    # UN RETARD SE LIT SUR LE CALENDRIER, PAS SUR UN STATUT
+    # Ce compteur cherchait `statut == 'EN_RETARD'`. Or aucune ligne du
+    # logiciel n'écrit jamais cette valeur : un prêt reste « EN_COURS »
+    # jusqu'à son retour. Le tableau du bibliothécaire annonçait donc
+    # « 0 retard » en permanence — y compris avec 27 livres sortis depuis
+    # plus de deux mois. La date de retour prévue, elle, ne dépend d'aucun
+    # traitement nocturne : elle est déjà là.
+    retards = db.query(Emprunt).join(Exemplaire).join(Ouvrage).filter(
+        Ouvrage.etablissement_id == etablissement_id,
+        Emprunt.date_retour_effective.is_(None),
+        Emprunt.statut.in_(["EN_COURS", "EN_RETARD"]),
+        Emprunt.date_retour_prevue < date.today(),
+    ).count()
     categories = db.query(Ouvrage.categorie, func.count(Ouvrage.ouvrage_id)).filter(Ouvrage.etablissement_id == etablissement_id).group_by(Ouvrage.categorie).all()
     return {
         "total_ouvrages": total_ouvrages,
@@ -229,6 +241,165 @@ def create_exemplaire(
     db.commit()
     db.refresh(ex)
     return ex
+
+
+@router.get("/emprunts")
+def list_emprunts(
+    statut: Optional[str] = Query(None, description="EN_COURS, EN_RETARD ou RENDU"),
+    q: Optional[str] = Query(None, description="Titre, code d'exemplaire ou emprunteur"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, le=200),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Qui a quoi, et depuis quand.
+
+    Cette route n'existait pas. On pouvait enregistrer un prêt, jamais le
+    retrouver : le tableau du bibliothécaire affichait « 27 prêts en cours »
+    sans aucun moyen de savoir de quels livres il s'agissait ni chez qui ils
+    étaient. Un compteur sans liste derrière ne permet de récupérer aucun
+    ouvrage.
+    """
+    _require_read(current_user)
+
+    base = (
+        db.query(Emprunt, Exemplaire, Ouvrage)
+        .join(Exemplaire, Exemplaire.exemplaire_id == Emprunt.exemplaire_id)
+        .join(Ouvrage, Ouvrage.ouvrage_id == Exemplaire.ouvrage_id)
+        .filter(Ouvrage.etablissement_id == etablissement_id)
+    )
+
+    aujourdhui = date.today()
+    if statut == "RENDU":
+        base = base.filter(Emprunt.date_retour_effective.isnot(None))
+    elif statut == "EN_RETARD":
+        base = base.filter(
+            Emprunt.date_retour_effective.is_(None),
+            Emprunt.date_retour_prevue < aujourdhui,
+        )
+    elif statut == "EN_COURS":
+        base = base.filter(Emprunt.date_retour_effective.is_(None))
+
+    if q:
+        motif = f"%{q.strip()}%"
+        base = base.filter(or_(
+            Ouvrage.titre.ilike(motif),
+            Ouvrage.auteur.ilike(motif),
+            Exemplaire.code_exemplaire.ilike(motif),
+        ))
+
+    total = base.count()
+    lignes = (base.order_by(Emprunt.date_retour_prevue.asc())
+                  .offset(skip).limit(limit).all())
+
+    # Les noms des emprunteurs en DEUX requêtes, pas une par ligne : cette
+    # liste est celle qu'on ouvre en fin d'année avec des centaines de prêts.
+    eleve_ids = {e.eleve_id for e, _, _ in lignes if e.eleve_id}
+    ens_ids = {e.enseignant_id for e, _, _ in lignes if e.enseignant_id}
+    eleves = {
+        r.eleve_id: (f"{r.prenom} {r.nom}", r.matricule)
+        for r in db.query(Eleve.eleve_id, Eleve.prenom, Eleve.nom, Eleve.matricule)
+        .filter(Eleve.eleve_id.in_(eleve_ids)).all()
+    } if eleve_ids else {}
+    enseignants = {
+        r.enseignant_id: f"{r.prenom} {r.nom}"
+        for r in db.query(Enseignant.enseignant_id, Enseignant.prenom, Enseignant.nom)
+        .filter(Enseignant.enseignant_id.in_(ens_ids)).all()
+    } if ens_ids else {}
+
+    items = []
+    for emprunt, exemplaire, ouvrage in lignes:
+        rendu = emprunt.date_retour_effective is not None
+        # Le retard se recalcule à l'affichage tant que le livre est dehors :
+        # il grandit chaque jour, il ne peut pas être figé à l'écriture.
+        if rendu:
+            retard = int(emprunt.nb_jours_retard or 0)
+        else:
+            retard = max(0, (aujourdhui - emprunt.date_retour_prevue).days)
+        nom, matricule = (eleves.get(emprunt.eleve_id, (None, None))
+                          if emprunt.eleve_id else (enseignants.get(emprunt.enseignant_id), None))
+        items.append({
+            "emprunt_id": emprunt.emprunt_id,
+            "titre": ouvrage.titre,
+            "auteur": ouvrage.auteur,
+            "code_exemplaire": exemplaire.code_exemplaire,
+            "emprunteur": nom or "Emprunteur supprimé",
+            "type_emprunteur": "ELEVE" if emprunt.eleve_id else "ENSEIGNANT",
+            "matricule": matricule,
+            "date_emprunt": emprunt.date_emprunt,
+            "date_retour_prevue": emprunt.date_retour_prevue,
+            "date_retour_effective": emprunt.date_retour_effective,
+            "jours_de_retard": retard,
+            "en_retard": (not rendu) and retard > 0,
+            "statut": "RENDU" if rendu else ("EN_RETARD" if retard > 0 else "EN_COURS"),
+            "rappel_envoye": emprunt.rappel_envoye == "O",
+            "etat_retour": emprunt.etat_retour,
+        })
+    return {"total": total, "skip": skip, "limit": limit, "items": items}
+
+
+@router.post("/emprunts/{emprunt_id}/retour")
+def enregistrer_retour(
+    emprunt_id: int,
+    data: Optional[dict] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Le livre revient : l'exemplaire redevient prêtable.
+
+    Sans cette route, un exemplaire prêté restait « EMPRUNTE » à vie et
+    `nb_disponibles` ne remontait jamais — le fonds s'épuisait à l'écran sans
+    qu'un seul livre ait quitté l'école.
+    """
+    _require_write(current_user)
+
+    ligne = (
+        db.query(Emprunt, Exemplaire, Ouvrage)
+        .join(Exemplaire, Exemplaire.exemplaire_id == Emprunt.exemplaire_id)
+        .join(Ouvrage, Ouvrage.ouvrage_id == Exemplaire.ouvrage_id)
+        .filter(Emprunt.emprunt_id == emprunt_id,
+                Ouvrage.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not ligne:
+        raise HTTPException(status_code=404, detail="Emprunt introuvable")
+    emprunt, exemplaire, ouvrage = ligne
+    if emprunt.date_retour_effective is not None:
+        raise HTTPException(status_code=400, detail="Ce livre a déjà été rendu")
+
+    data = data or {}
+    etat = (data.get("etat_retour") or "BON").upper()
+    if etat not in {"BON", "USE", "ABIME", "PERDU"}:
+        raise HTTPException(status_code=400, detail="État de retour inconnu")
+
+    aujourdhui = date.today()
+    emprunt.date_retour_effective = aujourdhui
+    emprunt.nb_jours_retard = max(0, (aujourdhui - emprunt.date_retour_prevue).days)
+    emprunt.etat_retour = etat
+    emprunt.observation = data.get("observation") or emprunt.observation
+    emprunt.statut = "RENDU"
+    emprunt.modified_by = current_user.get("nom", current_user.get("sub", "SYSTEM"))
+
+    # Un livre perdu ne retourne pas au rayon : il sort du fonds prêtable.
+    exemplaire.etat = etat if etat in {"USE", "ABIME"} else exemplaire.etat
+    if etat == "PERDU":
+        exemplaire.statut = "PERDU"
+    else:
+        exemplaire.statut = "DISPONIBLE"
+        ouvrage.nb_disponibles = int(ouvrage.nb_disponibles or 0) + 1
+
+    db.commit()
+    return {
+        "emprunt_id": emprunt.emprunt_id,
+        "statut": emprunt.statut,
+        "jours_de_retard": emprunt.nb_jours_retard,
+        "message": (
+            f"Retour enregistré avec {emprunt.nb_jours_retard} jour(s) de retard."
+            if emprunt.nb_jours_retard else "Retour enregistré dans les délais."
+        ),
+    }
 
 
 @router.post("/emprunts", response_model=EmpruntOut, status_code=201)
