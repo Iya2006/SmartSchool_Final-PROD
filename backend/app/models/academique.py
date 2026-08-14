@@ -866,6 +866,15 @@ class DemandeEmploi(Base):
     classes_concernees = Column(Text)  # JSON array of classe_ids, or "TOUTES"
     statut = Column(String(30), default="EN_COURS")  # EN_COURS, CLOTUREE, EMPLOIS_GENERES, PUBLIEE
     trimestre = Column(Integer, nullable=True)  # 1, 2, 3 pour le système guinéen
+    # DE QUELLE ÉPREUVE PARLE-T-ON
+    # Une année ne contient pas que des compositions : à TrillionX, quatre
+    # évaluations et trois compositions. « Déposez vos sujets pour le 1er
+    # Semestre » reçu deux fois en deux mois ne dit pas s'il s'agit de la même
+    # épreuve. Nullable : une campagne peut viser toute la période.
+    # Voir migrations/2026_08_examens_01_type_epreuve.py
+    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=True)
+    # « avant le 7 novembre » : sans échéance, une relance ne s'appuie sur rien.
+    date_limite = Column(Date, nullable=True)
     date_creation = Column(DateTime, server_default=func.now())
     date_cloture = Column(DateTime, nullable=True)
 
@@ -961,6 +970,10 @@ class EmploiExamen(Base):
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
     trimestre = Column(Integer, nullable=False)
+    # Le calendrier porte les dates d'UNE épreuve : la 2ᵉ évaluation, la
+    # composition du 1er semestre. Deux calendriers du même semestre étaient
+    # indiscernables sans lire leurs créneaux.
+    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=True)
     titre = Column(String(255), nullable=False)
     date_debut = Column(Date, nullable=False)
     date_fin = Column(Date, nullable=False)

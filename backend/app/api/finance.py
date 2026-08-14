@@ -3810,6 +3810,7 @@ def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int)
             "prime_mensuelle": float(ens.prime_mensuelle or 0),
             "type_contrat": ens.type_contrat or "PERMANENT", "mobile_money": None,
             "type_agent": "ENSEIGNANT", "agent_id": emp_id,
+            "date_embauche": ens.date_embauche,
             "mode_remuneration": _r["mode"],
             "total_heures": _r["total_heures"],
             "explication_salaire": _r.get("explication", ""),
@@ -3826,6 +3827,9 @@ def _identifier_employe(employe_id_str: str, db: Session, etablissement_id: int)
             "prime_mensuelle": float(pers.prime_mensuelle or 0),
             "type_contrat": pers.type_contrat or "PERMANENT", "mobile_money": None,
             "type_agent": "PERSONNEL", "agent_id": emp_id,
+            # On ne doit rien a quelqu'un pour les mois qui precedent son
+            # arrivee : voir `_avant_embauche`.
+            "date_embauche": pers.date_embauche,
             # Un comptable, un surveillant, un gardien ne sont pas payes a
             # l'heure de cours : leur salaire est fixe, par mois.
             "mode_remuneration": "MENSUEL",
@@ -3988,6 +3992,9 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
     ).scalar()
     total_avances = float(avances_en_attente or 0)
 
+    # On ne doit rien a quelqu'un pour les mois qui precedent son arrivee.
+    avant_arrivee = _avant_embauche(infos.get("date_embauche"), mois_concerne)
+
     # Une retenue superieure au salaire donnerait un net negatif — un
     # « paiement » que l'ecole devrait recevoir de son employe.
     total_absences = min(total_absences, infos["salaire_base"] + total_primes)
@@ -4001,8 +4008,12 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
         "total_primes": total_primes,
         "total_absences": total_absences,
         "total_avances": total_avances,
-        "net_a_payer": max(net_a_payer, 0),
-        "statut": "NON_PAYE",
+        "net_a_payer": 0 if avant_arrivee else max(net_a_payer, 0),
+        # « Ce mois précède son arrivée » n'est pas la même chose que « rien à
+        # verser » : l'écran doit pouvoir le dire, pas juste afficher zéro.
+        "avant_embauche": avant_arrivee,
+        "date_embauche": str(infos["date_embauche"]) if infos.get("date_embauche") else None,
+        "statut": "AVANT_EMBAUCHE" if avant_arrivee else "NON_PAYE",
         "bulletin_id": None,
         "nom_complet": f"{infos['prenom']} {infos['nom']}",
         "details_absences": details_absences_texte,
@@ -4039,6 +4050,25 @@ def _lister_employes_actifs(db: Session, etablissement_id: int):
     ).all():
         refs.append(f"PERS_{pers.utilisateur_id}")
     return refs
+
+
+def _avant_embauche(date_embauche: Optional[date_type], mois_concerne: str) -> bool:
+    """Ce mois précède-t-il l'arrivée de la personne ?
+
+    ON NE DOIT RIEN À QUELQU'UN AVANT SON ARRIVÉE
+    La liste des arriérés parcourait les douze derniers mois glissants et
+    calculait un salaire pour chacun, sans jamais regarder la date d'embauche.
+    Un comptable recruté aujourd'hui apparaissait donc avec « Mois en retard
+    (12) — Total dû : 12 000 000 GNF », et un clic suffisait à lui verser une
+    année de salaire pour du travail qu'il n'a pas fourni.
+
+    Le mois d'arrivée est dû en entier : découper un salaire au prorata des
+    jours est une décision d'école, pas une règle du logiciel — et la trancher
+    ici en silence serait pire que de la laisser à la direction.
+    """
+    if not date_embauche or not mois_concerne:
+        return False
+    return mois_concerne < date_embauche.strftime("%Y-%m")
 
 
 def _lire_date(valeur) -> Optional[date_type]:
@@ -4095,6 +4125,12 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
     calc = _calculer_salaire(db, employe_id_str, mois_concerne, etablissement_id)
     if calc["statut"] == "PAYE":
         raise HTTPException(status_code=400, detail=f"{calc['nom_complet']} est déjà payé(e) pour {mois_concerne}")
+    if calc.get("avant_embauche"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{calc['nom_complet']} a été embauché(e) le "
+                   f"{calc['date_embauche']} : rien n'est dû pour {mois_concerne}.",
+        )
     if calc["net_a_payer"] <= 0:
         raise HTTPException(status_code=400, detail="Le net à payer calculé est nul ou négatif")
 
@@ -4372,13 +4408,25 @@ def arrieres_salaire_endpoint(
     NON payés avec un net à payer positif — permet au comptable de régler un ou
     plusieurs mois de retard manuellement, ou la totalité en un clic, plutôt que d'être
     limité au seul mois actuellement sélectionné dans le calendrier de paie.
+
+    LES MOIS D'AVANT L'ARRIVÉE NE SONT PAS DES ARRIÉRÉS
+    Cette liste parcourait les douze derniers mois sans jamais regarder la date
+    d'embauche. Un comptable recruté le jour même s'affichait avec « Mois en
+    retard (12) — Total dû : 12 000 000 GNF », et un clic suffisait à lui
+    verser une année de salaire pour du travail qu'il n'a pas fourni.
     """
     mois_du = []
     total_du = 0.0
+    ignores_avant_embauche = 0
+    embauche = None
     for mois in _mois_periode_paie(db, etablissement_id, nb_mois):
         try:
             calc = _calculer_salaire(db, employe_id_str, mois, etablissement_id)
         except HTTPException:
+            continue
+        if calc.get("avant_embauche"):
+            ignores_avant_embauche += 1
+            embauche = calc.get("date_embauche")
             continue
         if calc["statut"] != "PAYE" and calc["net_a_payer"] > 0:
             mois_du.append({
@@ -4390,7 +4438,15 @@ def arrieres_salaire_endpoint(
                 "net_a_payer": calc["net_a_payer"],
             })
             total_du += calc["net_a_payer"]
-    return {"mois_du": mois_du, "total_du": round(total_du, 2)}
+    return {
+        "mois_du": mois_du,
+        "total_du": round(total_du, 2),
+        # L'écran doit pouvoir expliquer pourquoi la liste est courte : « 11
+        # mois écartés, arrivé le 14/08/2026 » vaut mieux qu'une liste vide
+        # dont on se demande si elle est juste.
+        "mois_avant_embauche": ignores_avant_embauche,
+        "date_embauche": embauche,
+    }
 
 
 @router.post("/salaires/payer-plusieurs-mois")

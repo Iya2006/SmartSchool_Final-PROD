@@ -69,6 +69,14 @@ export default function CentreEvaluationPage() {
     const [demandeOuverte, setDemandeOuverte] = useState(false);
     const [demandePeriode, setDemandePeriode] = useState<number | null>(null);
     const [demandeMessage, setDemandeMessage] = useState('');
+    // DE QUELLE ÉPREUVE PARLE-T-ON
+    // Une année ne contient pas que des compositions : à TrillionX, quatre
+    // évaluations et trois compositions. « Déposez vos sujets pour le 1er
+    // Semestre » reçu deux fois en deux mois ne dit pas à l'enseignant s'il
+    // s'agit de la même chose.
+    const [typesEpreuve, setTypesEpreuve] = useState<{ type_eval_id: number; libelle: string }[]>([]);
+    const [demandeType, setDemandeType] = useState<number | null>(null);
+    const [demandeEcheance, setDemandeEcheance] = useState('');
     const [envoiDemande, setEnvoiDemande] = useState(false);
     const [searchQ, setSearchQ] = useState('');
     const [page, setPage] = useState(0);
@@ -128,17 +136,19 @@ export default function CentreEvaluationPage() {
             if (filterStatut) params.statut = filterStatut;
             if (searchQ.trim()) params.q = searchQ.trim();
 
-            const [sujR, statsR, perR, suiviR] = await Promise.all([
+            const [sujR, statsR, perR, suiviR, typesR] = await Promise.all([
                 api.get('/api/examens/sujets', { params }),
                 api.get(`/api/examens/admin/stats${filtre}`),
                 api.get('/api/examens/periodes').catch(() => ({ data: [] })),
                 api.get(`/api/examens/sujets/suivi${filtre}`).catch(() => ({ data: null })),
+                api.get('/api/evaluations/types').catch(() => ({ data: [] })),
             ]);
             setSujets(sujR.data);
             setTotalSujets(Number(sujR.headers?.['x-total-count'] ?? sujR.data.length));
             setStats(statsR.data);
             setPeriodes(perR.data || []);
             setSuivi(suiviR.data);
+            setTypesEpreuve((typesR.data || []).filter((t: any) => t.statut === 'ACTIF'));
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
     }, [filterTrimestre, filterStatut, searchQ, page]);
@@ -160,6 +170,8 @@ export default function CentreEvaluationPage() {
         try {
             const res = await api.post('/api/examens/sujets/demander', {
                 trimestre_id: periodeId,
+                type_eval_id: demandeType || undefined,
+                date_limite: demandeEcheance || undefined,
                 description: demandeMessage || undefined,
             });
             showSuccess(res.data.message || 'Demande envoyée aux enseignants.');
@@ -606,6 +618,28 @@ export default function CentreEvaluationPage() {
                                             <option key={p.trimestre_id} value={p.trimestre_id}>{p.libelle}</option>
                                         ))}
                                     </select>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div>
+                                        <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>ÉPREUVE</label>
+                                        <select value={demandeType ?? ''} onChange={e => setDemandeType(Number(e.target.value) || null)}
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13.5px', fontWeight: 600 }}>
+                                            <option value="">Toute la période</option>
+                                            {typesEpreuve.map(t => (
+                                                <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>À DÉPOSER AVANT LE</label>
+                                        <input type="date" value={demandeEcheance} onChange={e => setDemandeEcheance(e.target.value)}
+                                            min={new Date().toISOString().slice(0, 10)}
+                                            style={{ width: '100%', padding: '9px 12px', borderRadius: '10px', border: '1px solid var(--border-light)', fontSize: '13.5px', fontWeight: 600 }} />
+                                    </div>
+                                </div>
+                                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '-6px' }}>
+                                    Sans échéance, une relance ne s’appuie sur rien. Sans épreuve
+                                    précisée, la demande vaut pour toute la période.
                                 </div>
                                 <div>
                                     <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>MESSAGE (FACULTATIF)</label>

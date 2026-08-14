@@ -7,7 +7,7 @@ API pour le module Examens & Évaluations
 
 import os
 import shutil
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional, List
 from fastapi import (
     APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile,
@@ -21,7 +21,7 @@ from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import (
     SujetExamen, EmploiExamen, CreneauExamen, DemandeEmploi,
     Message, Enseignant, Matiere, Classe, Cycle, ClasseMatiere, Affectation,
-    Trimestre, AnneeScolaire
+    Trimestre, AnneeScolaire, TypeEvaluation
 )
 
 router = APIRouter(prefix="/api/examens", tags=["Examens"])
@@ -882,6 +882,11 @@ class DemandeSujets(BaseModel):
     trimestre_id: int
     titre: Optional[str] = None
     description: Optional[str] = None
+    # De quelle épreuve on parle : 2ᵉ évaluation, composition du semestre...
+    # Une année ne contient pas que des compositions.
+    type_eval_id: Optional[int] = None
+    # « avant le 7 novembre » : c'est l'échéance qui fait déposer à l'heure.
+    date_limite: Optional[date] = None
 
 
 @router.post("/sujets/demander", status_code=201)
@@ -902,10 +907,36 @@ def demander_sujets(
     """
     periode = _resoudre_periode(db, data.trimestre_id, None, etablissement_id)
 
-    titre = data.titre or f"Dépôt des sujets d'examen — {periode.libelle}"
+    # NOMMER L'ÉPREUVE, PAS SEULEMENT LA PÉRIODE
+    # « Merci de déposer vos sujets pour le 1er Semestre » reçu en novembre
+    # puis en décembre ne dit pas à l'enseignant s'il s'agit de la même chose.
+    # Une année compte quatre évaluations et trois compositions : chacune a
+    # ses sujets.
+    type_eval = None
+    if data.type_eval_id:
+        type_eval = db.query(TypeEvaluation).filter(
+            TypeEvaluation.type_eval_id == data.type_eval_id,
+            TypeEvaluation.etablissement_id == etablissement_id,
+        ).first()
+        if not type_eval:
+            raise HTTPException(404, "Type d'épreuve non trouvé")
+
+    if data.date_limite and data.date_limite < date.today():
+        raise HTTPException(
+            400,
+            "La date limite est déjà passée : les enseignants ne pourraient pas "
+            "la respecter.",
+        )
+
+    quoi = f"{type_eval.libelle} — {periode.libelle}" if type_eval else periode.libelle
+    titre = data.titre or f"Dépôt des sujets — {quoi}"
+    echeance = (
+        f" Merci de les déposer avant le {data.date_limite.strftime('%d/%m/%Y')}."
+        if data.date_limite else ""
+    )
     description = data.description or (
-        f"Merci de déposer vos sujets d'examen pour {periode.libelle} "
-        "depuis votre portail enseignant, onglet Examens."
+        f"Merci de déposer vos sujets de {quoi} depuis votre portail enseignant, "
+        f"onglet Examens.{echeance}"
     )
 
     demande = DemandeEmploi(
@@ -915,6 +946,8 @@ def demander_sujets(
         objet_type="EXAMENS",
         classes_concernees="TOUTES",
         trimestre=periode.numero,
+        type_eval_id=type_eval.type_eval_id if type_eval else None,
+        date_limite=data.date_limite,
     )
     db.add(demande)
     db.flush()
@@ -930,9 +963,11 @@ def demander_sujets(
     ))
     db.commit()
     return {
-        "message": "Demande envoyée à tous les enseignants.",
+        "message": f"Demande envoyée à tous les enseignants — {quoi}.",
         "demande_id": demande.demande_id,
         "periode": periode.libelle,
+        "epreuve": type_eval.libelle if type_eval else None,
+        "date_limite": str(data.date_limite) if data.date_limite else None,
     }
 
 
@@ -946,6 +981,10 @@ class EmploiExamenCreate(BaseModel):
     date_debut: str  # YYYY-MM-DD
     date_fin: str
     demande_id: Optional[int] = None
+    # De quelle épreuve ce calendrier porte les dates : 2ᵉ évaluation,
+    # composition du semestre... Deux calendriers du même semestre étaient
+    # indiscernables sans lire leurs créneaux.
+    type_eval_id: Optional[int] = None
 
 class CreneauExamenCreate(BaseModel):
     classe_id: int
@@ -961,20 +1000,44 @@ class CreneauExamenCreate(BaseModel):
 
 @router.post("/emploi", status_code=201)
 def creer_emploi_examen(data: EmploiExamenCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Créer un emploi du temps d'examen."""
-    from datetime import date as date_type
+    """Créer le calendrier d'une épreuve : ses dates, ses salles, ses surveillants.
+
+    Il porte les dates d'UNE épreuve — la 2ᵉ évaluation, la composition du
+    1er semestre — pas d'un semestre entier. Une année compte quatre
+    évaluations et trois compositions : sans le type, deux calendriers du même
+    semestre sont indiscernables.
+    """
+    type_eval = None
+    if data.type_eval_id:
+        type_eval = db.query(TypeEvaluation).filter(
+            TypeEvaluation.type_eval_id == data.type_eval_id,
+            TypeEvaluation.etablissement_id == etablissement_id,
+        ).first()
+        if not type_eval:
+            raise HTTPException(404, "Type d'épreuve non trouvé")
+
+    debut = datetime.strptime(data.date_debut, "%Y-%m-%d").date()
+    fin = datetime.strptime(data.date_fin, "%Y-%m-%d").date()
+    if fin < debut:
+        raise HTTPException(400, "La date de fin précède la date de début.")
+
     emploi = EmploiExamen(
         etablissement_id=etablissement_id,
         demande_id=data.demande_id,
         trimestre=data.trimestre,
+        type_eval_id=type_eval.type_eval_id if type_eval else None,
         titre=data.titre,
-        date_debut=datetime.strptime(data.date_debut, "%Y-%m-%d").date(),
-        date_fin=datetime.strptime(data.date_fin, "%Y-%m-%d").date(),
+        date_debut=debut,
+        date_fin=fin,
     )
     db.add(emploi)
     db.commit()
     db.refresh(emploi)
-    return {"message": "Emploi d'examen créé.", "emploi_examen_id": emploi.emploi_examen_id}
+    return {
+        "message": f"Calendrier « {emploi.titre} » créé.",
+        "emploi_examen_id": emploi.emploi_examen_id,
+        "epreuve": type_eval.libelle if type_eval else None,
+    }
 
 
 @router.get("/emploi")
@@ -984,12 +1047,21 @@ def lister_emplois_examen(trimestre: Optional[int] = None, db: Session = Depends
     if trimestre:
         q = q.filter(EmploiExamen.trimestre == trimestre)
     emplois = q.order_by(EmploiExamen.date_creation.desc()).all()
+    # Libellés des types en une requête : la boucle en émettrait un par
+    # calendrier sinon.
+    types = {
+        t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).filter(
+            TypeEvaluation.etablissement_id == etablissement_id
+        ).all()
+    }
     result = []
     for e in emplois:
         nb = db.query(CreneauExamen).filter(CreneauExamen.emploi_examen_id == e.emploi_examen_id).count()
         result.append({
             "emploi_examen_id": e.emploi_examen_id,
             "trimestre": e.trimestre,
+            "type_eval_id": e.type_eval_id,
+            "type_epreuve": types.get(e.type_eval_id),
             "titre": e.titre,
             "date_debut": str(e.date_debut),
             "date_fin": str(e.date_fin),
