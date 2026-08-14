@@ -2579,6 +2579,8 @@ NOMS_PERSONNEL = [
     ("Cisse", "Abdoulaye"), ("Sangare", "Salematou"),
 ]
 MOT_DE_PASSE_PERSONNEL = "TrillionX2026!"
+# Le compte de direction de l'ecole, celui qui pose les gestes de cloture.
+MOT_DE_PASSE_ADMIN = "Klay1982"
 
 
 def etape_12_personnel(db: Session) -> None:
@@ -3763,6 +3765,137 @@ def _recap_communications(db: Session, eid: int) -> None:
         print(f"     instituteur: {exemple.reponse[:88]}...")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ÉTAPE 17 — LA CLÔTURE
+#
+# « Quand on clôture l'année, l'admin de l'école va désactiver le compte
+#   comptable — seul lui aura accès à ça — sauf à la réouverture, ensuite il
+#   réactive pour la nouvelle année. »
+#
+# Cette étape ne se contente pas de poser un statut en base : elle rejoue la
+# séquence par l'API, avec de vrais jetons, et vérifie à chaque geste que la
+# porte est bien fermée puis bien rouverte. Un statut qui n'empêche pas de se
+# connecter n'est pas une clôture, c'est un libellé.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def etape_17_cloture(db: Session) -> None:
+    """Arrêter les comptes, fermer l'accès, puis rouvrir."""
+    from fastapi.testclient import TestClient
+
+    from main import app
+
+    _titre(17, "Cloture de l'annee : fermer puis rouvrir")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+    client = TestClient(app)
+
+    def _jeton(identifiant: str, mot_de_passe: str):
+        r = client.post("/api/auth/login",
+                        json={"identifiant": identifiant, "mot_de_passe": mot_de_passe})
+        return r
+
+    admin = db.execute(text("""
+        SELECT utilisateur_id, nom_utilisateur, email, prenom, nom FROM ss_utilisateurs
+        WHERE etablissement_id = :eid AND role = 'ADMIN' AND statut = 'ACTIF' LIMIT 1
+    """), {"eid": eid}).first()
+    comptables = db.execute(text("""
+        SELECT utilisateur_id, nom_utilisateur, prenom, nom, statut FROM ss_utilisateurs
+        WHERE etablissement_id = :eid AND role = 'COMPTABLE' ORDER BY utilisateur_id
+    """), {"eid": eid}).fetchall()
+    if not admin or not comptables:
+        print("  il faut un admin et au moins un comptable — etape 12 d'abord.")
+        return
+
+    # ── 1. L'ÉTAT DES COMPTES AVANT DE FERMER ────────────────────────────
+    # On ne clôture pas une année dont les comptes ne sont pas arrêtés.
+    bilan = db.execute(text("""
+        SELECT
+          (SELECT count(*) FROM ss_factures f
+             JOIN ss_inscriptions i ON i.inscription_id = f.inscription_id
+             JOIN ss_classes cl ON cl.classe_id = i.classe_id
+            WHERE cl.etablissement_id = :eid
+              AND f.montant_total - COALESCE(f.montant_paye, 0) > 0) AS factures_dues,
+          (SELECT COALESCE(sum(f.montant_total - COALESCE(f.montant_paye, 0)), 0)
+             FROM ss_factures f
+             JOIN ss_inscriptions i ON i.inscription_id = f.inscription_id
+             JOIN ss_classes cl ON cl.classe_id = i.classe_id
+            WHERE cl.etablissement_id = :eid
+              AND f.montant_total - COALESCE(f.montant_paye, 0) > 0) AS reste_du,
+          (SELECT count(*) FROM ss_bulletins_paie bp
+             JOIN ss_employes e ON e.employe_id = bp.employe_id
+            WHERE e.etablissement_id = :eid) AS bulletins_de_paie,
+          (SELECT count(*) FROM ss_emprunts em
+             JOIN ss_exemplaires ex ON ex.exemplaire_id = em.exemplaire_id
+             JOIN ss_ouvrages o ON o.ouvrage_id = ex.ouvrage_id
+            WHERE o.etablissement_id = :eid AND em.date_retour_effective IS NULL) AS livres_dehors
+    """), {"eid": eid}).first()
+
+    print("  Ce que la direction a sous les yeux avant de fermer :")
+    print(f"     scolarite non recouvree : {bilan.factures_dues} facture(s), "
+          f"{float(bilan.reste_du):,.0f} GNF".replace(",", " "))
+    print(f"     bulletins de paie emis  : {bilan.bulletins_de_paie}")
+    print(f"     livres non rendus       : {bilan.livres_dehors}")
+
+    # ── 2. QUI PEUT FERMER LE COMPTE COMPTABLE ───────────────────────────
+    identifiant_admin = admin.email or admin.nom_utilisateur
+    r = _jeton(identifiant_admin, MOT_DE_PASSE_ADMIN)
+    if r.status_code != 200:
+        print(f"  [!] connexion admin refusee ({r.status_code}) — verifiez le mot de passe.")
+        return
+    entete_admin = {"Authorization": f"Bearer {r.json()['token']}"}
+
+    cible = comptables[0]
+    r = _jeton(cible.nom_utilisateur, MOT_DE_PASSE_PERSONNEL)
+    comptable_entrait = r.status_code == 200
+    entete_comptable = ({"Authorization": f"Bearer {r.json()['token']}"}
+                        if comptable_entrait else None)
+    print(f"\n  Avant cloture, {cible.prenom} {cible.nom} se connecte : "
+          f"{'oui' if comptable_entrait else 'NON'}")
+
+    # Le comptable ne doit pas pouvoir se fermer ni se rouvrir lui-même :
+    # c'est le geste de la direction, et de personne d'autre.
+    if entete_comptable:
+        r = client.patch(f"/api/personnel/{cible.utilisateur_id}/statut?statut=INACTIF",
+                         headers=entete_comptable)
+        print(f"  Le comptable ferme lui-meme son compte  : {r.status_code} "
+              f"({'refuse' if r.status_code in (401, 403) else 'ACCEPTE — anomalie'})")
+
+    # ── 3. LA DIRECTION FERME ────────────────────────────────────────────
+    r = client.patch(f"/api/personnel/{cible.utilisateur_id}/statut?statut=INACTIF",
+                     headers=entete_admin)
+    print(f"  La direction ferme le compte             : {r.status_code} "
+          f"— {r.json().get('message', r.json().get('detail'))}")
+
+    r = _jeton(cible.nom_utilisateur, MOT_DE_PASSE_PERSONNEL)
+    print(f"  Apres cloture, il se connecte            : "
+          f"{'OUI — LA PORTE EST RESTEE OUVERTE' if r.status_code == 200 else 'non'}")
+
+    # ── 4. LA RÉOUVERTURE ────────────────────────────────────────────────
+    r = client.patch(f"/api/personnel/{cible.utilisateur_id}/statut?statut=ACTIF",
+                     headers=entete_admin)
+    print(f"\n  A la reouverture, la direction rouvre    : {r.status_code}")
+    r = _jeton(cible.nom_utilisateur, MOT_DE_PASSE_PERSONNEL)
+    print(f"  Il se reconnecte                         : "
+          f"{'oui' if r.status_code == 200 else 'NON — le compte est reste ferme'}")
+
+    # ── 5. CE QU'ON NE DOIT JAMAIS POUVOIR FERMER ────────────────────────
+    r = client.patch(f"/api/personnel/{admin.utilisateur_id}/statut?statut=INACTIF",
+                     headers=entete_admin)
+    print(f"\n  L'admin ferme son propre compte          : {r.status_code} "
+          f"— {r.json().get('detail', r.json().get('message'))}")
+
+    db.expire_all()
+    etat = db.execute(text("""
+        SELECT prenom, nom, role, statut FROM ss_utilisateurs
+        WHERE etablissement_id = :eid AND role IN ('ADMIN', 'COMPTABLE')
+        ORDER BY role, utilisateur_id
+    """), {"eid": eid}).fetchall()
+    print(f"\n  {'PERSONNE':<28}{'ROLE':<14}{'STATUT'}")
+    for p in etat:
+        print(f"  {p.prenom + ' ' + p.nom:<28}{p.role:<14}{p.statut}")
+
+
 ETAPES = {
     1: ("Referentiel (cycles, niveaux, matieres, annee, semestres)", etape_1_referentiel),
     2: ("Classes et grille horaire", etape_2_classes),
@@ -3780,6 +3913,7 @@ ETAPES = {
     14: ("Examens nationaux, admis et redoublants", etape_14_examens_nationaux),
     15: ("Communications : relances et echanges parents/instituteurs", etape_15_communications),
     16: ("Les espaces : bibliotheque, informatique, surveillance, presences", etape_16_espaces),
+    17: ("Cloture de l'annee : fermer le compte comptable, puis rouvrir", etape_17_cloture),
 }
 
 
