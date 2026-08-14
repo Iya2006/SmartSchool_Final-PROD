@@ -158,6 +158,67 @@ def create_equipement(
     return _equipement_to_dict(item)
 
 
+# Le vocabulaire de l'état d'une machine. Il n'était écrit nulle part : le
+# formulaire proposait BON/PANNE/A_REMPLACER, le compteur « en panne » lisait
+# ces deux dernières valeurs, et rien n'empêchait d'en écrire une troisième
+# par une autre voie — une machine avec un état inventé disparaissait alors
+# du compteur sans que personne ne le voie.
+ETATS_EQUIPEMENT = {"BON", "PANNE", "A_REMPLACER"}
+
+
+@router.put("/equipements/{equipement_id}")
+def update_equipement(
+    equipement_id: int,
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Change l'état d'une machine, sa salle ou son observation.
+
+    Il n'existait aucun moyen de modifier un équipement : une machine qui
+    tombait en panne restait « BON » à vie, sauf à la recréer sous un autre
+    code. Le compteur de pannes de l'informaticien ne pouvait donc que
+    refléter l'état du jour de l'inventaire, jamais l'état réel du parc.
+    """
+    _require_write(current_user)
+    item = db.query(EquipementInformatique).filter(
+        EquipementInformatique.equipement_id == equipement_id,
+        EquipementInformatique.etablissement_id == etablissement_id,
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Équipement introuvable")
+
+    if "etat" in data:
+        etat = (data.get("etat") or "").upper()
+        if etat not in ETATS_EQUIPEMENT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"État inconnu. Valeurs acceptées : {', '.join(sorted(ETATS_EQUIPEMENT))}",
+            )
+        item.etat = etat
+        # Une machine à remplacer ne sert plus : elle sort du parc actif.
+        item.statut = "HORS_SERVICE" if etat == "A_REMPLACER" else "ACTIF"
+
+    if "salle_id" in data:
+        salle_id = data.get("salle_id")
+        if salle_id and not db.query(Salle.salle_id).filter(
+            Salle.salle_id == salle_id, Salle.etablissement_id == etablissement_id
+        ).first():
+            raise HTTPException(status_code=404, detail="Salle introuvable")
+        item.salle_id = salle_id
+
+    if "observation" in data:
+        item.observation = data.get("observation") or None
+    if "derniere_maintenance" in data:
+        valeur = data.get("derniere_maintenance")
+        item.derniere_maintenance = date.fromisoformat(valeur) if valeur else None
+
+    db.commit()
+    db.refresh(item)
+    return _equipement_to_dict(item)
+
+
 @router.get("/tickets")
 def list_tickets(
     etablissement_id: int = Depends(require_etablissement),

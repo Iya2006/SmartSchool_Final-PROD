@@ -1576,6 +1576,54 @@ function InformaticienPortal() {
 
     useEffect(() => { loadIt(); }, [loadIt]);
 
+    /* ═══ CLORE UN TICKET ═══
+       L'ecran creait des tickets sans jamais pouvoir en fermer un : la route
+       existait, elle n'etait appelee nulle part. « Tickets ouverts » ne
+       pouvait donc que grandir, et l'indicateur devenait faux des le premier
+       depannage reussi. */
+    const [ticketEnCours, setTicketEnCours] = useState<number | null>(null);
+
+    const resoudreTicket = async (ticket: TicketInfo) => {
+        const resolution = window.prompt(
+            `Qu'avez-vous fait pour « ${ticket.titre} » ?`,
+            'Reparation effectuee');
+        if (!resolution || !resolution.trim()) return;
+        setTicketEnCours(ticket.ticket_id);
+        setError(null);
+        setSuccess(null);
+        try {
+            await api.put(
+                `/api/informatique/tickets/${ticket.ticket_id}/resoudre?resolution=${encodeURIComponent(resolution.trim())}`);
+            setSuccess(`Ticket « ${ticket.titre} » resolu.`);
+            await loadIt();
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setTicketEnCours(null);
+        }
+    };
+
+    /* ═══ CHANGER L'ETAT D'UNE MACHINE ═══
+       Une machine qui tombait en panne restait « BON » a vie, sauf a la
+       recreer sous un autre code : le compteur de pannes refletait l'etat du
+       jour de l'inventaire, jamais l'etat reel du parc. */
+    const [equipEnCours, setEquipEnCours] = useState<number | null>(null);
+
+    const changerEtat = async (equipement: EquipementInfo, etat: string) => {
+        setEquipEnCours(equipement.equipement_id);
+        setError(null);
+        setSuccess(null);
+        try {
+            await api.put(`/api/informatique/equipements/${equipement.equipement_id}`, { etat });
+            setSuccess(`${equipement.code} — ${equipement.nom} : ${etat === 'BON' ? 'remis en service' : etat === 'PANNE' ? 'signale en panne' : 'a remplacer'}.`);
+            await loadIt();
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setEquipEnCours(null);
+        }
+    };
+
     const submitIt = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         setSaving(true);
@@ -1661,10 +1709,10 @@ function InformaticienPortal() {
                 <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: '20px', alignItems: 'start' }}>
                     <main style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                         <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #f0f9ff)' }}><p style={{ margin: 0, fontSize: '12px', color: '#0284c7', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Inventaire réel</p><h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Parc matériel</h2></div>
-                        {loading ? <div style={{ minHeight: '260px', display: 'grid', placeItems: 'center', color: '#0284c7', fontWeight: 900 }}><Loader2 size={28} className="animate-spin" /> Chargement informatique…</div> : equipements.length === 0 ? <div style={{ padding: '52px 24px', textAlign: 'center' }}><div style={{ width: 84, height: 84, borderRadius: '28px', margin: '0 auto 18px', background: '#f0f9ff', color: '#0284c7', display: 'grid', placeItems: 'center' }}><Monitor size={34} /></div><h3 style={{ margin: 0, color: '#0c4a6e', fontSize: '22px', fontWeight: 950 }}>Aucun équipement inventorié</h3><p style={{ margin: '10px auto 0', maxWidth: '520px', color: '#64748b', lineHeight: 1.7 }}>Ajoutez les ordinateurs, imprimantes et projecteurs pour construire le parc réel.</p></div> : <div style={{ padding: '20px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(235px, 1fr))', gap: '14px' }}>{equipements.map((eq) => <article key={eq.equipement_id} style={{ padding: '16px', borderRadius: '20px', background: '#fcfdff', border: '1px solid #edf2f7' }}><div style={{ width: 48, height: 48, borderRadius: '16px', background: 'linear-gradient(135deg, #0284c7, #7c3aed)', color: 'white', display: 'grid', placeItems: 'center', marginBottom: '12px' }}><Monitor size={22} /></div><h3 style={{ margin: 0, color: '#0f172a', fontSize: '16px', fontWeight: 950 }}>{eq.nom}</h3><p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px', fontWeight: 750 }}>{eq.code} • {eq.type_equipement}</p><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}><span style={{ padding: '6px 9px', borderRadius: 999, background: eq.etat === 'BON' ? '#f0fdf4' : '#fff7ed', color: eq.etat === 'BON' ? '#166534' : '#9a3412', fontSize: '11px', fontWeight: 900 }}>{eq.etat}</span>{eq.marque && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#f8fafc', color: '#475569', fontSize: '11px', fontWeight: 900 }}>{eq.marque}</span>}</div></article>)}</div>}
+                        {loading ? <div style={{ minHeight: '260px', display: 'grid', placeItems: 'center', color: '#0284c7', fontWeight: 900 }}><Loader2 size={28} className="animate-spin" /> Chargement informatique…</div> : equipements.length === 0 ? <div style={{ padding: '52px 24px', textAlign: 'center' }}><div style={{ width: 84, height: 84, borderRadius: '28px', margin: '0 auto 18px', background: '#f0f9ff', color: '#0284c7', display: 'grid', placeItems: 'center' }}><Monitor size={34} /></div><h3 style={{ margin: 0, color: '#0c4a6e', fontSize: '22px', fontWeight: 950 }}>Aucun équipement inventorié</h3><p style={{ margin: '10px auto 0', maxWidth: '520px', color: '#64748b', lineHeight: 1.7 }}>Ajoutez les ordinateurs, imprimantes et projecteurs pour construire le parc réel.</p></div> : <div style={{ padding: '20px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(235px, 1fr))', gap: '14px' }}>{equipements.map((eq) => <article key={eq.equipement_id} style={{ padding: '16px', borderRadius: '20px', background: '#fcfdff', border: '1px solid #edf2f7' }}><div style={{ width: 48, height: 48, borderRadius: '16px', background: 'linear-gradient(135deg, #0284c7, #7c3aed)', color: 'white', display: 'grid', placeItems: 'center', marginBottom: '12px' }}><Monitor size={22} /></div><h3 style={{ margin: 0, color: '#0f172a', fontSize: '16px', fontWeight: 950 }}>{eq.nom}</h3><p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px', fontWeight: 750 }}>{eq.code} • {eq.type_equipement}</p><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}><span style={{ padding: '6px 9px', borderRadius: 999, background: eq.etat === 'BON' ? '#f0fdf4' : '#fff7ed', color: eq.etat === 'BON' ? '#166534' : '#9a3412', fontSize: '11px', fontWeight: 900 }}>{eq.etat}</span>{eq.marque && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#f8fafc', color: '#475569', fontSize: '11px', fontWeight: 900 }}>{eq.marque}</span>}</div><div style={{ display: 'flex', gap: '5px', marginTop: '12px', flexWrap: 'wrap' }}>{([{ e: 'BON', l: 'En service', c: '#16a34a' }, { e: 'PANNE', l: 'En panne', c: '#f59e0b' }, { e: 'A_REMPLACER', l: 'A remplacer', c: '#dc2626' }]).map((o) => (<button key={o.e} type="button" disabled={equipEnCours === eq.equipement_id || eq.etat === o.e} onClick={() => changerEtat(eq, o.e)} style={{ padding: '6px 10px', borderRadius: '10px', border: eq.etat === o.e ? `1px solid ${o.c}` : '1px solid #e2e8f0', background: eq.etat === o.e ? o.c : 'white', color: eq.etat === o.e ? 'white' : '#64748b', fontSize: '11px', fontWeight: 800, cursor: eq.etat === o.e ? 'default' : 'pointer' }}>{o.l}</button>))}</div>{eq.observation && <p style={{ margin: '9px 0 0', fontSize: '11.5px', color: '#94a3b8', lineHeight: 1.5 }}>{eq.observation}</p>}</article>)}</div>}
                     </main>
                     <aside style={{ display: 'flex', flexDirection: 'column', gap: '18px', position: 'sticky', top: '24px' }}>
-                        <div style={{ background: 'white', borderRadius: '28px', border: '1px solid #e2e8f0', boxShadow: '0 22px 54px rgba(15,23,42,0.06)', padding: '22px' }}><p style={{ margin: 0, fontSize: '12px', color: '#0284c7', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Tickets de panne</p><div style={{ marginTop: '14px', display: 'grid', gap: '10px' }}>{tickets.length === 0 ? <p style={{ margin: 0, color: '#64748b', lineHeight: 1.7, fontSize: '13px' }}>Aucun ticket ouvert pour le moment.</p> : tickets.slice(0, 8).map((ticket) => <div key={ticket.ticket_id} style={{ padding: '12px 14px', borderRadius: '16px', background: '#f8fafc', border: '1px solid #f1f5f9' }}><div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}><strong style={{ color: '#0f172a', fontSize: '13px' }}>{ticket.titre}</strong><span style={{ color: ticket.priorite === 'URGENTE' ? '#dc2626' : '#f59e0b', fontSize: '11px', fontWeight: 900 }}>{ticket.priorite}</span></div><p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '12px', lineHeight: 1.55 }}>{ticket.description}</p></div>)}</div></div>
+                        <div style={{ background: 'white', borderRadius: '28px', border: '1px solid #e2e8f0', boxShadow: '0 22px 54px rgba(15,23,42,0.06)', padding: '22px' }}><p style={{ margin: 0, fontSize: '12px', color: '#0284c7', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Tickets de panne</p><div style={{ marginTop: '14px', display: 'grid', gap: '10px' }}>{tickets.length === 0 ? <p style={{ margin: 0, color: '#64748b', lineHeight: 1.7, fontSize: '13px' }}>Aucun ticket ouvert pour le moment.</p> : tickets.slice(0, 8).map((ticket) => <div key={ticket.ticket_id} style={{ padding: '12px 14px', borderRadius: '16px', background: '#f8fafc', border: '1px solid #f1f5f9' }}><div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}><strong style={{ color: '#0f172a', fontSize: '13px' }}>{ticket.titre}</strong><span style={{ color: ticket.priorite === 'URGENTE' ? '#dc2626' : '#f59e0b', fontSize: '11px', fontWeight: 900 }}>{ticket.priorite}</span></div><p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '12px', lineHeight: 1.55 }}>{ticket.description}</p>{ticket.statut === 'RESOLU' ? <p style={{ margin: '8px 0 0', fontSize: '11.5px', color: '#166534', fontWeight: 800 }}>Resolu</p> : <button type="button" disabled={ticketEnCours === ticket.ticket_id} onClick={() => resoudreTicket(ticket)} style={{ marginTop: '9px', padding: '7px 13px', borderRadius: '11px', border: 'none', background: '#0284c7', color: 'white', fontSize: '12px', fontWeight: 800, cursor: ticketEnCours === ticket.ticket_id ? 'wait' : 'pointer' }}>{ticketEnCours === ticket.ticket_id ? 'Enregistrement…' : 'Marquer resolu'}</button>}</div>)}</div></div>
                         <div style={{ background: '#0c4a6e', color: 'white', borderRadius: '28px', boxShadow: '0 22px 54px rgba(12,74,110,0.20)', padding: '22px' }}><p style={{ margin: 0, fontSize: '12px', color: '#bae6fd', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Référence PDF</p><h3 style={{ margin: '8px 0 0', fontSize: '20px', fontWeight: 950 }}>Salle informatique</h3><p style={{ margin: '10px 0 0', color: 'rgba(255,255,255,0.78)', lineHeight: 1.75, fontSize: '13px' }}>Planning, inventaire matériel, pannes et support interne sont les axes du portail IT.</p></div>
                     </aside>
                 </section>
