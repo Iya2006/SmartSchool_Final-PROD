@@ -4437,8 +4437,14 @@ def _mois_periode_paie(db: Session, etablissement_id: int, nb_mois_fallback: int
         ).first()
         if annee and annee.date_debut and annee.date_fin:
             debut = annee.date_debut.strftime("%Y-%m")
-            fin = min(annee.date_fin.strftime("%Y-%m"),
+            # La fenêtre court jusqu'au MOIS EN COURS, même passé la fin de
+            # l'année scolaire : le personnel reste employé en juillet et août,
+            # et l'école le paie. La borner à juin faisait disparaître le mois
+            # que le comptable a sous les yeux — l'écran proposait « Payer ce
+            # mois » pendant que la liste des arriérés répondait « à jour ».
+            fin = max(annee.date_fin.strftime("%Y-%m"),
                       date_type.today().strftime("%Y-%m"))
+            fin = min(fin, date_type.today().strftime("%Y-%m"))
             return _mois_entre(debut, fin) if debut <= fin else []
         return _derniers_mois(nb_mois_fallback)
     mois_fin = (settings.get("salaires_mois_fin") or "").strip() or date_type.today().strftime("%Y-%m")

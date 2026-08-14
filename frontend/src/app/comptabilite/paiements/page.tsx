@@ -222,7 +222,7 @@ function GestionPaiements() {
     // mois (base + primes - absences - avances) — jamais un montant libre. On liste
     // ici TOUS les mois en retard (pas seulement le mois sélectionné dans le
     // calendrier), pour permettre de régler un mois précis ou la totalité en un clic.
-    const [arrieres, setArrieres] = useState<{ mois_du: any[]; total_du: number } | null>(null);
+    const [arrieres, setArrieres] = useState<{ mois_du: any[]; total_du: number; mois_avant_embauche?: number; date_embauche?: string | null } | null>(null);
     const [arrieresLoading, setArrieresLoading] = useState(false);
     const [arrieresError, setArrieresError] = useState(false);
     const [moisSelectionnes, setMoisSelectionnes] = useState<string[]>([]);
@@ -231,7 +231,7 @@ function GestionPaiements() {
         if (!selectedEns) { setArrieres(null); setMoisSelectionnes([]); setArrieresError(false); return; }
         setArrieresLoading(true);
         setArrieresError(false);
-        api.get(`/api/finance/salaires/arrieres/${selectedEns.id}?etablissement_id=1&nb_mois=12`)
+        api.get(`/api/finance/salaires/arrieres/${selectedEns.id}`)
             .then(res => {
                 setArrieres(res.data);
                 setMoisSelectionnes((res.data?.mois_du || []).map((m: any) => m.mois_concerne));
@@ -1909,7 +1909,20 @@ function GestionPaiements() {
                                             </div>
                                         ) : (
                                             <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '14px 16px' }}>
-                                                <p style={{ margin: 0, fontSize: '13px', color: '#166534', fontWeight: 600 }}>À jour — aucun mois en retard sur les 12 derniers mois.</p>
+                                                {/* « sur les 12 derniers mois » était faux : la fenêtre suit
+                                                    l'année scolaire, qui ne fait pas douze mois. Et un
+                                                    nouvel arrivé n'est pas « à jour », il vient d'arriver —
+                                                    deux situations différentes qui méritent deux phrases. */}
+                                                <p style={{ margin: 0, fontSize: '13px', color: '#166534', fontWeight: 600 }}>
+                                                    {(arrieres?.mois_avant_embauche || 0) > 0
+                                                        ? `Aucun arriéré : arrivé(e) le ${arrieres?.date_embauche}.`
+                                                        : 'À jour — aucun mois en retard sur l’année scolaire.'}
+                                                </p>
+                                                {(arrieres?.mois_avant_embauche || 0) > 0 && (
+                                                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#15803d' }}>
+                                                        {arrieres?.mois_avant_embauche} mois écarté(s) : ils précèdent son embauche.
+                                                    </p>
+                                                )}
                                             </div>
                                         )}
                                         <button
