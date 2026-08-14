@@ -637,7 +637,8 @@ function BulletinsContent() {
 
                                         {/* ═══ TABLEAU DES NOTES ═══ */}
                                         <div style={{ padding: '0 28px' }}>
-                                            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '16px' }}>
+                                            <div className="table-scroll">
+                                            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '16px', minWidth: '480px' }}>
                                                 <thead>
                                                     <tr style={{ background: 'linear-gradient(135deg, #064e3b, #059669)' }}>
                                                         {/* Trois colonnes seulement : coefficient, moyenne, appréciation.
@@ -687,6 +688,7 @@ function BulletinsContent() {
                                                     )}
                                                 </tbody>
                                             </table>
+                                            </div>
                                         </div>
 
                                         {/* ═══ RÉSULTATS GÉNÉRAUX ═══ */}

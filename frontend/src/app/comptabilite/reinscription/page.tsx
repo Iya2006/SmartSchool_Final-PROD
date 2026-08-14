@@ -266,7 +266,8 @@ export default function ReinscriptionPage() {
                 <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><Loader2 size={32} className="animate-spin" color="#10b981" /></div>
             ) : (
                 <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <div className="table-scroll">
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: '700px' }}>
                         <thead>
                             <tr style={{ background: 'linear-gradient(135deg, #f8fafc, #f1f5f9)', borderBottom: '2px solid #e2e8f0' }}>
                                 {['Élève', 'Matricule', 'Décision', 'Frais générés', 'Statut', 'Action'].map(h => (
@@ -340,6 +341,7 @@ export default function ReinscriptionPage() {
                             })}
                         </tbody>
                     </table>
+                    </div>
                     <Pagination page={page} pageSize={PAGE_SIZE} total={filtered.length} onPageChange={setPage} />
                 </div>
             )}
@@ -376,7 +378,8 @@ export default function ReinscriptionPage() {
                 </div>
             ) : (
                 <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <div className="table-scroll">
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: '600px' }}>
                         <thead>
                             <tr style={{ background: 'linear-gradient(135deg, #f8fafc, #f1f5f9)', borderBottom: '2px solid #e2e8f0' }}>
                                 {['Élève', 'Matricule', 'Classe actuelle', 'Moyenne', 'Filière'].map(h => (
@@ -403,6 +406,7 @@ export default function ReinscriptionPage() {
                             ))}
                         </tbody>
                     </table>
+                    </div>
                 </div>
             )}
 

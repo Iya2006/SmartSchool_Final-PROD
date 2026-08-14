@@ -274,7 +274,8 @@ export default function RapportsPage() {
                                     </div>
 
                                     <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: '#1e293b' }}>Détails des encaissements par classe</h3>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 30 }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 30, minWidth: '600px' }}>
                                         <thead>
                                             <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                                                 <th style={{ padding: 12, textAlign: 'left', fontWeight: 600 }}>Classe</th>
@@ -292,6 +293,7 @@ export default function RapportsPage() {
                                             ))}
                                         </tbody>
                                     </table>
+                                    </div>
 
                                     <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 12, color: '#1e293b' }}>Historique chronologique des transactions</h3>
                                     {(() => {
@@ -350,7 +352,8 @@ export default function RapportsPage() {
 
                                                             {(isExpanded || paiementsGroup.length === 1) && (
                                                                 <div style={{ background: '#f8fafc', padding: '16px 20px', borderTop: '1px solid #e2e8f0' }}>
-                                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                                                    <div className="table-scroll">
+                                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: '480px' }}>
                                                                         <thead>
                                                                             <tr style={{ borderBottom: '1px solid #cbd5e1' }}>
                                                                                 <th style={{ padding: '8px 0', textAlign: 'left', color: '#64748b', fontWeight: 600 }}>Reçu</th>
@@ -370,6 +373,7 @@ export default function RapportsPage() {
                                                                             ))}
                                                                         </tbody>
                                                                     </table>
+                                                                    </div>
                                                                 </div>
                                                             )}
                                                         </div>

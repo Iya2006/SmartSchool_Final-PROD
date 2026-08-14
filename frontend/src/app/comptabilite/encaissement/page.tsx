@@ -403,7 +403,8 @@ function EncaissementContent() {
                     {/* Results Table */}
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}
                         style={{ background: '#fff', borderRadius: 14, boxShadow: '0 1px 4px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                        <div className="table-scroll">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: '820px' }}>
                             <thead>
                                 <tr style={{ background: 'linear-gradient(135deg, #f8fafc, #f1f5f9)', borderBottom: '2px solid #e2e8f0' }}>
                                     {['Élève', 'Matricule', 'Classe', 'Total Facturé', 'Total Payé', 'Reste', 'Taux', 'Action'].map(h => (
@@ -473,6 +474,7 @@ function EncaissementContent() {
                                 ))}
                             </tbody>
                         </table>
+                        </div>
                         <Pagination page={resultsPage} pageSize={RESULTS_PAGE_SIZE} total={searchResults.length} onPageChange={setResultsPage} />
                     </motion.div>
                 </>

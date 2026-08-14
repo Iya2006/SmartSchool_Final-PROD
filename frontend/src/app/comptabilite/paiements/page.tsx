@@ -932,9 +932,15 @@ function GestionPaiements() {
                         </div>
                     </div>
 
-                    {/* Tableau des paiements */}
+                    {/* Tableau des paiements — `overflow: hidden` sur cette carte
+                        tronquait silencieusement les colonnes qui ne
+                        tenaient pas dans la largeur au lieu de les rendre
+                        défilables. Le défilement horizontal vit maintenant
+                        sur un wrapper interne dédié, la carte garde son
+                        `overflow: hidden` pour les coins arrondis. */}
                     <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                        <div className="table-scroll">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '820px' }}>
                             <thead>
                                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                                     {['N Recu', 'Date', 'Eleve', 'Montant', 'Mode', 'N Facture', 'Statut', 'Actions'].map(h => (
@@ -1030,6 +1036,7 @@ function GestionPaiements() {
                                 )}
                             </tbody>
                         </table>
+                        </div>
                         <Pagination page={pagePaiements} pageSize={pageSize} total={totalPaiements} onPageChange={setPagePaiements} />
                     </div>
                 </div>
@@ -1332,9 +1339,11 @@ function GestionPaiements() {
                         })}
                     </div>
 
-                    {/* Tableau des decaissements */}
+                    {/* Tableau des decaissements — meme correctif que le tableau
+                        des paiements ci-dessus. */}
                     <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                        <div className="table-scroll">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '760px' }}>
                             <thead>
                                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                                     {['Date', 'Categorie', 'Description', 'Fournisseur', 'Reference', 'Montant', 'Statut'].map(h => (
@@ -1377,6 +1386,7 @@ function GestionPaiements() {
                                 )}
                             </tbody>
                         </table>
+                        </div>
                         <Pagination page={pageDepenses} pageSize={pageSize} total={totalDepenses} onPageChange={setPageDepenses} />
                     </div>
 

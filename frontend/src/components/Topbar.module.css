@@ -47,6 +47,29 @@
     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 
+/* Bouton hamburger — masque au-dessus de 768px (remplace .sidebarToggle,
+   qui pilote le rail icone-seule desktop, sans equivalent utile sur
+   mobile). */
+.mobileMenuBtn {
+    display: none;
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    border: 1px solid #e2e8f0;
+    background: rgba(248, 250, 252, 0.95);
+    color: #334155;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.mobileMenuBtn:hover {
+    background: #ffffff;
+    color: var(--brand-secondary);
+}
+
 .searchShell {
     position: relative;
     flex: 1;
@@ -290,5 +313,21 @@
 
     .searchShell {
         max-width: none;
+    }
+}
+
+/* Sous 768px, la sidebar est un tiroir masque : ne reserve plus d'espace
+   (ni 280px, ni le rail 96px du bloc ci-dessus). */
+@media (max-width: 768px) {
+    .topbar {
+        width: 100vw;
+    }
+
+    .sidebarToggle {
+        display: none;
+    }
+
+    .mobileMenuBtn {
+        display: inline-flex;
     }
 }

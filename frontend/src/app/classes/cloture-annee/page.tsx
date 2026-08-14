@@ -621,7 +621,7 @@ export default function ClotureAnneePage() {
                                 </button>
                             ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 480 }}>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                                    <div className="form-grid-2" style={{ gap: 12 }}>
                                         <input placeholder="Code (ex: 2027-2028)" value={newAnnee.code} onChange={e => setNewAnnee(s => ({ ...s, code: e.target.value }))} style={{ padding: 10, borderRadius: 8, border: '1px solid var(--border-light)' }} />
                                         <input placeholder="Libellé" value={newAnnee.libelle} onChange={e => setNewAnnee(s => ({ ...s, libelle: e.target.value }))} style={{ padding: 10, borderRadius: 8, border: '1px solid var(--border-light)' }} />
                                         <input type="date" value={newAnnee.date_debut} onChange={e => setNewAnnee(s => ({ ...s, date_debut: e.target.value }))} style={{ padding: 10, borderRadius: 8, border: '1px solid var(--border-light)' }} />
@@ -941,7 +941,8 @@ export default function ClotureAnneePage() {
                                     </div>
                                 )}
 
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                <div className="table-scroll">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '600px' }}>
                                     <thead>
                                         <tr style={{ borderBottom: '2px solid var(--border-light)' }}>
                                             <th style={{ textAlign: 'left', padding: '8px' }}>Élève</th>
@@ -989,6 +990,7 @@ export default function ClotureAnneePage() {
                                         )}
                                     </tbody>
                                 </table>
+                                </div>
 
                                 {apercu.deja_calcule && apercu.eleves.length > 0 && (
                                     <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '12px' }}>

@@ -8,8 +8,8 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 
-const sourceMark = path.join(root, 'public/icons/source-mark.svg');
-const sourceMaskable = path.join(root, 'public/icons/source-mark-maskable.svg');
+const sourceMark = path.join(root, 'public/brand/symbol-source.svg');
+const sourceMaskable = path.join(root, 'public/brand/symbol-source-maskable.svg');
 
 const targets = [
     { src: sourceMark, out: path.join(root, 'public/icons/icon-192.png'), size: 192 },

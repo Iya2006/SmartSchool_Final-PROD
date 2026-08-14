@@ -8,9 +8,10 @@ import { useInstallPrompt } from '@/hooks/useInstallPrompt';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     ArrowRight, BarChart3, Download, Eye, EyeOff, Info, LayoutGrid, Loader2,
-    Lock, Mail, ShieldCheck, Sparkles, AlertTriangle, Users, X,
+    Lock, Mail, Sparkles, AlertTriangle, Users, X,
 } from 'lucide-react';
 import api from '@/lib/api';
+import SmartSchoolMark from '@/components/SmartSchoolMark';
 import styles from './login.module.css';
 
 const BENEFITS = [
@@ -83,7 +84,7 @@ export default function LoginPage() {
                         {logoSrc ? (
                             <img src={logoSrc} alt={etablissementNom ? `Logo ${etablissementNom}` : 'Logo établissement'} />
                         ) : (
-                            <ShieldCheck size={24} />
+                            <SmartSchoolMark size={24} color="#ffffff" />
                         )}
                     </div>
                     <div>

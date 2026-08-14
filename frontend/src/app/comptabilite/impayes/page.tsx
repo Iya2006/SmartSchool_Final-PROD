@@ -433,7 +433,8 @@ export default function ImpayesPage() {
                                             </div>
                                         </div>
                                         {/* Tableau échéances */}
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, fontSize: 13 }}>
+                                        <div className="table-scroll">
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, fontSize: 13, minWidth: '480px' }}>
                                             <thead>
                                                 <tr style={{ background: '#f8fafc' }}>
                                                     <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>Échéance</th>
@@ -453,6 +454,7 @@ export default function ImpayesPage() {
                                                 ))}
                                             </tbody>
                                         </table>
+                                        </div>
                                         {/* Résumé */}
                                         <div style={{ background: '#f8fafc', borderRadius: 10, padding: 20, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, textAlign: 'center' }}>
                                             <div><p style={{ fontSize: 11, color: '#94a3b8' }}>Total Facturé</p><p style={{ fontSize: 18, fontWeight: 800, color: '#1e293b' }}>{fmt(avisData.facture.montant_net)}</p></div>

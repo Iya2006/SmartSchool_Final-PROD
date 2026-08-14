@@ -10,13 +10,14 @@ import {
     Shield, Loader2, Lock, Home, ArrowLeft, LogOut, ChevronDown, Send, Inbox,
     PieChart, Activity, TrendingDown, Mail, MailOpen, Settings, Key,
     Camera, Upload, ImageIcon, ChevronLeft, ShoppingBag, Download, CheckCircle2, XCircle, PenLine, AlertTriangle, Target,
-    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil, Hourglass
+    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil, Hourglass, Menu
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 import ClassementEpreuves from '@/components/ClassementEpreuves';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface MsgItem {
     message_id: number; expediteur_type: string; expediteur_id: number|null;
@@ -103,6 +104,11 @@ export default function PortailParent() {
     const [showNotifDrop, setShowNotifDrop] = useState(false);
     const [showUserMenu, setShowUserMenu] = useState(false);
     const [showProfileDropdown, setShowProfileDropdown] = useState(false);
+    // Tiroir mobile — aucun traitement responsive n'existait sur cette page
+    // avant ce chantier (contrairement a portail-eleve, qui a servi de motif
+    // de reference).
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const isMobile = useIsMobile();
     // Clé "type:id" (ex. "eleve:12") — jamais un id nu : Parent.parent_id et
     // Eleve.eleve_id sont deux séquences auto-incrémentées indépendantes qui
     // se recoupent facilement (ex. parent_id=12 et un eleve_id=12 sans lien
@@ -169,6 +175,12 @@ export default function PortailParent() {
     const [expandedFactureId, setExpandedFactureId] = useState<number | null>(null);
     // Ref stable pour le parentId — évite les dépendances circulaires dans refreshDashboard
     const parentIdRef = useRef<number | null>(null);
+
+    // Ferme le tiroir mobile a chaque changement d'onglet — la navigation ici
+    // se fait via setActiveTab, pas via le routeur.
+    useEffect(() => {
+        setMobileMenuOpen(false);
+    }, [activeTab]);
 
     // Load timetable when tab changes to 'emploi' or child changes
     useEffect(() => {
@@ -425,10 +437,22 @@ export default function PortailParent() {
     ];
 
     return (
-        <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: 'Inter, -apple-system, sans-serif', background: '#f8fafc' }}>
+        <div style={{ display: 'flex', height: '100dvh', overflow: 'hidden', fontFamily: 'Inter, -apple-system, sans-serif', background: '#f8fafc' }}>
 
-            {/* ══ SIDEBAR PARENT (Émeraude) ══ */}
-            <div style={{
+            {/* ══ SIDEBAR PARENT (Émeraude) — tiroir sous 768px, aucun
+                traitement responsive n'existait ici avant ce chantier ══ */}
+            <div style={isMobile ? {
+                width: 'min(240px, 84vw)', background: `linear-gradient(180deg, ${primaryColor} 0%, ${accentColor} 100%)`,
+                display: 'flex', flexDirection: 'column', flexShrink: 0,
+                position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 200,
+                transform: mobileMenuOpen ? 'translateX(0)' : 'translateX(-100%)',
+                transition: 'transform 0.3s ease',
+                boxShadow: mobileMenuOpen ? '10px 0 34px rgba(0,0,0,0.25)' : 'none',
+                paddingLeft: 'env(safe-area-inset-left)',
+                paddingTop: 'env(safe-area-inset-top)',
+                paddingBottom: 'env(safe-area-inset-bottom)',
+                boxSizing: 'border-box',
+            } : {
                 width: '240px', background: `linear-gradient(180deg, ${primaryColor} 0%, ${accentColor} 100%)`,
                 display: 'flex', flexDirection: 'column', flexShrink: 0,
                 boxShadow: '4px 0 24px rgba(0,0,0,0.2)',
@@ -475,7 +499,7 @@ export default function PortailParent() {
                         const badge = item.key === 'messages' && unreadCount > 0 ? unreadCount : null;
                         return (
                             <button key={item.key}
-                                onClick={() => setActiveTab(item.key)}
+                                onClick={() => { setActiveTab(item.key); setMobileMenuOpen(false); }}
                                 style={{
                                     width: '100%', display: 'flex', alignItems: 'center', gap: '12px',
                                     padding: '10px 14px', borderRadius: '10px', border: 'none', cursor: 'pointer',
@@ -508,10 +532,28 @@ export default function PortailParent() {
                 </div>
             </div>
 
+            {/* Overlay du tiroir mobile — clic pour fermer */}
+            {isMobile && mobileMenuOpen && (
+                <div
+                    onClick={() => setMobileMenuOpen(false)}
+                    aria-hidden="true"
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 190 }}
+                />
+            )}
+
             {/* ══ CONTENU PRINCIPAL ══ */}
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 {/* ── HEADER ── */}
-                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 32px', flexShrink: 0, position: 'relative' }}>
+                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: isMobile ? 'space-between' : 'flex-end', padding: isMobile ? '0 14px' : '0 32px', flexShrink: 0, position: 'relative' }}>
+                    {isMobile && (
+                        <button
+                            onClick={() => setMobileMenuOpen(o => !o)}
+                            aria-label="Ouvrir le menu de navigation"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#334155', padding: '6px' }}
+                        >
+                            <Menu size={22} />
+                        </button>
+                    )}
                     <div style={{ position: 'relative' }}>
                         <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
                             <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: primaryColor, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>
@@ -552,7 +594,7 @@ export default function PortailParent() {
                 </motion.div>
 
                 {/* KPI Cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '18px', marginBottom: '28px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '18px', marginBottom: '28px' }}>
                     {[
                         { label: 'Enfants Inscrits', value: String(data.nb_enfants), icon: <GraduationCap size={22} />, color: '#6366f1', bg: '#ede9fe' },
                         { label: 'Total Facturé', value: formatGNF(data.finance_resume.total_factures), icon: <FileText size={22} />, color: '#f59e0b', bg: '#fef3c7' },
@@ -618,7 +660,7 @@ export default function PortailParent() {
 
                 {/* ═══ MAIN CONTENT: TWO COLUMNS ═══ */}
                 {child && (
-                    <div style={{ display: 'grid', gridTemplateColumns: ['profil', 'parametres', 'evenements', 'activites'].includes(activeTab) ? '1fr' : '340px 1fr', gap: '24px', alignItems: 'start' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile || ['profil', 'parametres', 'evenements', 'activites'].includes(activeTab) ? '1fr' : '340px 1fr', gap: '24px', alignItems: 'start' }}>
 
                         {/* ─── LEFT: CHILD CARD ─── */}
                         {!['profil', 'parametres', 'evenements', 'activites'].includes(activeTab) && (
@@ -763,7 +805,8 @@ export default function PortailParent() {
                                                         <p style={{ fontSize: '12px', color: '#cbd5e1' }}>Les notes apparaîtront ici après les évaluations</p>
                                                     </div>
                                                 ) : (
-                                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                    <div className="table-scroll">
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '560px' }}>
                                                         <thead>
                                                             <tr>
                                                                 {['Matière', 'Évaluation', 'Note', 'Coef.', 'Date'].map(h => (
@@ -802,6 +845,7 @@ export default function PortailParent() {
                                                             ))}
                                                         </tbody>
                                                     </table>
+                                                    </div>
                                                 )}
                                             </div>
                                             {/* Classement par épreuve : le backend l'exposait
@@ -1096,6 +1140,7 @@ export default function PortailParent() {
                                                         <p style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 600 }}>Emploi du temps non disponible</p>
                                                     </div>
                                                 ) : (
+                                                    <div className="table-scroll">
                                                     <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
                                                         <thead>
                                                             <tr>
@@ -1142,6 +1187,7 @@ export default function PortailParent() {
                                                             })}
                                                         </tbody>
                                                     </table>
+                                                    </div>
                                                 )}
                                             </div>
                                         </div>
@@ -1174,7 +1220,7 @@ export default function PortailParent() {
                                                 ) : (
                                                     <>
                                                         {/* KPI Summary */}
-                                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginBottom: '20px' }}>
                                                             {[
                                                                 { label: 'Moyenne', value: bulletinData.moyenne_generale !== null ? `${bulletinData.moyenne_generale}/20` : '—', color: bulletinData.moyenne_generale >= 10 ? '#10b981' : '#ef4444' },
                                                                 { label: 'Rang', value: (bulletinData.rang && bulletinData.effectif_classe) ? `${bulletinData.rang}e / ${bulletinData.effectif_classe}` : '—', color: '#6366f1' },
@@ -1188,7 +1234,8 @@ export default function PortailParent() {
                                                             ))}
                                                         </div>
                                                         {/* Grades Table */}
-                                                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                        <div className="table-scroll">
+                                                        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '480px' }}>
                                                             <thead>
                                                                 <tr style={{ background: 'linear-gradient(135deg, #064e3b, #059669)' }}>
                                                                     {['Matière', 'Coef', 'Moy. Élève', 'Moy. Cl.', 'Min', 'Max', 'Appréciation'].map(h => (
@@ -1215,6 +1262,7 @@ export default function PortailParent() {
                                                                 ))}
                                                             </tbody>
                                                         </table>
+                                                        </div>
                                                         {/* Decision */}
                                                         {bulletinData.decision && (
                                                             <div style={{ marginTop: '16px', padding: '14px 18px', borderRadius: '12px', background: '#fef3c7', border: '1px solid #fbbf24' }}>
@@ -1654,7 +1702,7 @@ export default function PortailParent() {
                                                     </div>
                                                 </div>
                                                 {/* Summary stat cards */}
-                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
                                                     {[
                                                         { label: 'Notes', value: String(child.nb_notes), icon: <PenLine size={20} />, color: '#6366f1', bg: '#ede9fe' },
                                                         { label: 'Présences', value: String(child.nb_present), icon: <CheckCircle2 size={20} />, color: primaryColor, bg: '#d1fae5' },

@@ -403,7 +403,8 @@ export default function ClasseProfilPage() {
                             <p style={{ fontWeight: 600 }}>Aucun élève inscrit.</p>
                         </div>
                     ) : (
-                        <table className="sp-table" style={{ margin: 0 }}>
+                        <div className="table-scroll">
+                        <table className="sp-table" style={{ margin: 0, minWidth: '680px' }}>
                             <thead>
                                 <tr>
                                     <th style={{ background: 'var(--brand-primary)', color: 'white' }}>Élève</th>
@@ -480,6 +481,7 @@ export default function ClasseProfilPage() {
                                 })}
                             </tbody>
                         </table>
+                        </div>
                     )}
                     <Pagination page={elevesPage} pageSize={ELEVES_PAGE_SIZE} total={profil.eleves.length} onPageChange={setElevesPage} />
                 </motion.div>

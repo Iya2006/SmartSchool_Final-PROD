@@ -22,7 +22,7 @@ export default function Sidebar() {
     const pathname = usePathname();
     const { etablissementNom, etablissementLogo } = useApp();
     const { user, logout } = useAuth();
-    const { sidebarCollapsed } = useUI();
+    const { sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar } = useUI();
     const [unreadCount, setUnreadCount] = useState(0);
 
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
@@ -56,7 +56,7 @@ export default function Sidebar() {
     const initials = user ? `${user.prenom.charAt(0)}${user.nom.charAt(0)}` : 'AD';
 
     return (
-        <nav id="sidebar" className={`${styles.sidebarWrapper} ${sidebarCollapsed ? styles.sidebarCollapsed : ''}`}>
+        <nav id="sidebar" className={`${styles.sidebarWrapper} ${sidebarCollapsed ? styles.sidebarCollapsed : ''} ${mobileSidebarOpen ? styles.mobileOpen : ''}`}>
 
             {/* App brand */}
             <div className={styles.appBrand}>
@@ -78,7 +78,12 @@ export default function Sidebar() {
 
             {/* Sidebar menu starts */}
             <div className={styles.sidebarMenuScroll}>
-                <ul className={styles.sidebarMenu}>
+                {/* Ferme le tiroir mobile au clic sur n'importe quel lien —
+                    delegation d'evenement plutot qu'un onClick sur chacun des
+                    26 liens de navigation. */}
+                <ul className={styles.sidebarMenu} onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('a')) closeMobileSidebar();
+                }}>
 
                     <li className={styles.sidebarTitle}>
                         <h6 className={styles.titleText}>Dashboards</h6>

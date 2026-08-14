@@ -15,7 +15,7 @@
 
 import { useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Search, Calendar, PanelLeftClose, PanelLeftOpen, Command, Settings, User } from 'lucide-react';
+import { Search, Calendar, PanelLeftClose, PanelLeftOpen, Command, Settings, User, Menu } from 'lucide-react';
 import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
 import { useUI } from '@/context/UIContext';
@@ -61,7 +61,7 @@ export default function Topbar() {
     const { anneeLibelle } = useApp();
     const pathname = usePathname();
     const router = useRouter();
-    const { sidebarCollapsed, toggleSidebarCollapsed } = useUI();
+    const { sidebarCollapsed, toggleSidebarCollapsed, openMobileSidebar } = useUI();
     const { user } = useAuth();
     const [query, setQuery] = useState('');
     const [isFocused, setIsFocused] = useState(false);
@@ -83,6 +83,8 @@ export default function Topbar() {
 
             {/* ── Section gauche : Recherche + Badge année ── */}
             <div className={styles.leftSection}>
+                {/* Repli desktop (rail icone-seule) — masque sous 768px, remplace
+                    par le bouton hamburger ci-dessous qui ouvre le tiroir. */}
                 <button
                     type="button"
                     className={styles.sidebarToggle}
@@ -90,6 +92,16 @@ export default function Topbar() {
                     aria-label={sidebarCollapsed ? 'Ouvrir le menu latéral' : 'Réduire le menu latéral'}
                 >
                     {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+                </button>
+
+                {/* Hamburger mobile — masque au-dessus de 768px (voir Topbar.module.css) */}
+                <button
+                    type="button"
+                    className={styles.mobileMenuBtn}
+                    onClick={openMobileSidebar}
+                    aria-label="Ouvrir le menu de navigation"
+                >
+                    <Menu size={20} />
                 </button>
 
                 <div className={styles.searchShell}>

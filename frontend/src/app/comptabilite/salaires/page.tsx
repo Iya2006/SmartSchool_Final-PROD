@@ -954,7 +954,8 @@ function SalairesContent() {
                                             </div>
                                         </div>
 
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 28, fontSize: 13 }}>
+                                        <div className="table-scroll">
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 28, fontSize: 13, minWidth: '420px' }}>
                                             <thead>
                                                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                                                     <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700 }}>Élément</th>
@@ -998,6 +999,7 @@ function SalairesContent() {
                                                 )}
                                             </tbody>
                                         </table>
+                                        </div>
 
                                         <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <div>

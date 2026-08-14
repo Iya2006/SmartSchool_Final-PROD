@@ -164,7 +164,8 @@ export default function ExportsPage() {
                                             <p style={{ fontSize: 24, fontWeight: 800, color: '#1e293b' }}>{dataJour.nb_paiements}</p>
                                         </div>
                                     </div>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: '720px' }}>
                                         <thead><tr style={{ background: '#f1f5f9' }}><th style={{ padding: 12, textAlign: 'left' }}>Reçu</th><th style={{ padding: 12, textAlign: 'left' }}>Élève</th><th style={{ padding: 12, textAlign: 'left' }}>Classe</th><th style={{ padding: 12, textAlign: 'left' }}>Facture</th><th style={{ padding: 12, textAlign: 'left' }}>Mode</th><th style={{ padding: 12, textAlign: 'right' }}>Montant</th></tr></thead>
                                         <tbody>
                                             {dataJour.paiements.map((p: any, i: number) => (
@@ -173,6 +174,7 @@ export default function ExportsPage() {
                                             {dataJour.paiements.length === 0 && <tr><td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#94a3b8' }}>Aucun encaissement ce jour.</td></tr>}
                                         </tbody>
                                     </table>
+                                    </div>
                                 </div>
                             )}
 
@@ -194,7 +196,8 @@ export default function ExportsPage() {
                                         </div>
                                     </div>
                                     <h3 style={{ fontSize: 14, fontWeight: 700, marginTop: 30, marginBottom: 10, color: '#475569' }}>Résumé par Classe</h3>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 30 }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 30, minWidth: '480px' }}>
                                         <thead><tr style={{ background: '#f1f5f9' }}><th style={{ padding: 10, textAlign: 'left' }}>Classe</th><th style={{ padding: 10, textAlign: 'center' }}>Nb Paiements</th><th style={{ padding: 10, textAlign: 'right' }}>Total Encaissé</th></tr></thead>
                                         <tbody>
                                             {dataMois.par_classe.map((c: any, i: number) => (
@@ -202,13 +205,15 @@ export default function ExportsPage() {
                                             ))}
                                         </tbody>
                                     </table>
+                                    </div>
                                 </div>
                             )}
 
                             {tab === 'classe' && dataClasse && (
                                 <div>
                                     <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: '#1e293b' }}>Situation Financière — {classes.find(c => c.classe_id.toString() === classeCible)?.libelle || 'Classe sélectionnée'}</h2>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                    <div className="table-scroll">
+                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: '680px' }}>
                                         <thead><tr style={{ background: '#f1f5f9' }}><th style={{ padding: 10, textAlign: 'left' }}>Élève</th><th style={{ padding: 10, textAlign: 'left' }}>Facture</th><th style={{ padding: 10, textAlign: 'right' }}>Montant</th><th style={{ padding: 10, textAlign: 'right' }}>Payé</th><th style={{ padding: 10, textAlign: 'right' }}>Reste</th><th style={{ padding: 10, textAlign: 'center' }}>Statut</th></tr></thead>
                                         <tbody>
                                             {dataClasse.map((f: any, i: number) => (
@@ -217,6 +222,7 @@ export default function ExportsPage() {
                                             {dataClasse.length === 0 && <tr><td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#94a3b8' }}>Aucune donnée</td></tr>}
                                         </tbody>
                                     </table>
+                                    </div>
                                 </div>
                             )}
                         </>

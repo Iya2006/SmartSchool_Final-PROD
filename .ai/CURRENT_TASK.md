@@ -1,6 +1,44 @@
 # 🎯 TÂCHE EN COURS
 
-## Tâche active — Fusion Sams + « incidents » locaux périmés (13/08/2026)
+## Tâche active — Refonte mobile complète + identité visuelle SmartSchool (14/08/2026)
+Brief de 17 phases de l'utilisateur (captures d'écran à l'appui) :
+la version mobile de l'app était « éclatée au sol » — sidebar affichée
+à pleine largeur desktop, écrasée dans ~375px, aucun repli responsive.
+Demande : identité PWA/icônes, vrai logo, audit mobile complet par
+composants partagés (pas de rustines page par page), non-régression
+desktop obligatoire, rapport final structuré.
+
+3 agents Explore (lecture seule) avant tout code. Trouvé : 3 barres
+latérales indépendantes sans aucun traitement mobile ; `UIContext.tsx`
+avait déjà l'état `mobileSidebarOpen` mais jamais branché nulle part ;
+`portail-eleve/` avait déjà un vrai système responsive (modèle repris) ;
+37 fichiers avec `<table>` brut, `eleves/page.tsx` et
+`enseignants/page.tsx` sans aucun wrapper ; plusieurs pages comptabilité
+avec un vrai bug `overflow:hidden` tronquant des colonnes ;
+`TopbarNotifications.tsx` avec un panneau `right:-26px` hors écran.
+
+Fait, par paliers avec checkpoint `tsc`/`vitest` après chacun : nouveau
+symbole SmartSchool dessiné à la main (SVG, remplace l'icône générique
+`ShieldCheck`) + icônes PWA régénérées ; hook `useIsMobile` (première
+introduction de ce motif dans le projet) ; les 3 barres latérales
+converties en tiroir mobile (état déjà existant branché, pas de nouvel
+état) ; 37 fichiers à tableau audités un par un (défilement horizontal
+protégé + bugs `overflow:hidden` corrigés) ; `eleves/page.tsx` et
+`enseignants/page.tsx` transformés en vraie vue carte sur mobile ;
+bug réel de `TopbarNotifications` corrigé + `touchstart` ajouté sur les
+2 menus déroulants pour une fermeture fiable au doigt ; `.form-grid-2`
+retrofité sur les formulaires nouveau/modifier (élèves, enseignants,
+classes, personnel) ; zones de sécurité iOS/Android sur les 3 tiroirs.
+
+Vérifié : `tsc --noEmit` 0 erreur, `vitest run` 102/102, `npm run build`
+78 routes générées avec succès, non-régression desktop confirmée
+explicitement (valeurs `sidebarWidth` desktop inchangées). Rapport
+complet : `.ai/MOBILE_PWA_REFONTE_RAPPORT.md`. Rien touché côté backend/
+API/JWT/isolation multi-tenant. Périmètre non couvert documenté
+explicitement (vue carte limitée à 2 pages démo, `.modal-box` pas
+retrofitée partout) plutôt que caché.
+
+## Tâche précédente — Fusion Sams + « incidents » locaux périmés (13/08/2026)
 Après avoir fusionné `origin/main` (PR #5 du collaborateur Sams — paie
 enseignants, correctifs comptabilité) dans `IYA` (5 conflits résolus —
 dont un bug trouvé dans mon propre code, `Depends()` invalide sur un
