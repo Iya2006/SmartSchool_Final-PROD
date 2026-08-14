@@ -17,6 +17,7 @@ import Pagination from '@/components/Pagination';
 import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
 import { useApp } from '@/context/AppContext';
 import AnneeFilter from '@/components/AnneeFilter';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 /* ═══════════════════════════════════════════════════════════════════════
    TYPES
@@ -142,6 +143,7 @@ function GestionPaiements() {
     const router = useRouter();
     const queryClient = useQueryClient();
     const { anneeId: anneeCouranteId } = useApp();
+    const isMobile = useIsMobile();
     // Année scolaire consultée — par défaut l'année en cours ; le comptable
     // peut basculer sur une année clôturée pour consulter l'historique.
     const [filterAnnee, setFilterAnnee] = useState<number>(anneeCouranteId);
@@ -814,7 +816,7 @@ function GestionPaiements() {
                     </div>
 
                     {/* Repartition par mode de paiement */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
                         <div style={cardStyle}>
                             <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <BarChart3 size={18} color="#10b981" /> Repartition par Mode
@@ -1403,7 +1405,7 @@ function GestionPaiements() {
                ════════════════════════════════════════════════════════════════ */}
             {activeTab === 'reductions' && (
                 <div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px' }}>
                         {/* Remises / Reductions */}
                         <div style={cardStyle}>
                             <h3 style={{ margin: '0 0 16px', fontSize: '15px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1550,7 +1552,7 @@ function GestionPaiements() {
                         {/* Mode de paiement */}
                         <div style={{ marginBottom: '16px' }}>
                             <label style={labelStyle}>Mode de paiement *</label>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))', gap: '8px' }}>
                                 {modesAffichables.map(m => (
                                     <button key={m.value} onClick={() => setPayForm({ ...payForm, mode_paiement: m.value })}
                                         style={{

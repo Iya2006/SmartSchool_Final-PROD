@@ -8,6 +8,7 @@ import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { getRoleInterfaceSummary } from '@/lib/roleAccess';
 import Pagination from '@/components/Pagination';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import {
     Activity,
     AlertTriangle,
@@ -180,6 +181,7 @@ function getStatusTone(statut: string) {
 
 export default function PersonnelPage() {
     const { etablissementId } = useApp();
+    const isMobile = useIsMobile();
     const [personnel, setPersonnel] = useState<PersonnelMember[]>([]);
     const [stats, setStats] = useState<Stats[]>([]);
     const [loading, setLoading] = useState(true);
@@ -312,7 +314,7 @@ export default function PersonnelPage() {
                 }}
             >
                 <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top right, rgba(255,255,255,0.14), transparent 24%), radial-gradient(circle at bottom left, rgba(16,185,129,0.18), transparent 28%)' }} />
-                <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(320px, 0.9fr)', gap: '24px', alignItems: 'stretch' }}>
+                <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.35fr) minmax(320px, 0.9fr)', gap: '24px', alignItems: 'stretch' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', alignSelf: 'flex-start', padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.14)', fontSize: '12px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                             <Sparkles size={14} /> Centre de contrôle RH
@@ -460,7 +462,7 @@ export default function PersonnelPage() {
                 })}
             </section>
 
-            <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.15fr) minmax(320px, 0.85fr)', gap: '18px' }}>
+            <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(320px, 0.85fr)', gap: '18px' }}>
                 <div style={{ background: 'rgba(255,255,255,0.88)', border: '1px solid rgba(226,232,240,0.92)', borderRadius: '28px', padding: '22px', boxShadow: '0 24px 54px rgba(15,23,42,0.06)', backdropFilter: 'blur(18px)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '18px', flexWrap: 'wrap' }}>
                         <div>
@@ -558,7 +560,7 @@ export default function PersonnelPage() {
             </section>
 
             <section style={{ background: 'rgba(255,255,255,0.82)', border: '1px solid rgba(226,232,240,0.92)', borderRadius: '28px', padding: '18px', boxShadow: '0 24px 54px rgba(15,23,42,0.06)', backdropFilter: 'blur(18px)' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1.4fr) minmax(200px, 0.8fr) minmax(170px, 0.7fr) auto', gap: '12px', alignItems: 'center' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(260px, 1.4fr) minmax(200px, 0.8fr) minmax(170px, 0.7fr) auto', gap: '12px', alignItems: 'center' }}>
                     <div style={{ position: 'relative' }}>
                         <Search size={17} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                         <input

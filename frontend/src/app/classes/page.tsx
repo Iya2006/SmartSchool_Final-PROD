@@ -172,7 +172,7 @@ export default function ClassesPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
             {/* ═══ Header / Breadcrumb ═══ */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 0 16px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px', padding: '0 0 16px', flexShrink: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     {/* ← Back button */}
                     <button
@@ -198,7 +198,7 @@ export default function ClassesPage() {
                         <span>Classes & Effectifs</span>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                     <Link href="/classes/cloture-annee" style={{
                         display: 'flex', alignItems: 'center', gap: '8px',
                         background: 'white', color: '#b45309', border: '1px solid #fde68a',
@@ -222,7 +222,7 @@ export default function ClassesPage() {
             </div>
 
             {/* ═══ Statistics Row - Compact ═══ */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
                 <motion.div className="kpi-card" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                     style={{ padding: '14px 18px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -399,7 +399,7 @@ export default function ClassesPage() {
                 ) : (
                     <div style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(3, 1fr)',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
                         gap: '16px',
                         paddingBottom: '24px'
                     }}>

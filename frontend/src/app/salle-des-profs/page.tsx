@@ -202,7 +202,7 @@ export default function SalleDesProfsPage() {
             {/* ═══════ KPI STATS ═══════ */}
             {stats && (
                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
-                    style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px' }}>
+                    style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
                     {[
                         { label: 'Enseignants Actifs', value: stats.total_enseignants, icon: <Users size={20} />, color: '#6366f1', bg: '#ede9fe' },
                         { label: 'Affectés', value: stats.enseignants_affectes, icon: <UserCheck size={20} />, color: '#10b981', bg: '#d1fae5' },

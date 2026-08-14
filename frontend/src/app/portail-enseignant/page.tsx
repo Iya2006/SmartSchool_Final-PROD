@@ -943,7 +943,7 @@ export default function PortailEnseignant() {
                 </motion.div>
 
                 {/* ═══ KPI CARDS ═══ */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', margin: '24px 0' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', margin: '24px 0' }}>
                     {[
                         { label: 'Classes gérées', value: stats.nb_classes, icon: <Users size={22} />, color: accentColor, bg: '#ede9fe' },
                         { label: 'Matières enseignées', value: stats.nb_matieres, icon: <BookOpen size={22} />, color: '#10b981', bg: '#d1fae5' },
@@ -1196,7 +1196,7 @@ export default function PortailEnseignant() {
                             </div>
 
                             {/* Stats Cards — Premium Lucide Icons */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
                                 {[
                                     { label: 'Total Élèves', value: stats.total_eleves, icon: <GraduationCap size={24} />, color: '#3b82f6', bg: 'linear-gradient(135deg, #eff6ff, #dbeafe)', border: '#93c5fd' },
                                     { label: 'Heures / Semaine', value: `${stats.total_heures}h`, icon: <Clock size={24} />, color: '#10b981', bg: 'linear-gradient(135deg, #f0fdf4, #d1fae5)', border: '#6ee7b7' },
@@ -1402,7 +1402,7 @@ export default function PortailEnseignant() {
                             </div>
 
                             {/* Quick Actions — Premium with Lucide Icons */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px' }}>
                                 {[
                                     { label: 'Saisir des Notes', icon: <FileText size={22} color="white" />, desc: 'Évaluations & notes', tab: 'notes' as const, gradient: `linear-gradient(135deg, ${accentColor}, ${primaryColor})` },
                                     { label: 'Faire l\'Appel', icon: <ClipboardList size={22} color="white" />, desc: 'Présences du jour', tab: 'appel' as const, gradient: 'linear-gradient(135deg, #10b981, #059669)' },

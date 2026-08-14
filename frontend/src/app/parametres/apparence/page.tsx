@@ -7,6 +7,7 @@ import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
 import { useApp, applyThemeStyles } from '@/context/AppContext';
 import styles from './Apparence.module.css';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 /* ─── Types ─── */
 interface ParametreSetting {
@@ -79,6 +80,7 @@ const DEFAULT: ThemeConfig = {
 /* ─── Page ─── */
 export default function ApparencePage() {
     const { theme: globalTheme, setTheme: setGlobalTheme, applyTheme } = useApp();
+    const isMobile = useIsMobile();
     const [theme, setTheme]     = useState<ThemeConfig>(globalTheme);
     const [saved, setSaved]     = useState<ThemeConfig>(globalTheme);
     const [loading, setLoading] = useState(true);
@@ -355,7 +357,7 @@ export default function ApparencePage() {
                                         { key: 'Parent' as const, label: 'Portail Parent', desc: "S'applique à l'espace parent", colorKey: 'couleurParent' as const, msgKey: 'msgParent' as const, icon: <Users size={24} />, defaultColor: '#16a34a' },
                                         { key: 'Enseignant' as const, label: 'Portail Enseignant', desc: "S'applique à l'espace enseignant", colorKey: 'couleurEnseignant' as const, msgKey: 'msgEnseignant' as const, icon: <BookOpen size={24} />, defaultColor: '#7e22ce' }
                                     ].map(p => (
-                                        <div key={p.key} style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '2rem', padding: '1.5rem', background: '#f8fafc', borderRadius: '16px', border: '1px solid #e2e8f0' }}>
+                                        <div key={p.key} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 2fr', gap: '2rem', padding: '1.5rem', background: '#f8fafc', borderRadius: '16px', border: '1px solid #e2e8f0' }}>
                                             <div>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
                                                     <span style={{ fontSize: '1.5rem' }}>{p.icon}</span>
