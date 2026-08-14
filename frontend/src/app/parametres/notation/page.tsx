@@ -10,6 +10,7 @@ import {
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
 import styles from './Notation.module.css';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 // ─── Constantes cycles ─────────────────────────────────────────────────────
 const CYCLES = [
@@ -132,6 +133,7 @@ function buildParam(key: string, value: string | number | boolean) {
 
 // ─── Main Page ──────────────────────────────────────────────────────────────
 export default function NotationPage() {
+    const isMobile = useIsMobile();
     const [activeTab, setActiveTab] = useState('bareme');
     const [baremeCycle, setBaremeCycle] = useState('college');
     const [loading, setLoading]     = useState(true);
@@ -950,7 +952,8 @@ export default function NotationPage() {
                                             gap: '1px',
                                             background: '#e2e8f0',
                                             borderRadius: '12px 12px 0 0',
-                                            overflow: 'hidden'
+                                            overflow: 'hidden',
+                                            minWidth: '600px'
                                         }}>
                                             <div style={{ padding: '0.75rem 1rem', background: '#1e293b', color: 'white', fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Matière</div>
                                             {(['SM', 'SE', 'SS'] as const).map(s => {
@@ -986,7 +989,7 @@ export default function NotationPage() {
                                                 );
                                             }
                                             return (
-                                                <div style={{ border: '1px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 12px 12px', overflow: 'hidden' }}>
+                                                <div style={{ border: '1px solid #e2e8f0', borderTop: 'none', borderRadius: '0 0 12px 12px', overflow: 'hidden', minWidth: '600px' }}>
                                                     {rows.map(([code, matData], idx) => (
                                                         <div key={code} style={{
                                                             display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr',
@@ -1291,7 +1294,7 @@ export default function NotationPage() {
                             </div>
 
                             {/* Liste des types */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', overflowX: 'auto' }}>
                                 {typesEval.map(te => {
                                     const surcharge = coefsParCycle[coefTypeCycle]?.[te.code];
                                     const effectif = surcharge ?? te.coefficient;
@@ -1301,6 +1304,7 @@ export default function NotationPage() {
                                         alignItems: 'center', gap: '1rem', padding: '1rem 1.25rem',
                                         borderRadius: '12px', background: 'white', border: '1px solid #e2e8f0',
                                         opacity: te.statut === 'INACTIF' ? 0.5 : 1,
+                                        minWidth: '620px',
                                     }}>
                                         {editingTypeId === te.type_eval_id ? (
                                             <>
@@ -1385,7 +1389,7 @@ export default function NotationPage() {
                             {showNewTypeForm ? (
                                 <div style={{ marginTop: '1rem', padding: '1.25rem', borderRadius: '12px', border: '2px dashed var(--brand-primary, #3b82f6)', background: 'var(--brand-primary-light, #eff6ff)' }}>
                                     <div style={{ fontWeight: 700, color: '#1e293b', marginBottom: '1rem', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '4px' }}><Plus size={16} /> Nouveau type d&apos;évaluation</div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr 110px auto', gap: '0.75rem', alignItems: 'end' }}>
+                                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '120px 1fr 110px auto', gap: '0.75rem', alignItems: isMobile ? 'stretch' : 'end' }}>
                                         <div>
                                             <label style={{ fontSize: '0.75rem', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '0.25rem' }}>Code</label>
                                             <input placeholder="EVAL" value={newTypeCode} onChange={e => setNewTypeCode(e.target.value.toUpperCase())}

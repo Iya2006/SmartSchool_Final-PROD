@@ -210,7 +210,7 @@ export default function ProfilPage() {
                 }} />
                 
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '24px', position: 'relative', zIndex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '24px', minWidth: 0 }}>
                         {/* Avatar */}
                         <div style={{ position: 'relative' }}>
                             <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handlePhotoUpload} />
@@ -247,8 +247,8 @@ export default function ProfilPage() {
                         </div>
 
                         {/* Nom & Roles */}
-                        <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
                                 <span style={{
                                     background: 'rgba(99,102,241,0.25)', border: '1px solid rgba(129,140,248,0.4)',
                                     color: '#a5b4fc', padding: '4px 12px', borderRadius: '50px',
@@ -265,10 +265,10 @@ export default function ProfilPage() {
                                     Compte Actif
                                 </span>
                             </div>
-                            <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 800, letterSpacing: '-0.5px' }}>
+                            <h1 style={{ margin: 0, fontSize: 'clamp(20px, 5vw, 28px)', fontWeight: 800, letterSpacing: '-0.5px', wordBreak: 'break-word' }}>
                                 {prenom} {nom}
                             </h1>
-                            <p style={{ margin: '6px 0 0', opacity: 0.8, fontSize: '14px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+                            <p style={{ margin: '6px 0 0', opacity: 0.8, fontSize: '14px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 16px' }}>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Mail size={14} /> {email}</span>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Building size={14} /> {etablissementNom}</span>
                             </p>

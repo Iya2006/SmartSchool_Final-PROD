@@ -290,7 +290,7 @@ export default function ElevesPage() {
             </AnimatePresence>
 
             {/* Breadcrumb + Actions */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <button onClick={() => router.back()} title="Retour" style={{
                         width: '36px', height: '36px', borderRadius: '10px',
@@ -310,7 +310,7 @@ export default function ElevesPage() {
                         <span style={{ color: 'var(--brand-primary)', fontWeight: 600 }}>Élèves</span>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                     <button onClick={() => setViewMode('grid')} className="btn btn-outline btn-sm" style={{ color: '#10b981', borderColor: '#10b981' }}>
                         <Users size={16} /> Toutes les Cartes
                     </button>

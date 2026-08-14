@@ -127,6 +127,33 @@
     flex-shrink: 0;
 }
 
+/* Recouvrement plein-largeur au tap sur mobile (voir Topbar.tsx) — la
+   barre de recherche complète prend alors toute la largeur de l'en-tête,
+   les icônes d'actions étant masquées pendant ce temps. */
+.searchShellMobile {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    max-width: none;
+    z-index: 95;
+}
+
+.searchCloseBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: none;
+    background: #f1f5f9;
+    color: #475569;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
 .searchDropdown {
     position: absolute;
     top: calc(100% + 10px);

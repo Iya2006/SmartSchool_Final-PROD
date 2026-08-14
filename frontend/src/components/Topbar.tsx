@@ -15,7 +15,7 @@
 
 import { useMemo, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { Search, Calendar, PanelLeftClose, PanelLeftOpen, Command, Settings, User, Menu } from 'lucide-react';
+import { Search, Calendar, PanelLeftClose, PanelLeftOpen, Command, Settings, User, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
 import { useUI } from '@/context/UIContext';
@@ -24,6 +24,7 @@ import { isAdminSystemRole } from '@/lib/roleAccess';
 import TopbarNotifications from './TopbarNotifications';
 import TopbarUserMenu from './TopbarUserMenu';
 import styles from './Topbar.module.css';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 const SEARCH_ITEMS = [
     { label: 'Dashboard', href: '/dashboard', keywords: ['dashboard', 'accueil', 'admin', 'tableau de bord'] },
@@ -63,8 +64,10 @@ export default function Topbar() {
     const router = useRouter();
     const { sidebarCollapsed, toggleSidebarCollapsed, openMobileSidebar } = useUI();
     const { user } = useAuth();
+    const isMobile = useIsMobile();
     const [query, setQuery] = useState('');
     const [isFocused, setIsFocused] = useState(false);
+    const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
     const searchItems = useMemo(() => {
         return isAdminSystemRole(user?.role) ? [...SEARCH_ITEMS, MONITORING_SEARCH_ITEM] : SEARCH_ITEMS;
@@ -104,7 +107,22 @@ export default function Topbar() {
                     <Menu size={20} />
                 </button>
 
-                <div className={styles.searchShell}>
+                {/* Sur mobile, la barre de recherche complète prend trop de place
+                    face aux icônes d'actions (cause du chevauchement avec la
+                    cloche) — repliée en simple bouton, elle s'ouvre en recouvrement
+                    plein-largeur au tap, comme dans la plupart des applis mobiles. */}
+                {isMobile && !mobileSearchOpen ? (
+                    <button
+                        type="button"
+                        className={styles.mobileMenuBtn}
+                        style={{ display: 'inline-flex' }}
+                        onClick={() => setMobileSearchOpen(true)}
+                        aria-label="Rechercher"
+                    >
+                        <Search size={18} />
+                    </button>
+                ) : (
+                <div className={`${styles.searchShell} ${isMobile ? styles.searchShellMobile : ''}`}>
                     <div className={styles.searchContainer}>
                         <Search className={styles.searchIcon} size={16} strokeWidth={2.5} />
                         <input
@@ -112,6 +130,7 @@ export default function Topbar() {
                             placeholder="Rechercher une page, un module ou une action..."
                             className={styles.searchInput}
                             id="topbar-search-input"
+                            autoFocus={isMobile}
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
                             onFocus={() => setIsFocused(true)}
@@ -122,9 +141,24 @@ export default function Topbar() {
                                     setQuery('');
                                     setIsFocused(false);
                                 }
+                                if (e.key === 'Escape' && isMobile) {
+                                    setMobileSearchOpen(false);
+                                }
                             }}
                         />
-                        <span className={styles.searchHint}><Command size={13} /> Recherche</span>
+                        {isMobile ? (
+                            <button
+                                type="button"
+                                className={styles.searchCloseBtn}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => { setMobileSearchOpen(false); setQuery(''); setIsFocused(false); }}
+                                aria-label="Fermer la recherche"
+                            >
+                                <X size={16} />
+                            </button>
+                        ) : (
+                            <span className={styles.searchHint}><Command size={13} /> Recherche</span>
+                        )}
                     </div>
 
                     {isFocused && query.trim() && (
@@ -139,6 +173,7 @@ export default function Topbar() {
                                         router.push(item.href);
                                         setQuery('');
                                         setIsFocused(false);
+                                        if (isMobile) setMobileSearchOpen(false);
                                     }}
                                 >
                                     <span>{item.label}</span>
@@ -150,8 +185,9 @@ export default function Topbar() {
                         </div>
                     )}
                 </div>
+                )}
 
-                {anneeLibelle && (
+                {anneeLibelle && !isMobile && (
                     <div className={styles.yearBadge}>
                         <Calendar size={14} />
                         <span>{anneeLibelle}</span>
@@ -160,7 +196,7 @@ export default function Topbar() {
             </div>
 
             {/* ── Section droite : Actions ── */}
-            <div className={styles.actions}>
+            <div className={styles.actions} style={isMobile && mobileSearchOpen ? { display: 'none' } : undefined}>
                 {/* Notifications */}
                 <TopbarNotifications />
 
