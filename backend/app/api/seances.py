@@ -356,6 +356,80 @@ def annuler_seance(
 # ADMINISTRATION
 # ============================================================================
 
+def _materialiser_le_jour(db: Session, etablissement_id: int, jour: date_type) -> int:
+    """Ouvre les cours d'une journée pour TOUTE l'école, depuis l'emploi du temps.
+
+    POURQUOI CETTE FONCTION EXISTE
+    ------------------------------
+    Une séance ne naissait que si un enseignant ouvrait sa journée dans son
+    portail. La direction, elle, voyait une page vide : l'école a 1 061
+    créneaux à l'emploi du temps et le logiciel était incapable de dire quels
+    cours étaient prévus ce matin, ni lesquels étaient tombés. Le seul écran
+    censé répondre à « quels cours ont eu lieu aujourd'hui » ne répondait donc
+    jamais, et constater l'absence d'un professeur reposait entièrement sur ce
+    qu'un surveillant remarquait de lui-même.
+
+    Ouvrir la journée ne préjuge de rien : chaque séance naît PREVUE. Elle ne
+    devient EFFECTUEE que si quelqu'un fait cours, et l'absence d'un professeur
+    se lit dans ce qui reste PREVUE à la fin de la journée.
+
+    Idempotent : rappeler la fonction sur le même jour ne crée aucun doublon.
+    Rien le week-end — l'emploi du temps ne connaît que LUNDI..VENDREDI.
+    Deux requêtes au total, quel que soit le nombre de classes : jamais une
+    requête par créneau.
+    """
+    if jour.weekday() >= 5:
+        return 0
+    jour_nom = JOURS[jour.weekday()]
+
+    creneaux = (
+        db.query(CreneauEmploi, Classe)
+        .join(Classe, Classe.classe_id == CreneauEmploi.classe_id)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            CreneauEmploi.jour == jour_nom,
+            CreneauEmploi.statut == "ACTIVE",
+        )
+        .all()
+    )
+    if not creneaux:
+        return 0
+
+    deja = {
+        s.creneau_id for s in db.query(Seance.creneau_id).filter(
+            Seance.date_seance == jour,
+            Seance.creneau_id.in_([c.creneau_id for c, _ in creneaux]),
+        ).all()
+    }
+
+    cree = 0
+    for creneau, classe in creneaux:
+        if creneau.creneau_id in deja:
+            continue
+        db.add(Seance(
+            creneau_id=creneau.creneau_id,
+            classe_id=creneau.classe_id,
+            matiere_id=creneau.matiere_id,
+            annee_id=classe.annee_id,
+            enseignant_prevu_id=creneau.enseignant_id,
+            date_seance=jour,
+            heure_debut_prevue=creneau.heure_debut,
+            heure_fin_prevue=creneau.heure_fin,
+            salle=creneau.salle,
+        ))
+        cree += 1
+
+    if cree:
+        try:
+            db.commit()
+        except Exception:
+            # Deux écrans ouverts au même instant sur la même journée : le
+            # second retombe sur les lignes du premier, il n'y a rien à faire.
+            db.rollback()
+            return 0
+    return cree
+
+
 @router_admin.get("")
 def list_seances(
     date: Optional[str] = None,
@@ -365,9 +439,26 @@ def list_seances(
     classe_id: Optional[int] = None,
     matiere_id: Optional[int] = None,
     statut: Optional[str] = None,
+    ouvrir_la_journee: bool = True,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    """Les séances, filtrées. Ouvrir l'écran ouvre la journée concernée.
+
+    Sans aucun filtre de date, c'est AUJOURD'HUI qu'on ouvre : c'est la
+    question que se pose un directeur en arrivant le matin, et jusqu'ici
+    l'écran lui répondait par une page vide.
+
+    Sur une PLAGE de dates on n'ouvre rien : ouvrir un trimestre entier d'un
+    clic créerait des dizaines de milliers de lignes sans que personne l'ait
+    demandé. `ouvrir_la_journee=false` pour consulter sans rien créer.
+    """
+    if ouvrir_la_journee and not date_debut and not date_fin:
+        _materialiser_le_jour(
+            db, etablissement_id,
+            date_type.fromisoformat(date) if date else date_type.today(),
+        )
+
     q = db.query(Seance).join(Classe, Classe.classe_id == Seance.classe_id).filter(
         Classe.etablissement_id == etablissement_id
     )

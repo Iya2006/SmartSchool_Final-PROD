@@ -33,6 +33,7 @@ import {
     X,
     Zap,
     CalendarClock,
+    QrCode,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
@@ -178,6 +179,14 @@ type LigneAppel = {
     statut: 'PRESENT' | 'ABSENT' | 'RETARD';
     est_justifie: boolean;
     motif?: string | null;
+    /** Ce que dit la carte scannée au portail — l'élève est-il dans l'école ? */
+    pointe_a_l_ecole?: boolean;
+    heure_arrivee?: string | null;
+    heure_depart?: string | null;
+    /** Entré ce matin, absent à ce cours : il n'a pas manqué l'école, il a
+     *  manqué le cours. C'est la contradiction qui mérite un regard. */
+    entre_mais_absent?: boolean;
+    jamais_entre?: boolean;
 };
 
 type CreneauAppel = {
@@ -205,12 +214,38 @@ type FeuilleAppel = {
     creneaux: CreneauAppel[];
     creneau_id?: number | null;
     seance_id?: number | null;
+    /** Le portail d'entrée en un coup d'œil, avant de descendre dans la liste. */
+    portail?: { pointes: number; jamais_entres: number; entres_mais_absents: number };
     eleves: LigneAppel[];
+};
+
+type CoursDuJour = {
+    seance_id: number;
+    classe: string;
+    matiere: string;
+    enseignant_prevu_id: number | null;
+    enseignant_prevu: string;
+    enseignant_reel: string | null;
+    heure_debut_prevue: string;
+    heure_fin_prevue: string;
+    statut: string;
+    appel_fait: boolean;
 };
 
 type ClasseAppel = { classe_id: number; libelle: string };
 
 type ProfOption = { enseignant_id: number; nom: string; prenom: string; matiere?: string | null };
+
+/** Les enseignants rangés par cycle : quarante-six noms à plat, c'est une
+ *  liste dans laquelle on ne retrouve personne. */
+type GroupeCycle = {
+    code: string;
+    libelle: string;
+    enseignants: {
+        enseignant_id: number; nom: string; prenom: string;
+        matricule?: string | null; autres_cycles: string[];
+    }[];
+};
 
 type EleveOption = {
     eleve_id: number;
@@ -1014,8 +1049,61 @@ function SurveillantPortal() {
         enseignant_id: '',
         date_absence: new Date().toISOString().slice(0, 10),
         motif: '',
+        est_justifie: false,
     });
+    // Les heures que ce professeur n'a pas assurees. Vide au primaire : le
+    // maitre tient sa classe toute la journee, il n'y a rien a cocher.
+    const [coursCoches, setCoursCoches] = useState<number[]>([]);
+    // Ranges par cycle : le surveillant sait dans quel cycle il vient de
+    // constater l'absence, la liste doit suivre sa tete.
+    const [cycles, setCycles] = useState<GroupeCycle[]>([]);
     const [signalEnCours, setSignalEnCours] = useState(false);
+
+    /* LES COURS DU JOUR
+       Le surveillant signalait ce qu'il remarquait lui-meme dans la cour :
+       une absence vue, c'est une absence signalee, et tout le reste passait.
+       L'emploi du temps sait pourtant exactement quels cours sont prevus.
+       Ici il les voit, et un cours reste « a venir » en fin de journee est
+       precisement un cours qui n'a pas eu lieu. */
+    const [coursDuJour, setCoursDuJour] = useState<CoursDuJour[]>([]);
+    const [coursLoading, setCoursLoading] = useState(false);
+
+    const chargerCoursDuJour = useCallback(async () => {
+        setCoursLoading(true);
+        try {
+            const res = await api.get<CoursDuJour[]>(
+                `/api/seances?date=${signalement.date_absence}`);
+            setCoursDuJour(res.data || []);
+        } catch {
+            setCoursDuJour([]);
+        } finally {
+            setCoursLoading(false);
+        }
+    }, [signalement.date_absence]);
+
+    useEffect(() => { chargerCoursDuJour(); }, [chargerCoursDuJour]);
+
+    /** Depuis un cours precis : le professeur, la date et le motif sont deja
+     *  connus, il n'y a plus rien a ressaisir de memoire. */
+    const signalerDepuisLeCours = (c: CoursDuJour) => {
+        if (!c.enseignant_prevu_id) return;
+        setSignalement((v) => ({ ...v, enseignant_id: String(c.enseignant_prevu_id) }));
+        setCoursCoches([c.seance_id]);
+        document.getElementById('signalement-cours')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+
+    /** Les cours de CE professeur ce jour-la. Au primaire la liste est vide :
+     *  il n'a pas d'emploi du temps par heure, il tient sa classe. */
+    const coursDuProf = useMemo(
+        () => (signalement.enseignant_id
+            ? coursDuJour.filter((c) => String(c.enseignant_prevu_id) === signalement.enseignant_id)
+            : []),
+        [coursDuJour, signalement.enseignant_id],
+    );
+
+    // Changer de professeur ou de jour vide les cases : cocher l'heure d'un
+    // autre serait pire que ne rien cocher.
+    useEffect(() => { setCoursCoches([]); }, [signalement.enseignant_id, signalement.date_absence]);
 
     const envoyerSignalement = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -1028,9 +1116,15 @@ function SurveillantPortal() {
                 employe_id: `ENS_${signalement.enseignant_id}`,
                 date_absence: signalement.date_absence,
                 motif: signalement.motif.trim() || null,
+                est_justifie: signalement.est_justifie,
+                // Au collège et au lycée, on désigne les heures manquées ; au
+                // primaire il n'y en a pas à choisir, c'est la journée.
+                seance_ids: coursCoches,
             });
             setSuccess(`${res.data?.employe || 'Enseignant'} — ${res.data?.message || 'Signalement transmis.'}`);
-            setSignalement((v) => ({ ...v, enseignant_id: '', motif: '' }));
+            setSignalement((v) => ({ ...v, enseignant_id: '', motif: '', est_justifie: false }));
+            setCoursCoches([]);
+            chargerCoursDuJour();
         } catch (err) {
             setError(getErrorMessage(err));
         } finally {
@@ -1061,6 +1155,11 @@ function SurveillantPortal() {
             ]);
             setClasses(classesRes.data || []);
             setProfs(Array.isArray(profsRes.data) ? profsRes.data : []);
+            // Le rangement par cycle ne doit pas empêcher l'écran de s'ouvrir :
+            // s'il échoue, on retombe sur la liste à plat.
+            api.get<{ groupes: GroupeCycle[] }>('/api/vie-scolaire/enseignants-par-cycle')
+                .then((r) => setCycles(r.data?.groupes || []))
+                .catch(() => setCycles([]));
             setPresenceStats(presenceRes.data || { total: 0, presents: 0, absents: 0, retards: 0, taux_presence: 0 });
             setIncidentStats(incidentStatsRes.data || { total_incidents: 0, par_gravite: [], top_types: [] });
             setIncidents(incidentsRes.data || []);
@@ -1076,7 +1175,35 @@ function SurveillantPortal() {
         loadSurveillance();
     }, [loadSurveillance]);
 
-    const selectedEleve = useMemo(() => eleves.find((eleve) => String(eleve.eleve_id) === form.eleve_id), [eleves, form.eleve_id]);
+    /* TROUVER UN ELEVE PARMI MILLE
+       La liste deroulante chargeait les 120 premiers eleves de l'ecole. Dans
+       une ecole de mille, huit eleves sur dix etaient introuvables — et rien
+       ne le disait : la liste s'ouvrait normalement, simplement incomplete.
+       On interroge donc le serveur, qui cherche sur nom, prenom et matricule
+       dans TOUTE l'ecole. */
+    const [rechercheEleve, setRechercheEleve] = useState('');
+    const [resultatsEleves, setResultatsEleves] = useState<EleveOption[]>([]);
+    const [rechercheLoading, setRechercheLoading] = useState(false);
+    const [eleveChoisi, setEleveChoisi] = useState<EleveOption | null>(null);
+
+    useEffect(() => {
+        const terme = rechercheEleve.trim();
+        if (terme.length < 2) { setResultatsEleves([]); return; }
+
+        // On attend que la frappe se pose : sans cela, « Fatoumata » lance
+        // neuf recherches et la reponse la plus lente ecrase la bonne.
+        let annule = false;
+        setRechercheLoading(true);
+        const minuteur = setTimeout(() => {
+            api.get<EleveOption[]>(
+                `/api/eleves?statut=ACTIF&limit=25&search=${encodeURIComponent(terme)}`)
+                .then((res) => { if (!annule) setResultatsEleves(res.data || []); })
+                .catch(() => { if (!annule) setResultatsEleves([]); })
+                .finally(() => { if (!annule) setRechercheLoading(false); });
+        }, 280);
+
+        return () => { annule = true; clearTimeout(minuteur); };
+    }, [rechercheEleve]);
 
     const submitIncident = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
@@ -1167,10 +1294,91 @@ function SurveillantPortal() {
                     </div>
                 </section>
 
+                {/* ═══ LES COURS DU JOUR ═══
+                    Le surveillant ne signalait que ce qu'il remarquait de
+                    lui-meme. L'emploi du temps sait quels cours sont prevus :
+                    un cours reste « a venir » en fin de journee est un cours
+                    qui n'a pas eu lieu. */}
+                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                    <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #eff6ff)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                            <p style={{ margin: 0, fontSize: '12px', color: '#2563eb', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Emploi du temps</p>
+                            <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Les cours du jour</h2>
+                            <p style={{ margin: '6px 0 0', fontSize: '13.5px', color: '#64748b', maxWidth: '660px', lineHeight: 1.65 }}>
+                                Ce qui reste <strong>à venir</strong> en fin de journée n&apos;a pas été assuré.
+                                Signalez directement depuis le cours : le professeur et l&apos;heure sont déjà connus.
+                            </p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                            {[
+                                { l: 'Prévus', v: coursDuJour.length, c: '#2563eb' },
+                                { l: 'Non assurés', v: coursDuJour.filter((c) => c.statut === 'PREVUE').length, c: '#b45309' },
+                                { l: 'Appel fait', v: coursDuJour.filter((c) => c.appel_fait).length, c: '#16a34a' },
+                            ].map((x) => (
+                                <div key={x.l} style={{ padding: '10px 14px', borderRadius: '14px', background: `${x.c}10`, border: `1px solid ${x.c}25`, minWidth: '92px' }}>
+                                    <p style={{ margin: 0, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', color: x.c }}>{x.l}</p>
+                                    <p style={{ margin: '3px 0 0', fontSize: '22px', fontWeight: 950, color: '#0f172a' }}>{x.v}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        {coursLoading ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                <Loader2 size={20} className="animate-spin" style={{ verticalAlign: 'middle', marginRight: 8 }} />
+                                Lecture de l&apos;emploi du temps…
+                            </p>
+                        ) : coursDuJour.length === 0 ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                Aucun cours prévu ce jour-là — week-end ou emploi du temps vide.
+                            </p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '420px', overflowY: 'auto' }}>
+                                {coursDuJour.map((c, idx) => {
+                                    const nonAssure = c.statut === 'PREVUE';
+                                    return (
+                                        <div key={c.seance_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: nonAssure ? '#fffbeb' : 'transparent', flexWrap: 'wrap' }}>
+                                            <div style={{ minWidth: '110px' }}>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 900, color: '#0f172a' }}>
+                                                    {c.heure_debut_prevue?.slice(0, 5)}–{c.heure_fin_prevue?.slice(0, 5)}
+                                                </p>
+                                            </div>
+                                            <div style={{ minWidth: '200px', flex: '1 1 220px' }}>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>{c.matiere}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>{c.classe}</p>
+                                            </div>
+                                            <div style={{ minWidth: '170px', flex: '1 1 170px' }}>
+                                                <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#334155' }}>
+                                                    {c.enseignant_reel || c.enseignant_prevu}
+                                                </p>
+                                                {c.enseignant_reel && c.enseignant_reel !== c.enseignant_prevu && (
+                                                    <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#0284c7', fontWeight: 700 }}>
+                                                        remplace {c.enseignant_prevu}
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <span style={{ padding: '5px 12px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: nonAssure ? '#fef3c7' : '#f0fdf4', color: nonAssure ? '#92400e' : '#166534' }}>
+                                                {nonAssure ? 'À venir' : c.statut === 'EFFECTUEE' ? 'Effectué' : c.statut}
+                                            </span>
+                                            {nonAssure && c.enseignant_prevu_id && (
+                                                <button type="button" onClick={() => signalerDepuisLeCours(c)}
+                                                    style={{ marginLeft: 'auto', padding: '8px 14px', borderRadius: '12px', border: '1px solid #f59e0b', background: 'white', color: '#b45309', fontWeight: 800, fontSize: '12.5px', cursor: 'pointer' }}>
+                                                    Signaler ce cours
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </section>
+
                 {/* ═══ SIGNALER L'ABSENCE D'UN ENSEIGNANT ═══
                     Constater n'est pas decider : ce formulaire cree un
                     signalement, jamais une retenue. */}
-                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                <section id="signalement-cours" style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                     <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #fff7ed)' }}>
                         <p style={{ margin: 0, fontSize: '12px', color: '#b45309', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Corps enseignant</p>
                         <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Signaler un cours non assuré</h2>
@@ -1188,7 +1396,22 @@ function SurveillantPortal() {
                                 onChange={(e) => setSignalement((v) => ({ ...v, enseignant_id: e.target.value }))}
                                 style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }}>
                                 <option value="">Choisir…</option>
-                                {profs.map((pr) => (
+                                {/* Rangés par cycle : le surveillant sait dans quel
+                                    cycle il vient de constater l'absence. Un
+                                    professeur qui enseigne dans deux cycles apparaît
+                                    dans celui où il a le plus de classes, et sa
+                                    ligne le dit — le classer ailleurs en silence
+                                    serait plus déroutant que de ne pas le classer. */}
+                                {cycles.length > 0 ? cycles.map((g) => (
+                                    <optgroup key={g.code} label={`${g.libelle} — ${g.enseignants.length}`}>
+                                        {g.enseignants.map((pr) => (
+                                            <option key={pr.enseignant_id} value={pr.enseignant_id}>
+                                                {pr.nom} {pr.prenom}
+                                                {pr.autres_cycles.length ? ` (aussi ${pr.autres_cycles.join(', ')})` : ''}
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                )) : profs.map((pr) => (
                                     <option key={pr.enseignant_id} value={pr.enseignant_id}>
                                         {pr.nom} {pr.prenom}
                                     </option>
@@ -1209,6 +1432,69 @@ function SurveillantPortal() {
                                 placeholder="Cours de 8h non assuré, classe restée sans professeur…"
                                 style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '14px' }} />
                         </label>
+                        {/* QUELLES HEURES, EXACTEMENT
+                            Un professeur du collège peut manquer son cours de
+                            8 h et revenir assurer celui de 11 h, dans la même
+                            classe ou dans une autre. Signaler « absent le 14 »
+                            serait faux. Au primaire il n'y a rien à cocher :
+                            le maître tient sa classe toute la journée. */}
+                        {signalement.enseignant_id && (
+                            <div style={{ flex: '1 1 100%', padding: '14px 16px', borderRadius: '16px', background: '#fffbeb', border: '1px solid #fde68a' }}>
+                                {coursDuProf.length === 0 ? (
+                                    <p style={{ margin: 0, fontSize: '13px', color: '#92400e', fontWeight: 700 }}>
+                                        Aucune heure à l&apos;emploi du temps ce jour-là — le signalement
+                                        porte sur la <strong>journée entière</strong>. C&apos;est le cas
+                                        normal au primaire : le maître tient sa classe toute la journée.
+                                    </p>
+                                ) : (
+                                    <>
+                                        <p style={{ margin: '0 0 10px', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#92400e' }}>
+                                            Quelles heures n&apos;a-t-il pas assurées ?
+                                        </p>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                                            {coursDuProf.map((c) => {
+                                                const coche = coursCoches.includes(c.seance_id);
+                                                const fait = c.statut === 'EFFECTUEE';
+                                                return (
+                                                    <label key={c.seance_id}
+                                                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderRadius: '12px', background: fait ? '#f1f5f9' : coche ? '#fee2e2' : 'white', border: `1px solid ${coche ? '#dc2626' : '#e2e8f0'}`, cursor: fait ? 'not-allowed' : 'pointer', opacity: fait ? 0.6 : 1 }}>
+                                                        <input type="checkbox" checked={coche} disabled={fait}
+                                                            onChange={() => setCoursCoches((v) => v.includes(c.seance_id)
+                                                                ? v.filter((x) => x !== c.seance_id)
+                                                                : [...v, c.seance_id])}
+                                                            style={{ width: 17, height: 17, cursor: fait ? 'not-allowed' : 'pointer' }} />
+                                                        <span style={{ fontSize: '13.5px', fontWeight: 800, color: '#0f172a', minWidth: '104px' }}>
+                                                            {c.heure_debut_prevue?.slice(0, 5)}–{c.heure_fin_prevue?.slice(0, 5)}
+                                                        </span>
+                                                        <span style={{ fontSize: '13px', color: '#334155', flex: 1 }}>
+                                                            {c.matiere} · {c.classe}
+                                                        </span>
+                                                        {fait && (
+                                                            <span style={{ fontSize: '11.5px', fontWeight: 800, color: '#166534' }}>
+                                                                appel fait — cours assuré
+                                                            </span>
+                                                        )}
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                        {coursCoches.length === 0 && (
+                                            <p style={{ margin: '9px 0 0', fontSize: '12.5px', color: '#a16207', fontWeight: 700 }}>
+                                                Sans heure cochée, le signalement portera sur la journée entière.
+                                            </p>
+                                        )}
+                                    </>
+                                )}
+
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '9px', marginTop: '12px', fontSize: '13px', fontWeight: 800, color: '#92400e', cursor: 'pointer' }}>
+                                    <input type="checkbox" checked={signalement.est_justifie}
+                                        onChange={(e) => setSignalement((v) => ({ ...v, est_justifie: e.target.checked }))}
+                                        style={{ width: 17, height: 17, cursor: 'pointer' }} />
+                                    Absence justifiée (aucune retenue ne sera proposée)
+                                </label>
+                            </div>
+                        )}
+
                         <button type="submit" disabled={signalEnCours || !signalement.enseignant_id}
                             style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '14px', border: 'none', background: '#b45309', color: 'white', fontWeight: 900, fontSize: '14px', cursor: signalEnCours ? 'wait' : 'pointer', opacity: signalement.enseignant_id ? 1 : 0.55 }}>
                             {signalEnCours ? <Loader2 size={17} className="animate-spin" /> : <AlertTriangle size={17} />}
@@ -1259,6 +1545,11 @@ function SurveillantPortal() {
                                     { l: 'Absents', v: bilanAppel.absents, c: '#dc2626' },
                                     { l: 'Retards', v: bilanAppel.retards, c: '#f59e0b' },
                                     { l: 'Non justifiés', v: bilanAppel.nonJustifies, c: '#7c3aed' },
+                                    // Le portail d'entrée, à côté de l'appel : « entré,
+                                    // mais absent de ce cours » est le chiffre qu'aucun
+                                    // des deux contrôles ne pouvait donner seul.
+                                    { l: 'Entrés à l’école', v: feuille.portail?.pointes ?? 0, c: '#0284c7' },
+                                    { l: 'Entrés, absents ici', v: feuille.portail?.entres_mais_absents ?? 0, c: '#b45309' },
                                 ].map((x) => (
                                     <div key={x.l} style={{ padding: '10px 14px', borderRadius: '14px', background: `${x.c}10`, border: `1px solid ${x.c}25`, minWidth: '92px' }}>
                                         <p style={{ margin: 0, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', color: x.c }}>{x.l}</p>
@@ -1384,7 +1675,25 @@ function SurveillantPortal() {
                                         <div key={el.inscription_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '11px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: absent ? '#fef2f2' : retard ? '#fffbeb' : 'transparent', flexWrap: 'wrap' }}>
                                             <div style={{ minWidth: '230px', flex: '1 1 230px' }}>
                                                 <p style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>{el.nom} {el.prenom}</p>
-                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>{el.matricule}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                                                    <span>{el.matricule}</span>
+                                                    {/* CE QUE DIT LE PORTAIL
+                                                        La carte prouve qu'il est dans l'école ; l'appel
+                                                        prouve qu'il est en cours. Les deux ne disent pas
+                                                        la même chose, et l'écart se voit ici. */}
+                                                    {el.pointe_a_l_ecole ? (
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '999px', background: el.entre_mais_absent ? '#fef2f2' : '#f0fdf4', color: el.entre_mais_absent ? '#991b1b' : '#166534', fontWeight: 800, fontSize: '10.5px' }}>
+                                                            <QrCode size={10} />
+                                                            {el.entre_mais_absent
+                                                                ? `entré à ${el.heure_arrivee} — absent de ce cours`
+                                                                : `entré à ${el.heure_arrivee}`}
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '999px', background: '#f8fafc', color: '#94a3b8', fontWeight: 800, fontSize: '10.5px' }}>
+                                                            carte non scannée
+                                                        </span>
+                                                    )}
+                                                </p>
                                             </div>
                                             <div style={{ display: 'flex', gap: '6px' }}>
                                                 {([
@@ -1491,14 +1800,82 @@ function SurveillantPortal() {
                                 <button type="button" onClick={() => setShowForm(false)} style={{ width: 42, height: 42, borderRadius: '14px', border: '1px solid #e2e8f0', background: 'white', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><X size={18} /></button>
                             </div>
                             <div style={{ padding: '24px', display: 'grid', gap: '16px' }}>
+                                {/* CHERCHER L'ÉLÈVE, PAS LE FAIRE DÉFILER
+                                    La liste déroulante était plafonnée aux 120
+                                    premiers élèves. Dans une école de mille, le
+                                    surveillant ne trouvait pas huit élèves sur
+                                    dix — et rien ne le lui disait : la liste
+                                    s'ouvrait normalement, simplement incomplète.
+                                    On cherche donc côté serveur, par nom,
+                                    prénom ou matricule, sur TOUTE l'école. */}
                                 <label style={{ display: 'grid', gap: '7px' }}>
                                     <span style={{ color: '#334155', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Élève concerné</span>
-                                    <select required value={form.eleve_id} onChange={(e) => setForm((prev) => ({ ...prev, eleve_id: e.target.value }))} style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', outline: 'none', background: '#f8fafc', color: '#0f172a', fontWeight: 700 }}>
-                                        <option value="">Sélectionner un élève</option>
-                                        {eleves.map((eleve) => <option key={eleve.eleve_id} value={eleve.eleve_id}>{eleve.prenom} {eleve.nom} {eleve.classe_code ? `• ${eleve.classe_code}` : ''}</option>)}
-                                    </select>
+                                    {eleveChoisi ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 14px', borderRadius: '15px', border: '1px solid #16a34a', background: '#f0fdf4' }}>
+                                            <UserCheck size={18} style={{ color: '#16a34a', flexShrink: 0 }} />
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <p style={{ margin: 0, fontSize: '14px', fontWeight: 900, color: '#0f172a' }}>
+                                                    {eleveChoisi.prenom} {eleveChoisi.nom}
+                                                </p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#15803d', fontWeight: 700 }}>
+                                                    {eleveChoisi.matricule || 'matricule non renseigné'}
+                                                    {eleveChoisi.classe_code ? ` • ${eleveChoisi.classe_code}` : ''}
+                                                    {eleveChoisi.niveau ? ` • ${eleveChoisi.niveau}` : ''}
+                                                </p>
+                                            </div>
+                                            <button type="button" onClick={() => { setEleveChoisi(null); setForm((prev) => ({ ...prev, eleve_id: '' })); setRechercheEleve(''); }}
+                                                style={{ padding: '7px 13px', borderRadius: '11px', border: '1px solid #e2e8f0', background: 'white', color: '#64748b', fontWeight: 800, fontSize: '12.5px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                Changer
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                                                <Search size={17} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                                                <input value={rechercheEleve} onChange={(e) => setRechercheEleve(e.target.value)}
+                                                    placeholder="Nom, prénom ou matricule…" autoComplete="off"
+                                                    style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '14px', fontWeight: 700, color: '#0f172a' }} />
+                                                {rechercheLoading && <Loader2 size={15} className="animate-spin" style={{ color: '#94a3b8' }} />}
+                                            </div>
+                                            {rechercheEleve.trim().length > 0 && rechercheEleve.trim().length < 2 && (
+                                                <p style={{ margin: 0, fontSize: '12.5px', color: '#94a3b8', fontWeight: 700 }}>
+                                                    Tapez au moins deux lettres.
+                                                </p>
+                                            )}
+                                            {rechercheEleve.trim().length >= 2 && !rechercheLoading && resultatsEleves.length === 0 && (
+                                                <p style={{ margin: 0, fontSize: '12.5px', color: '#b45309', fontWeight: 700 }}>
+                                                    Aucun élève ne correspond à « {rechercheEleve.trim()} ».
+                                                </p>
+                                            )}
+                                            {/* 25 est un plafond, pas un total : sans le dire,
+                                                le surveillant croirait avoir vu tous les Soumah
+                                                de l'école. */}
+                                            {resultatsEleves.length >= 25 && (
+                                                <p style={{ margin: 0, fontSize: '12.5px', color: '#b45309', fontWeight: 700 }}>
+                                                    Plus de 25 élèves correspondent — ajoutez le prénom
+                                                    ou le matricule pour affiner.
+                                                </p>
+                                            )}
+                                            {resultatsEleves.length > 0 && (
+                                                <div style={{ maxHeight: '230px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '15px' }}>
+                                                    {resultatsEleves.map((eleve, i) => (
+                                                        <button key={eleve.eleve_id} type="button"
+                                                            onClick={() => { setEleveChoisi(eleve); setForm((prev) => ({ ...prev, eleve_id: String(eleve.eleve_id) })); }}
+                                                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '11px 14px', border: 'none', borderTop: i === 0 ? 'none' : '1px solid #f1f5f9', background: 'white', cursor: 'pointer' }}>
+                                                            <span style={{ display: 'block', fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>
+                                                                {eleve.prenom} {eleve.nom}
+                                                            </span>
+                                                            <span style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginTop: '2px', fontWeight: 700 }}>
+                                                                {eleve.matricule || 'sans matricule'}
+                                                                {eleve.classe_code ? ` • ${eleve.classe_code}` : ' • sans classe'}
+                                                            </span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
                                 </label>
-                                {selectedEleve && <p style={{ margin: '-6px 0 0', color: '#64748b', fontSize: '13px' }}>Matricule : {selectedEleve.matricule || 'non renseigné'} — Niveau : {selectedEleve.niveau || 'non renseigné'}</p>}
                                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
                                     <label style={{ display: 'grid', gap: '7px' }}>
                                         <span style={{ color: '#334155', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Type</span>

@@ -498,6 +498,87 @@ paramètre explicite.
 
 ---
 
+## 6. Le portail et la classe se parlent (14/08/2026)
+
+Couvert par `tests/test_pointage_et_appel_se_parlent.py` (12 tests), vérifié sur
+l'école 3.
+
+**Deux contrôles, deux questions différentes** — c'est la règle métier posée par
+le fondateur, et elle n'était nulle part dans le code :
+
+| | Prouve quoi | Fréquence |
+|---|---|---|
+| Carte scannée au portail (`ss_pointages_eleves`) | l'élève est **à l'école** ce jour | 1 fois / jour, tous cycles |
+| Appel en classe (`ss_presences`) | l'élève est **en cours** à cette heure | primaire : 1 fois / jour · collège et lycée : à chaque cours |
+
+**Ils ne se parlaient pas.** Le surveillant faisait l'appel sans savoir qui avait
+franchi le portail, et personne ne voyait le cas qui compte : l'élève entré le
+matin, absent en cours l'après-midi. Il n'a pas manqué l'école, il a manqué le
+cours — ce n'est pas la même chose à dire à une famille.
+
+`GET /vie-scolaire/feuille-appel` renvoie désormais, par élève,
+`pointe_a_l_ecole`, `heure_arrivee`, `heure_depart`, et deux drapeaux :
+`entre_mais_absent` et `jamais_entre`. Plus un bloc `portail` de synthèse. Une
+seule requête pour toute la classe. Le portail **informe** le surveillant, il ne
+décide jamais à sa place : c'est lui qui voit la salle.
+
+**L'écran des séances ouvre la journée.** Une séance ne naissait que si un
+enseignant ouvrait son portail. La direction voyait une page vide alors que
+l'école a 1 061 créneaux à l'emploi du temps : le seul écran censé répondre à
+« quels cours ont eu lieu aujourd'hui » ne répondait jamais, et constater
+l'absence d'un professeur reposait entièrement sur ce qu'un surveillant
+remarquait de lui-même.
+
+`GET /api/seances` matérialise maintenant la journée demandée (aujourd'hui si
+aucune date n'est donnée) via `_materialiser_le_jour`. Vérifié en réel :
+**238 séances** ouvertes pour un mardi, rejouable sans doublon, **rien** le
+week-end. Garde-fous : une **plage** de dates n'ouvre rien (un trimestre d'un
+clic ferait des dizaines de milliers de lignes) et `ouvrir_la_journee=false`
+permet de consulter sans écrire. Chaque séance naît `PREVUE` — l'absence d'un
+professeur se lit dans ce qui reste `PREVUE` en fin de journée.
+
+**Un professeur ne manque pas forcément sa journée.** Au primaire, un maître
+tient sa classe toute la journée : s'il n'est pas là, c'est la journée entière.
+Au collège et au lycée il enseigne une heure ici, une heure là — il peut manquer
+son cours de 8 h et revenir assurer celui de 16 h. Signaler « absent le 10 mars »
+était donc faux dans la moitié des cas.
+
+`POST /vie-scolaire/absences-enseignant` accepte désormais `seance_ids` : chaque
+séance désignée passe en `NON_EFFECTUEE` avec son motif. Un cours déjà
+`EFFECTUEE` est refusé — ce serait contredire l'appel que le professeur a
+lui-même enregistré.
+
+**La paie compte des JOURS** (`set(jours_pointage) | set(jours_manuels)`), donc
+on garde **une seule ligne d'absence par employé et par jour** : un second
+signalement le même jour la complète au lieu d'être refusé. Sans ça, le
+surveillant qui constatait une deuxième heure manquée s'entendait répondre
+« déjà enregistrée » et ne pouvait plus rien dire. Une absence déjà tranchée par
+la direction n'est plus modifiable ici.
+
+Vérifié en réel sur Bountouraby DIALLO (7 cours le même mardi) : 8 h et 16 h
+marquées non assurées, **les cinq heures du milieu intactes**, une seule ligne
+d'absence dont le motif garde la trace des deux cours.
+
+L'écran du surveillant coche les heures du professeur choisi ; quand il n'y en a
+aucune à l'emploi du temps — le cas du primaire — il l'annonce et le signalement
+porte sur la journée entière.
+
+**Enseignants rangés par cycle.** `GET /vie-scolaire/enseignants-par-cycle`
+groupe les professeurs en primaire / collège / lycée. Quarante-six noms à plat,
+c'est une liste où l'on ne retrouve personne ; le surveillant sait dans quel
+cycle il vient de constater l'absence. Un professeur qui enseigne dans deux
+cycles est rangé là où il a le plus d'affectations, et sa ligne le dit (« aussi
+Lycée ») — le classer ailleurs en silence serait plus déroutant. Vérifié sur
+l'école 3 : 17 au primaire, 14 au collège, 15 au lycée. Deux requêtes, pas une
+par professeur. La liste déroulante du signalement utilise ces `<optgroup>`.
+
+**Le pointage des enseignants n'a demandé aucun code** : `/api/presences-agents/scan`
+reconnaît déjà le matricule d'un enseignant et écrit `type_agent='ENSEIGNANT'`.
+Constat sur l'école 3 : 817 pointages, **tous du personnel administratif, aucun
+enseignant**. C'est un manque d'usage, pas de logiciel.
+
+---
+
 ### Reste à faire
 
 - [ ] Recette fonctionnelle par l'établissement pilote sur une classe réelle

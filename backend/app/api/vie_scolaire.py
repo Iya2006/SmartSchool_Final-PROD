@@ -9,7 +9,9 @@ from datetime import date as date_type, datetime
 from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import get_current_user, require_etablissement
-from app.models.academique import Presence, Incident, Inscription, Classe, Eleve
+from app.models.academique import (
+    Presence, Incident, Inscription, Classe, Eleve, PointageEleve,
+)
 from app.schemas.schemas import (
     PresenceCreate, PresenceOut, IncidentCreate, IncidentOut
 )
@@ -215,9 +217,30 @@ def feuille_appel(
         ).all()
     deja = {p.inscription_id: p for p in pointages}
 
+    # LE PORTAIL ET LA CLASSE, ENFIN RELIÉS
+    # ----------------------------------------------------------------------
+    # Deux contrôles coexistaient sans jamais se parler : la carte scannée à
+    # l'entrée prouve que l'élève est À L'ÉCOLE ce jour ; l'appel prouve qu'il
+    # était EN COURS à cette heure. Le surveillant faisait l'appel sans savoir
+    # qui avait franchi le portail — et personne ne voyait le cas qui compte
+    # le plus : l'élève entré le matin, absent en cours l'après-midi. Il n'a
+    # pas manqué l'école, il a manqué le cours ; ce n'est pas la même chose à
+    # dire à une famille.
+    #
+    # Une requête pour toute la classe, jamais une par élève.
+    pointes = {
+        p.eleve_id: p for p in db.query(PointageEleve).filter(
+            PointageEleve.etablissement_id == etablissement_id,
+            PointageEleve.date_pointage == date_presence,
+            PointageEleve.eleve_id.in_([l.eleve_id for l in lignes] or [0]),
+        ).all()
+    }
+
     eleves = []
     for l in lignes:
         pointage = deja.get(l.inscription_id)
+        entree = pointes.get(l.eleve_id)
+        statut = pointage.statut_presence if pointage else "PRESENT"
         eleves.append({
             "inscription_id": l.inscription_id,
             "eleve_id": l.eleve_id,
@@ -226,9 +249,17 @@ def feuille_appel(
             "prenom": l.prenom,
             # Absence de ligne = présent. La présence est la règle : on ne
             # pointe que ce qui en sort.
-            "statut": pointage.statut_presence if pointage else "PRESENT",
+            "statut": statut,
             "est_justifie": (pointage.est_justifie == "O") if pointage else False,
             "motif": pointage.motif if pointage else None,
+            # Ce que dit le portail d'entrée, sans jamais décider à la place
+            # du surveillant : c'est lui qui voit la salle.
+            "pointe_a_l_ecole": entree is not None,
+            "heure_arrivee": entree.heure_arrivee.strftime("%H:%M") if entree and entree.heure_arrivee else None,
+            "heure_depart": entree.heure_depart.strftime("%H:%M") if entree and entree.heure_depart else None,
+            # Les deux contradictions qui méritent un regard.
+            "entre_mais_absent": entree is not None and statut in ("ABSENT", "ABSENT_JUSTIFIE"),
+            "jamais_entre": entree is None,
         })
 
     return {
@@ -246,6 +277,12 @@ def feuille_appel(
         "creneaux": creneaux,
         "creneau_id": creneau_id,
         "seance_id": seance.seance_id if seance is not None else None,
+        # Le portail, en un coup d'œil, avant même de descendre dans la liste.
+        "portail": {
+            "pointes": sum(1 for e in eleves if e["pointe_a_l_ecole"]),
+            "jamais_entres": sum(1 for e in eleves if e["jamais_entre"]),
+            "entres_mais_absents": sum(1 for e in eleves if e["entre_mais_absent"]),
+        },
         "eleves": eleves,
     }
 
@@ -410,9 +447,26 @@ def signaler_absence_enseignant(
     Cela crée un SIGNALEMENT, pas une retenue : aucun franc ne bouge tant que
     la direction n'a pas tranché. C'est ce qui permet à celui qui voit de
     parler sans décider à la place de celui qui paie.
+
+    UN PROFESSEUR NE MANQUE PAS FORCÉMENT SA JOURNÉE
+    ------------------------------------------------
+    Au primaire, un maître tient sa classe toute la journée : s'il n'est pas
+    là, c'est la journée entière, et il n'y a aucun cours à choisir.
+
+    Au collège et au lycée, il enseigne une heure ici, une heure là. Il peut
+    manquer son cours de 8 h et revenir assurer celui de 11 h, dans la même
+    classe ou dans une autre. Le signalement porte donc sur des SÉANCES
+    précises, passées dans `seance_ids` : chacune est marquée non effectuée
+    avec son motif, et l'on sait exactement ce qui n'a pas été fait.
+
+    La paie, elle, compte des JOURS. On garde donc une seule ligne d'absence
+    par employé et par jour : un second signalement le même jour vient
+    compléter la première au lieu d'être refusé — sinon le surveillant qui
+    constate une deuxième heure manquée s'entendait répondre « déjà
+    enregistrée » et ne pouvait plus rien dire.
     """
     from app.api.finance import _get_or_sync_employe_paie, _identifier_employe
-    from app.models.academique import AbsencePersonnel
+    from app.models.academique import AbsencePersonnel, Seance, Matiere
 
     _peut(current_user, CONSTATE_LES_ABSENCES,
           "Seules la surveillance et la direction signalent une absence d'enseignant.")
@@ -427,35 +481,174 @@ def signaler_absence_enseignant(
     infos = _identifier_employe(reference, db, etablissement_id)
     employe = _get_or_sync_employe_paie(db, reference, infos, etablissement_id)
 
-    # Deux surveillants qui signalent le même jour ne créent pas deux retenues.
-    deja = db.query(AbsencePersonnel).filter(
+    justifie = "Y" if data.get("est_justifie") else "N"
+    motif = (data.get("motif") or "").strip() or None
+
+    # ── Les cours manqués, quand le surveillant en désigne ────────────────
+    seance_ids = data.get("seance_ids") or []
+    if not isinstance(seance_ids, list):
+        raise HTTPException(400, "seance_ids doit être une liste d'identifiants de cours.")
+
+    cours_manques = []
+    if seance_ids:
+        lignes = db.query(Seance, Classe, Matiere).join(
+            Classe, Classe.classe_id == Seance.classe_id
+        ).outerjoin(
+            Matiere, Matiere.matiere_id == Seance.matiere_id
+        ).filter(
+            Seance.seance_id.in_(seance_ids),
+            Classe.etablissement_id == etablissement_id,
+            Seance.date_seance == jour,
+        ).all()
+        if len(lignes) != len(set(seance_ids)):
+            raise HTTPException(
+                404, "Un des cours désignés n'existe pas ce jour-là dans cette école.")
+
+        for seance, classe, matiere in lignes:
+            # Un cours déjà fait ne se déclare pas manqué : ce serait
+            # contredire l'appel que le professeur a lui-même enregistré.
+            if seance.statut == "EFFECTUEE":
+                raise HTTPException(
+                    400,
+                    f"Le cours de {matiere.libelle if matiere else 'cette matière'} en "
+                    f"{classe.libelle} à {seance.heure_debut_prevue} est marqué effectué : "
+                    "il ne peut pas être déclaré non assuré.",
+                )
+            seance.statut = "NON_EFFECTUEE"
+            seance.motif_statut = motif or "Cours non assuré (signalé par la surveillance)"
+            cours_manques.append(
+                f"{matiere.libelle if matiere else 'Cours'} en {classe.libelle} "
+                f"{seance.heure_debut_prevue}–{seance.heure_fin_prevue}"
+            )
+
+    # ── L'absence du jour : une seule ligne, complétée si elle existe ─────
+    absence = db.query(AbsencePersonnel).filter(
         AbsencePersonnel.employe_id == employe.employe_id,
         AbsencePersonnel.date_absence == jour,
     ).first()
-    if deja:
-        raise HTTPException(
-            400,
-            f"Une absence est déjà enregistrée pour {infos['prenom']} {infos['nom']} "
-            f"le {jour.isoformat()} (statut : {deja.statut}).",
-        )
 
-    absence = AbsencePersonnel(
-        employe_id=employe.employe_id,
-        date_absence=jour,
-        motif=(data.get("motif") or "").strip() or None,
-        est_justifie="Y" if data.get("est_justifie") else "N",
-        statut="SIGNALE",
-        signale_par=_qui(current_user),
-    )
-    db.add(absence)
+    if absence is not None:
+        if absence.statut in ("VALIDE", "ECARTE"):
+            raise HTTPException(
+                400,
+                f"La direction a déjà tranché l'absence de {infos['prenom']} {infos['nom']} "
+                f"le {jour.isoformat()} ({absence.statut}) — elle ne se modifie plus ici.",
+            )
+        if not cours_manques:
+            raise HTTPException(
+                400,
+                f"Une absence est déjà enregistrée pour {infos['prenom']} {infos['nom']} "
+                f"le {jour.isoformat()} (statut : {absence.statut}).",
+            )
+        # Une deuxième heure manquée le même jour complète le signalement.
+        parts = [p for p in [absence.motif] if p] + cours_manques
+        absence.motif = " · ".join(parts)[:500]
+        absence.est_justifie = justifie
+        cree = False
+    else:
+        absence = AbsencePersonnel(
+            employe_id=employe.employe_id,
+            date_absence=jour,
+            motif=(" · ".join(cours_manques)[:500] if cours_manques else motif),
+            est_justifie=justifie,
+            statut="SIGNALE",
+            signale_par=_qui(current_user),
+        )
+        db.add(absence)
+        cree = True
+
     db.commit()
     db.refresh(absence)
     return {
         "absence_id": absence.absence_id,
         "statut": absence.statut,
         "employe": f"{infos['prenom']} {infos['nom']}",
-        "message": "Signalement transmis à la direction. Aucune retenue n'est appliquée "
-                   "tant qu'il n'a pas été validé.",
+        "cours_manques": cours_manques,
+        "nouveau": cree,
+        "message": (
+            f"{len(cours_manques)} cours marqué(s) non assuré(s). Signalement transmis "
+            "à la direction — aucune retenue n'est appliquée tant qu'il n'a pas été validé."
+            if cours_manques else
+            "Signalement transmis à la direction. Aucune retenue n'est appliquée "
+            "tant qu'il n'a pas été validé."
+        ),
+    }
+
+
+@router.get("/enseignants-par-cycle")
+def enseignants_par_cycle(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+    current_user: dict = Depends(get_current_user),
+):
+    """Les enseignants rangés par cycle : primaire, collège, lycée.
+
+    Une école de quarante-six professeurs affichés à plat, c'est une liste
+    dans laquelle on ne retrouve personne. Le surveillant sait dans quel cycle
+    il vient de constater une absence — la liste doit suivre sa tête, pas
+    l'ordre alphabétique de toute l'école.
+
+    Un professeur enseigne parfois dans deux cycles (le collège et le lycée
+    partagent souvent les mêmes professeurs de matière). On le range dans
+    celui où il a le plus d'affectations, et on le dit : le classer ailleurs
+    en silence serait plus déroutant que de ne pas le classer du tout.
+
+    Deux requêtes, quel que soit l'effectif.
+    """
+    from app.models.academique import Affectation, Classe as C, Cycle, Enseignant, Niveau
+
+    _peut(current_user, CONSTATE_LES_ABSENCES,
+          "Accès réservé à la surveillance et à la direction.")
+
+    profs = db.query(Enseignant).filter(
+        Enseignant.etablissement_id == etablissement_id,
+        Enseignant.statut == "ACTIF",
+    ).order_by(Enseignant.nom, Enseignant.prenom).all()
+
+    # Combien d'affectations chaque professeur a-t-il dans chaque cycle ?
+    comptes = db.query(
+        Affectation.enseignant_id, Cycle.code, Cycle.libelle, Cycle.ordre,
+        func.count(Affectation.affectation_id).label("nb"),
+    ).join(
+        C, C.classe_id == Affectation.classe_id
+    ).join(
+        Niveau, Niveau.niveau_id == C.niveau_id
+    ).join(
+        Cycle, Cycle.cycle_id == Niveau.cycle_id
+    ).filter(
+        C.etablissement_id == etablissement_id,
+        Affectation.statut == "ACTIVE",
+    ).group_by(
+        Affectation.enseignant_id, Cycle.code, Cycle.libelle, Cycle.ordre
+    ).all()
+
+    par_prof: dict = {}
+    for ligne in comptes:
+        par_prof.setdefault(ligne.enseignant_id, []).append(ligne)
+
+    SANS = {"code": "SANS_CYCLE", "libelle": "Sans classe affectée", "ordre": 99}
+    groupes: dict = {}
+    for p in profs:
+        lignes = sorted(par_prof.get(p.enseignant_id, []), key=lambda x: -x.nb)
+        principal = lignes[0] if lignes else None
+        code = principal.code if principal else SANS["code"]
+        libelle = principal.libelle if principal else SANS["libelle"]
+        ordre = principal.ordre if principal else SANS["ordre"]
+
+        groupes.setdefault(code, {"code": code, "libelle": libelle,
+                                  "ordre": ordre or 0, "enseignants": []})
+        groupes[code]["enseignants"].append({
+            "enseignant_id": p.enseignant_id,
+            "nom": p.nom,
+            "prenom": p.prenom,
+            "matricule": p.matricule,
+            # Dit franchement qu'il enseigne aussi ailleurs.
+            "autres_cycles": [x.libelle for x in lignes[1:]],
+        })
+
+    return {
+        "total": len(profs),
+        "groupes": sorted(groupes.values(), key=lambda g: (g["ordre"], g["libelle"])),
     }
 
 
