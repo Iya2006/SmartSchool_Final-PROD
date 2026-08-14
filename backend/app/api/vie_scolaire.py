@@ -23,7 +23,13 @@ router = APIRouter(prefix="/api/vie-scolaire", tags=["Vie Scolaire"])
 @router.get("/presences")
 def list_presences(
     classe_id: int = None,
-    date_presence: Optional[str] = None,
+    # `date_presence` était typée en texte et comparée à une colonne DATE :
+    # PostgreSQL refusait la comparaison (« operator does not exist: date =
+    # character varying ») et la route répondait 500. Le défaut a survécu
+    # parce qu'aucun écran n'appelait jamais cette route — le surveillant
+    # n'ayant pas d'écran d'appel, personne n'avait de raison de demander
+    # les présences d'un jour donné.
+    date_presence: Optional[date_type] = None,
     demi_journee: Optional[str] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
@@ -109,14 +115,93 @@ def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depend
     count = 0
     for p in presences:
         existing = existantes.get((p.inscription_id, p.date_presence, p.demi_journee))
+        # Un élève présent n'est jamais « justifié » : le champ ne vaut que
+        # pour une absence ou un retard, sinon il pollue le décompte.
+        justifie = (p.est_justifie or "N").upper()
+        if p.statut_presence == "PRESENT":
+            justifie, motif = "N", None
+        else:
+            motif = p.motif
         if existing:
             existing.statut_presence = p.statut_presence
-            existing.motif = p.motif
+            existing.motif = motif
+            existing.est_justifie = justifie
         else:
-            db.add(Presence(**p.model_dump()))
+            db.add(Presence(**{**p.model_dump(), "motif": motif, "est_justifie": justifie}))
         count += 1
     db.commit()
     return {"message": f"{count} présences enregistrées"}
+
+
+@router.get("/feuille-appel")
+def feuille_appel(
+    classe_id: int,
+    date_presence: date_type,
+    demi_journee: str = "MATIN",
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """La liste de classe d'un jour, prête à être pointée.
+
+    Faire l'appel demande deux choses que rien ne fournissait ensemble :
+    l'`inscription_id` de chaque élève — c'est lui, et non `eleve_id`, que
+    l'enregistrement attend — et ce qui a DÉJÀ été pointé pour ce jour et
+    cette demi-journée. Sans le second, rouvrir la feuille d'appel d'hier
+    affichait tout le monde présent et effaçait le travail de la veille.
+
+    Deux requêtes, quel que soit l'effectif : la liste, puis les pointages
+    du jour. Jamais une requête par élève.
+    """
+    classe = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+
+    demi_journee = (demi_journee or "MATIN").upper()
+    if demi_journee not in {"MATIN", "SOIR"}:
+        raise HTTPException(status_code=400, detail="La demi-journée vaut MATIN ou SOIR.")
+
+    lignes = db.query(Inscription.inscription_id, Eleve.eleve_id, Eleve.matricule,
+                      Eleve.nom, Eleve.prenom).join(
+        Eleve, Inscription.eleve_id == Eleve.eleve_id
+    ).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE"
+    ).order_by(Eleve.nom, Eleve.prenom).all()
+
+    deja = {
+        p.inscription_id: p for p in db.query(Presence).filter(
+            Presence.inscription_id.in_([l.inscription_id for l in lignes] or [0]),
+            Presence.date_presence == date_presence,
+            Presence.demi_journee == demi_journee,
+        ).all()
+    }
+
+    eleves = []
+    for l in lignes:
+        pointage = deja.get(l.inscription_id)
+        eleves.append({
+            "inscription_id": l.inscription_id,
+            "eleve_id": l.eleve_id,
+            "matricule": l.matricule,
+            "nom": l.nom,
+            "prenom": l.prenom,
+            # Absence de ligne = présent. La présence est la règle : on ne
+            # pointe que ce qui en sort.
+            "statut": pointage.statut_presence if pointage else "PRESENT",
+            "est_justifie": (pointage.est_justifie == "O") if pointage else False,
+            "motif": pointage.motif if pointage else None,
+        })
+
+    return {
+        "classe_id": classe.classe_id,
+        "classe": classe.libelle,
+        "date_presence": date_presence,
+        "demi_journee": demi_journee,
+        "effectif": len(eleves),
+        "deja_pointee": bool(deja),
+        "eleves": eleves,
+    }
 
 
 def _demi_journees_de_classe(debut: date_type, fin: date_type) -> int:

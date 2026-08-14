@@ -713,11 +713,17 @@ class PresenceBase(BaseModel):
     demi_journee: str
     statut_presence: str
     motif: Optional[str] = None
+    # « Justifiée ou non » est la seule chose qui distingue une absence
+    # ordinaire d'une absence dont l'école doit s'inquiéter — c'est ce que
+    # compte le tableau du surveillant. Le champ existait en base et dans la
+    # réponse, mais pas dans ce qu'on pouvait ENVOYER : une absence saisie
+    # restait donc systématiquement « non justifiée », même avec un mot des
+    # parents en main.
+    est_justifie: Optional[str] = "N"
 
 class PresenceCreate(PresenceBase): pass
 class PresenceOut(OrmBase, PresenceBase):
     presence_id: int
-    est_justifie: str = "N"
 
 class IncidentBase(BaseModel):
     eleve_id: int

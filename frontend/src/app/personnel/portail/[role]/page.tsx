@@ -129,6 +129,7 @@ type PresenceStats = {
     absents: number;
     retards: number;
     taux_presence: number;
+    absences_non_justifiees?: number;
 };
 
 type IncidentStats = {
@@ -148,6 +149,29 @@ type IncidentItem = {
     date_incident?: string | null;
     statut: string;
 };
+
+type LigneAppel = {
+    inscription_id: number;
+    eleve_id: number;
+    matricule?: string | null;
+    nom: string;
+    prenom: string;
+    statut: 'PRESENT' | 'ABSENT' | 'RETARD';
+    est_justifie: boolean;
+    motif?: string | null;
+};
+
+type FeuilleAppel = {
+    classe_id: number;
+    classe: string;
+    date_presence: string;
+    demi_journee: string;
+    effectif: number;
+    deja_pointee: boolean;
+    eleves: LigneAppel[];
+};
+
+type ClasseAppel = { classe_id: number; libelle: string };
 
 type EleveOption = {
     eleve_id: number;
@@ -698,16 +722,111 @@ function SurveillantPortal() {
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState<IncidentForm>({ eleve_id: '', type_incident: 'DISCIPLINE', gravite: 'MOYENNE', description: '' });
 
+    /* ═══ FAIRE L'APPEL ═══
+       Le surveillant voyait ses statistiques d'absences sans pouvoir en
+       saisir une seule : le geste central de son metier — l'appel du matin
+       et de l'apres-midi — n'existait nulle part dans son espace. */
+    const [classes, setClasses] = useState<ClasseAppel[]>([]);
+    const [appelClasse, setAppelClasse] = useState('');
+    const [appelDate, setAppelDate] = useState(() => new Date().toISOString().slice(0, 10));
+    const [appelDemi, setAppelDemi] = useState<'MATIN' | 'SOIR'>('MATIN');
+    const [feuille, setFeuille] = useState<FeuilleAppel | null>(null);
+    const [appelLoading, setAppelLoading] = useState(false);
+    const [appelSaving, setAppelSaving] = useState(false);
+
+    const chargerFeuille = useCallback(async () => {
+        if (!appelClasse) { setFeuille(null); return; }
+        setAppelLoading(true);
+        setError(null);
+        try {
+            const res = await api.get<FeuilleAppel>(
+                `/api/vie-scolaire/feuille-appel?classe_id=${appelClasse}&date_presence=${appelDate}&demi_journee=${appelDemi}`);
+            setFeuille(res.data);
+        } catch (err) {
+            setError(getErrorMessage(err));
+            setFeuille(null);
+        } finally {
+            setAppelLoading(false);
+        }
+    }, [appelClasse, appelDate, appelDemi]);
+
+    useEffect(() => { chargerFeuille(); }, [chargerFeuille]);
+
+    const marquer = (inscriptionId: number, statut: LigneAppel['statut']) => {
+        setFeuille((f) => f && ({
+            ...f,
+            eleves: f.eleves.map((e) => e.inscription_id === inscriptionId
+                // Repasser un eleve present efface la justification et le
+                // motif : ils ne veulent plus rien dire.
+                ? { ...e, statut, ...(statut === 'PRESENT' ? { est_justifie: false, motif: null } : {}) }
+                : e),
+        }));
+    };
+
+    const basculerJustifie = (inscriptionId: number) => {
+        setFeuille((f) => f && ({
+            ...f,
+            eleves: f.eleves.map((e) => e.inscription_id === inscriptionId
+                ? { ...e, est_justifie: !e.est_justifie } : e),
+        }));
+    };
+
+    const changerMotif = (inscriptionId: number, motif: string) => {
+        setFeuille((f) => f && ({
+            ...f,
+            eleves: f.eleves.map((e) => e.inscription_id === inscriptionId ? { ...e, motif } : e),
+        }));
+    };
+
+    const enregistrerAppel = async () => {
+        if (!feuille) return;
+        setAppelSaving(true);
+        setError(null);
+        setSuccess(null);
+        try {
+            // On envoie TOUTE la classe : un eleve repasse present doit voir
+            // sa ligne corrigee, pas rester absent parce qu'on ne l'a pas
+            // renvoye. Le serveur met a jour ou cree, jamais en double.
+            await api.post('/api/vie-scolaire/presences/batch', feuille.eleves.map((e) => ({
+                inscription_id: e.inscription_id,
+                date_presence: feuille.date_presence,
+                demi_journee: feuille.demi_journee,
+                statut_presence: e.statut,
+                est_justifie: e.est_justifie ? 'O' : 'N',
+                motif: e.motif || null,
+            })));
+            const absents = feuille.eleves.filter((e) => e.statut === 'ABSENT').length;
+            const retards = feuille.eleves.filter((e) => e.statut === 'RETARD').length;
+            setSuccess(`Appel enregistré : ${absents} absent(s), ${retards} retard(s) sur ${feuille.effectif} élèves.`);
+            await Promise.all([chargerFeuille(), loadSurveillance()]);
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setAppelSaving(false);
+        }
+    };
+
+    const bilanAppel = useMemo(() => {
+        const l = feuille?.eleves || [];
+        return {
+            absents: l.filter((e) => e.statut === 'ABSENT').length,
+            retards: l.filter((e) => e.statut === 'RETARD').length,
+            nonJustifies: l.filter((e) => e.statut !== 'PRESENT' && !e.est_justifie).length,
+        };
+    }, [feuille]);
+
     const loadSurveillance = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            const [presenceRes, incidentStatsRes, incidentsRes, elevesRes] = await Promise.all([
+            const [presenceRes, incidentStatsRes, incidentsRes, elevesRes, classesRes] = await Promise.all([
                 api.get<PresenceStats>(`/api/vie-scolaire/presences/stats?etablissement_id=${etablissementId}`),
                 api.get<IncidentStats>(`/api/vie-scolaire/incidents/stats?etablissement_id=${etablissementId}`),
                 api.get<IncidentItem[]>(`/api/vie-scolaire/incidents?etablissement_id=${etablissementId}&limit=30`),
                 api.get<EleveOption[]>(`/api/eleves?etablissement_id=${etablissementId}&annee_id=${anneeId}&statut=ACTIF&limit=120`),
+                api.get<ClasseAppel[]>(`/api/classes?annee_id=${anneeId}&limit=200`),
             ]);
+            setClasses(classesRes.data || []);
             setPresenceStats(presenceRes.data || { total: 0, presents: 0, absents: 0, retards: 0, taux_presence: 0 });
             setIncidentStats(incidentStatsRes.data || { total_incidents: 0, par_gravite: [], top_types: [] });
             setIncidents(incidentsRes.data || []);
@@ -751,9 +870,13 @@ function SurveillantPortal() {
     };
 
     const kpis = [
-        { label: 'Taux de présence', value: `${presenceStats.taux_presence || 0}%`, note: `${presenceStats.presents} présent(s) sur ${presenceStats.total} pointage(s)`, icon: UserCheck, color: '#16a34a' },
-        { label: 'Absences 30 jours', value: String(presenceStats.absents || 0), note: 'à surveiller et justifier', icon: AlertTriangle, color: '#dc2626' },
-        { label: 'Retards 30 jours', value: String(presenceStats.retards || 0), note: 'signaux faibles de discipline', icon: CalendarClock, color: '#f59e0b' },
+        // Les libelles annoncaient « 30 jours » alors que la fenetre est
+        // l'annee scolaire, et le taux se disait « sur N pointages » alors
+        // qu'il se calcule sur l'effectif attendu. Un indicateur qui se
+        // trompe sur sa propre periode ne se verifie pas.
+        { label: 'Taux de présence', value: `${presenceStats.taux_presence || 0}%`, note: 'sur l’année scolaire en cours', icon: UserCheck, color: '#16a34a' },
+        { label: 'Absences de l’année', value: String(presenceStats.absents || 0), note: `dont ${presenceStats.absences_non_justifiees ?? 0} non justifiée(s)`, icon: AlertTriangle, color: '#dc2626' },
+        { label: 'Retards de l’année', value: String(presenceStats.retards || 0), note: 'signaux faibles de discipline', icon: CalendarClock, color: '#f59e0b' },
         { label: 'Incidents 90 jours', value: String(incidentStats.total_incidents || 0), note: 'déclarés dans la vie scolaire', icon: ClipboardList, color: '#7c3aed' },
     ];
 
@@ -832,6 +955,125 @@ function SurveillantPortal() {
                     })}
                 </section>
 
+                {/* ═══ FAIRE L'APPEL ═══
+                    Le geste central du metier de surveillant. Il ne figurait
+                    nulle part : son espace affichait un taux d'absence qu'il
+                    n'avait aucun moyen d'alimenter. */}
+                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                    <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #f0fdf4)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                            <p style={{ margin: 0, fontSize: '12px', color: '#16a34a', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Appel</p>
+                            <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Faire l&apos;appel</h2>
+                            <p style={{ margin: '6px 0 0', fontSize: '13.5px', color: '#64748b', maxWidth: '620px' }}>
+                                Tout le monde est présent par défaut : ne marquez que ceux qui manquent.
+                                Rouvrir une feuille déjà pointée affiche ce qui a été saisi, sans l&apos;effacer.
+                            </p>
+                        </div>
+                        {feuille && (
+                            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                {[
+                                    { l: 'Absents', v: bilanAppel.absents, c: '#dc2626' },
+                                    { l: 'Retards', v: bilanAppel.retards, c: '#f59e0b' },
+                                    { l: 'Non justifiés', v: bilanAppel.nonJustifies, c: '#7c3aed' },
+                                ].map((x) => (
+                                    <div key={x.l} style={{ padding: '10px 14px', borderRadius: '14px', background: `${x.c}10`, border: `1px solid ${x.c}25`, minWidth: '92px' }}>
+                                        <p style={{ margin: 0, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', color: x.c }}>{x.l}</p>
+                                        <p style={{ margin: '3px 0 0', fontSize: '22px', fontWeight: 950, color: '#0f172a' }}>{x.v}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{ padding: '18px 24px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', borderBottom: '1px solid #f1f5f9' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569', minWidth: '210px', flex: '1 1 210px' }}>
+                            Classe
+                            <select value={appelClasse} onChange={(e) => setAppelClasse(e.target.value)}
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }}>
+                                <option value="">Choisir une classe…</option>
+                                {classes.map((cl) => <option key={cl.classe_id} value={cl.classe_id}>{cl.libelle}</option>)}
+                            </select>
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569' }}>
+                            Jour
+                            <input type="date" value={appelDate} onChange={(e) => setAppelDate(e.target.value)}
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }} />
+                        </label>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569' }}>
+                            Demi-journée
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                                {(['MATIN', 'SOIR'] as const).map((d) => (
+                                    <button key={d} type="button" onClick={() => setAppelDemi(d)}
+                                        style={{ padding: '11px 18px', borderRadius: '13px', border: appelDemi === d ? '1px solid #16a34a' : '1px solid #e2e8f0', background: appelDemi === d ? '#16a34a' : '#f8fafc', color: appelDemi === d ? 'white' : '#475569', fontWeight: 800, fontSize: '13px', cursor: 'pointer' }}>
+                                        {d === 'MATIN' ? 'Matin' : 'Après-midi'}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        {feuille && (
+                            <button type="button" onClick={enregistrerAppel} disabled={appelSaving}
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '14px', border: 'none', background: '#16a34a', color: 'white', fontWeight: 900, fontSize: '14px', cursor: appelSaving ? 'wait' : 'pointer', boxShadow: '0 14px 28px rgba(22,163,74,0.22)', marginLeft: 'auto' }}>
+                                {appelSaving ? <Loader2 size={17} className="animate-spin" /> : <UserCheck size={17} />}
+                                Enregistrer l&apos;appel
+                            </button>
+                        )}
+                    </div>
+
+                    <div style={{ padding: '8px 0 18px' }}>
+                        {appelLoading ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                <Loader2 size={20} className="animate-spin" style={{ verticalAlign: 'middle', marginRight: 8 }} />
+                                Chargement de la feuille…
+                            </p>
+                        ) : !feuille ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                Choisissez une classe pour commencer l&apos;appel.
+                            </p>
+                        ) : feuille.eleves.length === 0 ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                Aucun élève inscrit dans cette classe.
+                            </p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                {feuille.eleves.map((el, idx) => {
+                                    const absent = el.statut === 'ABSENT';
+                                    const retard = el.statut === 'RETARD';
+                                    return (
+                                        <div key={el.inscription_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '11px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: absent ? '#fef2f2' : retard ? '#fffbeb' : 'transparent', flexWrap: 'wrap' }}>
+                                            <div style={{ minWidth: '230px', flex: '1 1 230px' }}>
+                                                <p style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>{el.nom} {el.prenom}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>{el.matricule}</p>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '6px' }}>
+                                                {([
+                                                    { s: 'PRESENT' as const, l: 'Présent', c: '#16a34a' },
+                                                    { s: 'ABSENT' as const, l: 'Absent', c: '#dc2626' },
+                                                    { s: 'RETARD' as const, l: 'Retard', c: '#f59e0b' },
+                                                ]).map((o) => (
+                                                    <button key={o.s} type="button" onClick={() => marquer(el.inscription_id, o.s)}
+                                                        style={{ padding: '7px 14px', borderRadius: '11px', border: el.statut === o.s ? `1px solid ${o.c}` : '1px solid #e2e8f0', background: el.statut === o.s ? o.c : 'white', color: el.statut === o.s ? 'white' : '#64748b', fontWeight: 800, fontSize: '12.5px', cursor: 'pointer' }}>
+                                                        {o.l}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            {el.statut !== 'PRESENT' && (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: '1 1 300px' }}>
+                                                    <button type="button" onClick={() => basculerJustifie(el.inscription_id)}
+                                                        style={{ padding: '7px 13px', borderRadius: '11px', border: el.est_justifie ? '1px solid #0284c7' : '1px solid #e2e8f0', background: el.est_justifie ? '#e0f2fe' : 'white', color: el.est_justifie ? '#075985' : '#94a3b8', fontWeight: 800, fontSize: '12.5px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                                                        {el.est_justifie ? 'Justifié' : 'Non justifié'}
+                                                    </button>
+                                                    <input value={el.motif || ''} onChange={(e) => changerMotif(el.inscription_id, e.target.value)}
+                                                        placeholder="Motif (maladie, rendez-vous…)"
+                                                        style={{ flex: 1, minWidth: '150px', padding: '8px 11px', borderRadius: '11px', border: '1px solid #e2e8f0', background: 'white', fontSize: '13px' }} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </section>
                 <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 330px', gap: '20px', alignItems: 'start' }}>
                     <main style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                         <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #f0fdf4)' }}>
