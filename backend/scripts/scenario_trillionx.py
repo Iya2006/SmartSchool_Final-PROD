@@ -1389,9 +1389,10 @@ def _recap_facturation(db: Session, eid: int, annee) -> None:
 # qu'une école doit atteindre avant de clôturer son année.
 PROFILS_PAIEMENT = [
     ("comptant", 0.15),
-    ("ponctuel", 0.45),
-    ("retard", 0.28),
-    ("difficile", 0.12),
+    ("ponctuel", 0.43),
+    ("retard", 0.26),
+    ("difficile", 0.10),
+    ("impaye", 0.06),
 ]
 MODES_PAIEMENT = ["Espèces", "Espèces", "Espèces", "Orange Money", "Virement"]
 
@@ -1417,11 +1418,121 @@ def _jour_de_paiement(profil: str, limite: date, derniere: bool) -> date:
         return limite - timedelta(days=random.randint(0, 8))
     if profil == "retard":
         return limite + timedelta(days=random.randint(12, 45))
-    # « difficile » : le retard s'accumule, mais tout est soldé avant la fin
-    # de l'année — sinon l'école ne pourrait pas clôturer.
-    jour = limite + timedelta(days=random.randint(60, 140))
-    plafond = date(2026, 6, 25) if derniere else ANNEE_FIN
-    return min(jour, plafond)
+    if profil == "difficile":
+        # Le retard s'accumule, mais la famille finit par solder.
+        jour = limite + timedelta(days=random.randint(60, 140))
+        plafond = date(2026, 6, 25) if derniere else ANNEE_FIN
+        return min(jour, plafond)
+    # « impaye » : la famille règle le début d'année puis décroche. Ce profil
+    # a longtemps manqué, et son absence rendait le scénario faux : 2 000
+    # factures soldées au dernier franc, donc aucune relance à envoyer, aucun
+    # impayé au tableau du comptable, et toute la partie recouvrement du
+    # logiciel jamais éprouvée. Une école ne recouvre pas 100 %.
+    jour = limite + timedelta(days=random.randint(20, 60))
+    return None if derniere else min(jour, ANNEE_FIN)
+
+
+def _laisser_des_impayes(db: Session, eid: int, annee) -> None:
+    """Rétablit les impayés sur une base où l'étape 7 avait tout encaissé.
+
+    Le profil « impaye » n'existait pas quand cette base a été montée : les
+    2 000 factures étaient soldées au dernier franc. Aucune relance à envoyer,
+    aucun impayé au tableau du comptable, et toute la partie recouvrement du
+    logiciel jamais éprouvée — alors qu'aucune école ne recouvre 100 %.
+
+    On ne bricole pas le solde : on défait le versement de la dernière tranche
+    pour ces familles, avec ce qu'il a produit — l'écriture comptable et ses
+    deux lignes. Après quoi la base ressemble à ce qu'aurait donné l'étape 7
+    jouée depuis le début : cet argent n'est jamais entré.
+    """
+    restant = db.execute(text("""
+        SELECT count(*) FROM ss_factures f
+        JOIN ss_inscriptions i ON i.inscription_id = f.inscription_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid
+          AND f.montant_total - COALESCE(f.montant_paye, 0) > 0
+    """), {"eid": eid}).scalar()
+    if restant:
+        print(f"  {restant} facture(s) portent deja un reste a payer — rien a rejouer.")
+        return
+
+    part = dict(PROFILS_PAIEMENT).get("impaye", 0.0)
+    inscriptions = [r.inscription_id for r in db.execute(text("""
+        SELECT i.inscription_id FROM ss_inscriptions i
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        WHERE cl.etablissement_id = :eid AND i.annee_id = :aid AND i.statut = 'ACTIVE'
+        ORDER BY i.inscription_id
+    """), {"eid": eid, "aid": annee.annee_id}).fetchall()]
+    tirage = random.Random(20260814)
+    decrocheurs = tirage.sample(inscriptions, int(len(inscriptions) * part))
+    if not decrocheurs:
+        return
+
+    # La dernière tranche de chaque facture : celle qui tombe le plus tard.
+    lignes = db.execute(text("""
+        SELECT DISTINCT ON (f.facture_id)
+               f.facture_id, e.echeance_id
+        FROM ss_factures f
+        JOIN ss_echeances_factures e ON e.facture_id = f.facture_id
+        WHERE f.inscription_id = ANY(:ids)
+        ORDER BY f.facture_id, e.date_limite DESC
+    """), {"ids": decrocheurs}).fetchall()
+
+    annules = 0
+    montant = 0.0
+    for facture_id, echeance_id in lignes:
+        recus = db.execute(text("""
+            SELECT paiement_id, numero_recu, montant FROM ss_paiements
+            WHERE echeance_id = :e AND statut = 'VALIDE'
+        """), {"e": echeance_id}).fetchall()
+        for paiement_id, numero_recu, mnt in recus:
+            db.execute(text("""
+                DELETE FROM ss_lignes_ecritures WHERE ecriture_id IN (
+                    SELECT ecriture_id FROM ss_ecritures_comptables
+                    WHERE etablissement_id = :eid AND reference = :ref)
+            """), {"eid": eid, "ref": numero_recu})
+            db.execute(text("""
+                DELETE FROM ss_ecritures_comptables
+                WHERE etablissement_id = :eid AND reference = :ref
+            """), {"eid": eid, "ref": numero_recu})
+            db.execute(text("DELETE FROM ss_paiements WHERE paiement_id = :p"),
+                       {"p": paiement_id})
+            annules += 1
+            montant += float(mnt)
+
+        db.execute(text("""
+            UPDATE ss_echeances_factures
+               SET montant_paye = 0, statut = 'EN_ATTENTE'
+             WHERE echeance_id = :e
+        """), {"e": echeance_id})
+
+    # Les totaux de la facture se recalculent depuis les paiements qui restent,
+    # jamais par soustraction : une soustraction sur un solde déjà faux le
+    # garde faux.
+    db.execute(text("""
+        WITH regle AS (
+            SELECT f.facture_id,
+                   COALESCE(f.montant_net, f.montant_total) AS du,
+                   COALESCE((SELECT sum(p.montant) FROM ss_paiements p
+                             WHERE p.facture_id = f.facture_id
+                               AND p.statut = 'VALIDE'), 0) AS total
+            FROM ss_factures f
+            WHERE f.facture_id = ANY(:fids)
+        )
+        UPDATE ss_factures f SET
+            montant_paye = r.total,
+            montant_restant = r.du - r.total,
+            statut = CASE WHEN r.total >= r.du THEN 'PAYEE'
+                          WHEN r.total > 0 THEN 'PARTIELLEMENT_PAYEE'
+                          ELSE 'EN_ATTENTE' END
+        FROM regle r
+        WHERE f.facture_id = r.facture_id
+    """), {"fids": [f for f, _ in lignes]})
+    db.commit()
+
+    print(f"  {len(lignes)} famille(s) laissees avec un impaye : "
+          f"{annules} versement(s) annule(s), {montant:,.0f} GNF jamais entres."
+          .replace(",", " "))
 
 
 def etape_7_encaissements(db: Session) -> None:
@@ -1446,6 +1557,7 @@ def etape_7_encaissements(db: Session) -> None:
     """), {"eid": eid}).scalar()
     if deja:
         print(f"  {deja} paiement(s) deja enregistre(s) — etape deja jouee.")
+        _laisser_des_impayes(db, eid, annee)
         _recap_encaissements(db, eid, annee)
         return
 
@@ -1473,13 +1585,24 @@ def etape_7_encaissements(db: Session) -> None:
     # On paie dans l'ordre chronologique : c'est ainsi que la trésorerie de
     # l'école se remplit réellement, et c'est ce que les rapports mensuels
     # devront retrouver.
+    # La dernière tranche est celle qui tombe le plus tard, quel que soit le
+    # nombre de tranches de l'école : deux, trois ou dix. La reconnaître au
+    # libellé « 3ème tranche » ne marchait que pour une école à trois tranches.
+    derniere_par_facture: dict = {}
+    for e in echeances:
+        courante = derniere_par_facture.get(e.facture_id)
+        if courante is None or e.date_limite > courante[1]:
+            derniere_par_facture[e.facture_id] = (e.echeance_id, e.date_limite)
+
     a_payer = []
     for e in echeances:
         profil = profils.get(e.inscription_id, "ponctuel")
-        derniere = "3ème tranche" in (e.libelle or "")
+        derniere = derniere_par_facture[e.facture_id][0] == e.echeance_id
+        jour = _jour_de_paiement(profil, e.date_limite, derniere)
+        if jour is None:
+            continue  # cette tranche ne sera jamais réglée : c'est un impayé
         a_payer.append((
-            _jour_de_paiement(profil, e.date_limite, derniere),
-            e.echeance_id, e.facture_id, float(e.montant_attendu), profil,
+            jour, e.echeance_id, e.facture_id, float(e.montant_attendu), profil,
         ))
     a_payer.sort(key=lambda x: x[0])
 
@@ -2846,6 +2969,289 @@ def _recap_examens(db: Session, eid: int, annee) -> None:
     print(f"\n  Au total : {total[0]} admis sur {total[1]} candidats aux examens nationaux.")
 
 
+# ── étape 15 : les communications de l'année ────────────────────────────
+#
+# UNE ÉCOLE, C'EST AUSSI DES GENS QUI SE PARLENT
+# Trois conversations différentes, qui n'ont ni le même ton ni le même rythme.
+#
+#   L'ADMINISTRATION RELANCE LES ENSEIGNANTS pour les sujets. Une relance
+#   n'existe que parce qu'une échéance est passée : sans dépôt en retard, il
+#   n'y a rien à relancer. Le scénario s'appuie donc sur les vrais retards de
+#   l'étape 8.
+#
+#   L'ADMINISTRATION RELANCE LES PARENTS pour la scolarité. Là aussi, sur les
+#   vrais impayés du moment — pas sur une liste inventée.
+#
+#   LES PARENTS PARLENT AUX INSTITUTEURS, et c'est au primaire que ça se passe.
+#   Au lycée, un parent écrit rarement au professeur de physique ; au primaire,
+#   l'instituteur est LA personne qui connaît l'enfant. Ces échanges ont donc
+#   une réponse, ce qui n'est pas le cas d'une relance.
+MOTIFS_PARENTS = [
+    ("Absence de mon enfant",
+     "Bonjour Maître, {prenom} sera absent(e) demain pour un rendez-vous "
+     "médical. Merci de m'indiquer ce qu'il/elle doit rattraper."),
+    ("Difficultés en lecture",
+     "Bonjour, j'ai remarqué que {prenom} peine à lire à la maison. "
+     "Que puis-je faire pour l'aider le soir ?"),
+    ("Demande de rendez-vous",
+     "Bonjour Maître, je souhaiterais vous rencontrer pour parler des "
+     "résultats de {prenom}. Quel jour vous conviendrait ?"),
+    ("Comportement en classe",
+     "Bonjour, {prenom} me dit qu'il/elle s'ennuie en classe. "
+     "Est-ce que vous constatez la même chose ?"),
+    ("Fournitures manquantes",
+     "Bonjour Maître, quelles fournitures manquent encore à {prenom} ? "
+     "Je passe au marché ce week-end."),
+]
+REPONSES_INSTITUTEUR = [
+    "Bonjour, merci de m'avoir prévenu. Je note l'absence de {prenom} et je "
+    "lui donnerai les leçons à rattraper dès son retour.",
+    "Bonjour, {prenom} progresse mais a besoin de lire dix minutes chaque "
+    "soir à voix haute. Commencez par des textes courts.",
+    "Bonjour, je suis disponible mardi et jeudi après la classe, à partir de "
+    "16h. Passez au bureau, nous parlerons de {prenom} tranquillement.",
+    "Bonjour, {prenom} travaille bien mais se disperse en fin de journée. "
+    "Je vais le/la placer devant, cela aide souvent.",
+    "Bonjour, il manque un cahier de 100 pages et une ardoise. Le reste est "
+    "au complet.",
+]
+PART_PARENTS_QUI_ECRIVENT = 0.28
+PART_MESSAGES_AVEC_REPONSE = 0.72
+
+
+def etape_15_communications(db: Session) -> None:
+    """Relances de sujets, relances de paiement, et échanges au primaire."""
+    from datetime import datetime, timedelta
+
+    from app.models.academique import Message
+
+    _titre(15, "Communications de l'annee")
+    etab = _ecole(db)
+    eid = etab.etablissement_id
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == eid, AnneeScolaire.est_courante == "O"
+    ).first()
+
+    # Chaque flux se rejoue seul. Un garde-fou global sur « y a-t-il des
+    # messages ? » se déclencherait sur les alertes de paie automatiques, qui
+    # n'ont rien à voir avec cette étape.
+    nb_sujets = nb_paiements = nb_familles = nb_reponses = 0
+
+    # ── 1. Relances aux enseignants qui ont déposé en retard ──────────────
+    # On relance CEUX QUI ÉTAIENT EN RETARD, pas tout le monde : une relance
+    # envoyée à quelqu'un qui a déposé à l'heure décrédibilise les suivantes.
+    # En retard = déposé à moins d'une semaine de l'épreuve, ou après elle.
+    retardataires = db.execute(text("""
+        WITH epreuve AS (
+            SELECT classe_id, matiere_id, trimestre_id,
+                   min(date_evaluation) AS jour
+            FROM ss_evaluations
+            GROUP BY classe_id, matiere_id, trimestre_id
+        )
+        SELECT s.enseignant_id, e.prenom || ' ' || e.nom AS nom,
+               t.libelle AS periode, t.trimestre_id,
+               count(*) AS sujets_en_retard, min(s.date_depot) AS premier_depot
+        FROM ss_sujets_examen s
+        JOIN ss_enseignants e ON e.enseignant_id = s.enseignant_id
+        JOIN ss_trimestres t ON t.trimestre_id = s.trimestre_id
+        JOIN epreuve ep ON ep.classe_id = s.classe_id
+                       AND ep.matiere_id = s.matiere_id
+                       AND ep.trimestre_id = s.trimestre_id
+        WHERE e.etablissement_id = :eid
+          AND s.date_depot > ep.jour - INTERVAL '7 days'
+          AND NOT EXISTS (
+              SELECT 1 FROM ss_messages m
+              WHERE m.etablissement_id = :eid AND m.objet_type = 'EXAMENS'
+                AND m.destinataire_type = 'ENSEIGNANT'
+                AND m.destinataire_id = s.enseignant_id
+                AND m.sujet LIKE '%' || t.libelle
+          )
+        GROUP BY s.enseignant_id, e.prenom, e.nom, t.libelle, t.trimestre_id
+        ORDER BY s.enseignant_id
+    """), {"eid": eid}).fetchall()
+
+    # Qui est relancé ne se retire pas au sort à chaque exécution : sinon
+    # rejouer l'étape désigne 24 AUTRES retardataires et la boîte se remplit
+    # sans fin. Le tirage est attaché à la personne et à la période.
+    # Pas de plafond « les 24 premiers » non plus : comme la requête écarte
+    # déjà les couples relancés, un plafond fait simplement remonter les 24
+    # suivants au passage d'après.
+    retenus = [r for r in retardataires
+               if random.Random(f"sujets-{r.enseignant_id}-{r.trimestre_id}").random() < 0.55]
+    for r in retenus:
+        db.add(Message(
+            etablissement_id=eid, expediteur_type="ADMIN",
+            destinataire_type="ENSEIGNANT", destinataire_id=r.enseignant_id,
+            objet_type="EXAMENS",
+            sujet=f"Dépôt des sujets — {r.periode}",
+            contenu=(
+                f"Bonjour {r.nom}, vos sujets de {r.periode} ne nous sont pas "
+                f"encore parvenus au complet. Merci de les déposer depuis votre "
+                f"portail, onglet Examens, avant la fin de la semaine."
+            ),
+            statut=random.choice(["ENVOYE", "LU", "LU"]),
+            date_envoi=datetime.combine(
+                r.premier_depot - timedelta(days=random.randint(1, 4)),
+                datetime.min.time(),
+            ) if r.premier_depot else None,
+        ))
+        nb_sujets += 1
+
+    # ── 2. Relances de scolarité aux familles qui doivent encore ──────────
+    impayes = db.execute(text("""
+        SELECT p.parent_id, p.prenom || ' ' || p.nom AS parent,
+               el.prenom AS enfant, cl.libelle AS classe,
+               f.montant_total - COALESCE(f.montant_paye, 0) AS reste
+        FROM ss_factures f
+        JOIN ss_inscriptions i ON i.inscription_id = f.inscription_id
+        JOIN ss_eleves el ON el.eleve_id = i.eleve_id
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        JOIN ss_eleve_parent ep ON ep.eleve_id = el.eleve_id
+                               AND ep.est_responsable_financier = 'O'
+        JOIN ss_parents p ON p.parent_id = ep.parent_id
+        WHERE cl.etablissement_id = :eid
+          AND f.montant_total - COALESCE(f.montant_paye, 0) > 0
+          AND NOT EXISTS (
+              SELECT 1 FROM ss_messages m
+              WHERE m.etablissement_id = :eid AND m.objet_type = 'PAIEMENT'
+                AND m.destinataire_type = 'PARENT'
+                AND m.destinataire_id = p.parent_id
+          )
+        ORDER BY reste DESC LIMIT 120
+    """), {"eid": eid}).fetchall()
+
+    for r in impayes:
+        db.add(Message(
+            etablissement_id=eid, expediteur_type="ADMIN",
+            destinataire_type="PARENT", destinataire_id=r.parent_id,
+            objet_type="PAIEMENT",
+            sujet=f"Scolarité de {r.enfant} — {r.classe}",
+            contenu=(
+                f"Bonjour {r.parent}, il reste {float(r.reste):,.0f} GNF sur la "
+                f"scolarité de {r.enfant}. Merci de passer au secrétariat pour "
+                f"régulariser, ou de nous dire quel échéancier vous arrange."
+            ).replace(",", " "),
+            statut=random.choice(["ENVOYE", "LU"]),
+            date_envoi=datetime(2026, random.choice([2, 3, 4, 5]),
+                                random.randint(1, 28), 9, 0),
+        ))
+        nb_paiements += 1
+
+    # ── 3. Les parents du primaire écrivent à l'instituteur ───────────────
+    familles = db.execute(text("""
+        SELECT DISTINCT ON (el.eleve_id)
+               p.parent_id, p.prenom || ' ' || p.nom AS parent,
+               el.prenom AS enfant, a.enseignant_id,
+               ens.prenom || ' ' || ens.nom AS maitre, cl.libelle AS classe
+        FROM ss_inscriptions i
+        JOIN ss_classes cl ON cl.classe_id = i.classe_id
+        JOIN ss_niveaux n ON n.niveau_id = cl.niveau_id
+        JOIN ss_cycles c ON c.cycle_id = n.cycle_id
+        JOIN ss_eleves el ON el.eleve_id = i.eleve_id
+        JOIN ss_eleve_parent ep ON ep.eleve_id = el.eleve_id
+                               AND ep.est_contact_principal = 'O'
+        JOIN ss_parents p ON p.parent_id = ep.parent_id
+        JOIN ss_affectations a ON a.classe_id = cl.classe_id AND a.statut = 'ACTIVE'
+        JOIN ss_enseignants ens ON ens.enseignant_id = a.enseignant_id
+        WHERE cl.etablissement_id = :eid AND c.code = 'PRM' AND i.statut = 'ACTIVE'
+          AND NOT EXISTS (
+              SELECT 1 FROM ss_messages m
+              WHERE m.etablissement_id = :eid AND m.expediteur_type = 'PARENT'
+                AND m.expediteur_id = p.parent_id
+          )
+        ORDER BY el.eleve_id, a.affectation_id
+    """), {"eid": eid}).fetchall()
+
+    for f in familles:
+        # Même raison qu'au-dessus : le parent qui écrit est décidé par son
+        # identifiant, pas par un tirage neuf à chaque exécution.
+        de = random.Random(f"parent-{f.parent_id}")
+        if de.random() > PART_PARENTS_QUI_ECRIVENT:
+            continue
+        indice = random.randrange(len(MOTIFS_PARENTS))
+        sujet, corps = MOTIFS_PARENTS[indice]
+        jour = datetime(2026, random.choice([1, 2, 3, 4, 5]),
+                        random.randint(1, 28), random.randint(7, 19), 0)
+        message = Message(
+            etablissement_id=eid, expediteur_type="PARENT",
+            expediteur_id=f.parent_id, destinataire_type="ENSEIGNANT",
+            destinataire_id=f.enseignant_id, objet_type="GENERAL",
+            sujet=f"{sujet} — {f.enfant}",
+            contenu=corps.format(prenom=f.enfant),
+            statut="REPONDU", date_envoi=jour,
+        )
+        db.add(message)
+        db.flush()
+        nb_familles += 1
+
+        # Une conversation sans réponse n'est pas une conversation. L'instituteur
+        # répond dans la journée ou le lendemain — c'est ce qui fait la valeur
+        # du lien au primaire.
+        if random.random() < PART_MESSAGES_AVEC_REPONSE:
+            db.add(Message(
+                etablissement_id=eid, expediteur_type="ENSEIGNANT",
+                expediteur_id=f.enseignant_id, destinataire_type="PARENT",
+                destinataire_id=f.parent_id, objet_type="GENERAL",
+                sujet=f"Re : {sujet} — {f.enfant}",
+                contenu=REPONSES_INSTITUTEUR[indice].format(prenom=f.enfant),
+                parent_message_id=message.message_id,
+                statut=random.choice(["ENVOYE", "LU"]),
+                date_envoi=jour + timedelta(hours=random.randint(2, 30)),
+            ))
+            nb_reponses += 1
+        else:
+            message.statut = random.choice(["ENVOYE", "LU"])
+
+    db.commit()
+    print(f"  {nb_sujets} relance(s) de sujets aux enseignants")
+    print(f"  {nb_paiements} relance(s) de scolarite aux familles")
+    print(f"  {nb_familles} message(s) de parents aux instituteurs, "
+          f"dont {nb_reponses} avec reponse")
+    _recap_communications(db, eid)
+
+
+def _recap_communications(db: Session, eid: int) -> None:
+    lignes = db.execute(text("""
+        SELECT expediteur_type AS de, destinataire_type AS vers, objet_type AS objet,
+               count(*) AS nb,
+               count(*) FILTER (WHERE statut IN ('LU', 'REPONDU')) AS lus
+        FROM ss_messages WHERE etablissement_id = :eid
+        GROUP BY expediteur_type, destinataire_type, objet_type
+        ORDER BY count(*) DESC
+    """), {"eid": eid}).fetchall()
+    print(f"\n  {'DE':<12}{'VERS':<12}{'OBJET':<12}{'NB':>6}{'LUS':>6}")
+    for de, vers, objet, nb, lus in lignes:
+        print(f"  {de:<12}{vers:<12}{objet:<12}{nb:>6}{lus:>6}")
+
+    # CE QUI FAIT LA DIFFERENCE ENTRE UN ENVOI ET UNE CONVERSATION
+    echanges = db.execute(text("""
+        SELECT count(*) FROM ss_messages
+        WHERE etablissement_id = :eid AND parent_message_id IS NOT NULL
+    """), {"eid": eid}).scalar()
+    sans_reponse = db.execute(text("""
+        SELECT count(*) FROM ss_messages m
+        WHERE m.etablissement_id = :eid AND m.expediteur_type = 'PARENT'
+          AND NOT EXISTS (SELECT 1 FROM ss_messages r
+                          WHERE r.parent_message_id = m.message_id)
+    """), {"eid": eid}).scalar()
+    print(f"\n  {echanges} reponse(s) d'instituteur — un envoi sans reponse n'est")
+    print(f"  pas une conversation. {sans_reponse} message(s) de parent restent")
+    print(f"  sans reponse : c'est ce que l'ecole doit voir sur son ecran.")
+
+    exemple = db.execute(text("""
+        SELECT m.sujet, m.contenu, r.contenu AS reponse
+        FROM ss_messages m
+        JOIN ss_messages r ON r.parent_message_id = m.message_id
+        WHERE m.etablissement_id = :eid AND m.expediteur_type = 'PARENT'
+        LIMIT 1
+    """), {"eid": eid}).first()
+    if exemple:
+        print(f"\n  Un echange, tel qu'il apparait a l'ecran :")
+        print(f"     « {exemple.sujet} »")
+        print(f"     parent     : {exemple.contenu[:88]}...")
+        print(f"     instituteur: {exemple.reponse[:88]}...")
+
+
 ETAPES = {
     1: ("Referentiel (cycles, niveaux, matieres, annee, semestres)", etape_1_referentiel),
     2: ("Classes et grille horaire", etape_2_classes),
@@ -2861,6 +3267,7 @@ ETAPES = {
     12: ("Personnel non enseignant : comptes, espaces et salaires", etape_12_personnel),
     13: ("Paie mensuelle d'octobre a juin", etape_13_paie),
     14: ("Examens nationaux, admis et redoublants", etape_14_examens_nationaux),
+    15: ("Communications : relances et echanges parents/instituteurs", etape_15_communications),
 }
 
 
