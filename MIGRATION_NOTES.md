@@ -498,6 +498,52 @@ paramètre explicite.
 
 ---
 
+## 6. Le portail et la classe se parlent (14/08/2026)
+
+Couvert par `tests/test_pointage_et_appel_se_parlent.py` (12 tests), vérifié sur
+l'école 3.
+
+**Deux contrôles, deux questions différentes** — c'est la règle métier posée par
+le fondateur, et elle n'était nulle part dans le code :
+
+| | Prouve quoi | Fréquence |
+|---|---|---|
+| Carte scannée au portail (`ss_pointages_eleves`) | l'élève est **à l'école** ce jour | 1 fois / jour, tous cycles |
+| Appel en classe (`ss_presences`) | l'élève est **en cours** à cette heure | primaire : 1 fois / jour · collège et lycée : à chaque cours |
+
+**Ils ne se parlaient pas.** Le surveillant faisait l'appel sans savoir qui avait
+franchi le portail, et personne ne voyait le cas qui compte : l'élève entré le
+matin, absent en cours l'après-midi. Il n'a pas manqué l'école, il a manqué le
+cours — ce n'est pas la même chose à dire à une famille.
+
+`GET /vie-scolaire/feuille-appel` renvoie désormais, par élève,
+`pointe_a_l_ecole`, `heure_arrivee`, `heure_depart`, et deux drapeaux :
+`entre_mais_absent` et `jamais_entre`. Plus un bloc `portail` de synthèse. Une
+seule requête pour toute la classe. Le portail **informe** le surveillant, il ne
+décide jamais à sa place : c'est lui qui voit la salle.
+
+**L'écran des séances ouvre la journée.** Une séance ne naissait que si un
+enseignant ouvrait son portail. La direction voyait une page vide alors que
+l'école a 1 061 créneaux à l'emploi du temps : le seul écran censé répondre à
+« quels cours ont eu lieu aujourd'hui » ne répondait jamais, et constater
+l'absence d'un professeur reposait entièrement sur ce qu'un surveillant
+remarquait de lui-même.
+
+`GET /api/seances` matérialise maintenant la journée demandée (aujourd'hui si
+aucune date n'est donnée) via `_materialiser_le_jour`. Vérifié en réel :
+**238 séances** ouvertes pour un mardi, rejouable sans doublon, **rien** le
+week-end. Garde-fous : une **plage** de dates n'ouvre rien (un trimestre d'un
+clic ferait des dizaines de milliers de lignes) et `ouvrir_la_journee=false`
+permet de consulter sans écrire. Chaque séance naît `PREVUE` — l'absence d'un
+professeur se lit dans ce qui reste `PREVUE` en fin de journée.
+
+**Le pointage des enseignants n'a demandé aucun code** : `/api/presences-agents/scan`
+reconnaît déjà le matricule d'un enseignant et écrit `type_agent='ENSEIGNANT'`.
+Constat sur l'école 3 : 817 pointages, **tous du personnel administratif, aucun
+enseignant**. C'est un manque d'usage, pas de logiciel.
+
+---
+
 ### Reste à faire
 
 - [ ] Recette fonctionnelle par l'établissement pilote sur une classe réelle

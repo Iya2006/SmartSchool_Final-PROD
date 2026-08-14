@@ -33,6 +33,7 @@ import {
     X,
     Zap,
     CalendarClock,
+    QrCode,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
@@ -178,6 +179,14 @@ type LigneAppel = {
     statut: 'PRESENT' | 'ABSENT' | 'RETARD';
     est_justifie: boolean;
     motif?: string | null;
+    /** Ce que dit la carte scannée au portail — l'élève est-il dans l'école ? */
+    pointe_a_l_ecole?: boolean;
+    heure_arrivee?: string | null;
+    heure_depart?: string | null;
+    /** Entré ce matin, absent à ce cours : il n'a pas manqué l'école, il a
+     *  manqué le cours. C'est la contradiction qui mérite un regard. */
+    entre_mais_absent?: boolean;
+    jamais_entre?: boolean;
 };
 
 type CreneauAppel = {
@@ -205,6 +214,8 @@ type FeuilleAppel = {
     creneaux: CreneauAppel[];
     creneau_id?: number | null;
     seance_id?: number | null;
+    /** Le portail d'entrée en un coup d'œil, avant de descendre dans la liste. */
+    portail?: { pointes: number; jamais_entres: number; entres_mais_absents: number };
     eleves: LigneAppel[];
 };
 
@@ -1259,6 +1270,11 @@ function SurveillantPortal() {
                                     { l: 'Absents', v: bilanAppel.absents, c: '#dc2626' },
                                     { l: 'Retards', v: bilanAppel.retards, c: '#f59e0b' },
                                     { l: 'Non justifiés', v: bilanAppel.nonJustifies, c: '#7c3aed' },
+                                    // Le portail d'entrée, à côté de l'appel : « entré,
+                                    // mais absent de ce cours » est le chiffre qu'aucun
+                                    // des deux contrôles ne pouvait donner seul.
+                                    { l: 'Entrés à l’école', v: feuille.portail?.pointes ?? 0, c: '#0284c7' },
+                                    { l: 'Entrés, absents ici', v: feuille.portail?.entres_mais_absents ?? 0, c: '#b45309' },
                                 ].map((x) => (
                                     <div key={x.l} style={{ padding: '10px 14px', borderRadius: '14px', background: `${x.c}10`, border: `1px solid ${x.c}25`, minWidth: '92px' }}>
                                         <p style={{ margin: 0, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', color: x.c }}>{x.l}</p>
@@ -1384,7 +1400,25 @@ function SurveillantPortal() {
                                         <div key={el.inscription_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '11px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: absent ? '#fef2f2' : retard ? '#fffbeb' : 'transparent', flexWrap: 'wrap' }}>
                                             <div style={{ minWidth: '230px', flex: '1 1 230px' }}>
                                                 <p style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>{el.nom} {el.prenom}</p>
-                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>{el.matricule}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                                                    <span>{el.matricule}</span>
+                                                    {/* CE QUE DIT LE PORTAIL
+                                                        La carte prouve qu'il est dans l'école ; l'appel
+                                                        prouve qu'il est en cours. Les deux ne disent pas
+                                                        la même chose, et l'écart se voit ici. */}
+                                                    {el.pointe_a_l_ecole ? (
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '999px', background: el.entre_mais_absent ? '#fef2f2' : '#f0fdf4', color: el.entre_mais_absent ? '#991b1b' : '#166534', fontWeight: 800, fontSize: '10.5px' }}>
+                                                            <QrCode size={10} />
+                                                            {el.entre_mais_absent
+                                                                ? `entré à ${el.heure_arrivee} — absent de ce cours`
+                                                                : `entré à ${el.heure_arrivee}`}
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '999px', background: '#f8fafc', color: '#94a3b8', fontWeight: 800, fontSize: '10.5px' }}>
+                                                            carte non scannée
+                                                        </span>
+                                                    )}
+                                                </p>
                                             </div>
                                             <div style={{ display: 'flex', gap: '6px' }}>
                                                 {([

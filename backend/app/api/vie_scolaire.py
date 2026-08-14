@@ -9,7 +9,9 @@ from datetime import date as date_type, datetime
 from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import get_current_user, require_etablissement
-from app.models.academique import Presence, Incident, Inscription, Classe, Eleve
+from app.models.academique import (
+    Presence, Incident, Inscription, Classe, Eleve, PointageEleve,
+)
 from app.schemas.schemas import (
     PresenceCreate, PresenceOut, IncidentCreate, IncidentOut
 )
@@ -215,9 +217,30 @@ def feuille_appel(
         ).all()
     deja = {p.inscription_id: p for p in pointages}
 
+    # LE PORTAIL ET LA CLASSE, ENFIN RELIÉS
+    # ----------------------------------------------------------------------
+    # Deux contrôles coexistaient sans jamais se parler : la carte scannée à
+    # l'entrée prouve que l'élève est À L'ÉCOLE ce jour ; l'appel prouve qu'il
+    # était EN COURS à cette heure. Le surveillant faisait l'appel sans savoir
+    # qui avait franchi le portail — et personne ne voyait le cas qui compte
+    # le plus : l'élève entré le matin, absent en cours l'après-midi. Il n'a
+    # pas manqué l'école, il a manqué le cours ; ce n'est pas la même chose à
+    # dire à une famille.
+    #
+    # Une requête pour toute la classe, jamais une par élève.
+    pointes = {
+        p.eleve_id: p for p in db.query(PointageEleve).filter(
+            PointageEleve.etablissement_id == etablissement_id,
+            PointageEleve.date_pointage == date_presence,
+            PointageEleve.eleve_id.in_([l.eleve_id for l in lignes] or [0]),
+        ).all()
+    }
+
     eleves = []
     for l in lignes:
         pointage = deja.get(l.inscription_id)
+        entree = pointes.get(l.eleve_id)
+        statut = pointage.statut_presence if pointage else "PRESENT"
         eleves.append({
             "inscription_id": l.inscription_id,
             "eleve_id": l.eleve_id,
@@ -226,9 +249,17 @@ def feuille_appel(
             "prenom": l.prenom,
             # Absence de ligne = présent. La présence est la règle : on ne
             # pointe que ce qui en sort.
-            "statut": pointage.statut_presence if pointage else "PRESENT",
+            "statut": statut,
             "est_justifie": (pointage.est_justifie == "O") if pointage else False,
             "motif": pointage.motif if pointage else None,
+            # Ce que dit le portail d'entrée, sans jamais décider à la place
+            # du surveillant : c'est lui qui voit la salle.
+            "pointe_a_l_ecole": entree is not None,
+            "heure_arrivee": entree.heure_arrivee.strftime("%H:%M") if entree and entree.heure_arrivee else None,
+            "heure_depart": entree.heure_depart.strftime("%H:%M") if entree and entree.heure_depart else None,
+            # Les deux contradictions qui méritent un regard.
+            "entre_mais_absent": entree is not None and statut in ("ABSENT", "ABSENT_JUSTIFIE"),
+            "jamais_entre": entree is None,
         })
 
     return {
@@ -246,6 +277,12 @@ def feuille_appel(
         "creneaux": creneaux,
         "creneau_id": creneau_id,
         "seance_id": seance.seance_id if seance is not None else None,
+        # Le portail, en un coup d'œil, avant même de descendre dans la liste.
+        "portail": {
+            "pointes": sum(1 for e in eleves if e["pointe_a_l_ecole"]),
+            "jamais_entres": sum(1 for e in eleves if e["jamais_entre"]),
+            "entres_mais_absents": sum(1 for e in eleves if e["entre_mais_absent"]),
+        },
         "eleves": eleves,
     }
 
