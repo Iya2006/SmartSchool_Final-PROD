@@ -150,6 +150,24 @@ type IncidentItem = {
     statut: string;
 };
 
+type Pret = {
+    emprunt_id: number;
+    titre: string;
+    auteur?: string | null;
+    code_exemplaire: string;
+    emprunteur: string;
+    type_emprunteur: 'ELEVE' | 'ENSEIGNANT';
+    matricule?: string | null;
+    date_emprunt: string;
+    date_retour_prevue: string;
+    date_retour_effective?: string | null;
+    jours_de_retard: number;
+    en_retard: boolean;
+    statut: 'EN_COURS' | 'EN_RETARD' | 'RENDU';
+    rappel_envoye: boolean;
+    etat_retour?: string | null;
+};
+
 type LigneAppel = {
     inscription_id: number;
     eleve_id: number;
@@ -409,6 +427,49 @@ function BibliothecairePortal() {
     const [query, setQuery] = useState('');
     const [form, setForm] = useState<OuvrageForm>(EMPTY_FORM);
 
+    /* ═══ LES PRETS ═══
+       L'ecran annoncait « N prets en cours » et « N retards » sans qu'aucun
+       des deux ne mene nulle part : ni le titre, ni l'emprunteur, ni depuis
+       quand. Un compteur sans liste derriere ne permet de recuperer aucun
+       livre — et cache le fait qu'il ne compte peut-etre rien. */
+    const [prets, setPrets] = useState<Pret[]>([]);
+    const [filtrePrets, setFiltrePrets] = useState<'EN_RETARD' | 'EN_COURS' | 'RENDU'>('EN_RETARD');
+    const [pretsLoading, setPretsLoading] = useState(false);
+    const [retourEnCours, setRetourEnCours] = useState<number | null>(null);
+
+    const chargerPrets = useCallback(async () => {
+        setPretsLoading(true);
+        try {
+            const res = await api.get<{ items: Pret[] }>(
+                `/api/bibliotheque/emprunts?statut=${filtrePrets}&limit=100`);
+            setPrets(res.data?.items || []);
+        } catch (err) {
+            setError(getErrorMessage(err));
+            setPrets([]);
+        } finally {
+            setPretsLoading(false);
+        }
+    }, [filtrePrets]);
+
+    useEffect(() => { chargerPrets(); }, [chargerPrets]);
+
+    const enregistrerRetour = async (pret: Pret, etat: string) => {
+        setRetourEnCours(pret.emprunt_id);
+        setError(null);
+        setSuccess(null);
+        try {
+            const res = await api.post(`/api/bibliotheque/emprunts/${pret.emprunt_id}/retour`, {
+                etat_retour: etat,
+            });
+            setSuccess(`« ${pret.titre} » rendu par ${pret.emprunteur}. ${res.data?.message || ''}`.trim());
+            await Promise.all([chargerPrets(), loadLibrary()]);
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setRetourEnCours(null);
+        }
+    };
+
     const loadLibrary = useCallback(async () => {
         setLoading(true);
         setError(null);
@@ -557,6 +618,105 @@ function BibliothecairePortal() {
                     })}
                 </section>
 
+                {/* ═══ LES PRETS ═══
+                    « 27 prets en cours » ne menait a rien : ni le titre, ni
+                    l'emprunteur, ni depuis quand. Le compteur mene desormais
+                    a la liste, et la liste au retour. */}
+                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                    <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #faf5ff)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                            <p style={{ margin: 0, fontSize: '12px', color: '#7c3aed', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Circulation</p>
+                            <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Qui a quoi</h2>
+                            <p style={{ margin: '6px 0 0', fontSize: '13.5px', color: '#64748b', maxWidth: '600px' }}>
+                                Un retard se lit sur le calendrier et grandit chaque jour.
+                                Enregistrer un retour remet l&apos;exemplaire au rayon.
+                            </p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            {([
+                                { v: 'EN_RETARD' as const, l: 'En retard', c: '#dc2626' },
+                                { v: 'EN_COURS' as const, l: 'Dehors', c: '#7c3aed' },
+                                { v: 'RENDU' as const, l: 'Rendus', c: '#16a34a' },
+                            ]).map((o) => (
+                                <button key={o.v} type="button" onClick={() => setFiltrePrets(o.v)}
+                                    style={{ padding: '10px 16px', borderRadius: '13px', border: filtrePrets === o.v ? `1px solid ${o.c}` : '1px solid #e2e8f0', background: filtrePrets === o.v ? o.c : '#f8fafc', color: filtrePrets === o.v ? 'white' : '#475569', fontWeight: 800, fontSize: '13px', cursor: 'pointer' }}>
+                                    {o.l}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        {pretsLoading ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                <Loader2 size={20} className="animate-spin" style={{ verticalAlign: 'middle', marginRight: 8 }} />
+                                Chargement…
+                            </p>
+                        ) : prets.length === 0 ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                {filtrePrets === 'EN_RETARD' ? 'Aucun livre en retard — le fonds est à jour.'
+                                    : filtrePrets === 'EN_COURS' ? 'Aucun livre sorti actuellement.'
+                                    : 'Aucun retour enregistré.'}
+                            </p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                {prets.map((pret, idx) => (
+                                    <div key={pret.emprunt_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: pret.en_retard ? '#fef2f2' : 'transparent', flexWrap: 'wrap' }}>
+                                        <div style={{ minWidth: '230px', flex: '1 1 260px' }}>
+                                            <p style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>{pret.titre}</p>
+                                            <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>
+                                                {pret.code_exemplaire}{pret.auteur ? ` · ${pret.auteur}` : ''}
+                                            </p>
+                                        </div>
+                                        <div style={{ minWidth: '180px', flex: '1 1 180px' }}>
+                                            <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: '#334155' }}>{pret.emprunteur}</p>
+                                            <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>
+                                                {pret.type_emprunteur === 'ELEVE' ? 'Élève' : 'Enseignant'}
+                                                {pret.matricule ? ` · ${pret.matricule}` : ''}
+                                            </p>
+                                        </div>
+                                        <div style={{ minWidth: '150px' }}>
+                                            {pret.statut === 'RENDU' ? (
+                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '999px', background: '#f0fdf4', color: '#166534', fontSize: '12.5px', fontWeight: 800 }}>
+                                                    Rendu le {pret.date_retour_effective}
+                                                </span>
+                                            ) : pret.en_retard ? (
+                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '999px', background: '#fee2e2', color: '#991b1b', fontSize: '12.5px', fontWeight: 800 }}>
+                                                    {pret.jours_de_retard} jour(s) de retard
+                                                </span>
+                                            ) : (
+                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '999px', background: '#f5f3ff', color: '#5b21b6', fontSize: '12.5px', fontWeight: 800 }}>
+                                                    À rendre le {pret.date_retour_prevue}
+                                                </span>
+                                            )}
+                                            {pret.statut !== 'RENDU' && pret.rappel_envoye && (
+                                                <span style={{ display: 'block', marginTop: '4px', fontSize: '11px', color: '#94a3b8', fontWeight: 700 }}>
+                                                    rappel déjà envoyé
+                                                </span>
+                                            )}
+                                        </div>
+                                        {pret.statut !== 'RENDU' && (
+                                            <div style={{ display: 'flex', gap: '6px', marginLeft: 'auto', flexWrap: 'wrap' }}>
+                                                {([
+                                                    { e: 'BON', l: 'Rendu' },
+                                                    { e: 'ABIME', l: 'Abîmé' },
+                                                    { e: 'PERDU', l: 'Perdu' },
+                                                ]).map((o) => (
+                                                    <button key={o.e} type="button" disabled={retourEnCours === pret.emprunt_id}
+                                                        onClick={() => enregistrerRetour(pret, o.e)}
+                                                        style={{ padding: '8px 14px', borderRadius: '12px', border: o.e === 'BON' ? 'none' : '1px solid #e2e8f0', background: o.e === 'BON' ? '#7c3aed' : 'white', color: o.e === 'BON' ? 'white' : '#64748b', fontWeight: 800, fontSize: '12.5px', cursor: retourEnCours === pret.emprunt_id ? 'wait' : 'pointer' }}>
+                                                        {retourEnCours === pret.emprunt_id && o.e === 'BON'
+                                                            ? <Loader2 size={14} className="animate-spin" /> : o.l}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </section>
                 <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 330px', gap: '20px', alignItems: 'start' }}>
                     <main style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                         <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px', flexWrap: 'wrap', background: 'linear-gradient(135deg, #ffffff, #fffbeb)' }}>
