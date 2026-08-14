@@ -873,7 +873,7 @@ export default function PortailParent() {
                                         return (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                             {/* Summary Cards */}
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px' }}>
                                                 {[
                                                     { label: 'Montant Total', value: formatGNF(totalFact), icon: <FileText size={24} />, color: '#6366f1', bg: 'linear-gradient(135deg, #ede9fe, #ddd6fe)' },
                                                     { label: 'Montant Payé', value: formatGNF(totalPaye), icon: <CheckCircle2 size={24} />, color: primaryColor, bg: 'linear-gradient(135deg, #d1fae5, #a7f3d0)' },
@@ -1639,7 +1639,7 @@ export default function PortailParent() {
                                         return (
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                                                 {/* Donut charts row */}
-                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
                                                     <div style={{ background: 'white', borderRadius: '16px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0', textAlign: 'center' }}>
                                                         <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}><Target size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Moyenne Générale</h5>
                                                         <Donut pct={child.moyenne ? (child.moyenne / 20) * 100 : 0} color={child.moyenne && child.moyenne >= 10 ? '#10b981' : '#ef4444'} label="sur 20" value={child.moyenne ? `${child.moyenne}` : '—'} />
@@ -1675,7 +1675,7 @@ export default function PortailParent() {
                                                     )}
                                                 </div>
                                                 {/* Best & worst subjects */}
-                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
                                                     <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
                                                         <h5 style={{ margin: '0 0 14px', fontSize: '13px', fontWeight: 700, color: '#475569' }}><Trophy size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Meilleures Matières</h5>
                                                         {topMat.length === 0 ? <p style={{ fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>—</p> : topMat.slice(0, 3).map((m, i) => (
@@ -2470,7 +2470,7 @@ export default function PortailParent() {
                             )}
 
                             {/* Quick Actions */}
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '12px' }}>
                                 {[
                                     { icon: <MessageSquare size={22} />, label: 'Messages', color: '#6366f1', bg: '#ede9fe', action: () => setActiveTab('messages') },
                                     { icon: <BarChart3 size={22} />, label: 'Dashboard', color: primaryColor, bg: '#d1fae5', action: () => setActiveTab('dashboard') },

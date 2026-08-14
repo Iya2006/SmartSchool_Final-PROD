@@ -16,6 +16,7 @@ import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
 import { QRCodeSVG } from 'qrcode.react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 /* ─── interfaces ─── */
 interface Affectation {
@@ -64,6 +65,7 @@ const HEURES = [
 export default function ProfilEnseignant() {
     const { id } = useParams();
     const router = useRouter();
+    const isMobile = useIsMobile();
     const [ens, setEns] = useState<any>(null);
     const [affectations, setAffectations] = useState<Affectation[]>([]);
     const [creneaux, setCreneaux] = useState<Creneau[]>([]);
@@ -330,7 +332,7 @@ export default function ProfilEnseignant() {
             </motion.div>
 
             {/* ═══════ TWO COLUMN LAYOUT ═══════ */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.8fr', gap: '24px', alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1.8fr', gap: '24px', alignItems: 'start' }}>
 
                 {/* ─── LEFT COLUMN ─── */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>

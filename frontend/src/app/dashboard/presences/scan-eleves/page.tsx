@@ -6,6 +6,7 @@ import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { ScanLine, CheckCircle, AlertTriangle, Clock, LogOut, Users, GraduationCap } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface ScanResult {
     success: boolean;
@@ -32,6 +33,7 @@ type ActionType = "AUTO" | "ARRIVEE" | "DEPART";
 
 export default function ScanElevesPage() {
     const router = useRouter();
+    const isMobile = useIsMobile();
     const [scanResult, setScanResult] = useState<ScanResult | null>(null);
     const [isScanning, setIsScanning] = useState(false);
     const [actionType, setActionType] = useState<ActionType>("AUTO");
@@ -241,7 +243,7 @@ export default function ScanElevesPage() {
             </div>
 
             {/* KPI STATS */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '32px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '32px' }}>
                 <div style={{ background: 'white', borderRadius: '16px', padding: '20px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)', border: '1px solid #f1f5f9' }}>
                     <p style={{ margin: '0 0 4px 0', fontSize: '13px', color: '#64748b', fontWeight: 600 }}>Effectif Actif</p>
                     <h3 style={{ margin: 0, fontSize: '24px', fontWeight: 800, color: '#1e293b' }}>{stats.total_eleves_actifs}</h3>
@@ -260,7 +262,7 @@ export default function ScanElevesPage() {
                 </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 400px', gap: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 400px', gap: '24px' }}>
                 {/* SCANNER ZONE */}
                 <div style={{ background: 'white', borderRadius: '24px', overflow: 'hidden', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.05)', border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column' }}>
                     <div style={{ padding: '20px 24px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 /* ─── interfaces ─── */
 interface Enfant {
@@ -39,6 +40,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
 export default function ProfilParent() {
     const { id } = useParams();
     const router = useRouter();
+    const isMobile = useIsMobile();
     const [parent, setParent] = useState<ParentProfil | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -211,7 +213,7 @@ export default function ProfilParent() {
             </motion.div>
 
             {/* ═══ TWO COLUMN LAYOUT ═══ */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.8fr', gap: '24px', alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1.8fr', gap: '24px', alignItems: 'start' }}>
 
                 {/* ─── LEFT COLUMN ─── */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>

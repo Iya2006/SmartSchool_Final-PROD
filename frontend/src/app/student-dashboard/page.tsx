@@ -105,7 +105,7 @@ export default function StudentDashboard() {
                     <h5>Mon Parcours d&apos;Apprentissage</h5>
                 </div>
                 <div className="card-body">
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
                         {courses.map((course, i) => (
                             <div key={i} style={{ border: '1px solid var(--border-light)', borderRadius: '12px', overflow: 'hidden', transition: 'all 0.2s', cursor: 'pointer' }}
                                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = '0 8px 24px rgba(0,0,0,0.08)'; (e.currentTarget as HTMLElement).style.transform = 'translateY(-4px)'; }}
@@ -276,7 +276,7 @@ export default function StudentDashboard() {
                         <h5>Actions Rapides</h5>
                     </div>
                     <div className="card-body">
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
                             {quickActions.map((action, i) => (
                                 <Link key={i} href={action.href} style={{
                                     display: 'flex', alignItems: 'center', gap: '14px', padding: '18px',
@@ -306,7 +306,7 @@ export default function StudentDashboard() {
                     <h5>Ressources & Téléchargements</h5>
                 </div>
                 <div className="card-body">
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '12px' }}>
                         {resources.map((r, i) => (
                             <button key={i} style={{
                                 display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px',

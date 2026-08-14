@@ -695,7 +695,7 @@ export default function CentralisationNotesPage() {
             </div>
 
             {/* ═══ KPI STATS ═══ */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
                 {[
                     { label: 'Évaluations Totales', value: stats.total_evaluations, icon: BookOpen, color: '#6366f1', bg: '#eef2ff' },
                     { label: 'Centralisées', value: stats.centralisees, icon: Check, color: '#059669', bg: '#ecfdf5' },
