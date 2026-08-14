@@ -55,7 +55,8 @@ interface Titulaire {
 }
 
 interface RoleItem {
-  role_id: number;
+  /** null pour un poste du système : rien à modifier ni à supprimer dessus. */
+  role_id: number | null;
   code: string;
   libelle: string;
   description: string;
@@ -92,7 +93,9 @@ export default function SecuritePage() {
 
   // Data states
   const [roles, setRoles] = useState<RoleItem[]>([]);
-  const [selectedRoleId, setSelectedRoleId] = useState<number | null>(null);
+  // Le poste est designe par son code, pas par role_id : les postes du
+  // systeme n'en ont pas, et deux d'entre eux se confondraient sur `null`.
+  const [selectedRoleCode, setSelectedRoleCode] = useState<string | null>(null);
   const [modules, setModules] = useState<Array<{ code: string; libelle: string }>>([]);
   const [actions, setActions] = useState<string[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditItem[]>([]);
@@ -146,7 +149,7 @@ export default function SecuritePage() {
       setActions(modulesRes.data.actions || []);
       setRoles(rolesRes.data || []);
       if (rolesRes.data && rolesRes.data.length > 0) {
-        setSelectedRoleId(rolesRes.data[0].role_id);
+        setSelectedRoleCode(rolesRes.data[0].code);
       }
       setAuditLogs(auditRes.data.items || []);
 
@@ -211,9 +214,10 @@ export default function SecuritePage() {
   };
 
   const togglePermission = async (moduleCode: string, actionCode: string, currentVal: boolean) => {
-    if (!selectedRoleId) return;
+    const role = roles.find(r => r.code === selectedRoleCode);
+    if (!role?.role_id) return;
     const updatedRoles = roles.map(r => {
-      if (r.role_id === selectedRoleId) {
+      if (r.code === selectedRoleCode) {
         const perms = r.permissions.map(p => {
           if (p.module === moduleCode && p.action === actionCode) {
             return { ...p, est_autorise: !currentVal };
@@ -228,7 +232,7 @@ export default function SecuritePage() {
 
     // Immediate API persist for permissions matrix
     try {
-      await api.put(`/api/securite/roles/${selectedRoleId}/permissions`, {
+      await api.put(`/api/securite/roles/${role.role_id}/permissions`, {
         permissions: [{ module: moduleCode, action: actionCode, est_autorise: !currentVal ? 'O' : 'N' }]
       });
       showToast('Permission mise à jour');
@@ -260,7 +264,7 @@ export default function SecuritePage() {
     }
   };
 
-  const selectedRole = roles.find(r => r.role_id === selectedRoleId);
+  const selectedRole = roles.find(r => r.code === selectedRoleCode);
 
   return (
     <SettingsLayout
@@ -328,9 +332,9 @@ export default function SecuritePage() {
               <div className={styles.rolesGrid}>
                 {roles.map(role => (
                   <div
-                    key={role.role_id}
-                    className={`${styles.roleCard} ${selectedRoleId === role.role_id ? styles.roleCardActive : ''}`}
-                    onClick={() => setSelectedRoleId(role.role_id)}
+                    key={role.code}
+                    className={`${styles.roleCard} ${selectedRoleCode === role.code ? styles.roleCardActive : ''}`}
+                    onClick={() => setSelectedRoleCode(role.code)}
                   >
                     <div className={styles.roleCardHeader}>
                       <span className={styles.roleTitle}>{role.libelle}</span>
@@ -395,9 +399,9 @@ export default function SecuritePage() {
                       </Link>
                     </div>
 
-                    {!role.est_systeme && (
+                    {!role.est_systeme && role.role_id != null && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteRole(role.role_id); }}
+                        onClick={(e) => { e.stopPropagation(); handleDeleteRole(role.role_id!); }}
                         style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', marginTop: 8, alignSelf: 'flex-end' }}
                         title="Supprimer le rôle"
                       >
@@ -408,8 +412,19 @@ export default function SecuritePage() {
                 ))}
               </div>
 
+              {/* Un poste du système n'a pas de matrice : ses accès sont ceux
+                  du logiciel. Décocher une case n'aurait rien enregistré. */}
+              {selectedRole && selectedRole.role_id == null && (
+                <div style={{ margin: '24px 0 0', padding: '14px 16px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, fontSize: '0.85rem', color: '#475569', lineHeight: 1.6 }}>
+                  <strong>{selectedRole.libelle}</strong> est un poste du système : ses accès
+                  sont ceux du logiciel et ne se règlent pas ici.
+                  {' '}Pour un poste au nom de votre école, avec des accès que vous restreignez
+                  vous-même, créez un rôle qui reprend cet espace.
+                </div>
+              )}
+
               {/* Permissions Matrix */}
-              {selectedRole && (
+              {selectedRole && selectedRole.role_id != null && (
                 <div>
                   <h4 style={{ margin: '24px 0 12px 0', fontSize: '1rem', fontWeight: 700 }}>
                     Matrice de permissions pour : <span style={{ color: '#4f46e5' }}>{selectedRole.libelle}</span>
@@ -686,12 +701,22 @@ export default function SecuritePage() {
         {showRoleModal && (
           <div style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-            background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000
+            background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            padding: 16,
           }}>
-            <div style={{ background: 'white', borderRadius: 12, padding: 24, width: 420, maxWidth: '90%' }}>
-              <h3 style={{ margin: '0 0 16px 0', fontSize: '1.2rem', fontWeight: 700 }}>Créer un nouveau rôle</h3>
-              <form onSubmit={handleCreateRole}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Le formulaire a grandi (espace de travail, salaire, prime) et la
+                boîte, elle, ne bougeait pas : sur un écran d'ordinateur portable
+                « Créer le rôle » tombait sous le bord et rien ne défilait — le
+                rôle ne pouvait tout simplement pas être enregistré. Le corps
+                défile désormais, les deux boutons restent visibles. */}
+            <div style={{
+              background: 'white', borderRadius: 12, width: 420, maxWidth: '100%',
+              maxHeight: '90vh', display: 'flex', flexDirection: 'column',
+            }}>
+              <h3 style={{ margin: 0, padding: '24px 24px 16px', fontSize: '1.2rem', fontWeight: 700 }}>Créer un nouveau rôle</h3>
+              <form onSubmit={handleCreateRole}
+                style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 24px', overflowY: 'auto', flex: 1 }}>
                   <div>
                     <label style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', color: '#475569' }}>Code (ex: CENSEUR)</label>
                     <input
@@ -785,7 +810,11 @@ export default function SecuritePage() {
                     />
                   </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+                <div style={{
+                  display: 'flex', justifyContent: 'flex-end', gap: 8,
+                  padding: '16px 24px 20px', borderTop: '1px solid #e2e8f0',
+                  background: 'white', borderRadius: '0 0 12px 12px', flexShrink: 0,
+                }}>
                   <button
                     type="button"
                     className={styles.cancelBtn}

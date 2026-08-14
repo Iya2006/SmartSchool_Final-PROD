@@ -24,7 +24,9 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
 from app.core.database import get_db
-from app.core.auth import ROLES_ATTRIBUABLES, require_etablissement
+from app.core.auth import (
+    LIBELLES_DES_ROLES, ROLES_ATTRIBUABLES, require_etablissement,
+)
 from app.models.academique import Role, Permission, AuditLog, Utilisateur
 
 router = APIRouter(prefix="/api/securite", tags=["Sécurité & Accès"])
@@ -152,6 +154,45 @@ def list_roles(
                 for p in perms
             ]
         })
+
+    # LES POSTES DU SYSTÈME, DANS LA MÊME LISTE
+    # Ils n'ont pas de ligne dans ss_roles : ce sont les rôles que le logiciel
+    # attribue lui-même quand on enregistre un membre du personnel. Sans eux,
+    # cet écran ne montrait que les rôles créés à la main — et une école qui
+    # avait saisi « COMPTA » à côté du COMPTABLE existant lisait « Personne
+    # n'occupe encore ce poste » en face de sa comptabilité, alors que son
+    # comptable est en poste. On liste aussi les codes réellement portés par
+    # quelqu'un même s'ils ne sont plus attribuables : personne ne doit être
+    # invisible sur l'écran qui sert à savoir qui occupe quoi.
+    deja = {r.code for r in roles}
+    for code in list(ROLES_ATTRIBUABLES) + sorted(titulaires):
+        if code in deja:
+            continue
+        deja.add(code)
+        gens = titulaires.get(code, [])
+        libelle, description = LIBELLES_DES_ROLES.get(code, (code.replace("_", " ").title(), None))
+        res.append({
+            "titulaires": gens,
+            "nb_titulaires": len(gens),
+            "nb_actifs": sum(1 for g in gens if g["statut"] == "ACTIF"),
+            # Pas de role_id : il n'y a rien à modifier ni à supprimer sur un
+            # poste du système. L'écran doit le refléter au lieu de proposer
+            # des boutons qui échoueraient.
+            "role_id": None,
+            "code": code,
+            "libelle": libelle,
+            "description": description,
+            "est_systeme": True,
+            "role_base": code,
+            "salaire_mensuel": None,
+            "prime_mensuelle": None,
+            "attribuable": code in ROLES_ATTRIBUABLES,
+            "created_date": None,
+            "permissions": [],
+        })
+
+    # Les postes occupés d'abord : c'est l'organigramme réel de l'école.
+    res.sort(key=lambda p: (-p["nb_actifs"], -p["nb_titulaires"], p["libelle"] or ""))
     return res
 
 @router.post("/roles", status_code=201)

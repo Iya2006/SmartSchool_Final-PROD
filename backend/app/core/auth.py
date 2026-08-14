@@ -164,6 +164,31 @@ ROLES_ATTRIBUABLES = (
     "AGENT_ENTRETIEN", "GARDIEN", "CHAUFFEUR", "AUTRE",
 )
 
+# Comment ces postes se nomment à l'écran.
+#
+# Ces libellés n'existaient que côté frontend, dans l'assistant de création de
+# rôle. L'écran « Rôles » ne listait donc QUE les rôles créés à la main par
+# l'école : une direction qui ouvrait cet écran voyait « Personne n'occupe
+# encore ce poste » en face de la comptabilité, alors que son comptable est en
+# poste, se connecte tous les jours et touche un salaire. Les postes du système
+# doivent apparaître dans la même liste, avec leurs titulaires.
+LIBELLES_DES_ROLES = {
+    "SUPER_ADMIN":      ("Éditeur de la plateforme", "Compte de maintenance : n'est pas un poste de l'école."),
+    "FONDATEUR":        ("Fondateur", "Vision exécutive sur toute la plateforme."),
+    "DG":               ("Direction générale", "Pilotage de l'école, comptabilité comprise."),
+    "ADMIN":            ("Administration complète", "Tous les écrans, comptabilité comprise."),
+    "DIRECTEUR_NIVEAU": ("Direction des études", "Évaluations, notes, bulletins, résultats de fin d'année, examens, archive. Pas la comptabilité."),
+    "COMPTABLE":        ("Comptabilité", "Encaissements, dépenses, salaires, rapports. Rien de pédagogique."),
+    "SURVEILLANT":      ("Surveillance", "Discipline, présences, remontées terrain."),
+    "OPERATEUR":        ("Secrétariat / opérations", "Accueil, inscriptions, saisie courante."),
+    "BIBLIOTHECAIRE":   ("Bibliothèque", "Fonds documentaire, prêts et retours."),
+    "INFORMATICIEN":    ("Informatique", "Équipements, incidents, support technique."),
+    "AGENT_ENTRETIEN":  ("Entretien", "Aucun écran : la personne existe en RH et à la paie, sans compte."),
+    "GARDIEN":          ("Gardiennage", "Aucun écran : la personne existe en RH et à la paie, sans compte."),
+    "CHAUFFEUR":        ("Transport", "Aucun écran : la personne existe en RH et à la paie, sans compte."),
+    "AUTRE":            ("Autre", "Aucun écran : la personne existe en RH et à la paie, sans compte."),
+}
+
 
 def roles_du_compte(current_user: dict) -> set:
     """Role principal + roles secondaires declares sur la fiche.
