@@ -1,5 +1,6 @@
 """
-Tests — on ne doit rien à quelqu'un avant son arrivée.
+Tests — on ne doit rien à quelqu'un avant son arrivée, et l'année scolaire
+ne fait pas douze mois.
 
 CE QUI A ÉTÉ TROUVÉ
 -------------------
@@ -22,6 +23,12 @@ CE QUI N'EST PAS TRANCHÉ ICI
 Le mois d'arrivée est dû en entier. Proratiser au nombre de jours travaillés
 est une décision d'école — certaines le font, d'autres non — et la trancher en
 silence dans le logiciel serait pire que de la laisser à la direction.
+
+DEUXIÈME DÉFAUT, MÊME ÉCRAN
+La liste retombait sur « les douze derniers mois glissants ». L'année de
+TrillionX va d'octobre à juin : neuf mois. Le comptable se voyait proposer
+juillet, août et septembre — des mois où l'école ne paie personne. Les mois
+dus sont désormais bornés par l'année scolaire en cours.
 """
 from datetime import date
 
@@ -105,10 +112,14 @@ class TestLaListeDesArrieres:
                        headers=h)
         assert r.status_code == 200, r.text
         d = r.json()
-        # Le mois en cours peut être dû ; les onze précédents, jamais.
-        assert len(d["mois_du"]) <= 1
-        assert d["mois_avant_embauche"] >= 11
-        assert d["total_du"] <= 1000000
+        # Aucun mois antérieur à son arrivée ne lui est dû. Les mois proposés
+        # sont ceux de l'année scolaire (octobre → juin dans ce test), tous
+        # antérieurs à l'embauche du jour : la liste est donc vide, et l'écran
+        # sait dire pourquoi.
+        assert d["mois_du"] == []
+        assert d["total_du"] == 0
+        assert d["mois_avant_embauche"] >= 9
+        assert d["date_embauche"] == str(date.today())
 
     def test_un_ancien_garde_bien_ses_arrieres(self, client: TestClient, db: Session):
         """Le correctif ne doit pas effacer une vraie dette de l'école."""
@@ -127,8 +138,9 @@ class TestLaListeDesArrieres:
         assert r.status_code == 200
         d = r.json()
         assert d["mois_avant_embauche"] == 0
-        assert len(d["mois_du"]) >= 11
-        assert d["total_du"] > 0
+        # Les neuf mois de l'année scolaire (octobre → juin) lui sont dus.
+        assert len(d["mois_du"]) == 9
+        assert d["total_du"] == 9 * 1400000
 
 
 class TestOnNePaiePasAvantL_arrivee:
@@ -150,3 +162,88 @@ class TestOnNePaiePasAvantL_arrivee:
                               "mois": mois_passe, "mode_paiement": "ESPECES"})
         assert r.status_code == 400
         assert "embauché" in r.json()["detail"]
+
+
+class TestOnNePaiePasUnMoisAVenir:
+    def test_un_mois_futur_est_refuse(self, client: TestClient, db: Session):
+        """« Ça bloque tant que le mois prochain n'est pas venu. »
+
+        Sans ce contrôle, régler décembre en août revient à verser un salaire
+        pour du travail qui n'a pas encore eu lieu.
+        """
+        etab, admin = _ecole(db)
+        h = _headers(client, admin.nom_utilisateur)
+
+        futur = f"{date.today().year + 1}-12"
+        r = client.post("/api/finance/salaires/payer", headers=h,
+                        json={"enseignant_id": f"PERS_{admin.utilisateur_id}",
+                              "mois": futur, "mode_paiement": "ESPECES"})
+        assert r.status_code == 400
+        assert "pas encore arrivé" in r.json()["detail"]
+
+
+class TestLAvanceSeDeduitParSaDate:
+    """« Tout ce qu'il a pris depuis la dernière paie se déduit le jour de paie. »"""
+
+    def test_une_avance_mal_etiquetee_est_quand_meme_retenue(
+        self, client: TestClient, db: Session
+    ):
+        """Le cas qui passait à travers : une avance prise en mars et
+        étiquetée « avril » n'était jamais déduite en mars, et le comptable
+        versait le salaire entier sans s'en apercevoir."""
+        from app.api.finance import _calculer_salaire
+        from app.models.academique import Avance
+
+        etab, admin = _ecole(db)
+        agent = Utilisateur(
+            nom="Bah", prenom="Avance", nom_utilisateur=f"emb.avance.{_uid()}",
+            mot_de_passe=hash_password("motdepasse123"), role="SURVEILLANT",
+            statut="ACTIF", etablissement_id=etab.etablissement_id,
+            salaire_base=1400000, date_embauche=date(2020, 1, 1),
+        )
+        db.add(agent); db.commit(); db.refresh(agent)
+
+        ref = f"PERS_{agent.utilisateur_id}"
+        avant = _calculer_salaire(db, ref, "2026-03", etab.etablissement_id)
+        assert avant["total_avances"] == 0
+
+        # Prise le 15 mars, mais étiquetée « décembre » par erreur.
+        db.add(Avance(employe_id=avant["employe_pk"], montant=300000,
+                      mois_concerne="2026-12", date_avance=date(2026, 3, 15),
+                      statut="EN_ATTENTE"))
+        db.commit()
+
+        apres = _calculer_salaire(db, ref, "2026-03", etab.etablissement_id)
+        assert apres["total_avances"] == 300000
+        assert apres["net_a_payer"] == avant["net_a_payer"] - 300000
+        # Une retenue se conteste : elle doit se justifier ligne par ligne.
+        assert "15/03/2026" in apres["details_avances"]
+
+    def test_une_avance_posterieure_au_mois_paye_attend_son_tour(
+        self, client: TestClient, db: Session
+    ):
+        from app.api.finance import _calculer_salaire
+        from app.models.academique import Avance
+
+        etab, admin = _ecole(db)
+        agent = Utilisateur(
+            nom="Sow", prenom="Futur", nom_utilisateur=f"emb.futur.{_uid()}",
+            mot_de_passe=hash_password("motdepasse123"), role="SURVEILLANT",
+            statut="ACTIF", etablissement_id=etab.etablissement_id,
+            salaire_base=1400000, date_embauche=date(2020, 1, 1),
+        )
+        db.add(agent); db.commit(); db.refresh(agent)
+
+        ref = f"PERS_{agent.utilisateur_id}"
+        base = _calculer_salaire(db, ref, "2026-01", etab.etablissement_id)
+        db.add(Avance(employe_id=base["employe_pk"], montant=200000,
+                      mois_concerne="2026-01", date_avance=date(2026, 5, 20),
+                      statut="EN_ATTENTE"))
+        db.commit()
+
+        # Une avance de mai ne se retient pas sur le salaire de janvier.
+        janvier = _calculer_salaire(db, ref, "2026-01", etab.etablissement_id)
+        assert janvier["total_avances"] == 0
+        # Mais bien sur celui de mai.
+        mai = _calculer_salaire(db, ref, "2026-05", etab.etablissement_id)
+        assert mai["total_avances"] == 200000

@@ -6,7 +6,7 @@ import uuid
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel
@@ -3985,12 +3985,28 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
     if details_absences_parts:
         details_absences_texte = " | ".join(details_absences_parts) + f" — Retenue totale: {total_absences} GNF"
 
-    avances_en_attente = db.query(func.coalesce(func.sum(Avance.montant), 0)).filter(
+    # TOUT CE QUI A ÉTÉ PRIS DEPUIS LA DERNIÈRE PAIE SE DÉDUIT ICI
+    # Une avance ne se rattachait qu'au mois inscrit à la main sur sa fiche.
+    # Une avance prise le 15 mars et étiquetée « avril » par erreur — ou par
+    # habitude — n'était donc jamais déduite en mars, et le comptable versait
+    # le salaire entier sans s'en apercevoir.
+    #
+    # La règle est celle de la caisse : une avance reste due tant qu'elle n'a
+    # pas été retenue. Toute avance encore EN_ATTENTE à la fin du mois payé
+    # est donc déduite maintenant, quelle que soit l'étiquette qu'elle porte.
+    # Elle passe ensuite en DEDUITE et ne peut plus revenir.
+    fin_du_mois = _jour_de_versement(mois_concerne)
+    avances_dues = db.query(Avance).filter(
         Avance.employe_id == employe.employe_id,
-        Avance.mois_concerne == mois_concerne,
         Avance.statut == "EN_ATTENTE",
-    ).scalar()
-    total_avances = float(avances_en_attente or 0)
+        or_(Avance.date_avance.is_(None), Avance.date_avance <= fin_du_mois),
+    ).all()
+    total_avances = float(sum(float(a.montant or 0) for a in avances_dues))
+    detail_avances = " | ".join(
+        f"{a.date_avance.strftime('%d/%m/%Y') if a.date_avance else 'sans date'} : "
+        f"{float(a.montant):,.0f} GNF"
+        for a in avances_dues
+    ) or None
 
     # On ne doit rien a quelqu'un pour les mois qui precedent son arrivee.
     avant_arrivee = _avant_embauche(infos.get("date_embauche"), mois_concerne)
@@ -4012,6 +4028,10 @@ def _calculer_salaire(db: Session, employe_id_str: str, mois_concerne: str, etab
         # « Ce mois précède son arrivée » n'est pas la même chose que « rien à
         # verser » : l'écran doit pouvoir le dire, pas juste afficher zéro.
         "avant_embauche": avant_arrivee,
+        # Le detail de ce qui est retenu : une avance se conteste comme une
+        # retenue d'absence, elle doit se justifier ligne par ligne.
+        "details_avances": detail_avances,
+        "nb_avances": len(avances_dues),
         "date_embauche": str(infos["date_embauche"]) if infos.get("date_embauche") else None,
         "statut": "AVANT_EMBAUCHE" if avant_arrivee else "NON_PAYE",
         "bulletin_id": None,
@@ -4122,6 +4142,18 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
     `etablissement_id` provient toujours de l'établissement authentifié de
     l'appelant (Depends(require_etablissement)), jamais d'une valeur par
     défaut ni d'un champ fourni par le client."""
+    # ON NE PAIE PAS UN MOIS QUI N'EST PAS ENCORE ARRIVÉ
+    # « On paie par mois, et ça bloque tant que le mois prochain n'est pas
+    # venu. » Sans ce contrôle, régler septembre en août revient à verser un
+    # salaire pour du travail qui n'a pas encore eu lieu — et à priver l'école
+    # du seul garde-fou qu'elle avait : le calendrier.
+    if mois_concerne > date_type.today().strftime("%Y-%m"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Le mois {mois_concerne} n'est pas encore arrivé : "
+                   f"un salaire ne se verse pas à l'avance.",
+        )
+
     calc = _calculer_salaire(db, employe_id_str, mois_concerne, etablissement_id)
     if calc["statut"] == "PAYE":
         raise HTTPException(status_code=400, detail=f"{calc['nom_complet']} est déjà payé(e) pour {mois_concerne}")
@@ -4167,11 +4199,15 @@ def _executer_paiement_salaire(db: Session, employe_id_str: str, mois_concerne: 
     db.flush()
     dep.reference = str(bulletin.bulletin_id)  # lien pour pouvoir annuler proprement plus tard
 
+    # Les avances soldees sont celles qui viennent d etre retenues : memes
+    # conditions que le calcul, sinon une avance deduite du net resterait
+    # EN_ATTENTE et serait retenue une seconde fois le mois suivant.
     db.query(Avance).filter(
         Avance.employe_id == calc["employe_pk"],
-        Avance.mois_concerne == mois_concerne,
         Avance.statut == "EN_ATTENTE",
-    ).update({"statut": "DEDUITE"})
+        or_(Avance.date_avance.is_(None),
+            Avance.date_avance <= _jour_de_versement(mois_concerne)),
+    ).update({"statut": "DEDUITE"}, synchronize_session=False)
 
     db.commit()
     _invalidate_dashboard_cache(etablissement_id, annee_id)
@@ -4379,12 +4415,31 @@ def _mois_periode_paie(db: Session, etablissement_id: int, nb_mois_fallback: int
     """
     Période sur laquelle les salaires sont considérés dus, telle que configurée dans
     Paramètres > Finance & Comptabilité > Salaires (ss_parametres, finance.salaires_mois_*).
-    Sans configuration, on retombe sur les `nb_mois_fallback` derniers mois glissants
-    (comportement précédent).
+
+    UNE ANNÉE SCOLAIRE NE FAIT PAS DOUZE MOIS
+    Sans configuration, on retombait sur douze mois glissants. Or l'année de
+    TrillionX va d'octobre à juin : neuf mois. Le comptable se voyait donc
+    proposer juillet, août et septembre — des mois où l'école ne paie personne —
+    et un employé arrivé en cours d'année réclamait des salaires antérieurs à
+    la rentrée elle-même.
+
+    À défaut de réglage explicite, on borne donc sur l'ANNÉE SCOLAIRE EN COURS
+    de cette école, et jamais au-delà du mois d'aujourd'hui. Les douze mois
+    glissants ne servent plus que d'ultime repli, quand aucune année n'est
+    ouverte.
     """
     settings = get_finance_settings(db, etablissement_id)
     mois_debut = (settings.get("salaires_mois_debut") or "").strip()
     if not mois_debut:
+        annee = db.query(AnneeScolaire).filter(
+            AnneeScolaire.etablissement_id == etablissement_id,
+            AnneeScolaire.est_courante == "O",
+        ).first()
+        if annee and annee.date_debut and annee.date_fin:
+            debut = annee.date_debut.strftime("%Y-%m")
+            fin = min(annee.date_fin.strftime("%Y-%m"),
+                      date_type.today().strftime("%Y-%m"))
+            return _mois_entre(debut, fin) if debut <= fin else []
         return _derniers_mois(nb_mois_fallback)
     mois_fin = (settings.get("salaires_mois_fin") or "").strip() or date_type.today().strftime("%Y-%m")
     mois_courant = date_type.today().strftime("%Y-%m")
