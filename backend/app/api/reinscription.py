@@ -54,7 +54,8 @@ def _inscription_ou_404(db: Session, inscription_id: int, etablissement_id: int)
     return insc
 
 
-def _generer_frais_reinscription(db: Session, inscription: Inscription, classe: Classe) -> int:
+def _generer_frais_reinscription(db: Session, inscription: Inscription, classe: Classe,
+                                 etablissement_id: int) -> int:
     """
     Génère les factures des frais OBLIGATOIRES configurés (TarifClasse) pour la
     classe cible — grille tarifaire réelle de l'année comme seule source de
@@ -63,8 +64,17 @@ def _generer_frais_reinscription(db: Session, inscription: Inscription, classe: 
     sont jamais générés automatiquement, cohérent avec le garde-fou
     `forcer_optionnel` déjà en place sur generer_factures_classe. Idempotent :
     ignore un type de frais déjà facturé sur cette inscription. Retourne le
-    nombre de factures créées. Réutilisé tel quel par
+    nombre de factures créées. Réutilisé par
     `POST /api/eleves/inscription-complete` (inscription d'un nouvel élève).
+
+    `etablissement_id` EST UN PARAMÈTRE, et il doit le rester
+    ----------------------------------------------------------
+    Il était lu comme s'il venait du contexte : `NameError`, donc 500, sur la
+    toute première facture. Le défaut restait invisible parce que la fonction
+    sort avant (`if not tarifs: return 0`) quand la classe cible n'a aucun
+    tarif — c'est-à-dire dans une école qui n'a pas encore posé sa grille. Une
+    école qui travaille pour de vrai, elle, tombait dessus à chaque
+    réinscription.
     """
     tarifs = db.query(TarifClasse, TypeFrais).join(
         TypeFrais, TarifClasse.type_frais_id == TypeFrais.type_frais_id
@@ -279,7 +289,9 @@ def confirmer_reinscription(inscription_id: int, db: Session = Depends(get_db), 
     eleve.statut = "ACTIF"
     insc.statut_reinscription = "REINSCRIT"
 
-    nb_factures = _generer_frais_reinscription(db, nouvelle_inscription, classe_cible)
+    nb_factures = _generer_frais_reinscription(
+        db, nouvelle_inscription, classe_cible, etablissement_id
+    )
 
     db.commit()
     return {
