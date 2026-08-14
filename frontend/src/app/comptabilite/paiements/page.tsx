@@ -11,7 +11,7 @@ import {
     Plus, Eye, Printer, XCircle, ChevronDown, Filter, Calendar,
     Briefcase, PieChart, BarChart3, Receipt, Wallet, HandCoins,
     Coins, Landmark, Percent, Award, Ban, Clock, ChevronRight, CheckCircle,
-    AlertCircle, Loader2, Store, Package, Wrench, Monitor, Bus, Signal, ClipboardList
+    Store, Package, Wrench, Monitor, Bus, Signal, ClipboardList
 } from 'lucide-react';
 import Pagination from '@/components/Pagination';
 import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
@@ -51,18 +51,6 @@ type DashboardData = {
 
 type Fournisseur = {
     fournisseur: string; total_depenses: number; nb_transactions: number;
-};
-
-type EmployeSalaire = {
-    id: string; // e.g. "ENS_1" or "PERS_2"
-    type_employe: string;
-    nom: string; prenom: string;
-    role_label: string;
-    salaire_base: number;
-    prime_mensuelle: number;
-    telephone: string; paye_ce_mois: boolean; total_paye_annee: number;
-    nb_paiements: number;
-    historique: { depense_id: number; date: string; montant: number; libelle: string; statut: string }[];
 };
 
 type SoldeEleve = {
@@ -209,45 +197,6 @@ function GestionPaiements() {
     const [justificatifFile, setJustificatifFile] = useState<File | null>(null);
     const [classes, setClasses] = useState<{ classe_id: number; libelle: string }[]>([]);
 
-    // ── Module Salaires ──
-    const [showSalaireModal, setShowSalaireModal] = useState(false);
-    const [employesSalaires, setEmployesSalaires] = useState<EmployeSalaire[]>([]);
-    const [salairesMois, setSalairesMois] = useState(() => {
-        const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-    });
-    const [salaireSearch, setSalaireSearch] = useState('');
-    const [salaireLoading, setSalaireLoading] = useState(false);
-    const [selectedEns, setSelectedEns] = useState<EmployeSalaire | null>(null);
-    // Arriérés multi-mois : le backend calcule et impose son propre net_a_payer par
-    // mois (base + primes - absences - avances) — jamais un montant libre. On liste
-    // ici TOUS les mois en retard (pas seulement le mois sélectionné dans le
-    // calendrier), pour permettre de régler un mois précis ou la totalité en un clic.
-    const [arrieres, setArrieres] = useState<{ mois_du: any[]; total_du: number; mois_avant_embauche?: number; date_embauche?: string | null } | null>(null);
-    const [arrieresLoading, setArrieresLoading] = useState(false);
-    const [arrieresError, setArrieresError] = useState(false);
-    const [moisSelectionnes, setMoisSelectionnes] = useState<string[]>([]);
-
-    useEffect(() => {
-        if (!selectedEns) { setArrieres(null); setMoisSelectionnes([]); setArrieresError(false); return; }
-        setArrieresLoading(true);
-        setArrieresError(false);
-        api.get(`/api/finance/salaires/arrieres/${selectedEns.id}`)
-            .then(res => {
-                setArrieres(res.data);
-                setMoisSelectionnes((res.data?.mois_du || []).map((m: any) => m.mois_concerne));
-            })
-            .catch(() => { setArrieres(null); setMoisSelectionnes([]); setArrieresError(true); })
-            .finally(() => setArrieresLoading(false));
-    }, [selectedEns]);
-
-    const toggleMoisSelectionne = (mois: string) => {
-        setMoisSelectionnes(prev => prev.includes(mois) ? prev.filter(m => m !== mois) : [...prev, mois]);
-    };
-
-    const montantSelectionne = (arrieres?.mois_du || [])
-        .filter((m: any) => moisSelectionnes.includes(m.mois_concerne))
-        .reduce((s: number, m: any) => s + m.net_a_payer, 0);
-    const [salairePaying, setSalairePaying] = useState<string | null>(null); // employe_id (ex: ENS_1) en cours
 
     // ── Filtres decaissements ──
     const [decaisFilterCat, setDecaisFilterCat] = useState('');
@@ -422,104 +371,21 @@ function GestionPaiements() {
         }
     };
 
-    /* ═══ CHARGER LES ENSEIGNANTS AVEC SALAIRES ═══ */
-    const loadEnseignantsSalaires = async (mois: string) => {
-        setSalaireLoading(true);
-        try {
-            const res = await api.get(`/api/finance/salaires/employes?etablissement_id=1&annee_id=${filterAnnee}&mois=${mois}`);
-            setEmployesSalaires(res.data || []);
-        } catch { setEmployesSalaires([]); }
-        finally { setSalaireLoading(false); }
-    };
 
-    /* ═══ PAYER UNE LISTE DE MOIS PRÉCISE POUR UN EMPLOYÉ DONNÉ ═══
-       Helper partagé : ne lit JAMAIS un état partagé (moisSelectionnes) au nom d'un
-       autre employé — la liste des mois à payer est toujours passée explicitement
-       par l'appelant, pour éviter qu'un bouton "rapide" sur une ligne de la liste
-       paie accidentellement les mois cochés dans le panneau d'un AUTRE employé. */
-    const payerMoisPourEmploye = async (ens: EmployeSalaire, moisList: string[]) => {
-        if (moisList.length === 0) {
-            setPayResult({ type: 'error', msg: 'Sélectionnez au moins un mois à payer' });
-            return;
-        }
-        // Si le mois en cours fait partie de la sélection, on vérifie que sa date de
-        // paie officielle (Calendrier de paie) est bien arrivée ; sinon on demande
-        // confirmation avant de payer en avance plutôt que de bloquer purement.
-        const moisActuel = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
-        if (moisList.includes(moisActuel)) {
-            try {
-                const dpRes = await api.get(`/api/finance/salaires/date-paie?etablissement_id=1&mois_concerne=${moisActuel}`);
-                const datePaie = dpRes.data?.date_paie;
-                if (datePaie && new Date().toISOString().split('T')[0] < datePaie) {
-                    const ok = confirm(`La date de paie officielle du mois en cours (${datePaie}) n'est pas encore arrivée. Payer quand même ?`);
-                    if (!ok) return;
-                }
-            } catch { /* si la vérification échoue, on ne bloque pas le paiement */ }
-        }
-        setSalairePaying(ens.id);
-        try {
-            const res = await api.post('/api/finance/salaires/payer-plusieurs-mois', {
-                enseignant_id: ens.id,
-                mois_list: moisList,
-                mode_paiement: 'ESPECES',
-                etablissement_id: 1,
-                annee_id: filterAnnee,
-            });
-            setPayResult({ type: res.data?.erreurs?.length ? 'error' : 'success', msg: res.data?.message || `Salaire de ${ens.prenom} ${ens.nom} enregistré !` });
-            setSelectedEns(null);
-            await loadEnseignantsSalaires(salairesMois);
-            loadData();
-            // La page Salaires lit ces mêmes données via React Query — sans invalidation
-            // ici, un paiement effectué depuis ce module (redirigé) laissait "Non payé"
-            // affiché là-bas jusqu'à un refresh manuel.
-            queryClient.invalidateQueries({ queryKey: ['salaires-employes'] });
-            queryClient.invalidateQueries({ queryKey: ['salaires-calculer'] });
-        } catch (err: any) {
-            setPayResult({ type: 'error', msg: err.response?.data?.detail || 'Erreur paiement salaire' });
-        } finally { setSalairePaying(null); }
-    };
-
-    // Panneau détaillé (arriérés multi-mois cochés par le comptable pour l'employé
-    // actuellement sélectionné) :
-    const payerSalaireEnseignant = (ens: EmployeSalaire) => payerMoisPourEmploye(ens, moisSelectionnes);
-
-    // Bouton rapide "Payer ce mois" sur chaque ligne de la liste : ne doit payer QUE
-    // le mois actuellement affiché dans le sélecteur de mois (salairesMois) pour
-    // CETTE ligne, jamais la sélection multi-mois d'un autre employé dont le
-    // panneau serait resté ouvert.
-    const payerMoisCourantRapide = (ens: EmployeSalaire) => payerMoisPourEmploye(ens, [salairesMois]);
-
-    /* ═══ OUVRIR LE MODULE SALAIRES ═══ */
-    const openSalaireModal = () => {
-        setShowSalaireModal(true);
-        loadEnseignantsSalaires(salairesMois);
-    };
-
-    /* ═══ ARRIVÉE DEPUIS SALAIRES > CALCUL DES SALAIRES ═══
-       Le bouton "Payer" de cet onglet ne paie plus sur place : il redirige ici
-       (?tab=fournisseurs&payerSalaire=ENS_7&mois=2026-07) pour que TOUT paiement
-       de salaire passe par ce même formulaire (Centre de Décaissement), qui affiche
-       le net à payer réel calculé par le backend plutôt qu'un montant libre. */
+    /* ═══ ANCIEN LIEN « PAYER UN SALAIRE » ═══
+       Cet écran hébergeait une seconde gestion de la paie, qui rouvrait la
+       liste entière du personnel pour payer une seule personne — et la lisait
+       sur `etablissement_id=1` codé en dur, donc sur le personnel d'une autre
+       école. La paie vit désormais uniquement dans /comptabilite/salaires ;
+       les URL déjà en circulation y sont redirigées plutôt que cassées. */
     useEffect(() => {
         const tab = searchParams.get('tab');
         if (tab === 'fournisseurs') setActiveTab('fournisseurs');
 
-        const payerSalaireId = searchParams.get('payerSalaire');
-        if (!payerSalaireId) return;
-
-        const mois = searchParams.get('mois');
-        const moisCible = mois || salairesMois;
-        if (mois && mois !== salairesMois) setSalairesMois(mois);
-        setShowSalaireModal(true);
-        api.get(`/api/finance/salaires/employes?etablissement_id=1&annee_id=${filterAnnee}&mois=${moisCible}`)
-            .then(res => {
-                setEmployesSalaires(res.data || []);
-                const match = (res.data || []).find((e: any) => e.id === payerSalaireId);
-                if (match) setSelectedEns(match);
-            })
-            .catch(() => {});
-        // Nettoie l'URL pour ne pas rouvrir le modal à chaque rafraîchissement de page.
-        router.replace('/comptabilite/paiements?tab=fournisseurs');
+        if (searchParams.get('payerSalaire')) {
+            const mois = searchParams.get('mois');
+            router.replace(`/comptabilite/salaires?tab=paie${mois ? `&mois=${mois}` : ''}`);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -1061,7 +927,9 @@ function GestionPaiements() {
                             return (
                                 <div key={cat}
                                     onClick={() => {
-                                        if (cat === 'SALAIRES') { openSalaireModal(); }
+                                        // La paie a son écran, qui sépare les enseignants du
+                                        // reste du personnel et connaît l'école connectée.
+                                        if (cat === 'SALAIRES') { router.push('/comptabilite/salaires?tab=paie'); }
                                         else { resetFournisseurForm(); setDecaisFormCategorie(cat); setShowFournisseurForm(true); }
                                     }}
                                     style={{
@@ -1709,264 +1577,6 @@ function GestionPaiements() {
                     </div>
                 );
             })()}
-            {/* ════════════════════════════════════════════════════════════════
-                MODAL : GESTION DES SALAIRES ENSEIGNANTS
-               ════════════════════════════════════════════════════════════════ */}
-            {showSalaireModal && (
-                <div style={modalOverlay} onClick={() => { setShowSalaireModal(false); setSelectedEns(null); }}>
-                    <div style={{ ...modalBox, maxWidth: '860px', padding: 0, overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
-                        {/* Header */}
-                        <div style={{ background: 'linear-gradient(135deg, #0891b2, #0e7490)', padding: '24px 28px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                                <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: 'white', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                    <Briefcase size={20} /> Gestion des Salaires — Corps Enseignant
-                                </h2>
-                                <p style={{ margin: '4px 0 0', fontSize: '13px', color: 'rgba(255,255,255,0.8)' }}>Sélectionnez un enseignant pour enregistrer son paiement</p>
-                            </div>
-                            <button onClick={() => { setShowSalaireModal(false); setSelectedEns(null); }} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: '10px', padding: '8px', cursor: 'pointer', color: 'white' }}>
-                                <X size={20} />
-                            </button>
-                        </div>
-
-                        <div style={{ display: 'grid', gridTemplateColumns: selectedEns ? '1fr 380px' : '1fr', height: '600px' }}>
-                            {/* Panneau gauche : liste des enseignants */}
-                            <div style={{ padding: '20px', overflowY: 'auto', borderRight: selectedEns ? '1px solid #e2e8f0' : 'none' }}>
-                                {/* Filtre mois + recherche */}
-                                <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
-                                    <div style={{ flex: '1 1 180px' }}>
-                                        <label style={labelStyle}>Mois de paiement</label>
-                                        <input type="month" value={salairesMois}
-                                            onChange={e => { setSalairesMois(e.target.value); loadEnseignantsSalaires(e.target.value); }}
-                                            style={inputStyle} />
-                                    </div>
-                                    <div style={{ flex: '2 1 200px' }}>
-                                        <label style={labelStyle}>Rechercher un enseignant</label>
-                                        <div style={{ position: 'relative' }}>
-                                            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
-                                            <input value={salaireSearch} onChange={e => setSalaireSearch(e.target.value)}
-                                                placeholder="Nom, prénom, matricule..."
-                                                style={{ ...inputStyle, paddingLeft: '36px' }} />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Liste des enseignants */}
-                                {salaireLoading ? (
-                                    <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
-                                        <RefreshCw size={24} style={{ animation: 'spin 1s linear infinite' }} />
-                                        <p style={{ marginTop: '8px' }}>Chargement...</p>
-                                    </div>
-                                ) : (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                        {employesSalaires.filter(e =>
-                                            e.nom.toLowerCase().includes(salaireSearch.toLowerCase()) ||
-                                            e.prenom.toLowerCase().includes(salaireSearch.toLowerCase())
-                                        ).map((ens) => (
-                                            <div key={ens.id} style={{ padding: '24px', background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 2px 4px rgba(0,0,0,0.02)' }}>
-                                                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '16px' }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                                                        <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: ens.type_employe === 'ENSEIGNANT' ? '#e0f2fe' : '#f3e8ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: ens.type_employe === 'ENSEIGNANT' ? '#0284c7' : '#7e22ce', fontSize: '18px', fontWeight: 700 }}>
-                                                            {ens.prenom.charAt(0)}{ens.nom.charAt(0)}
-                                                        </div>
-                                                        <div>
-                                                            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#0f172a' }}>
-                                                                {ens.prenom} {ens.nom}
-                                                            </h3>
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                                                                <span style={{ fontSize: '13px', color: '#64748b', fontWeight: 500 }}>
-                                                                    {ens.role_label}
-                                                                </span>
-                                                                {ens.telephone && (
-                                                                    <>
-                                                                        <span style={{ color: '#cbd5e1' }}>•</span>
-                                                                        <span style={{ fontSize: '13px', color: '#64748b' }}>{ens.telephone}</span>
-                                                                    </>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                    <div style={{ textAlign: 'right' }}>
-                                                        <p style={{ margin: '0 0 4px', fontSize: '13px', color: '#64748b', fontWeight: 500 }}>Base mensuelle (avec primes)</p>
-                                                        <p style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#0f172a' }}>
-                                                            {formatMoney(ens.salaire_base + ens.prime_mensuelle)}
-                                                        </p>
-                                                    </div>
-                                                </div>
-
-                                                <div style={{ padding: '16px', background: '#f8fafc', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                                        {ens.paye_ce_mois ? (
-                                                            <div style={{ padding: '8px 12px', background: '#dcfce7', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                <CheckCircle2 size={16} style={{ color: '#16a34a' }} />
-                                                                <span style={{ fontSize: '13px', fontWeight: 600, color: '#166534' }}>Mois payé</span>
-                                                            </div>
-                                                        ) : (
-                                                            <div style={{ padding: '8px 12px', background: '#fef2f2', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                                <AlertCircle size={16} style={{ color: '#dc2626' }} />
-                                                                <span style={{ fontSize: '13px', fontWeight: 600, color: '#991b1b' }}>Salaire en attente</span>
-                                                            </div>
-                                                        )}
-                                                        <span style={{ fontSize: '13px', color: '#64748b' }}>Total payé année : {formatMoney(ens.total_paye_annee)}</span>
-                                                    </div>
-
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                                        <button
-                                                            onClick={() => setSelectedEns(ens)}
-                                                            style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', color: '#475569', fontSize: '13px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
-                                                        >
-                                                            <Clock size={16} /> Historique ({ens.nb_paiements})
-                                                        </button>
-                                                        {!ens.paye_ce_mois && (ens.salaire_base + ens.prime_mensuelle) > 0 && (
-                                                            <button
-                                                                onClick={() => payerMoisCourantRapide(ens)}
-                                                                disabled={salairePaying === ens.id}
-                                                                style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: 'white', fontSize: '13px', fontWeight: 600, cursor: salairePaying === ens.id ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
-                                                            >
-                                                                {salairePaying === ens.id ? <Loader2 size={16} className="animate-spin" /> : <Banknote size={16} />}
-                                                                Payer ce mois
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                        {employesSalaires.length === 0 && (
-                                            <p style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>Aucun employé trouvé.</p>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Panneau droit : formulaire de paiement */}
-                            {selectedEns && (
-                                <div style={{ padding: '24px', background: '#f8fafc', display: 'flex', flexDirection: 'column', gap: '16px', overflowY: 'auto' }}>
-                                    <div style={{ background: 'white', borderRadius: '12px', padding: '16px', border: '1px solid #e2e8f0' }}>
-                                        <h3 style={{ margin: '0 0 4px', fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
-                                            {selectedEns.prenom} {selectedEns.nom}
-                                        </h3>
-                                        <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
-                                            {selectedEns.role_label}
-                                        </p>
-                                        <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>
-                                            📞 {selectedEns.telephone} — 🆔 {selectedEns.id}
-                                        </p>
-                                    </div>
-
-                                    {/* Statut du mois */}
-                                    <div style={{
-                                        padding: '12px 16px', borderRadius: '10px',
-                                        background: selectedEns.paye_ce_mois ? '#d1fae5' : '#fef3c7',
-                                        border: `1px solid ${selectedEns.paye_ce_mois ? '#6ee7b7' : '#fde68a'}`
-                                    }}>
-                                        <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: selectedEns.paye_ce_mois ? '#059669' : '#d97706' }}>
-                                            {selectedEns.paye_ce_mois
-                                                ? <span style={{display: 'inline-flex', alignItems: 'center', gap: '4px'}}><CheckCircle2 size={14} /> Salaire déjà payé pour {salairesMois}</span>
-                                                : <span style={{display: 'inline-flex', alignItems: 'center', gap: '4px'}}><Clock size={14} /> Salaire non payé pour {salairesMois}</span>
-                                            }
-                                        </p>
-                                    </div>
-
-                                    {/* Arriérés multi-mois — calculés par le backend (base + primes - absences
-                                        - avances par mois), jamais un montant libre saisi ici. Le comptable
-                                        coche le(s) mois qu'il veut régler (tous par défaut), ou décoche pour
-                                        ne payer qu'un mois précis. */}
-                                    <div style={{ display: 'grid', gap: '12px' }}>
-                                        {arrieresLoading ? (
-                                            <p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>Calcul des arriérés...</p>
-                                        ) : arrieresError ? (
-                                            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '10px', padding: '14px 16px' }}>
-                                                <p style={{ margin: 0, fontSize: '13px', color: '#991b1b', fontWeight: 600 }}>
-                                                    Impossible de calculer les arriérés pour cet employé. Réessayez ou vérifiez sa fiche.
-                                                </p>
-                                            </div>
-                                        ) : arrieres && arrieres.mois_du.length > 0 ? (
-                                            <div style={{ background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '10px', padding: '12px 14px' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                                                    <p style={{ margin: 0, fontSize: '12px', color: '#0891b2', fontWeight: 700 }}>
-                                                        Mois en retard ({arrieres.mois_du.length}) — Total dû : {formatMoney(arrieres.total_du)}
-                                                    </p>
-                                                    <button type="button" onClick={() => setMoisSelectionnes(
-                                                        moisSelectionnes.length === arrieres.mois_du.length ? [] : arrieres.mois_du.map((m: any) => m.mois_concerne)
-                                                    )} style={{ background: 'none', border: 'none', color: '#0891b2', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                                                        {moisSelectionnes.length === arrieres.mois_du.length ? 'Tout décocher' : 'Tout cocher'}
-                                                    </button>
-                                                </div>
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '180px', overflowY: 'auto' }}>
-                                                    {arrieres.mois_du.map((m: any) => (
-                                                        <label key={m.mois_concerne} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '6px 8px', background: 'white', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
-                                                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                                                <input type="checkbox" checked={moisSelectionnes.includes(m.mois_concerne)} onChange={() => toggleMoisSelectionne(m.mois_concerne)} />
-                                                                {m.mois_concerne}
-                                                            </span>
-                                                            <span style={{ fontWeight: 700, color: '#0e7490' }}>{formatMoney(m.net_a_payer)}</span>
-                                                        </label>
-                                                    ))}
-                                                </div>
-                                                <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #99f6e4', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                                                    <span style={{ fontSize: '12px', color: '#64748b' }}>Total sélectionné ({moisSelectionnes.length} mois)</span>
-                                                    <span style={{ fontSize: '20px', fontWeight: 800, color: '#0e7490' }}>{formatMoney(montantSelectionne)}</span>
-                                                </div>
-                                            </div>
-                                        ) : (
-                                            <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '14px 16px' }}>
-                                                {/* « sur les 12 derniers mois » était faux : la fenêtre suit
-                                                    l'année scolaire, qui ne fait pas douze mois. Et un
-                                                    nouvel arrivé n'est pas « à jour », il vient d'arriver —
-                                                    deux situations différentes qui méritent deux phrases. */}
-                                                <p style={{ margin: 0, fontSize: '13px', color: '#166534', fontWeight: 600 }}>
-                                                    {(arrieres?.mois_avant_embauche || 0) > 0
-                                                        ? `Aucun arriéré : arrivé(e) le ${arrieres?.date_embauche}.`
-                                                        : 'À jour — aucun mois en retard sur l’année scolaire.'}
-                                                </p>
-                                                {(arrieres?.mois_avant_embauche || 0) > 0 && (
-                                                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#15803d' }}>
-                                                        {arrieres?.mois_avant_embauche} mois écarté(s) : ils précèdent son embauche.
-                                                    </p>
-                                                )}
-                                            </div>
-                                        )}
-                                        <button
-                                            onClick={() => payerSalaireEnseignant(selectedEns)}
-                                            disabled={salairePaying === selectedEns.id || arrieresLoading || moisSelectionnes.length === 0}
-                                            style={{
-                                                ...btnPrimary, background: 'linear-gradient(135deg, #0891b2, #0e7490)',
-                                                opacity: (salairePaying === selectedEns.id || arrieresLoading || moisSelectionnes.length === 0) ? 0.6 : 1,
-                                                justifyContent: 'center', fontSize: '14px'
-                                            }}>
-                                            {salairePaying === selectedEns.id
-                                                ? 'Enregistrement...'
-                                                : <span style={{display: 'inline-flex', alignItems: 'center', gap: '4px'}}><Banknote size={14} /> Payer {moisSelectionnes.length > 1 ? `${moisSelectionnes.length} mois` : 'le mois coché'} ({formatMoney(montantSelectionne)})</span>
-                                            }
-                                        </button>
-                                    </div>
-
-                                    {/* Historique des paiements de cet enseignant */}
-                                    {selectedEns.historique.length > 0 && (
-                                        <div style={{ background: 'white', borderRadius: '12px', padding: '16px', border: '1px solid #e2e8f0' }}>
-                                            <h4 style={{ margin: '0 0 12px', fontSize: '13px', fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                <Calendar size={14} /> Historique des paiements
-                                            </h4>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                                                {selectedEns.historique.map((h, i) => (
-                                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', background: '#f8fafc', borderRadius: '8px', fontSize: '12px' }}>
-                                                        <span style={{ color: '#475569' }}>{h.date ? new Date(h.date).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) : '—'}</span>
-                                                        <span style={{ fontWeight: 700, color: '#059669' }}>{formatMoney(h.montant)}</span>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                            <div style={{ marginTop: '10px', padding: '8px 12px', background: '#0891b215', borderRadius: '8px' }}>
-                                                <span style={{ fontSize: '12px', fontWeight: 700, color: '#0891b2' }}>
-                                                    Total payé cette année : {formatMoney(selectedEns.total_paye_annee)}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

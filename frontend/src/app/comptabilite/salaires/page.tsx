@@ -303,6 +303,40 @@ function SalairesContent() {
         }
     };
 
+    /* PAYER UNE PERSONNE — sur place.
+       Ce bouton renvoyait vers le module « Décaissement », qui rouvrait la
+       liste complète des 46 employés dans une fenêtre de 600 px : pour payer
+       Oumar, le comptable revoyait tout le monde, et cette liste-là lisait
+       `etablissement_id=1` en dur — donc le personnel d'une AUTRE école.
+       Le comptable a déjà la ligne sous les yeux : il lui faut la confirmation
+       de ce qu'il verse, pas un second écran. */
+    const [aPayer, setAPayer] = useState<any>(null);
+    const [paiementEnCours, setPaiementEnCours] = useState(false);
+
+    const ficheDeLaPersonne = useMemo(
+        () => (aPayer ? employes.find(e => e.employe_id === aPayer.employe_id) : null),
+        [aPayer, employes]);
+
+    const confirmerPaiement = async () => {
+        if (!aPayer) return;
+        setPaiementEnCours(true);
+        try {
+            const res = await api.post('/api/finance/salaires/payer', {
+                // L'école vient du jeton, jamais du corps de la requête.
+                enseignant_id: aPayer.employe_id,
+                mois: selectedMonth,
+                mode_paiement: 'ESPECES',
+            });
+            showMsg(res.data?.message || `${aPayer.prenom} ${aPayer.nom} payé(e) pour ${selectedMonth}`, 'success');
+            setAPayer(null);
+            invalidateSalaires(); invalidateEmployes();
+            queryClient.invalidateQueries({ queryKey: ['depenses'] });
+        } catch (err: any) {
+            showMsg(err.response?.data?.detail || 'Erreur lors du paiement', 'error');
+        }
+        setPaiementEnCours(false);
+    };
+
     const apresMouvement = () => {
         invalidateSalaires(); invalidateEmployes();
         queryClient.invalidateQueries({ queryKey: ['depenses'] });
@@ -751,7 +785,7 @@ function SalairesContent() {
                                                             <Check size={14} /> Payé
                                                         </span>
                                                     ) : (sal.net_a_payer || 0) > 0 ? (
-                                                        <button onClick={() => router.push(`/comptabilite/paiements?tab=fournisseurs&payerSalaire=${sal.employe_id}&mois=${selectedMonth}`)}
+                                                        <button onClick={() => setAPayer(sal)}
                                                             style={{ padding: '6px 14px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
                                                             Payer
                                                         </button>
@@ -1108,6 +1142,81 @@ function SalairesContent() {
                                     </div>
                                 </div>
                             ) : null}
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ── CONFIRMER UN VERSEMENT ──────────────────────────────────────
+                Qui l'école paie, combien, et ce qui a déjà été versé. Rien
+                d'autre : ni la liste des collègues, ni un montant à ressaisir. */}
+            <AnimatePresence>
+                {aPayer && (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={() => !paiementEnCours && setAPayer(null)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16 }}>
+                        <motion.div initial={{ scale: 0.96, y: 8 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, y: 8 }}
+                            onClick={e => e.stopPropagation()}
+                            style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 440, overflow: 'hidden' }}>
+
+                            <div style={{ padding: '18px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#0f172a' }}>
+                                        {aPayer.prenom} {aPayer.nom}
+                                    </h3>
+                                    <p style={{ margin: '3px 0 0', fontSize: 12.5, color: '#64748b' }}>
+                                        {aPayer.poste}
+                                        {ficheDeLaPersonne?.telephone ? ` · ${ficheDeLaPersonne.telephone}` : ''}
+                                    </p>
+                                </div>
+                                <button onClick={() => setAPayer(null)} disabled={paiementEnCours}
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 2 }}>
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div style={{ padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+                                <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+                                    Salaire de {moisDisponibles.find(m => m.valeur === selectedMonth)?.libelle || selectedMonth}
+                                </p>
+                                {[
+                                    ['Salaire de base', fmt(aPayer.salaire_base), '#0f172a'],
+                                    ...((aPayer.total_primes || 0) > 0
+                                        ? [['Primes', `+${fmt(aPayer.total_primes)}`, '#10b981'] as const] : []),
+                                    ...((aPayer.total_absences || 0) > 0
+                                        ? [['Retenue absences', `−${fmt(aPayer.total_absences)}`, '#ef4444'] as const] : []),
+                                    ...((aPayer.total_avances || 0) > 0
+                                        ? [['Avances déjà remises', `−${fmt(aPayer.total_avances)}`, '#ef4444'] as const] : []),
+                                ].map(([libelle, montant, couleur]: any) => (
+                                    <div key={libelle} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5 }}>
+                                        <span style={{ color: '#475569' }}>{libelle}</span>
+                                        <span style={{ fontWeight: 600, color: couleur }}>{montant}</span>
+                                    </div>
+                                ))}
+                                <div style={{ borderTop: '1px solid #e2e8f0', marginTop: 4, paddingTop: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                                    <span style={{ fontSize: 13.5, fontWeight: 700, color: '#334155' }}>Net à verser</span>
+                                    <span style={{ fontSize: 21, fontWeight: 900, color: '#10b981' }}>{fmt(aPayer.net_a_payer)}</span>
+                                </div>
+                                {ficheDeLaPersonne && (
+                                    <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94a3b8' }}>
+                                        Déjà versé cette année : {fmt(ficheDeLaPersonne.total_paye_annee)}
+                                        {(ficheDeLaPersonne.nb_paiements || 0) > 0
+                                            ? ` sur ${ficheDeLaPersonne.nb_paiements} mois` : ''}
+                                    </p>
+                                )}
+                            </div>
+
+                            <div style={{ padding: '14px 22px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                                <button onClick={() => setAPayer(null)} disabled={paiementEnCours}
+                                    style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#475569', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                                    Annuler
+                                </button>
+                                <button onClick={confirmerPaiement} disabled={paiementEnCours}
+                                    style={{ padding: '9px 20px', borderRadius: 8, border: 'none', background: '#10b981', color: '#fff', fontSize: 13, fontWeight: 700, cursor: paiementEnCours ? 'not-allowed' : 'pointer', opacity: paiementEnCours ? 0.6 : 1, display: 'flex', alignItems: 'center', gap: 7 }}>
+                                    {paiementEnCours && <Loader2 size={15} className="animate-spin" />}
+                                    Verser {fmt(aPayer.net_a_payer)}
+                                </button>
+                            </div>
                         </motion.div>
                     </motion.div>
                 )}
