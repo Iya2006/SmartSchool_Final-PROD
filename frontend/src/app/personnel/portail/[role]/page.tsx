@@ -219,6 +219,19 @@ type FeuilleAppel = {
     eleves: LigneAppel[];
 };
 
+type CoursDuJour = {
+    seance_id: number;
+    classe: string;
+    matiere: string;
+    enseignant_prevu_id: number | null;
+    enseignant_prevu: string;
+    enseignant_reel: string | null;
+    heure_debut_prevue: string;
+    heure_fin_prevue: string;
+    statut: string;
+    appel_fait: boolean;
+};
+
 type ClasseAppel = { classe_id: number; libelle: string };
 
 type ProfOption = { enseignant_id: number; nom: string; prenom: string; matiere?: string | null };
@@ -1028,6 +1041,42 @@ function SurveillantPortal() {
     });
     const [signalEnCours, setSignalEnCours] = useState(false);
 
+    /* LES COURS DU JOUR
+       Le surveillant signalait ce qu'il remarquait lui-meme dans la cour :
+       une absence vue, c'est une absence signalee, et tout le reste passait.
+       L'emploi du temps sait pourtant exactement quels cours sont prevus.
+       Ici il les voit, et un cours reste « a venir » en fin de journee est
+       precisement un cours qui n'a pas eu lieu. */
+    const [coursDuJour, setCoursDuJour] = useState<CoursDuJour[]>([]);
+    const [coursLoading, setCoursLoading] = useState(false);
+
+    const chargerCoursDuJour = useCallback(async () => {
+        setCoursLoading(true);
+        try {
+            const res = await api.get<CoursDuJour[]>(
+                `/api/seances?date=${signalement.date_absence}`);
+            setCoursDuJour(res.data || []);
+        } catch {
+            setCoursDuJour([]);
+        } finally {
+            setCoursLoading(false);
+        }
+    }, [signalement.date_absence]);
+
+    useEffect(() => { chargerCoursDuJour(); }, [chargerCoursDuJour]);
+
+    /** Depuis un cours precis : le professeur, la date et le motif sont deja
+     *  connus, il n'y a plus rien a ressaisir de memoire. */
+    const signalerDepuisLeCours = (c: CoursDuJour) => {
+        if (!c.enseignant_prevu_id) return;
+        setSignalement((v) => ({
+            ...v,
+            enseignant_id: String(c.enseignant_prevu_id),
+            motif: `${c.matiere} en ${c.classe}, ${c.heure_debut_prevue}–${c.heure_fin_prevue} : cours non assuré`,
+        }));
+        document.getElementById('signalement-cours')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+
     const envoyerSignalement = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         if (!signalement.enseignant_id) return;
@@ -1178,10 +1227,91 @@ function SurveillantPortal() {
                     </div>
                 </section>
 
+                {/* ═══ LES COURS DU JOUR ═══
+                    Le surveillant ne signalait que ce qu'il remarquait de
+                    lui-meme. L'emploi du temps sait quels cours sont prevus :
+                    un cours reste « a venir » en fin de journee est un cours
+                    qui n'a pas eu lieu. */}
+                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                    <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #eff6ff)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                            <p style={{ margin: 0, fontSize: '12px', color: '#2563eb', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Emploi du temps</p>
+                            <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Les cours du jour</h2>
+                            <p style={{ margin: '6px 0 0', fontSize: '13.5px', color: '#64748b', maxWidth: '660px', lineHeight: 1.65 }}>
+                                Ce qui reste <strong>à venir</strong> en fin de journée n&apos;a pas été assuré.
+                                Signalez directement depuis le cours : le professeur et l&apos;heure sont déjà connus.
+                            </p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                            {[
+                                { l: 'Prévus', v: coursDuJour.length, c: '#2563eb' },
+                                { l: 'Non assurés', v: coursDuJour.filter((c) => c.statut === 'PREVUE').length, c: '#b45309' },
+                                { l: 'Appel fait', v: coursDuJour.filter((c) => c.appel_fait).length, c: '#16a34a' },
+                            ].map((x) => (
+                                <div key={x.l} style={{ padding: '10px 14px', borderRadius: '14px', background: `${x.c}10`, border: `1px solid ${x.c}25`, minWidth: '92px' }}>
+                                    <p style={{ margin: 0, fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', color: x.c }}>{x.l}</p>
+                                    <p style={{ margin: '3px 0 0', fontSize: '22px', fontWeight: 950, color: '#0f172a' }}>{x.v}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div>
+                        {coursLoading ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                <Loader2 size={20} className="animate-spin" style={{ verticalAlign: 'middle', marginRight: 8 }} />
+                                Lecture de l&apos;emploi du temps…
+                            </p>
+                        ) : coursDuJour.length === 0 ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                Aucun cours prévu ce jour-là — week-end ou emploi du temps vide.
+                            </p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '420px', overflowY: 'auto' }}>
+                                {coursDuJour.map((c, idx) => {
+                                    const nonAssure = c.statut === 'PREVUE';
+                                    return (
+                                        <div key={c.seance_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '12px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: nonAssure ? '#fffbeb' : 'transparent', flexWrap: 'wrap' }}>
+                                            <div style={{ minWidth: '110px' }}>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 900, color: '#0f172a' }}>
+                                                    {c.heure_debut_prevue?.slice(0, 5)}–{c.heure_fin_prevue?.slice(0, 5)}
+                                                </p>
+                                            </div>
+                                            <div style={{ minWidth: '200px', flex: '1 1 220px' }}>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>{c.matiere}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>{c.classe}</p>
+                                            </div>
+                                            <div style={{ minWidth: '170px', flex: '1 1 170px' }}>
+                                                <p style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#334155' }}>
+                                                    {c.enseignant_reel || c.enseignant_prevu}
+                                                </p>
+                                                {c.enseignant_reel && c.enseignant_reel !== c.enseignant_prevu && (
+                                                    <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#0284c7', fontWeight: 700 }}>
+                                                        remplace {c.enseignant_prevu}
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <span style={{ padding: '5px 12px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 800, background: nonAssure ? '#fef3c7' : '#f0fdf4', color: nonAssure ? '#92400e' : '#166534' }}>
+                                                {nonAssure ? 'À venir' : c.statut === 'EFFECTUEE' ? 'Effectué' : c.statut}
+                                            </span>
+                                            {nonAssure && c.enseignant_prevu_id && (
+                                                <button type="button" onClick={() => signalerDepuisLeCours(c)}
+                                                    style={{ marginLeft: 'auto', padding: '8px 14px', borderRadius: '12px', border: '1px solid #f59e0b', background: 'white', color: '#b45309', fontWeight: 800, fontSize: '12.5px', cursor: 'pointer' }}>
+                                                    Signaler ce cours
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </section>
+
                 {/* ═══ SIGNALER L'ABSENCE D'UN ENSEIGNANT ═══
                     Constater n'est pas decider : ce formulaire cree un
                     signalement, jamais une retenue. */}
-                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                <section id="signalement-cours" style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                     <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #fff7ed)' }}>
                         <p style={{ margin: 0, fontSize: '12px', color: '#b45309', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Corps enseignant</p>
                         <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Signaler un cours non assuré</h2>
