@@ -10,11 +10,12 @@ import {
     CheckCircle2, AlertCircle, Users, Clock, BookOpen, Wand2, Check, XCircle,
     Mail, MailOpen, Filter, ArrowRight, Zap, FileText, Shield, Award, Download,
     UserPlus, Search, Phone, Inbox, TrendingUp, BarChart3, Radio, Megaphone,
-    Handshake, ClipboardCheck, Wallet, ScrollText, Sparkles, Bell, Lock, User, Smartphone, School, Edit3, AlertTriangle, GraduationCap
+    Handshake, ClipboardCheck, Wallet, ScrollText, Sparkles, Bell, Lock, User, Smartphone, School, Edit3, AlertTriangle, GraduationCap, ArrowLeft
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface MessageItem {
     message_id: number; demande_id: number | null;
@@ -78,6 +79,7 @@ const JOURS_L: Record<string, string> = { LUNDI: 'Lun', MARDI: 'Mar', MERCREDI: 
 function CommunicationAdminPageInner() {
     const router = useRouter();
     const searchParams = useSearchParams();
+    const isMobile = useIsMobile();
     const [tab, setTab] = useState<'messages' | 'demandes' | 'parents'>('demandes');
     const [messages, setMessages] = useState<MessageItem[]>([]);
     const [demandes, setDemandes] = useState<DemandeItem[]>([]);
@@ -570,10 +572,14 @@ function CommunicationAdminPageInner() {
                         <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-muted)' }}>{parentMessages.length} message(s)</span>
                     </div>
 
-                    {/* Two columns: Parents list + Messages */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: '16px', alignItems: 'start' }}>
+                    {/* Two columns: Parents list + Messages — sur mobile, une seule
+                        vue à la fois (liste, puis conversation plein écran au tap),
+                        comme une vraie appli de messagerie plutôt que deux colonnes
+                        écrasées côte à côte. */}
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '380px 1fr', gap: '16px', alignItems: 'start' }}>
                         {/* Parents list */}
-                        <div className="card" style={{ maxHeight: '600px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                        {(!isMobile || !selectedParentFilter) && (
+                        <div className="card" style={{ maxHeight: isMobile ? '75vh' : '600px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                             <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border-light)' }}>
                                 <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}><Users size={16} color="#059669" /> Répertoire Parents</h4>
                             </div>
@@ -614,11 +620,21 @@ function CommunicationAdminPageInner() {
                                 <Pagination page={parentPage} pageSize={PARENT_PAGE_SIZE} total={parentsList.filter(p => `${p.prenom} ${p.nom} ${p.telephone}`.toLowerCase().includes(pmSearch.toLowerCase())).length} onPageChange={setParentPage} />
                             </div>
                         </div>
+                        )}
 
-                        {/* Messages history — filtered by selected parent */}
-                        <div className="card" style={{ maxHeight: '600px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                        {/* Messages history — filtered by selected parent — sur mobile,
+                            n'apparaît qu'une fois un parent choisi dans la liste. */}
+                        {(!isMobile || selectedParentFilter) && (
+                        <div className="card" style={{ maxHeight: isMobile ? '75vh' : '600px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                             <div style={{ padding: '16px 18px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                                <div style={{ flex: 1 }}>
+                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    {isMobile && selectedParentFilter && (
+                                        <button onClick={() => setSelectedParentFilter(null)} aria-label="Retour à la liste"
+                                            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'white', color: '#334155', cursor: 'pointer', flexShrink: 0 }}>
+                                            <ArrowLeft size={16} />
+                                        </button>
+                                    )}
+                                    <div>
                                     <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700 }}>
                                         {selectedParentFilter ? `📨 Messages — ${selectedParentFilter.prenom} ${selectedParentFilter.nom}` : '📨 Historique des Messages'}
                                     </h4>
@@ -627,6 +643,7 @@ function CommunicationAdminPageInner() {
                                             <Smartphone size={14} style={{display:'inline', verticalAlign:'middle'}}/> {selectedParentFilter.telephone} • {selectedParentFilter.nb_enfants} enfant(s)
                                         </p>
                                     )}
+                                    </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                     {selectedParentFilter && (
@@ -635,10 +652,12 @@ function CommunicationAdminPageInner() {
                                                 style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: '#059669', color: 'white', border: 'none', cursor: 'pointer' }}>
                                                 <Send size={12} /> Écrire
                                             </button>
+                                            {!isMobile && (
                                             <button onClick={() => setSelectedParentFilter(null)}
                                                 style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, background: '#f1f5f9', color: '#64748b', border: 'none', cursor: 'pointer' }}>
                                                 <X size={12} /> Tous
                                             </button>
+                                            )}
                                         </>
                                     )}
                                     <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>
@@ -730,6 +749,7 @@ function CommunicationAdminPageInner() {
                                 })()}
                             </div>
                         </div>
+                        )}
                     </div>
                 </motion.div>
             )}

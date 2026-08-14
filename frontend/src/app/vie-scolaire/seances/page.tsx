@@ -8,6 +8,7 @@ import {
     AlertTriangle, Filter, Users2, MapPin,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface Seance {
     seance_id: number;
@@ -64,6 +65,7 @@ function couleurPour(cle: string) {
 }
 
 export default function VieScolaireSeancesPage() {
+    const isMobile = useIsMobile();
     const [seances, setSeances] = useState<Seance[]>([]);
     const [loading, setLoading] = useState(true);
     const [detail, setDetail] = useState<SeanceDetail | null>(null);
@@ -131,11 +133,11 @@ export default function VieScolaireSeancesPage() {
     const detailColor = detail ? couleurPour(detail.classe) : PALETTE[0];
 
     return (
-        <div style={{ padding: '32px', maxWidth: '1400px', margin: '0 auto' }}>
+        <div style={{ padding: isMobile ? '16px' : '32px', maxWidth: '1400px', margin: '0 auto' }}>
             {/* ── Bannière ── */}
             <div className="no-print" style={{
-                background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', borderRadius: '20px', padding: '26px 30px',
-                marginBottom: '20px', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', borderRadius: '20px', padding: isMobile ? '20px' : '26px 30px',
+                marginBottom: '20px', color: 'white', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '14px',
                 boxShadow: '0 8px 24px rgba(79,70,229,0.25)',
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>

@@ -396,7 +396,7 @@ export default function ApparencePage() {
                                     <span className={styles.hint}>Configurez des thèmes temporaires qui s&apos;activent automatiquement lors de périodes festives ou de vacances.</span>
                                 </div>
 
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1.25rem', background: '#f8fafc', borderRadius: '14px', border: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px', padding: '1.25rem', background: '#f8fafc', borderRadius: '14px', border: '1px solid #e2e8f0', marginBottom: '1.5rem' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                         <Clock size={20} style={{ color: theme.primary }} />
                                         <div>
@@ -413,7 +413,7 @@ export default function ApparencePage() {
                                 {theme.seasonalEnabled && (
                                     <>
                                         {/* Notifications / Auto-Apply Preference */}
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1.25rem', background: '#f8fafc', borderRadius: '14px', border: '1px solid #e2e8f0', marginBottom: '2rem' }}>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '12px', padding: '1.25rem', background: '#f8fafc', borderRadius: '14px', border: '1px solid #e2e8f0', marginBottom: '2rem' }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                                                 <Bell size={20} style={{ color: theme.accent }} />
                                                 <div>
@@ -434,7 +434,7 @@ export default function ApparencePage() {
                                                 let themesList: any[] = [];
                                                 try { themesList = JSON.parse(theme.seasonalThemesJson); } catch(e) {}
                                                 return themesList.map((t: any, index: number) => (
-                                                    <div key={t.id} style={{ display: 'grid', gridTemplateColumns: '50px 1.5fr 1fr 1fr auto', alignItems: 'center', gap: '1rem', padding: '1.25rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px' }}>
+                                                    <div key={t.id} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '50px 1.5fr 1fr 1fr auto', alignItems: isMobile ? 'stretch' : 'center', gap: '1rem', padding: '1.25rem', background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px' }}>
                                                         <span style={{ fontSize: '2rem', textAlign: 'center' }}>{t.emoji}</span>
                                                         <div>
                                                             <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#0f172a' }}>{t.label}</div>

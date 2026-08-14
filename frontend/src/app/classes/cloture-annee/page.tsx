@@ -10,6 +10,7 @@ import {
 import api from '@/lib/api';
 import Stepper, { StepDef, StepStatus } from '@/components/Stepper';
 import Pagination from '@/components/Pagination';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface Annee { annee_id: number; code: string; libelle: string; est_courante: string; }
 interface ClasseItem { classe_id: number; libelle: string; code: string; effectif_actuel: number; niveau_id: number; }
@@ -79,6 +80,7 @@ const btnPrimary: React.CSSProperties = { padding: '11px 20px', borderRadius: '1
 const btnOutline: React.CSSProperties = { padding: '10px 18px', borderRadius: '10px', border: '1px solid #3b82f6', background: 'white', color: '#1d4ed8', fontWeight: 700, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' };
 
 export default function ClotureAnneePage() {
+    const isMobile = useIsMobile();
     const [annees, setAnnees] = useState<Annee[]>([]);
     const [anneeSourceId, setAnneeSourceId] = useState<number | null>(null);
     const [anneeCibleId, setAnneeCibleId] = useState<number | null>(null);
@@ -542,7 +544,7 @@ export default function ClotureAnneePage() {
                 )}
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '24px', alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '280px 1fr', gap: '24px', alignItems: 'start' }}>
                 <div className="card" style={{ padding: '20px 20px 4px' }}>
                     <Stepper steps={steps} activeId={activeStep} onSelect={setActiveStep} />
                 </div>

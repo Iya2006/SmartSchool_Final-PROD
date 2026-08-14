@@ -234,7 +234,7 @@ export default function EnseignantsPage() {
             </AnimatePresence>
 
             {/* Breadcrumb */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     {/* ← Back button */}
                     <button
@@ -257,7 +257,7 @@ export default function EnseignantsPage() {
                         <span style={{ color: 'var(--brand-primary)', fontWeight: 600 }}>Enseignants</span>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
                     <button onClick={() => setViewMode('grid')} className="btn btn-outline btn-sm" style={{ color: '#10b981', borderColor: '#10b981' }}>
                         <UserCheck size={16} /> Toutes les Cartes
                     </button>
