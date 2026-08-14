@@ -104,17 +104,24 @@ def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depend
     verifier_annee_modifiable(db, premiere_inscription.annee_id)
 
     dates = {p.date_presence for p in presences}
-    existantes = {
-        (pr.inscription_id, pr.date_presence, pr.demi_journee): pr
-        for pr in db.query(Presence).filter(
-            Presence.inscription_id.in_(inscription_ids),
-            Presence.date_presence.in_(dates),
-        ).all()
-    }
+    # La clé d'un pointage dépend du cycle : au collège l'appel se fait par
+    # matière, donc par séance ; au primaire il porte sur la demi-journée.
+    # Sans cette distinction, les six heures d'une journée de 10ème écraseraient
+    # la même ligne, et il ne resterait que le dernier appel de la journée.
+    existantes = {}
+    for pr in db.query(Presence).filter(
+        Presence.inscription_id.in_(inscription_ids),
+        Presence.date_presence.in_(dates),
+    ).all():
+        cle = ((pr.seance_id, pr.inscription_id) if pr.seance_id
+               else (None, pr.inscription_id, pr.date_presence, pr.demi_journee))
+        existantes[cle] = pr
 
     count = 0
     for p in presences:
-        existing = existantes.get((p.inscription_id, p.date_presence, p.demi_journee))
+        cle = ((p.seance_id, p.inscription_id) if p.seance_id
+               else (None, p.inscription_id, p.date_presence, p.demi_journee))
+        existing = existantes.get(cle)
         # Un élève présent n'est jamais « justifié » : le champ ne vaut que
         # pour une absence ou un retard, sinon il pollue le décompte.
         justifie = (p.est_justifie or "N").upper()
@@ -138,19 +145,31 @@ def feuille_appel(
     classe_id: int,
     date_presence: date_type,
     demi_journee: str = "MATIN",
+    creneau_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """La liste de classe d'un jour, prête à être pointée.
+    """La liste de classe d'un jour, prête à être pointée — et QUI la pointe.
 
-    Faire l'appel demande deux choses que rien ne fournissait ensemble :
-    l'`inscription_id` de chaque élève — c'est lui, et non `eleve_id`, que
-    l'enregistrement attend — et ce qui a DÉJÀ été pointé pour ce jour et
-    cette demi-journée. Sans le second, rouvrir la feuille d'appel d'hier
-    affichait tout le monde présent et effaçait le travail de la veille.
+    Faire l'appel demande l'`inscription_id` de chaque élève (c'est lui, et non
+    `eleve_id`, que l'enregistrement attend) et ce qui a DÉJÀ été pointé : sans
+    le second, rouvrir la feuille d'hier affichait tout le monde présent et
+    effaçait le travail de la veille.
 
-    Deux requêtes, quel que soit l'effectif : la liste, puis les pointages
-    du jour. Jamais une requête par élève.
+    Mais l'appel ne se fait pas de la même façon selon le cycle, et l'écran
+    doit le refléter :
+
+    AU PRIMAIRE, un seul maître tient la classe toute la journée. Il est
+    désigné automatiquement — le surveillant n'a personne à choisir, et lui
+    demander de le faire serait lui demander de retrouver une information que
+    le logiciel a déjà.
+
+    AU COLLÈGE ET AU LYCÉE, la classe change de professeur à chaque heure.
+    L'appel se fait donc par matière : on donne les créneaux réels du jour,
+    chacun avec son professeur. Choisir la matière désigne le professeur, et
+    l'appel se rattache à cette séance-là.
+
+    Deux requêtes pour la liste, quel que soit l'effectif.
     """
     classe = db.query(Classe).filter(
         Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
@@ -162,6 +181,18 @@ def feuille_appel(
     if demi_journee not in {"MATIN", "SOIR"}:
         raise HTTPException(status_code=400, detail="La demi-journée vaut MATIN ou SOIR.")
 
+    cycle_code, est_primaire = _cycle_de_la_classe(db, classe)
+    responsable = _instituteur_de(db, classe) if est_primaire else None
+    creneaux = [] if est_primaire else _creneaux_du_jour(db, classe, date_presence)
+
+    # Au collège, l'appel se rattache à la séance du créneau choisi ; sinon il
+    # porte sur la demi-journée, comme au primaire.
+    seance = None
+    if creneau_id:
+        seance = _seance_du_creneau(db, creneau_id, date_presence, classe)
+        if seance is None:
+            raise HTTPException(404, "Ce créneau n'existe pas pour cette classe ce jour-là.")
+
     lignes = db.query(Inscription.inscription_id, Eleve.eleve_id, Eleve.matricule,
                       Eleve.nom, Eleve.prenom).join(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
@@ -169,13 +200,20 @@ def feuille_appel(
         Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE"
     ).order_by(Eleve.nom, Eleve.prenom).all()
 
-    deja = {
-        p.inscription_id: p for p in db.query(Presence).filter(
-            Presence.inscription_id.in_([l.inscription_id for l in lignes] or [0]),
+    inscriptions = [l.inscription_id for l in lignes] or [0]
+    if seance is not None:
+        pointages = db.query(Presence).filter(
+            Presence.seance_id == seance.seance_id,
+            Presence.inscription_id.in_(inscriptions),
+        ).all()
+    else:
+        pointages = db.query(Presence).filter(
+            Presence.inscription_id.in_(inscriptions),
             Presence.date_presence == date_presence,
             Presence.demi_journee == demi_journee,
+            Presence.seance_id.is_(None),
         ).all()
-    }
+    deja = {p.inscription_id: p for p in pointages}
 
     eleves = []
     for l in lignes:
@@ -196,12 +234,139 @@ def feuille_appel(
     return {
         "classe_id": classe.classe_id,
         "classe": classe.libelle,
+        "cycle": cycle_code,
+        "est_primaire": est_primaire,
         "date_presence": date_presence,
         "demi_journee": demi_journee,
         "effectif": len(eleves),
         "deja_pointee": bool(deja),
+        # Au primaire : le maître, désigné d'office.
+        "responsable": responsable,
+        # Au collège et au lycée : les heures du jour, chacune avec son prof.
+        "creneaux": creneaux,
+        "creneau_id": creneau_id,
+        "seance_id": seance.seance_id if seance is not None else None,
         "eleves": eleves,
     }
+
+
+def _cycle_de_la_classe(db: Session, classe) -> tuple:
+    """Le code du cycle, et s'il s'agit du primaire."""
+    from app.models.academique import Cycle, Niveau
+
+    ligne = db.query(Cycle.code).join(
+        Niveau, Niveau.cycle_id == Cycle.cycle_id
+    ).filter(Niveau.niveau_id == classe.niveau_id).first()
+    code = (ligne[0] if ligne else "") or ""
+    return code, code.upper().startswith("PRM") or "PRIM" in code.upper()
+
+
+def _instituteur_de(db: Session, classe) -> Optional[dict]:
+    """Le maître qui tient la classe.
+
+    C'est celui qui est affecté au plus grand nombre de matières de la classe :
+    au primaire, un seul enseignant les couvre toutes. Le désigner évite de
+    demander au surveillant une information que le logiciel connaît déjà.
+    """
+    from app.models.academique import Affectation, Enseignant
+
+    ligne = db.query(
+        Enseignant.enseignant_id, Enseignant.nom, Enseignant.prenom,
+        func.count(Affectation.affectation_id).label("matieres"),
+    ).join(
+        Affectation, Affectation.enseignant_id == Enseignant.enseignant_id
+    ).filter(
+        Affectation.classe_id == classe.classe_id,
+        Affectation.statut == "ACTIVE",
+    ).group_by(
+        Enseignant.enseignant_id, Enseignant.nom, Enseignant.prenom
+    ).order_by(func.count(Affectation.affectation_id).desc()).first()
+
+    if not ligne:
+        return None
+    return {
+        "enseignant_id": ligne.enseignant_id,
+        "nom": f"{ligne.prenom} {ligne.nom}".strip(),
+        "nb_matieres": ligne.matieres,
+    }
+
+
+def _creneaux_du_jour(db: Session, classe, jour: date_type) -> list:
+    """Les heures de cours de la classe ce jour-là, avec leur professeur."""
+    from app.models.academique import CreneauEmploi, Enseignant, Matiere
+
+    JOURS = ["LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI"]
+    if jour.weekday() >= 5:
+        return []
+
+    lignes = db.query(
+        CreneauEmploi.creneau_id, CreneauEmploi.heure_debut, CreneauEmploi.heure_fin,
+        Matiere.libelle.label("matiere"), Enseignant.enseignant_id,
+        Enseignant.nom, Enseignant.prenom,
+    ).join(
+        Matiere, Matiere.matiere_id == CreneauEmploi.matiere_id
+    ).outerjoin(
+        Enseignant, Enseignant.enseignant_id == CreneauEmploi.enseignant_id
+    ).filter(
+        CreneauEmploi.classe_id == classe.classe_id,
+        CreneauEmploi.jour == JOURS[jour.weekday()],
+        CreneauEmploi.statut == "ACTIVE",
+    ).order_by(CreneauEmploi.heure_debut).all()
+
+    return [{
+        "creneau_id": c.creneau_id,
+        "heure_debut": c.heure_debut,
+        "heure_fin": c.heure_fin,
+        "matiere": c.matiere,
+        "enseignant_id": c.enseignant_id,
+        # Un créneau sans professeur affecté existe : il faut le dire plutôt
+        # que d'afficher un nom vide.
+        "enseignant": f"{c.prenom} {c.nom}".strip() if c.enseignant_id else None,
+        "demi_journee": "MATIN" if (c.heure_debut or "08:00") < "13:00" else "SOIR",
+    } for c in lignes]
+
+
+def _seance_du_creneau(db: Session, creneau_id: int, jour: date_type, classe):
+    """La séance de ce créneau ce jour-là, créée si elle n'existe pas encore.
+
+    Les séances se génèrent à la demande depuis l'emploi du temps (module
+    Séances). On réutilise ce mécanisme plutôt que d'inventer un second
+    enregistrement par matière qui entrerait en concurrence avec lui.
+    """
+    from app.models.academique import CreneauEmploi, Seance
+
+    creneau = db.query(CreneauEmploi).filter(
+        CreneauEmploi.creneau_id == creneau_id,
+        CreneauEmploi.classe_id == classe.classe_id,
+    ).first()
+    if not creneau or jour.weekday() >= 5:
+        return None
+
+    seance = db.query(Seance).filter(
+        Seance.creneau_id == creneau_id, Seance.date_seance == jour
+    ).first()
+    if seance:
+        return seance
+
+    seance = Seance(
+        creneau_id=creneau.creneau_id, classe_id=creneau.classe_id,
+        matiere_id=creneau.matiere_id, annee_id=classe.annee_id,
+        enseignant_prevu_id=creneau.enseignant_id, date_seance=jour,
+        heure_debut_prevue=creneau.heure_debut, heure_fin_prevue=creneau.heure_fin,
+        salle=creneau.salle,
+    )
+    db.add(seance)
+    try:
+        db.commit()
+        db.refresh(seance)
+    except Exception:
+        # Deux surveillants qui ouvrent la même heure au même moment : la
+        # contrainte d'unicité tranche, on relit celle qui a gagné.
+        db.rollback()
+        seance = db.query(Seance).filter(
+            Seance.creneau_id == creneau_id, Seance.date_seance == jour
+        ).first()
+    return seance
 
 
 # ═══════════════════════════════════════════════════════════════════════════

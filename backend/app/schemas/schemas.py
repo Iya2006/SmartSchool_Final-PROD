@@ -720,6 +720,11 @@ class PresenceBase(BaseModel):
     # restait donc systématiquement « non justifiée », même avec un mot des
     # parents en main.
     est_justifie: Optional[str] = "N"
+    # Au collège et au lycée l'appel se fait par matière : le pointage se
+    # rattache alors à la séance de ce créneau-là. Au primaire, un seul maître
+    # tient la classe toute la journée et le pointage porte sur la
+    # demi-journée — d'où l'absence de séance.
+    seance_id: Optional[int] = None
 
 class PresenceCreate(PresenceBase): pass
 class PresenceOut(OrmBase, PresenceBase):

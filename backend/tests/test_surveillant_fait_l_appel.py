@@ -94,7 +94,7 @@ def ecole(db: Session):
     )
     db.add(surveillant); db.commit(); db.refresh(surveillant)
 
-    return {"etab": etab, "annee": annee, "classe": classe,
+    return {"etab": etab, "annee": annee, "cycle": cycle, "classe": classe,
             "inscriptions": inscriptions, "surveillant": surveillant}
 
 
@@ -285,3 +285,174 @@ class TestLeChiffreDuTableauSuitLaSaisie:
         # lire un taux qui a un sens.
         assert apres["taux_presence"] < 100
         assert apres["attendu"] > apres["total"]
+
+
+class TestQuiFaitLAppel:
+    """« Au primaire l'instituteur est sélectionné automatiquement ; au collège
+    et au lycée on fait l'appel par matière, et choisir la matière sélectionne
+    le professeur. »
+
+    Ce n'est pas un confort d'écran : demander au surveillant de retrouver le
+    maître d'une classe, ou de se souvenir qui avait la 10ème A à 10 h, c'est
+    lui demander une information que l'emploi du temps contient déjà — et
+    ouvrir la porte à un appel attribué au mauvais professeur.
+    """
+
+    def _classe_de_primaire(self, db: Session, ecole):
+        """Le cycle décide : au primaire un seul maître, ailleurs un par heure.
+        La fixture monte un collège — ce test-ci a besoin d'une vraie classe
+        de primaire, pas d'un collège renommé."""
+        from app.models.academique import Classe, Cycle, Niveau
+
+        eid = ecole["etab"].etablissement_id
+        cycle = Cycle(etablissement_id=eid, code="PRM", libelle="Primaire", ordre=0)
+        db.add(cycle); db.commit(); db.refresh(cycle)
+        niveau = Niveau(cycle_id=cycle.cycle_id, code=f"P{_JETON}{_uid()}",
+                        libelle="1ère Année", ordre=1)
+        db.add(niveau); db.commit(); db.refresh(niveau)
+        classe = Classe(etablissement_id=eid, annee_id=ecole["annee"].annee_id,
+                        niveau_id=niveau.niveau_id, code=f"CP{_JETON}{_uid()}",
+                        libelle="1ère Année A", capacite_max=40, statut="ACTIVE")
+        db.add(classe); db.commit(); db.refresh(classe)
+        return cycle, classe
+
+    def test_au_primaire_le_maitre_est_designe_d_office(
+        self, client: TestClient, db: Session, ecole
+    ):
+        from app.models.academique import Affectation, Enseignant, Matiere
+
+        cycle_prm, classe_prm = self._classe_de_primaire(db, ecole)
+
+        # Un instituteur affecté à toutes les matières de la classe.
+        maitre = Enseignant(
+            etablissement_id=ecole["etab"].etablissement_id,
+            matricule=f"MTR{_JETON}{_uid()}", nom="Kolié", prenom="Thierno",
+            sexe="M", telephone=f"622{_uid():06d}", date_naissance=date(1985, 2, 9),
+            statut="ACTIF",
+        )
+        db.add(maitre); db.commit(); db.refresh(maitre)
+        for n in range(3):
+            m = Matiere(cycle_id=cycle_prm.cycle_id,
+                        code=f"M{_JETON}{_uid()}", libelle=f"Matière {n}")
+            db.add(m); db.commit(); db.refresh(m)
+            db.add(Affectation(
+                enseignant_id=maitre.enseignant_id, matiere_id=m.matiere_id,
+                classe_id=classe_prm.classe_id, annee_id=ecole["annee"].annee_id,
+                nb_heures_semaine=5, statut="ACTIVE",
+            ))
+        db.commit()
+
+        h = _headers(client, ecole["surveillant"].nom_utilisateur)
+        d = _feuille(client, h, classe_prm.classe_id).json()
+
+        assert d["est_primaire"] is True
+        assert d["creneaux"] == []          # il tient la classe toute la journée
+        assert d["responsable"] is not None
+        assert d["responsable"]["enseignant_id"] == maitre.enseignant_id
+        assert d["responsable"]["nom"] == "Thierno Kolié"
+
+    def test_sans_instituteur_affecte_l_ecran_le_dit(
+        self, client: TestClient, db: Session, ecole
+    ):
+        """Un poste vacant se dit ; il ne se devine pas à une case vide."""
+        _, classe_prm = self._classe_de_primaire(db, ecole)
+        h = _headers(client, ecole["surveillant"].nom_utilisateur)
+        d = _feuille(client, h, classe_prm.classe_id).json()
+        assert d["est_primaire"] is True
+        assert d["responsable"] is None
+
+    def test_l_heure_de_cours_porte_sa_matiere_et_son_professeur(
+        self, client: TestClient, db: Session, ecole
+    ):
+        from app.models.academique import CreneauEmploi, Enseignant, Matiere
+
+        prof = Enseignant(
+            etablissement_id=ecole["etab"].etablissement_id,
+            matricule=f"PRF{_JETON}{_uid()}", nom="Diallo", prenom="Elhadj",
+            sexe="M", telephone=f"623{_uid():06d}", date_naissance=date(1982, 7, 3),
+            statut="ACTIF",
+        )
+        matiere = Matiere(cycle_id=ecole["cycle"].cycle_id,
+                          code=f"ANG{_JETON}{_uid()}", libelle="Anglais")
+        db.add_all([prof, matiere]); db.commit(); db.refresh(prof); db.refresh(matiere)
+        db.add(CreneauEmploi(
+            classe_id=ecole["classe"].classe_id, matiere_id=matiere.matiere_id,
+            enseignant_id=prof.enseignant_id, jour="LUNDI",
+            heure_debut="08:00", heure_fin="09:00",
+            annee_id=ecole["annee"].annee_id, statut="ACTIVE",
+        ))
+        db.commit()
+
+        h = _headers(client, ecole["surveillant"].nom_utilisateur)
+        d = _feuille(client, h, ecole["classe"].classe_id, jour="2026-05-11").json()  # lundi
+        assert len(d["creneaux"]) == 1
+        creneau = d["creneaux"][0]
+        assert creneau["matiere"] == "Anglais"
+        assert creneau["enseignant"] == "Elhadj Diallo"
+        assert creneau["demi_journee"] == "MATIN"
+
+    def test_deux_heures_du_meme_jour_ne_s_ecrasent_pas(
+        self, client: TestClient, db: Session, ecole
+    ):
+        """Six heures de cours dans une journée, c'est six appels. Sans
+        rattachement à l'heure, ils écriraient tous la même ligne et il ne
+        resterait que le dernier."""
+        from app.models.academique import CreneauEmploi, Enseignant, Matiere
+
+        prof = Enseignant(
+            etablissement_id=ecole["etab"].etablissement_id,
+            matricule=f"PR2{_JETON}{_uid()}", nom="Camara", prenom="Adama",
+            sexe="F", telephone=f"624{_uid():06d}", date_naissance=date(1990, 1, 5),
+            statut="ACTIF",
+        )
+        db.add(prof); db.commit(); db.refresh(prof)
+        creneaux = []
+        for heure, nom in [("08:00", "Anglais"), ("09:00", "Physique")]:
+            m = Matiere(cycle_id=ecole["cycle"].cycle_id,
+                        code=f"{nom[:3]}{_JETON}{_uid()}", libelle=nom)
+            db.add(m); db.commit(); db.refresh(m)
+            cr = CreneauEmploi(
+                classe_id=ecole["classe"].classe_id, matiere_id=m.matiere_id,
+                enseignant_id=prof.enseignant_id, jour="LUNDI",
+                heure_debut=heure, heure_fin=f"{int(heure[:2]) + 1:02d}:00",
+                annee_id=ecole["annee"].annee_id, statut="ACTIVE",
+            )
+            db.add(cr); db.commit(); db.refresh(cr)
+            creneaux.append(cr)
+
+        h = _headers(client, ecole["surveillant"].nom_utilisateur)
+        cible = ecole["inscriptions"][0]
+
+        premiere = client.get(
+            f"/api/vie-scolaire/feuille-appel?classe_id={ecole['classe'].classe_id}"
+            f"&date_presence=2026-05-11&creneau_id={creneaux[0].creneau_id}", headers=h).json()
+        assert premiere["seance_id"] is not None
+
+        client.post("/api/vie-scolaire/presences/batch", headers=h, json=[{
+            "inscription_id": cible.inscription_id, "date_presence": "2026-05-11",
+            "demi_journee": "MATIN", "statut_presence": "ABSENT", "est_justifie": "N",
+            "seance_id": premiere["seance_id"],
+        }])
+
+        relu = client.get(
+            f"/api/vie-scolaire/feuille-appel?classe_id={ecole['classe'].classe_id}"
+            f"&date_presence=2026-05-11&creneau_id={creneaux[0].creneau_id}", headers=h).json()
+        assert next(e["statut"] for e in relu["eleves"]
+                    if e["inscription_id"] == cible.inscription_id) == "ABSENT"
+
+        # L'heure suivante n'a pas encore été pointée : elle reste vierge.
+        suivante = client.get(
+            f"/api/vie-scolaire/feuille-appel?classe_id={ecole['classe'].classe_id}"
+            f"&date_presence=2026-05-11&creneau_id={creneaux[1].creneau_id}", headers=h).json()
+        assert suivante["seance_id"] != premiere["seance_id"]
+        assert next(e["statut"] for e in suivante["eleves"]
+                    if e["inscription_id"] == cible.inscription_id) == "PRESENT"
+
+    def test_un_creneau_d_une_autre_classe_est_refuse(
+        self, client: TestClient, db: Session, ecole
+    ):
+        h = _headers(client, ecole["surveillant"].nom_utilisateur)
+        r = client.get(
+            f"/api/vie-scolaire/feuille-appel?classe_id={ecole['classe'].classe_id}"
+            f"&date_presence=2026-05-11&creneau_id=999999", headers=h)
+        assert r.status_code == 404

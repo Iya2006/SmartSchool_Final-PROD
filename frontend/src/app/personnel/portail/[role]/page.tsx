@@ -179,13 +179,31 @@ type LigneAppel = {
     motif?: string | null;
 };
 
+type CreneauAppel = {
+    creneau_id: number;
+    heure_debut: string;
+    heure_fin: string;
+    matiere: string;
+    enseignant_id?: number | null;
+    enseignant?: string | null;
+    demi_journee: 'MATIN' | 'SOIR';
+};
+
 type FeuilleAppel = {
     classe_id: number;
     classe: string;
+    cycle: string;
+    est_primaire: boolean;
     date_presence: string;
     demi_journee: string;
     effectif: number;
     deja_pointee: boolean;
+    /** Au primaire : le maître qui tient la classe, désigné d'office. */
+    responsable?: { enseignant_id: number; nom: string; nb_matieres: number } | null;
+    /** Au collège et au lycée : les heures du jour, chacune avec son prof. */
+    creneaux: CreneauAppel[];
+    creneau_id?: number | null;
+    seance_id?: number | null;
     eleves: LigneAppel[];
 };
 
@@ -892,6 +910,9 @@ function SurveillantPortal() {
     const [appelClasse, setAppelClasse] = useState('');
     const [appelDate, setAppelDate] = useState(() => new Date().toISOString().slice(0, 10));
     const [appelDemi, setAppelDemi] = useState<'MATIN' | 'SOIR'>('MATIN');
+    // Au college et au lycee, la classe change de professeur a chaque heure :
+    // l'appel se fait par matiere, et choisir la matiere designe le prof.
+    const [appelCreneau, setAppelCreneau] = useState<number | null>(null);
     const [feuille, setFeuille] = useState<FeuilleAppel | null>(null);
     const [appelLoading, setAppelLoading] = useState(false);
     const [appelSaving, setAppelSaving] = useState(false);
@@ -902,7 +923,8 @@ function SurveillantPortal() {
         setError(null);
         try {
             const res = await api.get<FeuilleAppel>(
-                `/api/vie-scolaire/feuille-appel?classe_id=${appelClasse}&date_presence=${appelDate}&demi_journee=${appelDemi}`);
+                `/api/vie-scolaire/feuille-appel?classe_id=${appelClasse}&date_presence=${appelDate}`
+                + `&demi_journee=${appelDemi}${appelCreneau ? `&creneau_id=${appelCreneau}` : ''}`);
             setFeuille(res.data);
         } catch (err) {
             setError(getErrorMessage(err));
@@ -910,9 +932,14 @@ function SurveillantPortal() {
         } finally {
             setAppelLoading(false);
         }
-    }, [appelClasse, appelDate, appelDemi]);
+    }, [appelClasse, appelDate, appelDemi, appelCreneau]);
 
     useEffect(() => { chargerFeuille(); }, [chargerFeuille]);
+
+    // Changer de classe ou de jour remet l'heure a zero : le creneau d'hier
+    // n'existe pas forcement aujourd'hui, et pointer sur une heure qui n'est
+    // pas celle qu'on croit est pire que de ne pas pointer.
+    useEffect(() => { setAppelCreneau(null); }, [appelClasse, appelDate]);
 
     const marquer = (inscriptionId: number, statut: LigneAppel['statut']) => {
         setFeuille((f) => f && ({
@@ -956,6 +983,10 @@ function SurveillantPortal() {
                 statut_presence: e.statut,
                 est_justifie: e.est_justifie ? 'O' : 'N',
                 motif: e.motif || null,
+                // Au college, chaque heure a son propre appel : sans la
+                // seance, les six heures de la journee ecraseraient la meme
+                // ligne et il ne resterait que le dernier appel.
+                seance_id: feuille.seance_id || null,
             })));
             const absents = feuille.eleves.filter((e) => e.statut === 'ABSENT').length;
             const retards = feuille.eleves.filter((e) => e.statut === 'RETARD').length;
@@ -1268,6 +1299,64 @@ function SurveillantPortal() {
                             </button>
                         )}
                     </div>
+
+                    {/* QUI FAIT CET APPEL
+                        Au primaire un seul maitre tient la classe : le
+                        designer d'office evite de demander au surveillant une
+                        information que le logiciel connait deja. Au college et
+                        au lycee la classe change de professeur a chaque heure,
+                        et l'appel se fait par matiere. */}
+                    {feuille && feuille.est_primaire && (
+                        <div style={{ padding: '14px 24px', background: '#f0fdf4', borderBottom: '1px solid #dcfce7', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <UserCheck size={17} style={{ color: '#16a34a' }} />
+                            <span style={{ fontSize: '13.5px', color: '#166534', fontWeight: 800 }}>
+                                {feuille.responsable
+                                    ? `Instituteur : ${feuille.responsable.nom}`
+                                    : 'Aucun instituteur affecte a cette classe'}
+                            </span>
+                            <span style={{ fontSize: '12.5px', color: '#15803d' }}>
+                                {feuille.responsable
+                                    ? `— il tient la classe toute la journee (${feuille.responsable.nb_matieres} matieres)`
+                                    : '— affectez-le depuis la fiche de la classe.'}
+                            </span>
+                        </div>
+                    )}
+
+                    {feuille && !feuille.est_primaire && (
+                        <div style={{ padding: '14px 24px', borderBottom: '1px solid #f1f5f9', background: '#fafcff' }}>
+                            <p style={{ margin: '0 0 9px', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#64748b' }}>
+                                L&apos;heure de cours — choisir la matiere designe le professeur
+                            </p>
+                            {feuille.creneaux.length === 0 ? (
+                                <p style={{ margin: 0, fontSize: '13px', color: '#b45309', fontWeight: 700 }}>
+                                    Aucun cours prevu ce jour-la dans l&apos;emploi du temps de la classe.
+                                </p>
+                            ) : (
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                    {feuille.creneaux.map((cr) => {
+                                        const actif = appelCreneau === cr.creneau_id;
+                                        return (
+                                            <button key={cr.creneau_id} type="button"
+                                                onClick={() => setAppelCreneau(actif ? null : cr.creneau_id)}
+                                                style={{ textAlign: 'left', padding: '9px 13px', borderRadius: '13px', cursor: 'pointer', border: actif ? '1px solid #16a34a' : '1px solid #e2e8f0', background: actif ? '#16a34a' : 'white', color: actif ? 'white' : '#334155' }}>
+                                                <span style={{ display: 'block', fontSize: '13px', fontWeight: 800 }}>
+                                                    {cr.heure_debut}–{cr.heure_fin} · {cr.matiere}
+                                                </span>
+                                                <span style={{ display: 'block', fontSize: '11.5px', marginTop: '2px', color: actif ? 'rgba(255,255,255,0.86)' : '#94a3b8', fontWeight: 700 }}>
+                                                    {cr.enseignant || 'Aucun professeur affecte'}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                            {!appelCreneau && feuille.creneaux.length > 0 && (
+                                <p style={{ margin: '9px 0 0', fontSize: '12.5px', color: '#94a3b8' }}>
+                                    Sans heure choisie, l&apos;appel porte sur la demi-journee entiere.
+                                </p>
+                            )}
+                        </div>
+                    )}
 
                     <div style={{ padding: '8px 0 18px' }}>
                         {appelLoading ? (
