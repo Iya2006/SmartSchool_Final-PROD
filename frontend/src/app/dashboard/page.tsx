@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import {
   AlertTriangle,
   ArrowRight,
@@ -202,6 +203,7 @@ function getHealthStatus(data: DashboardData) {
 
 export default function DashboardPage() {
   const { etablissementId, anneeId } = useApp();
+  const isMobile = useIsMobile();
   const [showImpayesModal, setShowImpayesModal] = useState<ImpayeModalState>(false);
   const [impayesSearch, setImpayesSearch] = useState('');
   const [impayesPage, setImpayesPage] = useState(1);
@@ -444,7 +446,7 @@ export default function DashboardPage() {
         }}
       >
         <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top right, rgba(255,255,255,0.18), transparent 28%)' }} />
-        <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: '1.55fr 1fr', gap: 24 }}>
+        <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.55fr 1fr', gap: 24 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, width: 'fit-content', padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.12)' }}>
               <Sparkles size={16} />
@@ -649,7 +651,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.5fr 1fr', gap: 24 }}>
         <motion.div
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
@@ -926,7 +928,7 @@ export default function DashboardPage() {
         </motion.div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 24 }}>
         <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="card" style={{ padding: 0, overflow: 'hidden', borderRadius: 24 }}>
           <div style={{ padding: '22px 24px 12px', borderBottom: '1px solid var(--border-light)' }}>
             <h5 style={{ margin: 0, fontSize: 18 }}>Effectifs par classe</h5>

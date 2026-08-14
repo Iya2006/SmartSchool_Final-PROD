@@ -16,12 +16,14 @@ import {
 import api from '@/lib/api';
 import Link from 'next/link';
 import { modePaiementLabel } from '@/lib/modesPaiement';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 const COLORS = ['#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#8b5cf6', '#64748b'];
 const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN') + ' GNF';
 
 export default function DashboardFinancierPage() {
     const { etablissementId, anneeId } = useApp();
+    const isMobile = useIsMobile();
     const [period, setPeriod] = React.useState<'ANNEE' | 'TRIMESTRE' | 'MOIS' | 'PERSONNALISE'>('ANNEE');
     const [dateDebut, setDateDebut] = React.useState('');
     const [dateFin, setDateFin] = React.useState('');
@@ -171,7 +173,7 @@ export default function DashboardFinancierPage() {
 
 
             {/* Charts Row 1: Entrées vs Sorties monthly evolution */}
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, alignItems: 'stretch' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr', gap: 20, alignItems: 'stretch' }}>
                 
                 {/* Entrées vs Sorties Area Chart */}
                 <motion.div initial={{ opacity: 0, x: -15 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}

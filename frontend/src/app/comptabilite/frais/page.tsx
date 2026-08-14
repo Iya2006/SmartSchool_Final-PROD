@@ -13,6 +13,7 @@ import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@
 import { useApp } from '@/context/AppContext';
 import AnneeFilter from '@/components/AnneeFilter';
 import Pagination from '@/components/Pagination';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 
 // --- Types ---
@@ -79,6 +80,7 @@ function FraisScolaritePage() {
     const router = useRouter();
     const tabParam = searchParams.get('tab') || 'types';
     const { anneeId: anneeCouranteId } = useApp();
+    const isMobile = useIsMobile();
 
     // Data loaded via React Query
     const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -936,7 +938,7 @@ function FraisScolaritePage() {
                     </div>
 
                     {/* Filters */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '12px', marginBottom: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr auto auto', gap: '12px', marginBottom: '20px' }}>
                         <div style={{ position: 'relative' }}>
                             <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                             <input value={searchFacture} onChange={e => setSearchFacture(e.target.value)} placeholder="Rechercher par nom, numéro, classe..." style={{ width: '100%', padding: '10px 12px 10px 36px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', boxSizing: 'border-box' }} />
@@ -1002,14 +1004,14 @@ function FraisScolaritePage() {
                     <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', color: '#0f172a' }}>Suivi des Échéanciers</h3>
                     <p style={{ margin: '0 0 20px 0', color: '#64748b', fontSize: '13px' }}>Vue d'ensemble des paiements fractionnés et de leurs échéances</p>
 
-                    <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
-                        <select value={echeancesClasseFilter} onChange={e => setEcheancesClasseFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', backgroundColor: 'white', cursor: 'pointer', flex: 1 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginBottom: '20px' }}>
+                        <select value={echeancesClasseFilter} onChange={e => setEcheancesClasseFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', backgroundColor: 'white', cursor: 'pointer', flex: '1 1 200px' }}>
                             <option value="">Toutes les classes</option>
                             {classes.map(c => (
                                 <option key={c.classe_id} value={c.classe_id}>{c.libelle || c.nom || c.classe}</option>
                             ))}
                         </select>
-                        <select value={echeancesStatutFilter} onChange={e => setEcheancesStatutFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', backgroundColor: 'white', cursor: 'pointer', flex: 1 }}>
+                        <select value={echeancesStatutFilter} onChange={e => setEcheancesStatutFilter(e.target.value)} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', backgroundColor: 'white', cursor: 'pointer', flex: '1 1 200px' }}>
                             <option value="">Tous les statuts de facture</option>
                             <option value="EN_ATTENTE">En attente</option>
                             <option value="PARTIELLEMENT_PAYEE">Partiellement payées</option>

@@ -38,6 +38,7 @@ import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { getRoleAccessConfig } from '@/lib/roleAccess';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 type PortalModule = {
     icon: React.ComponentType<{ size?: number }>;
@@ -435,6 +436,7 @@ function getErrorMessage(error: unknown) {
 
 function BibliothecairePortal() {
     const { user, logout } = useAuth();
+    const isMobile = useIsMobile();
     const { etablissementId } = useApp();
     const roleConfig = useMemo(() => getRoleAccessConfig(user?.role), [user?.role]);
     const [stats, setStats] = useState<LibraryStats>(EMPTY_STATS);
@@ -564,7 +566,7 @@ function BibliothecairePortal() {
             <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '22px' }}>
                 <section style={{ position: 'relative', overflow: 'hidden', borderRadius: '34px', padding: '28px', background: 'linear-gradient(135deg, #fff7ed 0%, #ecfccb 48%, #ede9fe 100%)', border: '1px solid rgba(124,58,237,0.12)', boxShadow: '0 30px 80px rgba(120,53,15,0.12)' }}>
                     <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top right, rgba(124,58,237,0.18), transparent 25%), radial-gradient(circle at bottom left, rgba(245,158,11,0.20), transparent 28%)' }} />
-                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 1.25fr) minmax(310px, 0.75fr)', gap: '22px', alignItems: 'stretch' }}>
+                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.25fr) minmax(310px, 0.75fr)', gap: '22px', alignItems: 'stretch' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.72)', border: '1px solid rgba(124,58,237,0.14)', color: '#6d28d9', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -737,7 +739,7 @@ function BibliothecairePortal() {
                         )}
                     </div>
                 </section>
-                <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 330px', gap: '20px', alignItems: 'start' }}>
+                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 330px', gap: '20px', alignItems: 'start' }}>
                     <main style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                         <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '14px', flexWrap: 'wrap', background: 'linear-gradient(135deg, #ffffff, #fffbeb)' }}>
                             <div>
@@ -889,6 +891,7 @@ function BibliothecairePortal() {
 
 function SurveillantPortal() {
     const { user, logout } = useAuth();
+    const isMobile = useIsMobile();
     const { etablissementId, anneeId } = useApp();
     const roleConfig = useMemo(() => getRoleAccessConfig(user?.role), [user?.role]);
     const [presenceStats, setPresenceStats] = useState<PresenceStats>({ total: 0, presents: 0, absents: 0, retards: 0, taux_presence: 0 });
@@ -1116,7 +1119,7 @@ function SurveillantPortal() {
             <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '22px' }}>
                 <section style={{ position: 'relative', overflow: 'hidden', borderRadius: '34px', padding: '28px', background: 'linear-gradient(135deg, #dcfce7 0%, #dbeafe 50%, #fef9c3 100%)', border: '1px solid rgba(22,163,74,0.14)', boxShadow: '0 30px 80px rgba(20,83,45,0.12)' }}>
                     <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top right, rgba(34,197,94,0.22), transparent 25%), radial-gradient(circle at bottom left, rgba(59,130,246,0.18), transparent 30%)' }} />
-                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(310px, 0.7fr)', gap: '22px', alignItems: 'stretch' }}>
+                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.3fr) minmax(310px, 0.7fr)', gap: '22px', alignItems: 'stretch' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.78)', border: '1px solid rgba(22,163,74,0.16)', color: '#15803d', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -1413,7 +1416,7 @@ function SurveillantPortal() {
                         )}
                     </div>
                 </section>
-                <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 330px', gap: '20px', alignItems: 'start' }}>
+                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 330px', gap: '20px', alignItems: 'start' }}>
                     <main style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                         <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #f0fdf4)' }}>
                             <p style={{ margin: 0, fontSize: '12px', color: '#16a34a', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Main courante réelle</p>
@@ -1537,6 +1540,7 @@ function SurveillantPortal() {
 
 function OperateurPortal() {
     const { user, logout } = useAuth();
+    const isMobile = useIsMobile();
     const { etablissementId, anneeId } = useApp();
     const roleConfig = useMemo(() => getRoleAccessConfig(user?.role), [user?.role]);
     const [dashboard, setDashboard] = useState<DashboardLite>({});
@@ -1605,7 +1609,7 @@ function OperateurPortal() {
             <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '22px' }}>
                 <section style={{ position: 'relative', overflow: 'hidden', borderRadius: '34px', padding: '28px', background: 'linear-gradient(135deg, #f8fafc 0%, #dbeafe 48%, #ede9fe 100%)', border: '1px solid rgba(71,85,105,0.12)', boxShadow: '0 30px 80px rgba(30,41,59,0.11)' }}>
                     <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top right, rgba(37,99,235,0.18), transparent 25%), radial-gradient(circle at bottom left, rgba(124,58,237,0.16), transparent 28%)' }} />
-                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(310px, 0.7fr)', gap: '22px', alignItems: 'stretch' }}>
+                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.3fr) minmax(310px, 0.7fr)', gap: '22px', alignItems: 'stretch' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.78)', border: '1px solid rgba(71,85,105,0.16)', color: '#334155', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -1665,7 +1669,7 @@ function OperateurPortal() {
                     })}
                 </section>
 
-                <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 330px', gap: '20px', alignItems: 'start' }}>
+                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 330px', gap: '20px', alignItems: 'start' }}>
                     <main style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                         <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #eff6ff)' }}>
                             <p style={{ margin: 0, fontSize: '12px', color: '#475569', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Dossiers élèves</p>
@@ -1722,6 +1726,7 @@ function OperateurPortal() {
 
 function InformaticienPortal() {
     const { user, logout } = useAuth();
+    const isMobile = useIsMobile();
     const { etablissementId } = useApp();
     const roleConfig = useMemo(() => getRoleAccessConfig(user?.role), [user?.role]);
     const [stats, setStats] = useState<InformatiqueStats>({ total_equipements: 0, equipements_en_panne: 0, tickets_ouverts: 0, tickets_critiques: 0, salles_informatiques: 0, par_etat: [] });
@@ -1853,7 +1858,7 @@ function InformaticienPortal() {
             <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '22px' }}>
                 <section style={{ position: 'relative', overflow: 'hidden', borderRadius: '34px', padding: '28px', background: 'linear-gradient(135deg, #e0f2fe 0%, #dbeafe 48%, #f5f3ff 100%)', border: '1px solid rgba(2,132,199,0.14)', boxShadow: '0 30px 80px rgba(12,74,110,0.12)' }}>
                     <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top right, rgba(2,132,199,0.20), transparent 25%), radial-gradient(circle at bottom left, rgba(124,58,237,0.18), transparent 30%)' }} />
-                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 1.3fr) minmax(310px, 0.7fr)', gap: '22px', alignItems: 'stretch' }}>
+                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.3fr) minmax(310px, 0.7fr)', gap: '22px', alignItems: 'stretch' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.78)', border: '1px solid rgba(2,132,199,0.16)', color: '#0369a1', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}><Monitor size={14} /> Responsable informatique</span>
@@ -1885,7 +1890,7 @@ function InformaticienPortal() {
                     {kpis.map((item, index) => { const Icon = item.icon; return <motion.div key={item.label} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.04 }} whileHover={{ y: -5 }} style={{ padding: '20px', borderRadius: '26px', background: 'white', border: '1px solid #f1f5f9', boxShadow: '0 20px 50px rgba(15,23,42,0.06)' }}><div style={{ width: 48, height: 48, borderRadius: '18px', background: `${item.color}14`, color: item.color, display: 'grid', placeItems: 'center', marginBottom: '14px' }}><Icon size={21} /></div><p style={{ margin: 0, fontSize: '12px', color: '#94a3b8', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{item.label}</p><p style={{ margin: '8px 0 4px', fontSize: '32px', color: '#0f172a', fontWeight: 950 }}>{loading ? '…' : item.value}</p><p style={{ margin: 0, fontSize: '13px', color: '#64748b' }}>{item.note}</p></motion.div>; })}
                 </section>
 
-                <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 360px', gap: '20px', alignItems: 'start' }}>
+                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 360px', gap: '20px', alignItems: 'start' }}>
                     <main style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                         <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #f0f9ff)' }}><p style={{ margin: 0, fontSize: '12px', color: '#0284c7', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Inventaire réel</p><h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Parc matériel</h2></div>
                         {loading ? <div style={{ minHeight: '260px', display: 'grid', placeItems: 'center', color: '#0284c7', fontWeight: 900 }}><Loader2 size={28} className="animate-spin" /> Chargement informatique…</div> : equipements.length === 0 ? <div style={{ padding: '52px 24px', textAlign: 'center' }}><div style={{ width: 84, height: 84, borderRadius: '28px', margin: '0 auto 18px', background: '#f0f9ff', color: '#0284c7', display: 'grid', placeItems: 'center' }}><Monitor size={34} /></div><h3 style={{ margin: 0, color: '#0c4a6e', fontSize: '22px', fontWeight: 950 }}>Aucun équipement inventorié</h3><p style={{ margin: '10px auto 0', maxWidth: '520px', color: '#64748b', lineHeight: 1.7 }}>Ajoutez les ordinateurs, imprimantes et projecteurs pour construire le parc réel.</p></div> : <div style={{ padding: '20px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(235px, 1fr))', gap: '14px' }}>{equipements.map((eq) => <article key={eq.equipement_id} style={{ padding: '16px', borderRadius: '20px', background: '#fcfdff', border: '1px solid #edf2f7' }}><div style={{ width: 48, height: 48, borderRadius: '16px', background: 'linear-gradient(135deg, #0284c7, #7c3aed)', color: 'white', display: 'grid', placeItems: 'center', marginBottom: '12px' }}><Monitor size={22} /></div><h3 style={{ margin: 0, color: '#0f172a', fontSize: '16px', fontWeight: 950 }}>{eq.nom}</h3><p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px', fontWeight: 750 }}>{eq.code} • {eq.type_equipement}</p><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}><span style={{ padding: '6px 9px', borderRadius: 999, background: eq.etat === 'BON' ? '#f0fdf4' : '#fff7ed', color: eq.etat === 'BON' ? '#166534' : '#9a3412', fontSize: '11px', fontWeight: 900 }}>{eq.etat}</span>{eq.marque && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#f8fafc', color: '#475569', fontSize: '11px', fontWeight: 900 }}>{eq.marque}</span>}</div><div style={{ display: 'flex', gap: '5px', marginTop: '12px', flexWrap: 'wrap' }}>{([{ e: 'BON', l: 'En service', c: '#16a34a' }, { e: 'PANNE', l: 'En panne', c: '#f59e0b' }, { e: 'A_REMPLACER', l: 'A remplacer', c: '#dc2626' }]).map((o) => (<button key={o.e} type="button" disabled={equipEnCours === eq.equipement_id || eq.etat === o.e} onClick={() => changerEtat(eq, o.e)} style={{ padding: '6px 10px', borderRadius: '10px', border: eq.etat === o.e ? `1px solid ${o.c}` : '1px solid #e2e8f0', background: eq.etat === o.e ? o.c : 'white', color: eq.etat === o.e ? 'white' : '#64748b', fontSize: '11px', fontWeight: 800, cursor: eq.etat === o.e ? 'default' : 'pointer' }}>{o.l}</button>))}</div>{eq.observation && <p style={{ margin: '9px 0 0', fontSize: '11.5px', color: '#94a3b8', lineHeight: 1.5 }}>{eq.observation}</p>}</article>)}</div>}
@@ -1905,6 +1910,7 @@ function InformaticienPortal() {
 export default function PersonnelRolePortalPage() {
     const params = useParams<{ role: string }>();
     const { user, logout } = useAuth();
+    const isMobile = useIsMobile();
     const [activeSection, setActiveSection] = useState<'overview' | 'modules' | 'feed'>('overview');
     const slug = params?.role || '';
     const roleConfig = useMemo(() => getRoleAccessConfig(user?.role), [user?.role]);
@@ -1932,7 +1938,7 @@ export default function PersonnelRolePortalPage() {
             <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
                 <section style={{ position: 'relative', overflow: 'hidden', borderRadius: '30px', padding: '28px', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 45%, #0f172a 100%)', color: 'white', boxShadow: '0 28px 70px rgba(15,23,42,0.16)' }}>
                     <div style={{ position: 'absolute', inset: 0, background: `radial-gradient(circle at top right, ${content.accent}30, transparent 22%), radial-gradient(circle at bottom left, rgba(255,255,255,0.08), transparent 28%)` }} />
-                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(320px, 0.85fr)', gap: '22px', alignItems: 'stretch' }}>
+                    <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.35fr) minmax(320px, 0.85fr)', gap: '22px', alignItems: 'stretch' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 14px', borderRadius: 999, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.14)', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
@@ -1995,7 +2001,7 @@ export default function PersonnelRolePortalPage() {
                     </div>
                 </section>
 
-                <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.15fr) minmax(320px, 0.85fr)', gap: '20px', alignItems: 'start' }}>
+                <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(320px, 0.85fr)', gap: '20px', alignItems: 'start' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
                         {activeSection === 'overview' && (
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px' }}>

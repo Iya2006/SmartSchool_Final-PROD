@@ -175,7 +175,7 @@ export default function FamillesPage() {
 
             {/* Featured Parent Cards */}
             <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '16px' }}>
                     {parents.slice(0, 6).map((p, i) => (
                         <motion.div key={p.parent_id}
                             initial={{ opacity: 0, scale: 0.95 }}

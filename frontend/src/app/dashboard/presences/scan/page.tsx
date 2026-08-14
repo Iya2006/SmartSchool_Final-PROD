@@ -6,6 +6,7 @@ import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { ScanLine, CheckCircle, AlertTriangle, Clock, LogOut, ArrowRightCircle, Users, GraduationCap, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface ScanResult {
     success: boolean;
@@ -31,6 +32,7 @@ type ActionType = "AUTO" | "ARRIVEE" | "DEPART";
 
 export default function ScanPage() {
     const router = useRouter();
+    const isMobile = useIsMobile();
     const [scanResult, setScanResult] = useState<ScanResult | null>(null);
     const [isScanning, setIsScanning] = useState(false);
     const [actionType, setActionType] = useState<ActionType>("AUTO");
@@ -252,7 +254,7 @@ export default function ScanPage() {
                 </button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '30px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.2fr 1fr', gap: '30px' }}>
                 {/* Scanner Section */}
                 <div style={{ background: 'white', borderRadius: '24px', padding: '32px', boxShadow: '0 10px 40px rgba(0,0,0,0.08)', border: '1px solid #f1f5f9' }}>
                     
