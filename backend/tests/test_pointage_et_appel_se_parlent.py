@@ -332,3 +332,136 @@ class TestOuvrirLEcranOuvreLaJournee:
         seances = client.get(f"/api/seances?date={jour.isoformat()}", headers=h).json()
         ids = {s["classe_id"] for s in seances}
         assert ids == {ecole["classe"].classe_id}
+
+
+class TestUnProfesseurNeManquePasForcementSaJournee:
+    """Au collège, il peut manquer 8 h et revenir assurer 9 h.
+
+    Signaler « absent le 10 mars » serait faux : la classe de 9 h a bien eu son
+    cours. Le signalement porte donc sur les heures réellement manquées, et la
+    paie continue de compter des jours — une seule ligne d'absence par jour.
+    """
+
+    def _seances(self, client, h, jour):
+        return client.get(f"/api/seances?date={jour.isoformat()}", headers=h).json()
+
+    def test_signaler_une_heure_precise_marque_ce_cours_non_effectue(
+            self, client: TestClient, db: Session, ecole):
+        jour = _un_mardi()
+        h = _headers(client, ecole["ADMIN"].nom_utilisateur)
+        cours = self._seances(client, h, jour)
+        assert len(cours) == 2
+        premiere = min(cours, key=lambda c: c["heure_debut_prevue"])
+
+        r = client.post("/api/vie-scolaire/absences-enseignant", headers=h, json={
+            "employe_id": f"ENS_{ecole['prof'].enseignant_id}",
+            "date_absence": jour.isoformat(),
+            "seance_ids": [premiere["seance_id"]],
+            "motif": "Non présent à 8 h",
+        })
+        assert r.status_code == 201, r.text
+        assert len(r.json()["cours_manques"]) == 1
+
+        apres = {c["seance_id"]: c for c in self._seances(client, h, jour)}
+        assert apres[premiere["seance_id"]]["statut"] == "NON_EFFECTUEE"
+        # L'autre heure n'a pas bougé : il est revenu.
+        autre = [c for c in apres.values() if c["seance_id"] != premiere["seance_id"]][0]
+        assert autre["statut"] == "PREVUE"
+
+    def test_une_deuxieme_heure_manquee_complete_le_meme_signalement(
+            self, client: TestClient, db: Session, ecole):
+        """Le surveillant qui constate une deuxième heure manquée s'entendait
+        répondre « déjà enregistrée » et ne pouvait plus rien dire."""
+        from app.models.academique import AbsencePersonnel, Employe
+
+        jour = _un_mardi()
+        h = _headers(client, ecole["ADMIN"].nom_utilisateur)
+        cours = sorted(self._seances(client, h, jour), key=lambda c: c["heure_debut_prevue"])
+
+        for c in cours:
+            r = client.post("/api/vie-scolaire/absences-enseignant", headers=h, json={
+                "employe_id": f"ENS_{ecole['prof'].enseignant_id}",
+                "date_absence": jour.isoformat(),
+                "seance_ids": [c["seance_id"]],
+            })
+            assert r.status_code == 201, r.text
+
+        # Une seule ligne d'absence pour la journée : la paie compte des jours.
+        lignes = db.query(AbsencePersonnel).join(
+            Employe, Employe.employe_id == AbsencePersonnel.employe_id
+        ).filter(
+            Employe.etablissement_id == ecole["etab"].etablissement_id,
+            AbsencePersonnel.date_absence == jour,
+        ).all()
+        assert len(lignes) == 1, lignes
+        # Mais le motif garde la trace des deux heures.
+        assert lignes[0].motif.count("·") == 1, lignes[0].motif
+
+        statuts = {c["statut"] for c in self._seances(client, h, jour)}
+        assert statuts == {"NON_EFFECTUEE"}
+
+    def test_sans_heure_designee_c_est_la_journee_entiere(
+            self, client: TestClient, ecole):
+        """Le cas du primaire : un maître, une classe, aucune heure à choisir."""
+        jour = _un_mardi()
+        h = _headers(client, ecole["ADMIN"].nom_utilisateur)
+        r = client.post("/api/vie-scolaire/absences-enseignant", headers=h, json={
+            "employe_id": f"ENS_{ecole['prof'].enseignant_id}",
+            "date_absence": jour.isoformat(),
+            "motif": "Absent toute la journée",
+        })
+        assert r.status_code == 201, r.text
+        assert r.json()["cours_manques"] == []
+
+    def test_un_cours_deja_fait_ne_se_declare_pas_manque(
+            self, client: TestClient, db: Session, ecole):
+        """Ce serait contredire l'appel que le professeur a lui-même enregistré."""
+        jour = _un_mardi()
+        h = _headers(client, ecole["ADMIN"].nom_utilisateur)
+        cours = self._seances(client, h, jour)[0]
+
+        seance = db.query(Seance).filter(Seance.seance_id == cours["seance_id"]).first()
+        seance.statut = "EFFECTUEE"
+        db.commit()
+
+        r = client.post("/api/vie-scolaire/absences-enseignant", headers=h, json={
+            "employe_id": f"ENS_{ecole['prof'].enseignant_id}",
+            "date_absence": jour.isoformat(),
+            "seance_ids": [cours["seance_id"]],
+        })
+        assert r.status_code == 400, r.text
+        assert "effectué" in r.json()["detail"]
+
+    def test_un_cours_d_une_autre_ecole_est_refuse(
+            self, client: TestClient, db: Session, ecole):
+        jour = _un_mardi()
+        h = _headers(client, ecole["ADMIN"].nom_utilisateur)
+        r = client.post("/api/vie-scolaire/absences-enseignant", headers=h, json={
+            "employe_id": f"ENS_{ecole['prof'].enseignant_id}",
+            "date_absence": jour.isoformat(),
+            "seance_ids": [999_999],
+        })
+        assert r.status_code == 404, r.text
+
+    def test_une_absence_justifiee_ne_propose_aucune_retenue(
+            self, client: TestClient, db: Session, ecole):
+        from app.models.academique import AbsencePersonnel, Employe
+
+        jour = _un_mardi()
+        h = _headers(client, ecole["ADMIN"].nom_utilisateur)
+        cours = self._seances(client, h, jour)[0]
+        r = client.post("/api/vie-scolaire/absences-enseignant", headers=h, json={
+            "employe_id": f"ENS_{ecole['prof'].enseignant_id}",
+            "date_absence": jour.isoformat(),
+            "seance_ids": [cours["seance_id"]],
+            "est_justifie": True,
+            "motif": "Convocation officielle",
+        })
+        assert r.status_code == 201, r.text
+        ligne = db.query(AbsencePersonnel).join(
+            Employe, Employe.employe_id == AbsencePersonnel.employe_id
+        ).filter(
+            Employe.etablissement_id == ecole["etab"].etablissement_id,
+            AbsencePersonnel.date_absence == jour,
+        ).first()
+        assert ligne.est_justifie == "Y"

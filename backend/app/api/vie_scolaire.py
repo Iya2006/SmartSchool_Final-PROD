@@ -447,9 +447,26 @@ def signaler_absence_enseignant(
     Cela crée un SIGNALEMENT, pas une retenue : aucun franc ne bouge tant que
     la direction n'a pas tranché. C'est ce qui permet à celui qui voit de
     parler sans décider à la place de celui qui paie.
+
+    UN PROFESSEUR NE MANQUE PAS FORCÉMENT SA JOURNÉE
+    ------------------------------------------------
+    Au primaire, un maître tient sa classe toute la journée : s'il n'est pas
+    là, c'est la journée entière, et il n'y a aucun cours à choisir.
+
+    Au collège et au lycée, il enseigne une heure ici, une heure là. Il peut
+    manquer son cours de 8 h et revenir assurer celui de 11 h, dans la même
+    classe ou dans une autre. Le signalement porte donc sur des SÉANCES
+    précises, passées dans `seance_ids` : chacune est marquée non effectuée
+    avec son motif, et l'on sait exactement ce qui n'a pas été fait.
+
+    La paie, elle, compte des JOURS. On garde donc une seule ligne d'absence
+    par employé et par jour : un second signalement le même jour vient
+    compléter la première au lieu d'être refusé — sinon le surveillant qui
+    constate une deuxième heure manquée s'entendait répondre « déjà
+    enregistrée » et ne pouvait plus rien dire.
     """
     from app.api.finance import _get_or_sync_employe_paie, _identifier_employe
-    from app.models.academique import AbsencePersonnel
+    from app.models.academique import AbsencePersonnel, Seance, Matiere
 
     _peut(current_user, CONSTATE_LES_ABSENCES,
           "Seules la surveillance et la direction signalent une absence d'enseignant.")
@@ -464,35 +481,97 @@ def signaler_absence_enseignant(
     infos = _identifier_employe(reference, db, etablissement_id)
     employe = _get_or_sync_employe_paie(db, reference, infos, etablissement_id)
 
-    # Deux surveillants qui signalent le même jour ne créent pas deux retenues.
-    deja = db.query(AbsencePersonnel).filter(
+    justifie = "Y" if data.get("est_justifie") else "N"
+    motif = (data.get("motif") or "").strip() or None
+
+    # ── Les cours manqués, quand le surveillant en désigne ────────────────
+    seance_ids = data.get("seance_ids") or []
+    if not isinstance(seance_ids, list):
+        raise HTTPException(400, "seance_ids doit être une liste d'identifiants de cours.")
+
+    cours_manques = []
+    if seance_ids:
+        lignes = db.query(Seance, Classe, Matiere).join(
+            Classe, Classe.classe_id == Seance.classe_id
+        ).outerjoin(
+            Matiere, Matiere.matiere_id == Seance.matiere_id
+        ).filter(
+            Seance.seance_id.in_(seance_ids),
+            Classe.etablissement_id == etablissement_id,
+            Seance.date_seance == jour,
+        ).all()
+        if len(lignes) != len(set(seance_ids)):
+            raise HTTPException(
+                404, "Un des cours désignés n'existe pas ce jour-là dans cette école.")
+
+        for seance, classe, matiere in lignes:
+            # Un cours déjà fait ne se déclare pas manqué : ce serait
+            # contredire l'appel que le professeur a lui-même enregistré.
+            if seance.statut == "EFFECTUEE":
+                raise HTTPException(
+                    400,
+                    f"Le cours de {matiere.libelle if matiere else 'cette matière'} en "
+                    f"{classe.libelle} à {seance.heure_debut_prevue} est marqué effectué : "
+                    "il ne peut pas être déclaré non assuré.",
+                )
+            seance.statut = "NON_EFFECTUEE"
+            seance.motif_statut = motif or "Cours non assuré (signalé par la surveillance)"
+            cours_manques.append(
+                f"{matiere.libelle if matiere else 'Cours'} en {classe.libelle} "
+                f"{seance.heure_debut_prevue}–{seance.heure_fin_prevue}"
+            )
+
+    # ── L'absence du jour : une seule ligne, complétée si elle existe ─────
+    absence = db.query(AbsencePersonnel).filter(
         AbsencePersonnel.employe_id == employe.employe_id,
         AbsencePersonnel.date_absence == jour,
     ).first()
-    if deja:
-        raise HTTPException(
-            400,
-            f"Une absence est déjà enregistrée pour {infos['prenom']} {infos['nom']} "
-            f"le {jour.isoformat()} (statut : {deja.statut}).",
-        )
 
-    absence = AbsencePersonnel(
-        employe_id=employe.employe_id,
-        date_absence=jour,
-        motif=(data.get("motif") or "").strip() or None,
-        est_justifie="Y" if data.get("est_justifie") else "N",
-        statut="SIGNALE",
-        signale_par=_qui(current_user),
-    )
-    db.add(absence)
+    if absence is not None:
+        if absence.statut in ("VALIDE", "ECARTE"):
+            raise HTTPException(
+                400,
+                f"La direction a déjà tranché l'absence de {infos['prenom']} {infos['nom']} "
+                f"le {jour.isoformat()} ({absence.statut}) — elle ne se modifie plus ici.",
+            )
+        if not cours_manques:
+            raise HTTPException(
+                400,
+                f"Une absence est déjà enregistrée pour {infos['prenom']} {infos['nom']} "
+                f"le {jour.isoformat()} (statut : {absence.statut}).",
+            )
+        # Une deuxième heure manquée le même jour complète le signalement.
+        parts = [p for p in [absence.motif] if p] + cours_manques
+        absence.motif = " · ".join(parts)[:500]
+        absence.est_justifie = justifie
+        cree = False
+    else:
+        absence = AbsencePersonnel(
+            employe_id=employe.employe_id,
+            date_absence=jour,
+            motif=(" · ".join(cours_manques)[:500] if cours_manques else motif),
+            est_justifie=justifie,
+            statut="SIGNALE",
+            signale_par=_qui(current_user),
+        )
+        db.add(absence)
+        cree = True
+
     db.commit()
     db.refresh(absence)
     return {
         "absence_id": absence.absence_id,
         "statut": absence.statut,
         "employe": f"{infos['prenom']} {infos['nom']}",
-        "message": "Signalement transmis à la direction. Aucune retenue n'est appliquée "
-                   "tant qu'il n'a pas été validé.",
+        "cours_manques": cours_manques,
+        "nouveau": cree,
+        "message": (
+            f"{len(cours_manques)} cours marqué(s) non assuré(s). Signalement transmis "
+            "à la direction — aucune retenue n'est appliquée tant qu'il n'a pas été validé."
+            if cours_manques else
+            "Signalement transmis à la direction. Aucune retenue n'est appliquée "
+            "tant qu'il n'a pas été validé."
+        ),
     }
 
 

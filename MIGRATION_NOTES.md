@@ -537,6 +537,32 @@ clic ferait des dizaines de milliers de lignes) et `ouvrir_la_journee=false`
 permet de consulter sans écrire. Chaque séance naît `PREVUE` — l'absence d'un
 professeur se lit dans ce qui reste `PREVUE` en fin de journée.
 
+**Un professeur ne manque pas forcément sa journée.** Au primaire, un maître
+tient sa classe toute la journée : s'il n'est pas là, c'est la journée entière.
+Au collège et au lycée il enseigne une heure ici, une heure là — il peut manquer
+son cours de 8 h et revenir assurer celui de 16 h. Signaler « absent le 10 mars »
+était donc faux dans la moitié des cas.
+
+`POST /vie-scolaire/absences-enseignant` accepte désormais `seance_ids` : chaque
+séance désignée passe en `NON_EFFECTUEE` avec son motif. Un cours déjà
+`EFFECTUEE` est refusé — ce serait contredire l'appel que le professeur a
+lui-même enregistré.
+
+**La paie compte des JOURS** (`set(jours_pointage) | set(jours_manuels)`), donc
+on garde **une seule ligne d'absence par employé et par jour** : un second
+signalement le même jour la complète au lieu d'être refusé. Sans ça, le
+surveillant qui constatait une deuxième heure manquée s'entendait répondre
+« déjà enregistrée » et ne pouvait plus rien dire. Une absence déjà tranchée par
+la direction n'est plus modifiable ici.
+
+Vérifié en réel sur Bountouraby DIALLO (7 cours le même mardi) : 8 h et 16 h
+marquées non assurées, **les cinq heures du milieu intactes**, une seule ligne
+d'absence dont le motif garde la trace des deux cours.
+
+L'écran du surveillant coche les heures du professeur choisi ; quand il n'y en a
+aucune à l'emploi du temps — le cas du primaire — il l'annonce et le signalement
+porte sur la journée entière.
+
 **Le pointage des enseignants n'a demandé aucun code** : `/api/presences-agents/scan`
 reconnaît déjà le matricule d'un enseignant et écrit `type_agent='ENSEIGNANT'`.
 Constat sur l'école 3 : 817 pointages, **tous du personnel administratif, aucun
