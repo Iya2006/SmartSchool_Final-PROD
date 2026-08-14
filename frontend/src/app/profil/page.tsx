@@ -10,12 +10,14 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
 
 export default function ProfilPage() {
     const { user, logout } = useAuth();
     const { etablissementNom } = useApp();
+    const isMobile = useIsMobile();
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'profil' | 'securite'>('profil');
 
@@ -369,8 +371,8 @@ export default function ProfilPage() {
             {/* TAB 1 : PROFIL & INFORMATIONS                                */}
             {/* ════════════════════════════════════════════════════════════ */}
             {activeTab === 'profil' && (
-                <div style={{ background: 'white', borderRadius: '20px', padding: '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+                <div style={{ background: 'white', borderRadius: '20px', padding: isMobile ? '20px' : '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
                         <div>
                             <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: '#0f172a' }}>Informations Générales</h2>
                             <p style={{ color: '#64748b', fontSize: '14px', margin: '4px 0 0' }}>Mettez à jour vos coordonnées administratives.</p>
@@ -483,9 +485,9 @@ export default function ProfilPage() {
             {/* TAB 3 : SÉCURITÉ & AUTHENTIFICATION                          */}
             {/* ════════════════════════════════════════════════════════════ */}
             {activeTab === 'securite' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '24px' }}>
                     {/* Changement Mot de Passe */}
-                    <div style={{ background: 'white', borderRadius: '20px', padding: '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
+                    <div style={{ background: 'white', borderRadius: '20px', padding: isMobile ? '20px' : '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
                         <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 8px 0', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <Key color="#3b82f6" size={22} /> Modifier le Mot de Passe
                         </h2>
@@ -544,7 +546,7 @@ export default function ProfilPage() {
                     </div>
 
                     {/* Code PIN & Sécurité renforcée */}
-                    <div style={{ background: 'white', borderRadius: '20px', padding: '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
+                    <div style={{ background: 'white', borderRadius: '20px', padding: isMobile ? '20px' : '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
                         <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 8px 0', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <Lock color="#10b981" size={22} /> Code PIN de Sécurité (Comptabilité)
                         </h2>
