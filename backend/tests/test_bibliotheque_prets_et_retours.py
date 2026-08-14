@@ -35,6 +35,14 @@ from app.models.academique import (
     AnneeScolaire, Eleve, Emprunt, Etablissement, Exemplaire, Ouvrage, Utilisateur,
 )
 
+import uuid
+
+# Les fichiers de tests partagent une meme base. Deux d'entre eux qui
+# fabriquent leurs codes avec un simple compteur repartant de 1 finissent par
+# se voler un code d'etablissement, et le second echoue pour une raison qui
+# n'a rien a voir avec ce qu'il verifie. Ce jeton rend nos codes uniques.
+_JETON = uuid.uuid4().hex[:6]
+
 _C = 0
 
 
@@ -46,15 +54,15 @@ def _uid() -> int:
 
 def _ecole(db: Session):
     uid = _uid()
-    etab = Etablissement(code=f"BIB-{uid}", nom=f"École BIB {uid}", type_etablissement="LYCEE")
+    etab = Etablissement(code=f"BIB-{_JETON}-{uid}", nom=f"École BIB {uid}", type_etablissement="LYCEE")
     db.add(etab); db.commit(); db.refresh(etab)
     db.add(AnneeScolaire(
-        code=f"AB{uid}", libelle="2025-2026",
+        code=f"AB{_JETON}{uid}", libelle="2025-2026",
         date_debut=date(2025, 10, 1), date_fin=date(2026, 6, 30),
         est_courante="O", statut="EN_COURS", etablissement_id=etab.etablissement_id,
     ))
     biblio = Utilisateur(
-        nom="Diallo", prenom=f"Ousmane{uid}", nom_utilisateur=f"bib.{uid}",
+        nom="Diallo", prenom=f"Ousmane{uid}", nom_utilisateur=f"bib.{_JETON}.{uid}",
         mot_de_passe=hash_password("motdepasse123"), role="BIBLIOTHECAIRE",
         statut="ACTIF", etablissement_id=etab.etablissement_id,
     )
@@ -73,14 +81,14 @@ def _livre_prete(db: Session, etab, *, rendu_prevu: date, deja_rendu: bool = Fal
     """Un ouvrage, son exemplaire, un élève, et le prêt entre les deux."""
     uid = _uid()
     ouvrage = Ouvrage(
-        etablissement_id=etab.etablissement_id, code_interne=f"OUV{uid}",
+        etablissement_id=etab.etablissement_id, code_interne=f"OUV{_JETON}{uid}",
         titre=f"L'Enfant noir {uid}", auteur="Camara Laye",
         nb_exemplaires=1, nb_disponibles=0, statut="DISPONIBLE",
     )
     db.add(ouvrage); db.commit(); db.refresh(ouvrage)
-    ex = Exemplaire(ouvrage_id=ouvrage.ouvrage_id, code_exemplaire=f"EX{uid}",
+    ex = Exemplaire(ouvrage_id=ouvrage.ouvrage_id, code_exemplaire=f"EX{_JETON}{uid}",
                     statut="EMPRUNTE")
-    eleve = Eleve(matricule=f"ELV{uid}", nom="Bah", prenom="Sona", sexe="F",
+    eleve = Eleve(matricule=f"ELV{_JETON}{uid}", nom="Bah", prenom="Sona", sexe="F",
                   date_naissance=date(2010, 5, 14),
                   etablissement_id=etab.etablissement_id, statut="ACTIF")
     db.add_all([ex, eleve]); db.commit(); db.refresh(ex); db.refresh(eleve)

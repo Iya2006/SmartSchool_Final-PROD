@@ -32,6 +32,14 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.models.academique import AnneeScolaire, Etablissement, Utilisateur
 
+import uuid
+
+# Les fichiers de tests partagent une meme base. Deux d'entre eux qui
+# fabriquent leurs codes avec un simple compteur repartant de 1 finissent par
+# se voler un code d'etablissement, et le second echoue pour une raison qui
+# n'a rien a voir avec ce qu'il verifie. Ce jeton rend nos codes uniques.
+_JETON = uuid.uuid4().hex[:6]
+
 _C = 0
 
 
@@ -43,15 +51,15 @@ def _uid() -> int:
 
 def _ecole(db: Session):
     uid = _uid()
-    etab = Etablissement(code=f"ROL-{uid}", nom=f"École ROL {uid}", type_etablissement="LYCEE")
+    etab = Etablissement(code=f"ROL-{_JETON}-{uid}", nom=f"École ROL {uid}", type_etablissement="LYCEE")
     db.add(etab); db.commit(); db.refresh(etab)
     db.add(AnneeScolaire(
-        code=f"AR{uid}", libelle="2025-2026",
+        code=f"AR{_JETON}{uid}", libelle="2025-2026",
         date_debut=date(2025, 10, 1), date_fin=date(2026, 6, 30),
         est_courante="O", statut="EN_COURS", etablissement_id=etab.etablissement_id,
     ))
     admin = Utilisateur(
-        nom="Camara", prenom=f"Chef{uid}", nom_utilisateur=f"rol.admin.{uid}",
+        nom="Camara", prenom=f"Chef{uid}", nom_utilisateur=f"rol.{_JETON}.a{uid}",
         mot_de_passe=hash_password("motdepasse123"), role="ADMIN", statut="ACTIF",
         etablissement_id=etab.etablissement_id,
     )
@@ -79,7 +87,7 @@ class TestLesPostesDuSystemeApparaissent:
     ):
         etab, admin = _ecole(db)
         comptable = Utilisateur(
-            nom="Guisse", prenom="Oumar", nom_utilisateur=f"rol.compta.{_uid()}",
+            nom="Guisse", prenom="Oumar", nom_utilisateur=f"rol.{_JETON}.c{_uid()}",
             mot_de_passe=hash_password("motdepasse123"), role="COMPTABLE",
             statut="ACTIF", etablissement_id=etab.etablissement_id,
             salaire_base=1800000,
@@ -176,7 +184,7 @@ class TestChaqueEcoleNeVoitQueLesSiens:
         etab_a, admin_a = _ecole(db)
         etab_b, _ = _ecole(db)
         db.add(Utilisateur(
-            nom="Diallo", prenom="Ailleurs", nom_utilisateur=f"rol.autre.{_uid()}",
+            nom="Diallo", prenom="Ailleurs", nom_utilisateur=f"rol.{_JETON}.z{_uid()}",
             mot_de_passe=hash_password("motdepasse123"), role="COMPTABLE",
             statut="ACTIF", etablissement_id=etab_b.etablissement_id,
         ))

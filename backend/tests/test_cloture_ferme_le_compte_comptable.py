@@ -30,6 +30,14 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.models.academique import AnneeScolaire, Etablissement, Utilisateur
 
+import uuid
+
+# Les fichiers de tests partagent une meme base. Deux d'entre eux qui
+# fabriquent leurs codes avec un simple compteur repartant de 1 finissent par
+# se voler un code d'etablissement, et le second echoue pour une raison qui
+# n'a rien a voir avec ce qu'il verifie. Ce jeton rend nos codes uniques.
+_JETON = uuid.uuid4().hex[:6]
+
 _C = 0
 
 
@@ -41,10 +49,10 @@ def _uid() -> int:
 
 def _ecole(db: Session):
     uid = _uid()
-    etab = Etablissement(code=f"CLO-{uid}", nom=f"École CLO {uid}", type_etablissement="LYCEE")
+    etab = Etablissement(code=f"CLO-{_JETON}-{uid}", nom=f"École CLO {uid}", type_etablissement="LYCEE")
     db.add(etab); db.commit(); db.refresh(etab)
     db.add(AnneeScolaire(
-        code=f"AC{uid}", libelle="2025-2026",
+        code=f"AC{_JETON}{uid}", libelle="2025-2026",
         date_debut=date(2025, 10, 1), date_fin=date(2026, 6, 30),
         est_courante="O", statut="EN_COURS", etablissement_id=etab.etablissement_id,
     ))
@@ -55,7 +63,7 @@ def _ecole(db: Session):
 def _compte(db: Session, etab, role: str, prefixe: str) -> Utilisateur:
     uid = _uid()
     u = Utilisateur(
-        nom="Toure", prenom=f"{prefixe}{uid}", nom_utilisateur=f"{prefixe.lower()}.{uid}",
+        nom="Toure", prenom=f"{prefixe}{uid}", nom_utilisateur=f"{prefixe.lower()}.{_JETON}.{uid}",
         mot_de_passe=hash_password("motdepasse123"), role=role, statut="ACTIF",
         etablissement_id=etab.etablissement_id,
     )
