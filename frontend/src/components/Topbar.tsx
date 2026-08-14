@@ -200,7 +200,10 @@ export default function Topbar() {
                 {/* Notifications */}
                 <TopbarNotifications />
 
-                {/* Profil */}
+                {/* Profil — masqué sur mobile : déjà accessible depuis le menu
+                    avatar (TopbarUserMenu), évite l'encombrement d'icônes qui
+                    faisait sembler la cloche "posée" sur la recherche. */}
+                {!isMobile && (
                 <Link
                     href="/profil"
                     id="topbar-profil-link"
@@ -225,8 +228,10 @@ export default function Topbar() {
                 >
                     <User size={17} strokeWidth={2} />
                 </Link>
+                )}
 
-                {/* Paramètres */}
+                {/* Paramètres — même raison, masqué sur mobile */}
+                {!isMobile && (
                 <Link
                     href="/parametres"
                     id="topbar-settings-link"
@@ -251,9 +256,11 @@ export default function Topbar() {
                 >
                     <Settings size={17} strokeWidth={2} />
                 </Link>
+                )}
 
-                {/* Séparateur visuel */}
-                <div className={styles.divider} />
+                {/* Séparateur visuel — masqué sur mobile (rien à séparer, les
+                    2 liens ci-dessus sont cachés) */}
+                {!isMobile && <div className={styles.divider} />}
 
                 {/* Menu utilisateur */}
                 <TopbarUserMenu />

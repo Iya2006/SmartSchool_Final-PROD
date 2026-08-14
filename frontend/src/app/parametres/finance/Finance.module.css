@@ -100,17 +100,22 @@
 /* ══════════════════════════
    TABLE — TYPES DE FRAIS
 ══════════════════════════ */
-.tableWrap { background: white; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; }
+/* Defilement horizontal sur mobile — tableau a 7 colonnes fixes, aucune
+   protection jusqu'ici (garanti hors-ecran des ~620px de colonnes fixes
+   seules, sans compter le contenu de la colonne libelle). */
+.tableWrap { background: white; border: 1px solid #e2e8f0; border-radius: 14px; overflow-x: auto; overflow-y: hidden; }
 .tableHeader {
     display: grid; grid-template-columns: 90px 1fr 130px 120px 100px 110px 70px;
     gap: 0.75rem; padding: 0.75rem 1.25rem;
     background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+    min-width: 700px;
 }
 .tableHeader span { font-size: 0.72rem; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; }
 .tableRow {
     display: grid; grid-template-columns: 90px 1fr 130px 120px 100px 110px 70px;
     gap: 0.75rem; padding: 0.75rem 1.25rem; align-items: center;
     border-bottom: 1px solid #f1f5f9; transition: all 0.15s;
+    min-width: 700px;
 }
 .tableRow:last-child { border-bottom: none; }
 .tableRow:hover { background: #fafafa; }
@@ -140,6 +145,7 @@
     display: grid; grid-template-columns: 90px 1fr 130px 120px 100px 110px 70px;
     gap: 0.75rem; padding: 0.9rem 1.25rem; align-items: center;
     background: #f0fdf4; border-top: 2px dashed #a7f3d0;
+    min-width: 700px;
 }
 .addRowBtn {
     display: flex; align-items: center; justify-content: center; gap: 0.5rem;
@@ -267,6 +273,26 @@
     background: #0f172a; padding: 1rem 1.75rem; border-radius: 18px;
     box-shadow: 0 20px 40px rgba(0,0,0,0.25); z-index: 100;
     border: 1px solid rgba(255,255,255,0.08); min-width: 480px;
+}
+/* min-width:480px garanti hors-ecran sur tout telephone — meme bug que
+   parametres/cartes, fichier CSS distinct donc jamais corrige la */
+@media (max-width: 768px) {
+    .stickyBar {
+        min-width: 0;
+        width: calc(100vw - 24px);
+        max-width: 480px;
+        left: 12px;
+        right: 12px;
+        transform: none;
+        bottom: 1rem;
+    }
+    .stickyContent {
+        flex-wrap: wrap;
+        gap: 0.75rem;
+    }
+    .stickyActions {
+        width: 100%;
+    }
 }
 .stickyContent { display: flex; justify-content: space-between; align-items: center; gap: 2rem; }
 .stickyLeft { display: flex; align-items: center; gap: 0.75rem; }
