@@ -71,8 +71,14 @@ export default function Topbar() {
         // La recherche ne propose que des écrans auxquels ce compte a droit :
         // sinon un directeur de niveau retrouvait « Comptabilité » par la
         // recherche, un écran qui lui est justement fermé.
-        return base.filter((item) => canAccessPathForRole(user?.role, item.href, user?.role_base));
-    }, [user?.role, user?.role_base]);
+        return base.filter((item) => {
+            if (!canAccessPathForRole(user?.role, item.href, user?.role_base)) return false;
+            // Un DG à qui le fondateur a fermé la comptabilité ne la retrouve
+            // pas non plus par la recherche.
+            if (item.href.startsWith('/comptabilite') && user?.role === 'DG' && user?.acces_comptabilite === 'N') return false;
+            return true;
+        });
+    }, [user?.role, user?.role_base, user?.acces_comptabilite]);
 
     const searchResults = useMemo(() => {
         const q = query.trim().toLowerCase();

@@ -114,6 +114,9 @@ class PersonnelBase(BaseModel):
     lieu_naissance: Optional[str] = None
     adresse: Optional[str] = None
     numero_cni: Optional[str] = None
+    # Le fondateur choisit, à la création d'un directeur général, s'il voit la
+    # comptabilité. « O » par défaut ; ignoré pour les autres rôles.
+    acces_comptabilite: Optional[str] = "O"
 
 class PersonnelCreate(PersonnelBase):
     # Si accès système : login + mot de passe ; sinon None (staff technique sans accès)
@@ -141,6 +144,7 @@ class PersonnelUpdate(BaseModel):
     lieu_naissance: Optional[str] = None
     adresse: Optional[str] = None
     numero_cni: Optional[str] = None
+    acces_comptabilite: Optional[str] = None
     mot_de_passe: Optional[str] = None
     nom_utilisateur: Optional[str] = None
 

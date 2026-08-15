@@ -51,6 +51,11 @@ class Utilisateur(Base):
     lieu_naissance = Column(String(100), nullable=True)
     adresse = Column(String(255), nullable=True)
     numero_cni = Column(String(50), nullable=True)
+    # Le directeur général voit-il la comptabilité ? Le fondateur tranche à la
+    # création. « O » par défaut : les comptes existants gardent leur accès, et
+    # ce réglage ne concerne que le DG (les autres rôles finance ne le lisent
+    # jamais). Voir main.py::exige_acces_finance.
+    acces_comptabilite = Column(String(1), default="O")
     created_date = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

@@ -244,7 +244,8 @@ export default function Sidebar() {
                         directeur de niveau (comme d'autres postes) n'y accède
                         pas, et voyait pourtant l'onglet. Le contrôle réel reste
                         côté serveur ; on aligne simplement le menu dessus. */}
-                    {canAccessPathForRole(user?.role, '/comptabilite', user?.role_base) && (
+                    {canAccessPathForRole(user?.role, '/comptabilite', user?.role_base)
+                        && !(user?.role === 'DG' && user?.acces_comptabilite === 'N') && (
                         <>
                             <li className={styles.sidebarTitle}>
                                 <h6 className={styles.titleText}>FINANCE &amp; ADMIN</h6>
