@@ -59,15 +59,32 @@ def main() -> int:
                 ecarts.append((nom, "TABLE ABSENTE", []))
                 continue
 
-            reelles = {
-                r[0] for r in conn.execute(sa.text("""
-                    SELECT column_name FROM information_schema.columns
+            infos = {
+                r[0]: r[1] for r in conn.execute(sa.text("""
+                    SELECT column_name, is_nullable FROM information_schema.columns
                     WHERE table_name = :t
                 """), {"t": nom}).fetchall()
             }
+            reelles = set(infos)
+
             manquantes = sorted({c.name for c in table.columns} - reelles)
             if manquantes:
                 ecarts.append((nom, "COLONNES ABSENTES", manquantes))
+
+            # Divergence de contrainte : une colonne NOT NULL en base alors que
+            # le modele l'autorise vide fait echouer toute insertion qui la
+            # laisse a None — sans qu'aucune colonne ne manque. C'est ce qui a
+            # bloque la creation d'ecole (ss_types_evaluation.poids_pourcentage,
+            # champ « legacy » que le code ne renseigne plus).
+            for col in table.columns:
+                if col.name not in infos:
+                    continue
+                not_null_en_base = infos[col.name] == "NO"
+                if col.nullable and not_null_en_base and col.default is None:
+                    ecarts.append((
+                        nom, "CONTRAINTE PLUS STRICTE QUE LE MODELE",
+                        [f"{col.name} : NOT NULL en base, nullable dans le modele"],
+                    ))
 
     total = len(Base.metadata.tables)
     if not ecarts:
@@ -77,15 +94,16 @@ def main() -> int:
     print(f"[ECART] {len(ecarts)} table(s) en retard sur les modeles "
           f"(sur {total} verifiees) :\n")
     for nom, genre, colonnes in ecarts:
-        if colonnes:
-            print(f"  {nom}")
-            for c in colonnes:
-                colonne = table_colonne(nom, c)
-                print(f"      - {c}{colonne}")
-        else:
-            print(f"  {nom} : {genre}")
+        print(f"  {nom}  [{genre}]")
+        if not colonnes:
+            continue
+        for c in colonnes:
+            # Les lignes de contrainte portent deja leur explication.
+            print(f"      - {c}" if " : " in c else f"      - {c}{table_colonne(nom, c)}")
 
-    print("\nCes ecarts font echouer en 500 toute requete touchant ces modeles.")
+    print("\nUne colonne ABSENTE fait echouer en 500 toute requete sur ce modele.")
+    print("Une CONTRAINTE PLUS STRICTE fait echouer les insertions qui laissent")
+    print("la colonne vide — alors qu'aucune colonne ne manque.")
     print("Ecrivez une migration dans backend/migrations/ pour les combler.")
     return 1
 
