@@ -560,6 +560,12 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: Optional[int] = None, _auth:
         return None
 
     from app.api.evaluations import get_bulletin_display_flags
+    # Ces quatre fonctions n'étaient importées que dans l'endpoint du
+    # classement : ici, le bulletin les appelait sans qu'elles soient en
+    # portée, et toute ouverture d'un bulletin d'élève tombait en erreur.
+    from app.services.notation import (
+        get_bareme_defaut_cycle, get_cycle_key, get_lettres_config, lettre_pour_note,
+    )
     cl_for_flags = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
     if not cl_for_flags:
         # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
