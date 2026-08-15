@@ -563,6 +563,18 @@ export default function ProfilPage() {
                             </div>
                         </div>
 
+                        {/* Ce PIN est enregistré mais AUCUNE route ne le vérifie
+                            aujourd'hui : le dire évite de croire la comptabilité
+                            protégée alors qu'elle ne l'est pas. */}
+                        <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderLeft: '4px solid #f59e0b', borderRadius: '12px', padding: '14px 16px', marginBottom: '20px', color: '#78350f' }}>
+                            <strong style={{ display: 'block', fontSize: '14px' }}>Ce code n'est pas encore appliqué.</strong>
+                            <span style={{ fontSize: '13px', lineHeight: 1.5 }}>
+                                Vous pouvez le définir dès maintenant, mais aucun écran ne le demande
+                                encore avant une opération comptable. Son activation est prévue
+                                ultérieurement : ne comptez pas dessus pour protéger la comptabilité.
+                            </span>
+                        </div>
+
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                             {/* Champ masqué tant qu'aucun PIN n'existe : demander
                                 un « PIN actuel » jamais choisi rendait la première

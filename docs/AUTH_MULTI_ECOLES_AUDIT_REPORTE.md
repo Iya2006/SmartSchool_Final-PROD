@@ -129,3 +129,52 @@ Correctif minimal possible **sans** attendre le chantier complet : remplacer
 les 5 index globaux des enseignants et parents par des index composites
 `(etablissement_id, champ)`. C'est indépendant du reste et sans risque tant que
 les tables sont vides.
+
+---
+
+# ANNEXE — Code PIN de la comptabilité : également REPORTÉ
+
+**Statut : reporté (décision produit), avec l'année prochaine.**
+
+## Le constat
+
+Le PIN présenté dans **Profil > Sécurité** et **Paramètres > Finance** est le
+PIN d'accès à la comptabilité (`ParametreComptabilite.PIN_ACCESS`).
+
+**Il ne protège rien.** Vérification faite de bout en bout :
+
+| Ce qui existe | |
+|---|---|
+| `GET /api/comptabilite/pin/status` | dit s'il est configuré |
+| `PUT /api/comptabilite/pin` | permet de le définir |
+| **Route de vérification** | **aucune** |
+| **Écran qui l'exige avant une action** | **aucun** |
+
+`PIN_ACCESS` n'est lu nulle part ailleurs. Le commentaire d'origine dans
+`comptabilite.py` l'explique : le frontend avait été écrit en supposant ce
+garde-fou, et le backend rattrapé plus tard uniquement pour arrêter des 404 —
+la vérification n'a jamais été branchée.
+
+## Ce qui a été corrigé quand même
+
+Deux défauts rendaient la fonctionnalité non seulement inerte, mais dangereuse :
+
+1. **Un PIN d'usine `123000`**, semé identique dans CHAQUE école. Un secret
+   partagé par tous et lisible dans le dépôt ne protège personne. Supprimé ;
+   une école qui le porte encore est traitée comme n'ayant pas de PIN.
+2. **La première configuration était impossible** : les deux écrans exigeaient
+   un « PIN actuel » qui n'avait jamais existé. Le champ ne s'affiche plus tant
+   qu'aucun PIN n'est défini.
+
+Un bandeau indique désormais sur les deux écrans que le code **n'est pas encore
+appliqué** — même principe que pour la matrice de permissions : un réglage
+inerte ne doit pas laisser croire à une protection.
+
+## À trancher au moment de reprendre
+
+- **Quelles actions** le PIN doit-il protéger ? (annulation d'un paiement,
+  clôture d'exercice, suppression d'écriture… — à lister précisément)
+- **Stockage** : il est aujourd'hui en clair dans `ParametreComptabilite.valeur`.
+  À hacher, comme un mot de passe.
+- **Durée de validité** : demandé à chaque action, ou une fois par session ?
+- **Oubli** : quel parcours de réinitialisation, et par qui ?

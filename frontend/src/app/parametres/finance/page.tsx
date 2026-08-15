@@ -679,6 +679,13 @@ export default function FinancePage() {
                                 )}
                             </div>
 
+                            {/* Voir /profil : le PIN est enregistre mais aucune
+                                route ne le verifie encore. */}
+                            <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderLeft: '4px solid #f59e0b', borderRadius: 10, padding: '12px 14px', marginBottom: 16, color: '#78350f', fontSize: 13, lineHeight: 1.5 }}>
+                                <strong>Ce code n&apos;est pas encore appliqué.</strong> Vous pouvez le
+                                définir, mais aucun écran ne le demande avant une opération comptable.
+                                Son activation est prévue ultérieurement.
+                            </div>
                             <form className={styles.pinForm} onSubmit={submitPinChange}>
                                 {/* Masqué tant qu'aucun PIN n'existe : réclamer un
                                     « PIN actuel » jamais choisi rendait la première
