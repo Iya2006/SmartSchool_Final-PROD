@@ -333,7 +333,14 @@ def get_sujets(
         Enseignant.etablissement_id == etablissement_id
     )
     if current_user.get("role") not in ADMIN_TIER_ROLES and current_user.get("type") == "enseignant":
-        query = query.filter(SujetExamen.enseignant_id == current_user.get("sub"))
+        # Le « sub » du jeton est une chaîne ; la colonne enseignant_id est un
+        # entier. Sans conversion, PostgreSQL refuse « integer = varchar » et le
+        # Centre des Examens tombait en erreur pour un compte enseignant.
+        try:
+            mon_id = int(current_user.get("sub"))
+        except (TypeError, ValueError):
+            mon_id = -1
+        query = query.filter(SujetExamen.enseignant_id == mon_id)
     else:
         # Un brouillon n'est pas un dépôt : l'enseignant ne l'a pas encore
         # envoyé. L'écran les écartait déjà à l'affichage, mais le total, lui,
