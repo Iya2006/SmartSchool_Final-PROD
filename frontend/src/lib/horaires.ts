@@ -28,6 +28,30 @@ export interface Horaires {
     joursOuvres: string[];
 }
 
+/**
+ * Les sept jours, dans l'ordre de la semaine.
+ *
+ * Sert de référence d'ordre : les jours ouvrés d'une école sont un
+ * sous-ensemble de cette liste, jamais une liste réordonnée à la main.
+ * Doit rester identique à `JOURS_SEMAINE` du backend
+ * (`app/api/emploi_du_temps.py`) — deux listes divergentes, c'est un jour
+ * qu'un écran propose et que le serveur refuse.
+ */
+export const JOURS_SEMAINE = [
+    'LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI', 'SAMEDI', 'DIMANCHE',
+] as const;
+
+export const LIBELLE_JOUR: Record<string, string> = {
+    LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi',
+    VENDREDI: 'Vendredi', SAMEDI: 'Samedi', DIMANCHE: 'Dimanche',
+};
+
+/** Remet des jours ouvrés dans l'ordre de la semaine et écarte l'inconnu. */
+export function ordonnerJours(jours: string[]): string[] {
+    const choisis = new Set(jours.map(j => j.toUpperCase()));
+    return JOURS_SEMAINE.filter(j => choisis.has(j));
+}
+
 export const HORAIRES_DEFAUT: Horaires = {
     debut: '08:00',
     fin: '17:00',
@@ -62,9 +86,14 @@ export async function chargerHoraires(): Promise<Horaires> {
             pauseFin: lus['horaires.pause_fin'] || HORAIRES_DEFAUT.pauseFin,
             seuilRetard: Number(lus['horaires.seuil_retard']) || HORAIRES_DEFAUT.seuilRetard,
             seuilAbsence: Number(lus['horaires.seuil_absence']) || HORAIRES_DEFAUT.seuilAbsence,
-            joursOuvres: lus['horaires.jours_ouvres']
-                ? lus['horaires.jours_ouvres'].split(',').filter(Boolean)
-                : HORAIRES_DEFAUT.joursOuvres,
+            // Une école qui n'aurait plus aucun jour ouvré ne pourrait plus
+            // rien programmer : on retombe alors sur la semaine standard,
+            // exactement comme le fait le serveur.
+            joursOuvres: (() => {
+                const bruts = lus['horaires.jours_ouvres']?.split(',').filter(Boolean) ?? [];
+                const propres = ordonnerJours(bruts);
+                return propres.length > 0 ? propres : HORAIRES_DEFAUT.joursOuvres;
+            })(),
         };
         return cache;
     } catch {

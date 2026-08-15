@@ -10,6 +10,8 @@ import {
 import api from '@/lib/api';
 import Link from 'next/link';
 import Pagination from '@/components/Pagination';
+import { LIBELLE_JOUR } from '@/lib/horaires';
+import { useJoursOuvres } from '@/hooks/useJoursOuvres';
 
 interface ClasseProfil {
     classe_id: number;
@@ -63,10 +65,9 @@ const studentColors = [
     { bg: '#fdf2f8', text: '#ec4899' }, { bg: '#f0f9ff', text: '#06b6d4' },
 ];
 
-const JOURS_API = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
-const JOURS_LABEL: Record<string, string> = {
-    LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi'
-};
+// Les jours viennent de Parametres > Emploi du temps : la liste etait figee
+// du lundi au vendredi, et un cours du samedi restait invisible ici.
+const JOURS_LABEL = LIBELLE_JOUR;
 const HEURES_SLOTS = [
     { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
     { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
@@ -83,6 +84,7 @@ interface RealCreneau {
 export default function ClasseProfilPage() {
     const params = useParams();
     const classeId = params.id as string;
+    const JOURS_API = useJoursOuvres();
 
     const [profil, setProfil] = useState<ClasseProfil | null>(null);
     const [creneaux, setCreneaux] = useState<RealCreneau[]>([]);
@@ -599,7 +601,7 @@ export default function ClasseProfilPage() {
                                                     <React.Fragment key={`slot-${h.debut}`}>
                                                         {isPause && (
                                                             <tr key="pause">
-                                                                <td colSpan={6} style={{
+                                                                <td colSpan={JOURS_API.length + 1} style={{
                                                                     padding: '8px', textAlign: 'center', background: '#fef3c7',
                                                                     borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
                                                                 }}>

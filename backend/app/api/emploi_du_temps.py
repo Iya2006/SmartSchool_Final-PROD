@@ -9,7 +9,8 @@ from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import require_etablissement
 from app.models.academique import (
-    CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Affectation, Cycle
+    CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Affectation, Cycle,
+    ParametreEtablissement,
 )
 
 router = APIRouter(prefix="/api/emploi-du-temps", tags=["Emploi du Temps"])
@@ -58,7 +59,62 @@ def _verifier_matiere_et_enseignant(db: Session, matiere_id, enseignant_id, etab
         if not ok:
             raise HTTPException(404, "Enseignant non trouvé")
 
-JOURS = ["LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI"]
+# ── Jours de classe ───────────────────────────────────────────────────────
+# Le calendrier scolaire n'est pas le meme partout : beaucoup d'ecoles
+# guineennes ont cours le samedi matin, d'autres s'arretent le vendredi.
+# La liste etait figee du lundi au vendredi, et le serveur REFUSAIT tout
+# creneau pose un samedi — l'ecran de reglages laissait pourtant cocher le
+# samedi depuis toujours, sans que personne ne lise la valeur.
+#
+# Les jours ouvres viennent donc desormais de Parametres > Emploi du temps,
+# etablissement par etablissement.
+JOURS_SEMAINE = ["LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI", "SAMEDI", "DIMANCHE"]
+
+# Meme defaut que `HORAIRES_DEFAUT` cote frontend (lib/horaires.ts) : une
+# ecole qui n'a jamais ouvert l'ecran de reglages doit voir la meme semaine
+# des deux cotes. Deux defauts differents, c'est un jour qui s'affiche mais
+# que le serveur rejette.
+JOURS_DEFAUT = ["LUNDI", "MARDI", "MERCREDI", "JEUDI", "VENDREDI", "SAMEDI"]
+
+CATEGORIE_HORAIRES = "EMPLOI_DU_TEMPS"
+CLE_JOURS_OUVRES = "horaires.jours_ouvres"
+
+
+def _jours_ouvres(db: Session, etablissement_id: int) -> List[str]:
+    """Jours de classe declares par CET etablissement."""
+    p = (
+        db.query(ParametreEtablissement)
+        .filter(
+            ParametreEtablissement.etablissement_id == etablissement_id,
+            ParametreEtablissement.categorie == CATEGORIE_HORAIRES,
+            ParametreEtablissement.cle == CLE_JOURS_OUVRES,
+        )
+        .first()
+    )
+    if not p or not p.valeur:
+        return list(JOURS_DEFAUT)
+
+    choisis = {j.strip().upper() for j in p.valeur.split(",") if j.strip()}
+    # On repart de JOURS_SEMAINE pour garder l'ordre de la semaine et ecarter
+    # une valeur aberrante enregistree a la main.
+    ordonnes = [j for j in JOURS_SEMAINE if j in choisis]
+    # Une ecole sans aucun jour ouvre ne peut plus rien programmer : on
+    # retombe sur la semaine standard plutot que de la bloquer.
+    return ordonnes or list(JOURS_DEFAUT)
+
+
+def _verifier_jour(jour: str, jours: List[str]) -> None:
+    if jour in jours:
+        return
+    if jour in JOURS_SEMAINE:
+        raise HTTPException(
+            400,
+            f"Le {jour.lower()} n'est pas un jour de classe dans votre etablissement. "
+            "Ajoutez-le dans Parametres > Emploi du temps > Jours ouvres.",
+        )
+    raise HTTPException(400, f"Jour invalide. Choix : {', '.join(jours)}")
+
+
 HEURES_SLOTS = [
     ("08:00", "09:00"), ("09:00", "10:00"), ("10:00", "11:00"), ("11:00", "12:00"),
     ("14:00", "15:00"), ("15:00", "16:00"), ("16:00", "17:00"),
@@ -110,7 +166,7 @@ def get_emploi_du_temps(classe_id: int, db: Session = Depends(get_db), etablisse
         "classe_libelle": classe.libelle,
         "nb_creneaux": len(result),
         "creneaux": result,
-        "jours": JOURS,
+        "jours": _jours_ouvres(db, etablissement_id),
         "heures_slots": HEURES_SLOTS,
     }
 
@@ -130,8 +186,7 @@ def create_creneau(data: dict, db: Session = Depends(get_db), etablissement_id: 
             raise HTTPException(400, f"Champ requis manquant: {f}")
 
     jour = data["jour"].upper()
-    if jour not in JOURS:
-        raise HTTPException(400, f"Jour invalide. Choix: {', '.join(JOURS)}")
+    _verifier_jour(jour, _jours_ouvres(db, etablissement_id))
 
     classe = _classe_ou_404(db, data["classe_id"], etablissement_id)
     _verifier_matiere_et_enseignant(db, data.get("matiere_id"), data.get("enseignant_id"), etablissement_id)
@@ -176,8 +231,7 @@ def update_creneau(creneau_id: int, data: dict, db: Session = Depends(get_db), e
 
     if "jour" in data:
         jour = data["jour"].upper()
-        if jour not in JOURS:
-            raise HTTPException(400, f"Jour invalide")
+        _verifier_jour(jour, _jours_ouvres(db, etablissement_id))
         # Vérifier conflit si on change jour/heure
         hd = data.get("heure_debut", c.heure_debut)
         conflict = db.query(CreneauEmploi).filter(
@@ -273,7 +327,7 @@ def auto_generer_emploi(classe_id: int, db: Session = Depends(get_db), etablisse
 
     # Créneaux disponibles
     available_slots = []
-    for jour in JOURS:
+    for jour in _jours_ouvres(db, etablissement_id):
         for (hd, hf) in HEURES_SLOTS:
             available_slots.append((jour, hd, hf))
 

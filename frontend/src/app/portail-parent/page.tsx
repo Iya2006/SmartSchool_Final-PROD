@@ -620,7 +620,7 @@ export default function PortailParent() {
                         {/* ═══ WELCOME + KPI CARDS ═══ */}
                 <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}>
                     <h2 style={{ margin: '0 0 4px', fontSize: '22px', fontWeight: 800, color: '#1e293b' }}>
-                        Bonjour, {data.parent.prenom} 👋
+                        Bonjour, {data.parent.prenom}
                     </h2>
                     <p style={{ margin: '0 0 24px', fontSize: '14px', color: '#64748b' }}>
                         {theme.msgParent || `Suivi scolaire de ${data.nb_enfants} enfant${data.nb_enfants > 1 ? 's' : ''} • Année en cours`}

@@ -10,6 +10,8 @@ import Pagination from '@/components/Pagination';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 import MesSeances from './_components/MesSeances';
 import { startAutoSync } from '@/lib/syncEngine';
+import { LIBELLE_JOUR } from '@/lib/horaires';
+import { useJoursOuvres } from '@/hooks/useJoursOuvres';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Phone, User, GraduationCap, BookOpen, Clock, Calendar, AlertCircle,
@@ -22,8 +24,10 @@ import {
     School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip
 } from 'lucide-react';
 
-const DISPO_JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
-const DISPO_JOURS_L: Record<string, string> = { LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi' };
+// Jours ouvres de l'ecole (Parametres > Emploi du temps) : les listes etaient
+// figees du lundi au vendredi, donc ni la grille ni la declaration de
+// disponibilite ne connaissaient le samedi.
+const DISPO_JOURS_L = LIBELLE_JOUR;
 const DISPO_HEURES = [
     { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
     { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
@@ -61,8 +65,7 @@ interface EleveItem {
 }
 
 /* ═══ CONSTANTS ═══ */
-const JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
-const HEURES = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
+const HEURES =['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
 const SLOT_COLORS: Record<string, {bg:string;border:string;text:string}> = {
     'default': { bg: '#f1f5f9', border: '#94a3b8', text: '#475569' },
 };
@@ -85,6 +88,8 @@ function getSlotColor(index: number) {
 export default function PortailEnseignant() {
     const { user, logout } = useAuth();
     const { etablissementNom, etablissementLogo, theme, applyTheme } = useApp();
+    const JOURS = useJoursOuvres();
+    const DISPO_JOURS = JOURS;
 
     const primaryColor = theme.couleurEnseignant || '#8b5cf6';
     const accentColor = theme.couleurEnseignant ? theme.couleurEnseignant + 'cc' : '#6366f1';
@@ -1464,7 +1469,7 @@ export default function PortailEnseignant() {
                                         <thead>
                                             <tr>
                                                 <th style={{ padding: '10px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'center', width: '70px', borderBottom: '2px solid #f1f5f9' }}>HEURE</th>
-                                                {JOURS.map(j => <th key={j} style={{ padding: '10px', fontSize: '12px', fontWeight: 700, color: '#475569', textAlign: 'center', borderBottom: '2px solid #f1f5f9' }}>{j}</th>)}
+                                                {JOURS.map(j => <th key={j} style={{ padding: '10px', fontSize: '12px', fontWeight: 700, color: '#475569', textAlign: 'center', borderBottom: '2px solid #f1f5f9' }}>{DISPO_JOURS_L[j] || j}</th>)}
                                             </tr>
                                         </thead>
                                         <tbody>

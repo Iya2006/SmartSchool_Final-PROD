@@ -17,6 +17,8 @@ import BadgeCarte from '@/components/BadgeCarte';
 import { QRCodeSVG } from 'qrcode.react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { LIBELLE_JOUR } from '@/lib/horaires';
+import { useJoursOuvres } from '@/hooks/useJoursOuvres';
 
 /* ─── interfaces ─── */
 interface Affectation {
@@ -53,8 +55,9 @@ interface MatiereItem { matiere_id: number; code: string; libelle: string; }
 
 const avatarColors = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6', '#f97316'];
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
-const JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
-const JOURS_LABEL: Record<string, string> = { LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi' };
+// Jours ouvres de l'ecole, pas une semaine figee : un cours du samedi
+// n'apparaissait pas dans l'emploi du temps de l'enseignant.
+const JOURS_LABEL = LIBELLE_JOUR;
 const HEURES = [
     { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
     { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
@@ -66,6 +69,7 @@ export default function ProfilEnseignant() {
     const { id } = useParams();
     const router = useRouter();
     const isMobile = useIsMobile();
+    const JOURS = useJoursOuvres();
     const [ens, setEns] = useState<any>(null);
     const [affectations, setAffectations] = useState<Affectation[]>([]);
     const [creneaux, setCreneaux] = useState<Creneau[]>([]);
@@ -661,7 +665,7 @@ export default function ProfilEnseignant() {
                                                 <React.Fragment key={`h-${hi}`}>
                                                     {isPause && (
                                                         <tr>
-                                                            <td colSpan={6} style={{ padding: '4px 8px', fontSize: '10px', color: '#94a3b8', textAlign: 'center', background: '#f8fafc', fontWeight: 600, letterSpacing: '1px' }}>
+                                                            <td colSpan={JOURS.length + 1} style={{ padding: '4px 8px', fontSize: '10px', color: '#94a3b8', textAlign: 'center', background: '#f8fafc', fontWeight: 600, letterSpacing: '1px' }}>
                                                                 — PAUSE DÉJEUNER —
                                                             </td>
                                                         </tr>

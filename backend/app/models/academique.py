@@ -458,7 +458,10 @@ class CreneauEmploi(Base):
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
-    jour = Column(String(10), nullable=False)       # LUNDI, MARDI, MERCREDI, JEUDI, VENDREDI
+    # Un des sept jours. Les jours REELLEMENT ouverts sont propres a chaque
+    # ecole (Parametres > Emploi du temps) : cf. `_jours_ouvres` dans
+    # app/api/emploi_du_temps.py.
+    jour = Column(String(10), nullable=False)
     heure_debut = Column(String(5), nullable=False)  # "08:00"
     heure_fin = Column(String(5), nullable=False)    # "09:00"
     salle = Column(String(50))
