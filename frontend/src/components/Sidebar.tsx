@@ -15,6 +15,7 @@ import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, B
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
+import { canAccessPathForRole } from '@/lib/roleAccess';
 import { useUI } from '@/context/UIContext';
 import styles from './Sidebar.module.css';
 
@@ -239,15 +240,23 @@ export default function Sidebar() {
                         </Link>
                     </li>
 
-                    <li className={styles.sidebarTitle}>
-                        <h6 className={styles.titleText}>FINANCE &amp; ADMIN</h6>
-                    </li>
-                    <li className={pathname.startsWith('/comptabilite') ? styles.currentPage : ''}>
-                        <Link href="/comptabilite">
-                            <Banknote size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Comptabilité</span>
-                        </Link>
-                    </li>
+                    {/* La comptabilité n'apparaît que pour qui y a droit : le
+                        directeur de niveau (comme d'autres postes) n'y accède
+                        pas, et voyait pourtant l'onglet. Le contrôle réel reste
+                        côté serveur ; on aligne simplement le menu dessus. */}
+                    {canAccessPathForRole(user?.role, '/comptabilite', user?.role_base) && (
+                        <>
+                            <li className={styles.sidebarTitle}>
+                                <h6 className={styles.titleText}>FINANCE &amp; ADMIN</h6>
+                            </li>
+                            <li className={pathname.startsWith('/comptabilite') ? styles.currentPage : ''}>
+                                <Link href="/comptabilite">
+                                    <Banknote size={18} className={styles.menuIcon} />
+                                    <span className={styles.menuText}>Comptabilité</span>
+                                </Link>
+                            </li>
+                        </>
+                    )}
 
                         {/* ESPACE PLATEFORME — l'editeur de SmartSchool, pas une
                         ecole. Regroupe ce qui porte SUR les ecoles plutot que
