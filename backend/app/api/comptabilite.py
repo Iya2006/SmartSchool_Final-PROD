@@ -139,12 +139,13 @@ def init_comptabilite_tenant_defaults(db: Session, etablissement_id: int, commit
     un seul exercice '2026' possible) — voir
     migrations/lot1_comptabilite_etablissement.py. Chaque établissement
     obtient désormais les siens, indépendants des autres écoles."""
-    pin_param = db.query(ParametreComptabilite).filter(
-        ParametreComptabilite.cle == 'PIN_ACCESS',
-        ParametreComptabilite.etablissement_id == etablissement_id,
-    ).first()
-    if not pin_param:
-        db.add(ParametreComptabilite(cle='PIN_ACCESS', valeur='123000', etablissement_id=etablissement_id))
+    # Aucun PIN n'est semé : chaque école définit le sien à la première
+    # utilisation (voir changer_pin). Un PIN d'usine identique pour toutes les
+    # écoles — '123000' auparavant — n'est pas un secret : il protégeait la
+    # comptabilité de toutes les écoles avec la même valeur, connue de
+    # quiconque a lu le code. Son absence est signalée par
+    # GET /pin/status (`configured: false`), ce qui permet de le créer sans
+    # avoir à saisir un « PIN actuel » qui n'a jamais existé.
 
     exo = db.query(ExerciceComptable).filter(
         ExerciceComptable.annee == '2026',
@@ -156,20 +157,13 @@ def init_comptabilite_tenant_defaults(db: Session, etablissement_id: int, commit
             statut="OUVERT", etablissement_id=etablissement_id,
         ))
 
-    # Comptable : table vestigiale — l'authentification dédiée a été retirée
-    # (voir plus bas), conservée seulement pour compatibilité de schéma.
-    # nom_utilisateur suffixé par l'établissement pour respecter la
-    # contrainte UNIQUE globale existante sur cette colonne (non modifiée
-    # dans ce lot : table morte, hors périmètre).
-    if db.query(Comptable).filter(Comptable.etablissement_id == etablissement_id).count() == 0:
-        db.add(Comptable(
-            etablissement_id=etablissement_id,
-            nom_utilisateur=f"sams-{etablissement_id}",
-            mot_de_passe=hash_password("smart2025"),
-            nom="Camara",
-            prenom="Mohamed Sams Deen",
-            statut="ACTIF",
-        ))
+    # Comptable : table VESTIGIALE — son authentification dédiée a été retirée
+    # (voir la note plus bas), l'accès au module passe par le JWT principal.
+    # On n'y sème donc plus rien : chaque école se voyait créer un compte
+    # « sams-{id} » portant un mot de passe identique partout et une identité
+    # inventée. Aucune route ne l'utilisait — ce n'était pas une porte
+    # d'entrée — mais c'était une fausse personne dans les données de chaque
+    # client, et un mot de passe en dur dans le dépôt.
 
     db.commit() if commit else db.flush()
 
@@ -348,9 +342,27 @@ def generer_ecriture_auto(
 # appelait déjà, causant des 404 systématiques.
 # ============================================================================
 
+# PIN d'usine historique, identique pour toutes les écoles. Il ne protégeait
+# rien : quiconque avait lu le code le connaissait. Il n'est plus semé, et une
+# école qui le porte encore est traitée comme n'ayant PAS de PIN — elle peut
+# donc en définir un sans avoir à saisir cette valeur.
+_PIN_USINE = "123000"
+
+
+def _pin_configure(param) -> bool:
+    """Un PIN réellement choisi par l'école, par opposition à l'absence de PIN
+    ou au PIN d'usine hérité."""
+    return bool(param and param.valeur and param.valeur != _PIN_USINE)
+
+
 class PinChangeRequest(BaseModel):
-    ancien_pin: str
+    # Facultatif : la PREMIÈRE définition n'a pas d'ancien PIN à fournir.
+    # Auparavant obligatoire, ce qui rendait la configuration initiale
+    # impossible — la route répondait « PIN actuel incorrect » quelle que soit
+    # la valeur envoyée, puisqu'aucun PIN n'avait jamais été choisi.
+    ancien_pin: Optional[str] = None
     nouveau_pin: str
+
 
 @router.get("/pin/status")
 def get_pin_status(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
@@ -359,7 +371,8 @@ def get_pin_status(db: Session = Depends(get_db), etablissement_id: int = Depend
         ParametreComptabilite.cle == "PIN_ACCESS",
         ParametreComptabilite.etablissement_id == etablissement_id,
     ).first()
-    return {"configured": bool(param and param.valeur)}
+    return {"configured": _pin_configure(param)}
+
 
 @router.put("/pin")
 def changer_pin(data: PinChangeRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
@@ -368,13 +381,30 @@ def changer_pin(data: PinChangeRequest, db: Session = Depends(get_db), etablisse
         ParametreComptabilite.cle == "PIN_ACCESS",
         ParametreComptabilite.etablissement_id == etablissement_id,
     ).first()
-    if not param or param.valeur != data.ancien_pin:
-        raise HTTPException(status_code=400, detail="PIN actuel incorrect")
-    if not data.nouveau_pin or len(data.nouveau_pin) < 4:
+
+    # L'ancien PIN n'est exigé que s'il en existe un VRAI. Sinon on est dans la
+    # première configuration, et rien ne peut être vérifié.
+    if _pin_configure(param):
+        if not data.ancien_pin or param.valeur != data.ancien_pin:
+            raise HTTPException(status_code=400, detail="PIN actuel incorrect")
+
+    nouveau = (data.nouveau_pin or "").strip()
+    if len(nouveau) < 4:
         raise HTTPException(status_code=400, detail="Le nouveau PIN doit contenir au moins 4 caractères")
-    param.valeur = data.nouveau_pin
+    if nouveau == _PIN_USINE:
+        raise HTTPException(
+            status_code=400,
+            detail="Ce PIN est celui installé par défaut sur toutes les écoles. Choisissez-en un autre.",
+        )
+
+    if param:
+        param.valeur = nouveau
+    else:
+        db.add(ParametreComptabilite(
+            cle="PIN_ACCESS", valeur=nouveau, etablissement_id=etablissement_id,
+        ))
     db.commit()
-    return {"message": "PIN mis à jour avec succès"}
+    return {"message": "PIN enregistré avec succès", "configured": True}
 
 
 @router.get("/journaux", response_model=List[JournalOut])
