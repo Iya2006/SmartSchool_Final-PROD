@@ -292,7 +292,10 @@ export default function FinancePage() {
         if (pinForm.nouveau !== pinForm.confirmer) { setPinMsg({ text: 'La confirmation ne correspond pas au nouveau PIN', type: 'error' }); return; }
         setPinSaving(true);
         try {
-            await api.put('/api/comptabilite/pin', { ancien_pin: pinForm.ancien, nouveau_pin: pinForm.nouveau });
+            await api.put('/api/comptabilite/pin', {
+                ...(pinConfigured ? { ancien_pin: pinForm.ancien } : {}),
+                nouveau_pin: pinForm.nouveau,
+            });
             setPinMsg({ text: 'PIN mis à jour avec succès', type: 'success' });
             setPinForm({ ancien: '', nouveau: '', confirmer: '' });
             setPinConfigured(true);
@@ -677,10 +680,15 @@ export default function FinancePage() {
                             </div>
 
                             <form className={styles.pinForm} onSubmit={submitPinChange}>
-                                <div className={styles.pinFormRow}>
-                                    <label>PIN actuel</label>
-                                    <input type="password" className={styles.inputFancy} value={pinForm.ancien} onChange={e => setPinForm(v => ({ ...v, ancien: e.target.value }))} required />
-                                </div>
+                                {/* Masqué tant qu'aucun PIN n'existe : réclamer un
+                                    « PIN actuel » jamais choisi rendait la première
+                                    configuration impossible. */}
+                                {pinConfigured && (
+                                    <div className={styles.pinFormRow}>
+                                        <label>PIN actuel</label>
+                                        <input type="password" className={styles.inputFancy} value={pinForm.ancien} onChange={e => setPinForm(v => ({ ...v, ancien: e.target.value }))} required />
+                                    </div>
+                                )}
                                 <div className
 ={styles.pinFormRow}>
                                     <label>Nouveau PIN</label>

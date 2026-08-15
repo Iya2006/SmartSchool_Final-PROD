@@ -154,7 +154,10 @@ export default function ProfilPage() {
     };
 
     const handleSavePin = async () => {
-        if (!ancienPin) {
+        // Le PIN actuel n'est exigé que s'il en existe un. À la PREMIÈRE
+        // définition il n'y a rien à confirmer : réclamer un « PIN actuel »
+        // qui n'a jamais été choisi rendait la configuration impossible.
+        if (pinConfigured && !ancienPin) {
             toast.error("Veuillez saisir le code PIN actuel.");
             return;
         }
@@ -164,10 +167,11 @@ export default function ProfilPage() {
         }
         try {
             await api.put('/api/comptabilite/pin', {
-                ancien_pin: ancienPin,
+                // Omis à la première définition : le serveur ne l'exige pas non plus.
+                ...(pinConfigured ? { ancien_pin: ancienPin } : {}),
                 nouveau_pin: pinAccess
             });
-            toast.success('Code PIN mis à jour avec succès.');
+            toast.success(pinConfigured ? 'Code PIN mis à jour.' : 'Code PIN défini.');
             setPinConfigured(true);
             setAncienPin('');
             setPinAccess('');
@@ -560,17 +564,22 @@ export default function ProfilPage() {
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                            <div>
-                                <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Code PIN actuel</label>
-                                <input
-                                    type="text"
-                                    maxLength={6}
-                                    value={ancienPin}
-                                    onChange={e => setAncienPin(e.target.value)}
-                                    placeholder="PIN actuel"
-                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '18px', fontWeight: 700, letterSpacing: '3px' }}
-                                />
-                            </div>
+                            {/* Champ masqué tant qu'aucun PIN n'existe : demander
+                                un « PIN actuel » jamais choisi rendait la première
+                                configuration impossible. */}
+                            {pinConfigured && (
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Code PIN actuel</label>
+                                    <input
+                                        type="text"
+                                        maxLength={6}
+                                        value={ancienPin}
+                                        onChange={e => setAncienPin(e.target.value)}
+                                        placeholder="PIN actuel"
+                                        style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '18px', fontWeight: 700, letterSpacing: '3px' }}
+                                    />
+                                </div>
+                            )}
                             <div>
                                 <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>Nouveau code PIN</label>
                                 <input
