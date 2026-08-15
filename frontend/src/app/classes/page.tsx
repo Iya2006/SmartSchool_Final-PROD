@@ -2,7 +2,7 @@
 
 import { useApp } from '@/context/AppContext';
 import { useState, useEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useIsRestoring } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Users, X, Eye, Edit, ChevronRight, ChevronLeft, Loader2, BookOpen, UserCheck, Plus, Settings, Search, ArrowLeft } from 'lucide-react';
 import api from '@/lib/api';
@@ -65,7 +65,7 @@ export default function ClassesPage() {
     // mémoire) — un établissement à grand nombre de classes ne doit jamais
     // tout charger d'un coup. Le total réel vient de X-Total-Count, comme
     // useEleves.ts (même convention pour les listes React Query de ce projet).
-    const { data, isLoading: loading } = useQuery({
+    const { data, isLoading: queryLoading } = useQuery({
         queryKey: ['classes', etablissementId, anneeId, currentPage, search],
         queryFn: async () => {
             const skip = (currentPage - 1) * pageSize;
@@ -82,6 +82,14 @@ export default function ClassesPage() {
         },
         enabled: !!etablissementId && !!anneeId,
     });
+    // Le cache React Query persiste en localStorage (offline-first) : au tout
+    // premier rendu client, avant que ce cache ne soit restauré, isLoading
+    // tombe a `false` sans donnees — alors que le rendu serveur (pas de
+    // localStorage) affiche encore le spinner. Sans `isRestoring`, ce
+    // decalage declenche une erreur d'hydratation (spinner cote serveur vs
+    // "aucune classe" cote client) a chaque premier chargement de la page.
+    const isRestoring = useIsRestoring();
+    const loading = queryLoading || isRestoring;
     const classes = data?.classes ?? [];
     const total = data?.total ?? 0;
 
