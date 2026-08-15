@@ -233,6 +233,28 @@ type CoursDuJour = {
     appel_fait: boolean;
 };
 
+/** Une séance dans l'historique des appels : ce qui était prévu, et la réalité
+ *  de l'appel (présents / absents / retards). */
+type SeanceHist = {
+    seance_id: number;
+    classe: string;
+    matiere: string;
+    enseignant_prevu: string;
+    enseignant_reel: string | null;
+    date_seance: string;
+    heure_debut_prevue: string;
+    heure_fin_prevue: string;
+    statut: string;
+    appel_fait: boolean;
+    nb_presents: number | null;
+    nb_absents: number | null;
+    nb_retards: number | null;
+};
+
+type SeanceHistDetail = SeanceHist & {
+    eleves: { eleve: string; matricule: string | null; statut: string }[];
+};
+
 type ClasseAppel = { classe_id: number; libelle: string };
 
 type ProfOption = { enseignant_id: number; nom: string; prenom: string; matiere?: string | null };
@@ -1229,6 +1251,14 @@ function SurveillantPortal() {
        Ici il les voit, et un cours reste « a venir » en fin de journee est
        precisement un cours qui n'a pas eu lieu. */
     const [coursDuJour, setCoursDuJour] = useState<CoursDuJour[]>([]);
+    // L'HISTORIQUE DES APPELS : le surveillant retrouve, pour un jour et une
+    // classe, ce que chaque cours a réellement donné à l'appel — sans se
+    // déplacer. Le fondateur et la direction ont la même vue dans « Séances ».
+    const [histDate, setHistDate] = useState(new Date().toISOString().slice(0, 10));
+    const [histClasse, setHistClasse] = useState('');
+    const [histSeances, setHistSeances] = useState<SeanceHist[]>([]);
+    const [histLoading, setHistLoading] = useState(false);
+    const [histDetail, setHistDetail] = useState<SeanceHistDetail | null>(null);
     const [coursLoading, setCoursLoading] = useState(false);
 
     const chargerCoursDuJour = useCallback(async () => {
@@ -1245,6 +1275,31 @@ function SurveillantPortal() {
     }, [signalement.date_absence]);
 
     useEffect(() => { chargerCoursDuJour(); }, [chargerCoursDuJour]);
+
+    // L'historique des appels pour le jour (et la classe) choisis.
+    const chargerHistorique = useCallback(async () => {
+        setHistLoading(true);
+        try {
+            const res = await api.get<SeanceHist[]>(
+                `/api/seances?date=${histDate}${histClasse ? `&classe_id=${histClasse}` : ''}`);
+            setHistSeances(res.data || []);
+        } catch {
+            setHistSeances([]);
+        } finally {
+            setHistLoading(false);
+        }
+    }, [histDate, histClasse]);
+
+    useEffect(() => { chargerHistorique(); }, [chargerHistorique]);
+
+    const ouvrirDetailSeance = async (seanceId: number) => {
+        try {
+            const res = await api.get<SeanceHistDetail>(`/api/seances/${seanceId}`);
+            setHistDetail(res.data);
+        } catch (err) {
+            setError(getErrorMessage(err));
+        }
+    };
 
     /** Depuis un cours precis : le professeur, la date et le motif sont deja
      *  connus, il n'y a plus rien a ressaisir de memoire. */
@@ -1537,6 +1592,113 @@ function SurveillantPortal() {
                         )}
                     </div>
                 </section>
+
+                {/* ═══ HISTORIQUE DES APPELS ═══
+                    Le surveillant retrouve, pour un jour et une classe, ce que
+                    chaque cours a donné à l'appel — présents, absents, retards —
+                    sans se déplacer de classe en classe. La direction et le
+                    fondateur ont la même vue dans « Séances pédagogiques ». */}
+                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                    <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #eef2ff)' }}>
+                        <p style={{ margin: 0, fontSize: '12px', color: '#4f46e5', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Traçabilité</p>
+                        <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Historique des appels</h2>
+                        <p style={{ margin: '6px 0 0', fontSize: '13.5px', color: '#64748b', maxWidth: '640px' }}>
+                            Quel jour, quelle classe, quelle matière : l&apos;appel qui a été fait, et son résultat. Cliquez une ligne pour la liste nominative.
+                        </p>
+                    </div>
+
+                    <div style={{ padding: '16px 24px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', borderBottom: '1px solid #f1f5f9' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569' }}>
+                            Jour
+                            <input type="date" value={histDate} max={new Date().toISOString().slice(0, 10)}
+                                onChange={(e) => setHistDate(e.target.value)}
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569', minWidth: '210px', flex: '1 1 210px' }}>
+                            Classe
+                            <select value={histClasse} onChange={(e) => setHistClasse(e.target.value)}
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }}>
+                                <option value="">Toutes les classes</option>
+                                {classes.map((cl) => <option key={cl.classe_id} value={cl.classe_id}>{cl.libelle}</option>)}
+                            </select>
+                        </label>
+                    </div>
+
+                    <div>
+                        {histLoading ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                <Loader2 size={20} className="animate-spin" style={{ verticalAlign: 'middle', marginRight: 8 }} /> Chargement…
+                            </p>
+                        ) : histSeances.length === 0 ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                Aucun cours ce jour-là — week-end, ou emploi du temps vide.
+                            </p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '460px', overflowY: 'auto' }}>
+                                {histSeances.map((s, idx) => {
+                                    const fait = s.appel_fait;
+                                    return (
+                                        <button key={s.seance_id} type="button" onClick={() => ouvrirDetailSeance(s.seance_id)}
+                                            style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: 'transparent', flexWrap: 'wrap', textAlign: 'left', border: 'none', cursor: 'pointer', width: '100%' }}>
+                                            <div style={{ minWidth: '104px' }}>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 900, color: '#0f172a' }}>{s.heure_debut_prevue?.slice(0, 5)}–{s.heure_fin_prevue?.slice(0, 5)}</p>
+                                            </div>
+                                            <div style={{ minWidth: '200px', flex: '1 1 220px' }}>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>{s.matiere}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>{s.classe} · {s.enseignant_reel || s.enseignant_prevu}</p>
+                                            </div>
+                                            {fait ? (
+                                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                    <span style={{ padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 800, background: '#f0fdf4', color: '#166534' }}>{s.nb_presents ?? 0} présents</span>
+                                                    <span style={{ padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 800, background: '#fef2f2', color: '#991b1b' }}>{s.nb_absents ?? 0} absents</span>
+                                                    <span style={{ padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 800, background: '#fffbeb', color: '#92400e' }}>{s.nb_retards ?? 0} retards</span>
+                                                </div>
+                                            ) : (
+                                                <span style={{ marginLeft: 'auto', padding: '5px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 800, background: '#f1f5f9', color: '#64748b' }}>
+                                                    {s.statut === 'NON_EFFECTUEE' ? 'Cours non assuré' : 'Appel non fait'}
+                                                </span>
+                                            )}
+                                            <Search size={15} style={{ color: '#cbd5e1', marginLeft: fait ? 'auto' : '0' }} />
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                {/* Détail nominatif d'une séance de l'historique. */}
+                {histDetail && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(8px)', zIndex: 90, display: 'grid', placeItems: 'center', padding: '20px' }} onClick={() => setHistDetail(null)}>
+                        <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px, 100%)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', background: 'white', borderRadius: '24px', overflow: 'hidden', boxShadow: '0 40px 90px rgba(15,23,42,0.28)' }}>
+                            <div style={{ padding: '20px 22px', background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', color: 'white' }}>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                    <button type="button" onClick={() => setHistDetail(null)} style={{ width: 34, height: 34, borderRadius: '11px', border: 'none', background: 'rgba(255,255,255,0.18)', color: 'white', cursor: 'pointer', display: 'grid', placeItems: 'center' }}><X size={17} /></button>
+                                </div>
+                                <p style={{ margin: 0, fontSize: '18px', fontWeight: 900 }}>{histDetail.matiere}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '13px', opacity: 0.9 }}>{histDetail.classe} · {histDetail.date_seance} · {histDetail.heure_debut_prevue?.slice(0, 5)}–{histDetail.heure_fin_prevue?.slice(0, 5)}</p>
+                                <p style={{ margin: '6px 0 0', fontSize: '12.5px', opacity: 0.9 }}>{histDetail.enseignant_reel || histDetail.enseignant_prevu}</p>
+                            </div>
+                            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 4px' }}>
+                                {histDetail.eleves.length === 0 ? (
+                                    <p style={{ textAlign: 'center', padding: '30px', color: '#94a3b8', fontWeight: 700, fontSize: '13.5px' }}>Aucun appel enregistré pour cette séance.</p>
+                                ) : histDetail.eleves.map((e, i) => {
+                                    const c = e.statut === 'PRESENT' ? '#16a34a' : e.statut === 'RETARD' ? '#f59e0b' : e.statut === 'ABSENT_JUSTIFIE' ? '#8b5cf6' : '#dc2626';
+                                    const l = e.statut === 'PRESENT' ? 'Présent' : e.statut === 'RETARD' ? 'Retard' : e.statut === 'ABSENT_JUSTIFIE' ? 'Excusé' : 'Absent';
+                                    return (
+                                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 20px', borderBottom: '1px solid #f1f5f9' }}>
+                                            <div>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: '#1e293b' }}>{e.eleve}</p>
+                                                {e.matricule && <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>{e.matricule}</p>}
+                                            </div>
+                                            <span style={{ fontSize: '12px', fontWeight: 800, padding: '3px 11px', borderRadius: '999px', background: `${c}18`, color: c }}>{l}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* ═══ SIGNALER L'ABSENCE D'UN ENSEIGNANT ═══
                     Constater n'est pas decider : ce formulaire cree un
@@ -2279,8 +2441,12 @@ function InformaticienPortal() {
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState<ItForm>({ mode: 'ticket', code: '', nom: '', type_equipement: 'ORDINATEUR', marque: '', etat: 'BON', titre: '', description: '', priorite: 'NORMALE', equipement_id: '' });
 
-    const loadIt = useCallback(async () => {
-        setLoading(true);
+    // `silencieux` : rafraîchir les données SANS repasser tout l'écran en état
+    // de chargement. Sans cela, chaque changement d'état d'une machine faisait
+    // clignoter toute la liste (spinner plein écran puis retour) — instable à
+    // l'œil. Le premier chargement, lui, montre bien le spinner.
+    const loadIt = useCallback(async (silencieux = false) => {
+        if (!silencieux) setLoading(true);
         setError(null);
         try {
             const [statsRes, equipementsRes, ticketsRes] = await Promise.all([
@@ -2294,7 +2460,7 @@ function InformaticienPortal() {
         } catch (err) {
             setError(getErrorMessage(err));
         } finally {
-            setLoading(false);
+            if (!silencieux) setLoading(false);
         }
     }, [etablissementId]);
 
@@ -2345,8 +2511,8 @@ function InformaticienPortal() {
         try {
             await api.put(`/api/informatique/equipements/${equipement.equipement_id}`, { etat });
             setSuccess(`${equipement.code} — ${equipement.nom} : ${etat === 'BON' ? 'remis en service' : etat === 'PANNE' ? 'signale en panne' : etat === 'REPARE' ? 'panne resolue, remis en service' : 'a remplacer'}.`);
-            // On rafraîchit les compteurs (« en panne ») sans bloquer l'écran.
-            loadIt();
+            // Rafraîchir les compteurs SANS faire clignoter la liste.
+            loadIt(true);
         } catch (err) {
             // Le serveur a refusé : on remet l'état d'avant, l'écran reste vrai.
             setEquipements((prev) => prev.map((e) =>
