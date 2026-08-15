@@ -108,6 +108,13 @@ def list_messages(
             ens = db.query(Enseignant).filter(Enseignant.enseignant_id == m.expediteur_id).first()
             if ens:
                 exp_name = f"{ens.prenom} {ens.nom}"
+        elif m.expediteur_type == "PARENT" and m.expediteur_id:
+            # Sans ça, un message d'un parent s'affichait « Administration » dans
+            # la boîte du professeur — impossible de savoir qui écrit.
+            from app.models.academique import Parent as _P
+            p = db.query(_P).filter(_P.parent_id == m.expediteur_id).first()
+            if p:
+                exp_name = f"{p.prenom} {p.nom} (parent)"
 
         result.append({
             "message_id": m.message_id,

@@ -499,10 +499,15 @@ export default function PortailEnseignant() {
         if (!data || !replyText.trim()) return;
         setReplySending(true);
         try {
+            // La réponse revient à qui a écrit : à un parent si c'est lui qui a
+            // ouvert l'échange, sinon à l'administration. Répondre toujours à
+            // l'admin renvoyait la réponse du professeur au mauvais endroit.
+            const versParent = parentMsg.expediteur_type === 'PARENT' && parentMsg.expediteur_id;
             await api.post('/api/communication/messages', {
                 expediteur_type: 'ENSEIGNANT',
                 expediteur_id: data.enseignant.enseignant_id,
-                destinataire_type: 'ADMIN',
+                destinataire_type: versParent ? 'PARENT' : 'ADMIN',
+                destinataire_id: versParent ? parentMsg.expediteur_id : undefined,
                 objet_type: parentMsg.objet_type,
                 sujet: `RE: ${parentMsg.sujet}`,
                 contenu: replyText.trim(),

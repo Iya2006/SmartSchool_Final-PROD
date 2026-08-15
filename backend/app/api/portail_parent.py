@@ -838,10 +838,20 @@ def get_messages_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db:
     ).order_by(desc(Message.date_envoi)).limit(20).all()
 
     def format_msg(m):
+        # Qui écrit : l'administration, ou un professeur nommé (une réponse à un
+        # message que le parent lui a adressé).
+        exp_nom = "Administration"
+        if m.expediteur_type == "ENSEIGNANT" and m.expediteur_id:
+            ens = db.query(Enseignant).filter(Enseignant.enseignant_id == m.expediteur_id).first()
+            if ens:
+                exp_nom = f"{ens.prenom} {ens.nom}"
+        elif m.expediteur_type == "PARENT":
+            exp_nom = "Vous"
         return {
             "message_id": m.message_id,
             "expediteur_type": m.expediteur_type,
             "expediteur_id": m.expediteur_id,
+            "expediteur_nom": exp_nom,
             "destinataire_type": m.destinataire_type,
             "destinataire_id": m.destinataire_id,
             "objet_type": m.objet_type,
@@ -915,11 +925,65 @@ class ParentMessageSend(BaseModel):
     sujet: str
     contenu: str
     objet_type: str = "GENERAL"
+    # Optionnel : l'enseignant d'un de ses enfants. Absent = l'administration.
+    enseignant_id: Optional[int] = None
+
+
+@router.get("/{parent_id}/enseignants")
+def get_enseignants_du_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
+    """Les enseignants des enfants de ce parent — ceux à qui il peut écrire.
+
+    Un parent joignait jusqu'ici uniquement l'administration. Il peut désormais
+    écrire directement au professeur de son enfant ; on ne lui propose donc que
+    les enseignants qui enseignent réellement à l'un de ses enfants, jamais
+    toute la salle des profs.
+    """
+    liens = db.query(EleveParent.eleve_id).filter(EleveParent.parent_id == parent_id).all()
+    eleve_ids = [e for (e,) in liens]
+    if not eleve_ids:
+        return []
+    classe_ids = [
+        c for (c,) in db.query(Inscription.classe_id).filter(
+            Inscription.eleve_id.in_(eleve_ids), Inscription.statut == "ACTIVE"
+        ).distinct().all()
+    ]
+    if not classe_ids:
+        return []
+
+    from app.models.academique import Matiere, Classe as C
+    lignes = (
+        db.query(Enseignant.enseignant_id, Enseignant.nom, Enseignant.prenom,
+                 Matiere.libelle.label("matiere"), C.libelle.label("classe"))
+        .join(Affectation, Affectation.enseignant_id == Enseignant.enseignant_id)
+        .join(C, C.classe_id == Affectation.classe_id)
+        .outerjoin(Matiere, Matiere.matiere_id == Affectation.matiere_id)
+        .filter(Affectation.classe_id.in_(classe_ids), Affectation.statut == "ACTIVE")
+        .order_by(Enseignant.nom, Enseignant.prenom)
+        .all()
+    )
+    # Un même prof peut enseigner plusieurs matières : on le liste une fois,
+    # avec ses matières regroupées.
+    par_prof: dict = {}
+    for r in lignes:
+        g = par_prof.setdefault(r.enseignant_id, {
+            "enseignant_id": r.enseignant_id,
+            "nom": r.nom, "prenom": r.prenom,
+            "matieres": set(), "classes": set(),
+        })
+        if r.matiere:
+            g["matieres"].add(r.matiere)
+        if r.classe:
+            g["classes"].add(r.classe)
+    return [
+        {"enseignant_id": g["enseignant_id"], "nom": g["nom"], "prenom": g["prenom"],
+         "matieres": sorted(g["matieres"]), "classes": sorted(g["classes"])}
+        for g in par_prof.values()
+    ]
 
 
 @router.post("/{parent_id}/messages/envoyer")
 def envoyer_message_parent(parent_id: int, data: ParentMessageSend, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
-    """Parent envoie un message à l'administration."""
+    """Parent écrit à l'administration, ou directement à un professeur de son enfant."""
     parent = db.query(Parent).filter(Parent.parent_id == parent_id).first()
     if not parent:
         raise HTTPException(404, "Parent non trouvé")
@@ -935,12 +999,29 @@ def envoyer_message_parent(parent_id: int, data: ParentMessageSend, _auth: dict 
             ),
         )
 
+    destinataire_type, destinataire_id = "ADMIN", None
+    if data.enseignant_id:
+        # On ne laisse pas un parent écrire à n'importe quel professeur : il
+        # doit enseigner à l'un de ses enfants. Sinon 403, sans confirmer que
+        # le professeur existe ailleurs.
+        eleve_ids = [e for (e,) in db.query(EleveParent.eleve_id).filter(EleveParent.parent_id == parent_id).all()]
+        classe_ids = [c for (c,) in db.query(Inscription.classe_id).filter(
+            Inscription.eleve_id.in_(eleve_ids or [0]), Inscription.statut == "ACTIVE").distinct().all()]
+        autorise = db.query(Affectation.affectation_id).filter(
+            Affectation.enseignant_id == data.enseignant_id,
+            Affectation.classe_id.in_(classe_ids or [0]),
+            Affectation.statut == "ACTIVE",
+        ).first()
+        if not autorise:
+            raise HTTPException(403, "Ce professeur n'enseigne pas à votre enfant.")
+        destinataire_type, destinataire_id = "ENSEIGNANT", data.enseignant_id
+
     msg = Message(
         etablissement_id=etablissement_id,
         expediteur_type="PARENT",
         expediteur_id=parent_id,
-        destinataire_type="ADMIN",
-        destinataire_id=None,
+        destinataire_type=destinataire_type,
+        destinataire_id=destinataire_id,
         objet_type=data.objet_type,
         sujet=data.sujet,
         contenu=data.contenu,
