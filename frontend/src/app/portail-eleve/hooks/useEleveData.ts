@@ -27,8 +27,8 @@ export function useEleveData(eleveId: number | null) {
     const [bulletinLoading, setBulletinLoading] = useState(false);
     // Aucune période supposée : la liste vient de l'école de l'élève, et tant
     // qu'elle n'est pas chargée le serveur choisit la période en cours.
-    const [bulletinTrimestre, setBulletinTrimestre] = useState<number | null>(null);
-    const [periodes, setPeriodes] = useState<{ trimestre_id: number; libelle: string; statut: string }[]>([]);
+    const [bulletinTrimestre, setBulletinTrimestre] = useState<number | 'annuel' | null>(null);
+    const [periodes, setPeriodes] = useState<{ trimestre_id: number | null; libelle: string; statut: string; annuel?: boolean }[]>([]);
 
     const [messagesData, setMessagesData] = useState<MessagesData | null>(null);
     const [messagesLoading, setMessagesLoading] = useState(false);
@@ -106,11 +106,13 @@ export function useEleveData(eleveId: number | null) {
     }, []);
 
     // Fetch Bulletin
-    const fetchBulletin = useCallback(async (id: number, trimId: number | null) => {
+    const fetchBulletin = useCallback(async (id: number, sel: number | 'annuel' | null) => {
         setBulletinLoading(true);
         try {
-            const res = await api.get(
-                `/api/portail-eleve/${id}/bulletin${trimId ? `?trimestre_id=${trimId}` : ''}`);
+            // « annuel » = bulletin de fin d'année (sans période) ; un nombre =
+            // la période choisie ; rien = la période en cours par défaut.
+            const q = sel === 'annuel' ? '?annuel=true' : (sel ? `?trimestre_id=${sel}` : '');
+            const res = await api.get(`/api/portail-eleve/${id}/bulletin${q}`);
             setBulletinData(res.data);
         } catch {
             setBulletinData(null);

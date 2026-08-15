@@ -413,11 +413,33 @@ def create_emprunt(
     if not data.eleve_id and not data.enseignant_id:
         raise HTTPException(status_code=400, detail="Un emprunteur élève ou enseignant est requis")
 
+    # Prêter depuis le catalogue : on n'a que l'ouvrage, le serveur retient un
+    # exemplaire disponible de CETTE école. Le bibliothécaire n'a pas à connaître
+    # le numéro de la copie.
+    exemplaire_id = data.exemplaire_id
+    if not exemplaire_id:
+        if not data.ouvrage_id:
+            raise HTTPException(status_code=400, detail="Précisez l'exemplaire ou l'ouvrage à prêter.")
+        dispo = (
+            db.query(Exemplaire)
+            .join(Ouvrage, Ouvrage.ouvrage_id == Exemplaire.ouvrage_id)
+            .filter(
+                Exemplaire.ouvrage_id == data.ouvrage_id,
+                Ouvrage.etablissement_id == etablissement_id,
+                Exemplaire.statut == "DISPONIBLE",
+            )
+            .order_by(Exemplaire.exemplaire_id)
+            .first()
+        )
+        if not dispo:
+            raise HTTPException(status_code=400, detail="Aucun exemplaire disponible pour ce livre.")
+        exemplaire_id = dispo.exemplaire_id
+
     # Lot 11 — l'exemplaire ET l'emprunteur doivent relever de cette école.
     # Sans ces contrôles on pouvait prêter un exemplaire d'une autre école, ou
     # inscrire au nom d'un élève/enseignant d'une autre école un emprunt qu'il
     # devrait ensuite rendre.
-    ex = _exemplaire_ou_404(db, data.exemplaire_id, etablissement_id)
+    ex = _exemplaire_ou_404(db, exemplaire_id, etablissement_id)
     if data.eleve_id and not db.query(Eleve.eleve_id).filter(
         Eleve.eleve_id == data.eleve_id, Eleve.etablissement_id == etablissement_id
     ).first():
@@ -430,7 +452,14 @@ def create_emprunt(
 
     if getattr(ex, "statut", None) != "DISPONIBLE":
         raise HTTPException(status_code=400, detail="Cet exemplaire n'est pas disponible")
-    emprunt = Emprunt(**data.model_dump(), created_by=current_user.get("nom", current_user.get("sub", "SYSTEM")))
+    emprunt = Emprunt(
+        exemplaire_id=exemplaire_id,
+        eleve_id=data.eleve_id,
+        enseignant_id=data.enseignant_id,
+        date_retour_prevue=data.date_retour_prevue,
+        observation=data.observation,
+        created_by=current_user.get("nom", current_user.get("sub", "SYSTEM")),
+    )
     setattr(ex, "statut", "EMPRUNTE")
     if ex.ouvrage:
         current_available = int(getattr(ex.ouvrage, "nb_disponibles", 0) or 0)
@@ -439,3 +468,70 @@ def create_emprunt(
     db.commit()
     db.refresh(emprunt)
     return emprunt
+
+
+@router.post("/emprunts/rappels")
+def envoyer_rappels_retards(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Un rappel à tous les élèves qui ont un livre en retard non rendu.
+
+    Le bibliothécaire voyait la liste des retards mais devait prévenir chaque
+    élève de vive voix. Ce bouton dépose, dans l'espace de chaque élève
+    concerné, un message nommant le livre et le nombre de jours de retard —
+    il le lit lui-même, sans qu'on ait à le chercher dans la cour.
+
+    Ne renvoie pas un rappel déjà envoyé : rappeler dix fois le même jour n'est
+    pas rappeler, c'est harceler. Une requête pour trouver les retards, un
+    message par élève.
+    """
+    from app.models.academique import Message
+
+    _require_write(current_user)
+    aujourdhui = date.today()
+
+    retards = (
+        db.query(Emprunt, Exemplaire, Ouvrage)
+        .join(Exemplaire, Exemplaire.exemplaire_id == Emprunt.exemplaire_id)
+        .join(Ouvrage, Ouvrage.ouvrage_id == Exemplaire.ouvrage_id)
+        .filter(
+            Ouvrage.etablissement_id == etablissement_id,
+            Emprunt.eleve_id.isnot(None),
+            Emprunt.date_retour_effective.is_(None),
+            Emprunt.date_retour_prevue < aujourdhui,
+            Emprunt.rappel_envoye != "O",
+        )
+        .all()
+    )
+
+    envoyes = 0
+    for emprunt, _ex, ouvrage in retards:
+        jours = max(0, (aujourdhui - emprunt.date_retour_prevue).days)
+        db.add(Message(
+            etablissement_id=etablissement_id,
+            expediteur_type="ADMIN",
+            destinataire_type="ELEVE",
+            destinataire_id=emprunt.eleve_id,
+            objet_type="GENERAL",
+            sujet="Livre à rendre à la bibliothèque",
+            contenu=(
+                f"Le livre « {ouvrage.titre} » que vous avez emprunté est en retard "
+                f"de {jours} jour(s). Merci de le rapporter à la bibliothèque au plus vite."
+            ),
+            statut="ENVOYE",
+        ))
+        emprunt.rappel_envoye = "O"
+        emprunt.date_rappel = aujourdhui
+        envoyes += 1
+
+    db.commit()
+    return {
+        "rappels_envoyes": envoyes,
+        "message": (
+            f"{envoyes} rappel(s) déposé(s) dans l'espace des élèves concernés."
+            if envoyes else
+            "Aucun nouveau rappel à envoyer : tous les retards ont déjà été signalés."
+        ),
+    }

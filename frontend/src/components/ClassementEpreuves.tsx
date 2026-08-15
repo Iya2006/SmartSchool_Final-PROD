@@ -27,6 +27,9 @@ interface Epreuve {
     date: string | null;
     evaluation_ids: number[];
     nb_matieres: number;
+    /** La période de l'épreuve : le classement se calcule sur la bonne. */
+    trimestre_id?: number | null;
+    periode?: string | null;
 }
 
 interface LigneMatiere {
@@ -68,12 +71,15 @@ export default function ClassementEpreuves({ baseUrl, trimestreId, couleur, peri
     const [chargementResultat, setChargementResultat] = useState(false);
     const [erreur, setErreur] = useState<string | null>(null);
 
-    // ── Épreuves consultables de la période ───────────────────────────────
+    // ── Toutes les épreuves consultables de l'année ───────────────────────
+    // Une famille cherche « la 3ème évaluation » sans se rappeler son
+    // trimestre : on rassemble toutes les périodes, plutôt que de la forcer à
+    // changer d'onglet pour retrouver une composition déjà passée.
     useEffect(() => {
         let annule = false;
         setChargementListe(true);
         setErreur(null);
-        api.get(`${baseUrl}/epreuves${trimestreId ? `?trimestre_id=${trimestreId}` : ''}`)
+        api.get(`${baseUrl}/epreuves?toutes=true`)
             .then(res => {
                 if (annule) return;
                 const liste: Epreuve[] = res.data?.epreuves || [];
@@ -87,7 +93,7 @@ export default function ClassementEpreuves({ baseUrl, trimestreId, couleur, peri
             })
             .finally(() => { if (!annule) setChargementListe(false); });
         return () => { annule = true; };
-    }, [baseUrl, trimestreId]);
+    }, [baseUrl]);
 
     // ── Résultat sur l'épreuve choisie ────────────────────────────────────
     const charger = useCallback((epreuve: Epreuve | undefined) => {
@@ -95,7 +101,10 @@ export default function ClassementEpreuves({ baseUrl, trimestreId, couleur, peri
         setChargementResultat(true);
         setErreur(null);
         const ids = epreuve.evaluation_ids.join(',');
-        api.get(`${baseUrl}/classement?evaluation_ids=${ids}${trimestreId ? `&trimestre_id=${trimestreId}` : ''}`)
+        // Le classement se calcule sur la période de l'épreuve elle-même, pas
+        // sur celle du bulletin affiché à côté.
+        const tri = epreuve.trimestre_id ?? trimestreId;
+        api.get(`${baseUrl}/classement?evaluation_ids=${ids}${tri ? `&trimestre_id=${tri}` : ''}`)
             .then(res => setResultat(res.data))
             .catch(err => {
                 setResultat(null);
@@ -147,7 +156,7 @@ export default function ClassementEpreuves({ baseUrl, trimestreId, couleur, peri
                     <TrendingUp size={18} style={{ color: couleur }} /> Classement par épreuve
                 </h3>
                 <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>
-                    Choisissez une composition ou un devoir{periodeLibelle ? ` — ${periodeLibelle}` : ''}.
+                    Choisissez une évaluation ou une composition — toutes les périodes de l&apos;année.
                 </p>
             </div>
 
@@ -169,7 +178,7 @@ export default function ClassementEpreuves({ baseUrl, trimestreId, couleur, peri
                         >
                             <span style={{ display: 'block' }}>{e.libelle}</span>
                             <span style={{ display: 'block', fontSize: '11px', opacity: 0.75, fontWeight: 600 }}>
-                                {e.type}{e.date ? ` · ${new Date(e.date).toLocaleDateString('fr-FR')}` : ''}
+                                {e.type}{e.periode ? ` · ${e.periode}` : ''}{e.date ? ` · ${new Date(e.date).toLocaleDateString('fr-FR')}` : ''}
                             </span>
                         </button>
                     );

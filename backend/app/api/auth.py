@@ -208,6 +208,10 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
             # « pas les droits ». Résolu à la connexion pour ne pas interroger
             # la base à chaque appel.
             "role_base": _role_base(db, user),
+            # Le DG voit-il la comptabilité ? Réglé par le fondateur à la
+            # création. Porté par le token pour trancher sans requête ; « O »
+            # par défaut (comptes anciens = accès conservé).
+            "acces_comptabilite": (user.acces_comptabilite or "O"),
         }
         return {
             "token": create_access_token(token_data),
@@ -227,6 +231,8 @@ def unified_login(request: Request, data: LoginRequest, db: Session = Depends(ge
                 # un rôle créé par l'école : un « CENSEUR » n'existe pas dans
                 # sa table d'écrans, mais son espace, lui, existe.
                 "role_base": token_data["role_base"],
+                # Le menu masque la comptabilité au DG qui n'y a pas droit.
+                "acces_comptabilite": token_data["acces_comptabilite"],
             }
         }
 

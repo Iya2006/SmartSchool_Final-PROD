@@ -76,8 +76,8 @@ export default function IncidentsPage() {
 
     const estEditeur = user?.role === 'SUPER_ADMIN';
 
-    const charger = useCallback(async () => {
-        setChargement(true);
+    const charger = useCallback(async (silencieux = false) => {
+        if (!silencieux) setChargement(true);
         setErreur(null);
         try {
             const params = new URLSearchParams({ jours: String(jours) });
@@ -116,13 +116,20 @@ export default function IncidentsPage() {
     const marquerRegle = async (g: Groupe) => {
         const cle = `${g.route}|${g.type_erreur}`;
         setEnCours(cle);
+        // L'incident réglé quitte la liste TOUT DE SUITE : on le retire de
+        // l'affichage sans attendre l'aller-retour serveur, puis on rafraîchit
+        // en silence. Le fondateur ne veut pas voir la page se recharger en
+        // entier ni un incident déjà traité s'attarder à l'écran.
+        const avant = groupes;
+        setGroupes(prev => prev.filter(x => `${x.route}|${x.type_erreur}` !== cle));
+        setDetail(null);
         try {
             const params = new URLSearchParams({ route: g.route, type_erreur: g.type_erreur });
             const res = await api.put(`/api/incidents/marquer-resolu?${params}`);
             setMessage(res.data?.message || 'Marqué comme réglé.');
-            setDetail(null);
-            await charger();
+            await charger(true);
         } catch {
+            setGroupes(avant); // l'appel a échoué : on remet la ligne
             setErreur("L'opération a échoué.");
         } finally {
             setEnCours(null);
@@ -150,7 +157,7 @@ export default function IncidentsPage() {
                         Les erreurs rencontrées par les écoles, regroupées par bug. Corrigez avant qu&apos;on vous appelle.
                     </p>
                 </div>
-                <button onClick={charger} disabled={chargement} style={boutonDiscret}>
+                <button onClick={() => charger()} disabled={chargement} style={boutonDiscret}>
                     <RefreshCw size={15} style={chargement ? { animation: 'spin 1s linear infinite' } : undefined} /> Actualiser
                 </button>
             </div>

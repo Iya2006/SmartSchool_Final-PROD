@@ -470,8 +470,8 @@ def get_edt_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_parent_
 # BULLETIN D'UN ENFANT (pour le parent)
 # ================================================================
 @router.get("/{parent_id}/enfant/{eleve_id}/bulletin")
-def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
-    """Bulletin complet d'un enfant, avec lignes par matière."""
+def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None, annuel: bool = False, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
+    """Bulletin complet d'un enfant — de période, ou de fin d'année (`annuel=true`)."""
     link = db.query(EleveParent).filter(
         EleveParent.parent_id == parent_id,
         EleveParent.eleve_id == eleve_id
@@ -495,14 +495,22 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[in
         # appliquait les réglages d'affichage d'une autre école au bulletin.
         raise HTTPException(404, "Classe introuvable pour cette inscription")
 
-    if trimestre_id is None:
-        trimestre_id = get_active_trimestre_id(db, cl.etablissement_id)
-
-    bulletin = db.query(Bulletin).filter(
-        Bulletin.inscription_id == inscription.inscription_id,
-        Bulletin.trimestre_id == trimestre_id,
-        Bulletin.statut == "PUBLIE"
-    ).first()
+    if annuel:
+        # Le bulletin de fin d'année n'a pas de période : il agrège l'année.
+        bulletin = db.query(Bulletin).filter(
+            Bulletin.inscription_id == inscription.inscription_id,
+            Bulletin.type_bulletin == "ANNUEL",
+            Bulletin.statut == "PUBLIE",
+        ).first()
+        trimestre_id = None
+    else:
+        if trimestre_id is None:
+            trimestre_id = get_active_trimestre_id(db, cl.etablissement_id)
+        bulletin = db.query(Bulletin).filter(
+            Bulletin.inscription_id == inscription.inscription_id,
+            Bulletin.trimestre_id == trimestre_id,
+            Bulletin.statut == "PUBLIE"
+        ).first()
     if not bulletin:
         return None
 
@@ -548,6 +556,7 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[in
         "bulletin_id": bulletin.bulletin_id,
         "classe": cl.libelle if cl else "?",
         "trimestre_id": trimestre_id,
+        "annuel": annuel,
         "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
         "lettre_generale": lettre_pour_note(
             float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
@@ -620,30 +629,50 @@ def get_periodes_enfant(
     periodes = db.query(Trimestre).filter(
         Trimestre.annee_id == inscription.annee_id
     ).order_by(Trimestre.numero, Trimestre.date_debut).all()
-    return [
+    liste = [
         {
             "trimestre_id": p.trimestre_id,
             "numero": p.numero,
             "libelle": p.libelle,
             "statut": p.statut,
+            "annuel": False,
         }
         for p in periodes
     ]
+    # Le bulletin de fin d'année, s'il est publié : une entrée à part (il agrège
+    # toute l'année et ne porte pas de période). Sans elle, le parent voyait les
+    # bulletins de période mais jamais le résultat final.
+    annuel = db.query(Bulletin).filter(
+        Bulletin.inscription_id == inscription.inscription_id,
+        Bulletin.type_bulletin == "ANNUEL",
+        Bulletin.statut == "PUBLIE",
+    ).first()
+    if annuel:
+        liste.append({
+            "trimestre_id": None, "numero": 99,
+            "libelle": "Année (fin d'année)", "statut": "PUBLIE", "annuel": True,
+        })
+    return liste
 
 
 @router.get("/{parent_id}/enfant/{eleve_id}/epreuves")
 def get_epreuves_enfant(
-    parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None,
+    parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None, toutes: bool = False,
     _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
 ):
-    """Épreuves consultables pour cet enfant sur la période.
+    """Épreuves consultables pour cet enfant.
 
-    Le parent choisit ensuite ce qu'il veut regarder : le classement du seul
-    mois de janvier, celui d'une composition, ou celui de toute la période.
+    Le parent choisit ensuite ce qu'il veut regarder : le classement d'une
+    évaluation précise, d'une composition, ou de toute la période. `toutes=true`
+    rassemble les épreuves de toutes les périodes de l'année, pour retrouver
+    n'importe quelle évaluation sans changer d'onglet.
     """
     from app.services.notation import epreuves_consultables
 
     inscription = _inscription_enfant(db, parent_id, eleve_id)
+    if toutes:
+        return {"trimestre_id": None,
+                "epreuves": epreuves_consultables(db, inscription.classe_id, toute_annee=True)}
     trimestre_id = _periode(db, inscription, trimestre_id)
     return {
         "trimestre_id": trimestre_id,
@@ -740,12 +769,39 @@ def get_absences_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_pa
 # MESSAGERIE PARENT
 # ================================================================
 
+def _ecoles_du_parent(db: Session, parent_id: int) -> set:
+    """Les écoles auxquelles ce parent appartient, par ses enfants réels.
+
+    UN PARENT NE VOIT QUE LES MESSAGES DE SON ÉCOLE
+    -----------------------------------------------
+    Les diffusions `TOUS_PARENTS` et `TOUS` n'étaient filtrées par aucun
+    établissement : un parent de TrillionX recevait les annonces d'une autre
+    école. Trouvé en vrai — un parent de l'école 3 voyait « Information paie du
+    personnel » diffusée à tous les parents de l'école 1, un message qui ne le
+    concerne ni par son école ni par son contenu.
+
+    On borne donc à l'ensemble des écoles de ses enfants (un parent peut en
+    avoir dans deux écoles — Cas B) plutôt qu'à une seule choisie
+    arbitrairement.
+    """
+    lignes = (
+        db.query(Eleve.etablissement_id)
+        .join(EleveParent, EleveParent.eleve_id == Eleve.eleve_id)
+        .filter(EleveParent.parent_id == parent_id)
+        .distinct()
+        .all()
+    )
+    return {e for (e,) in lignes if e is not None}
+
+
 @router.get("/{parent_id}/messages")
 def get_messages_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
     """Messages reçus et envoyés par un parent."""
     parent = db.query(Parent).filter(Parent.parent_id == parent_id).first()
     if not parent:
         raise HTTPException(404, "Parent non trouvé")
+
+    ecoles = _ecoles_du_parent(db, parent_id)
 
     # Get children IDs for this parent
     liens = db.query(EleveParent).filter(EleveParent.parent_id == parent_id).all()
@@ -770,20 +826,32 @@ def get_messages_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db:
         )
 
     received = db.query(Message).filter(
-        or_(*filters)
+        Message.etablissement_id.in_(ecoles or [-1]),
+        or_(*filters),
     ).order_by(desc(Message.date_envoi)).limit(50).all()
 
-    # Messages sent by this parent
+    # Messages sent by this parent — bornés à son école pour la même raison.
     sent = db.query(Message).filter(
+        Message.etablissement_id.in_(ecoles or [-1]),
         Message.expediteur_type == "PARENT",
         Message.expediteur_id == parent_id
     ).order_by(desc(Message.date_envoi)).limit(20).all()
 
     def format_msg(m):
+        # Qui écrit : l'administration, ou un professeur nommé (une réponse à un
+        # message que le parent lui a adressé).
+        exp_nom = "Administration"
+        if m.expediteur_type == "ENSEIGNANT" and m.expediteur_id:
+            ens = db.query(Enseignant).filter(Enseignant.enseignant_id == m.expediteur_id).first()
+            if ens:
+                exp_nom = f"{ens.prenom} {ens.nom}"
+        elif m.expediteur_type == "PARENT":
+            exp_nom = "Vous"
         return {
             "message_id": m.message_id,
             "expediteur_type": m.expediteur_type,
             "expediteur_id": m.expediteur_id,
+            "expediteur_nom": exp_nom,
             "destinataire_type": m.destinataire_type,
             "destinataire_id": m.destinataire_id,
             "objet_type": m.objet_type,
@@ -805,6 +873,8 @@ def count_non_lus_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db
     """Nombre de messages non lus."""
     from sqlalchemy import or_
 
+    ecoles = _ecoles_du_parent(db, parent_id)
+
     liens = db.query(EleveParent).filter(EleveParent.parent_id == parent_id).all()
     children_classe_ids = []
     for lien in liens:
@@ -825,6 +895,7 @@ def count_non_lus_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db
         )
 
     count = db.query(Message).filter(
+        Message.etablissement_id.in_(ecoles or [-1]),
         or_(*filters),
         Message.statut == "ENVOYE"
     ).count()
@@ -834,8 +905,12 @@ def count_non_lus_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db
 
 @router.put("/{parent_id}/messages/{message_id}/lire")
 def marquer_lu_parent(parent_id: int, message_id: int, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
-    """Marquer un message comme lu."""
-    msg = db.query(Message).filter(Message.message_id == message_id).first()
+    """Marquer un message comme lu — s'il relève bien de l'école du parent."""
+    ecoles = _ecoles_du_parent(db, parent_id)
+    msg = db.query(Message).filter(
+        Message.message_id == message_id,
+        Message.etablissement_id.in_(ecoles or [-1]),
+    ).first()
     if not msg:
         raise HTTPException(404, "Message non trouvé")
     if msg.statut == "ENVOYE":
@@ -850,11 +925,65 @@ class ParentMessageSend(BaseModel):
     sujet: str
     contenu: str
     objet_type: str = "GENERAL"
+    # Optionnel : l'enseignant d'un de ses enfants. Absent = l'administration.
+    enseignant_id: Optional[int] = None
+
+
+@router.get("/{parent_id}/enseignants")
+def get_enseignants_du_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
+    """Les enseignants des enfants de ce parent — ceux à qui il peut écrire.
+
+    Un parent joignait jusqu'ici uniquement l'administration. Il peut désormais
+    écrire directement au professeur de son enfant ; on ne lui propose donc que
+    les enseignants qui enseignent réellement à l'un de ses enfants, jamais
+    toute la salle des profs.
+    """
+    liens = db.query(EleveParent.eleve_id).filter(EleveParent.parent_id == parent_id).all()
+    eleve_ids = [e for (e,) in liens]
+    if not eleve_ids:
+        return []
+    classe_ids = [
+        c for (c,) in db.query(Inscription.classe_id).filter(
+            Inscription.eleve_id.in_(eleve_ids), Inscription.statut == "ACTIVE"
+        ).distinct().all()
+    ]
+    if not classe_ids:
+        return []
+
+    from app.models.academique import Matiere, Classe as C
+    lignes = (
+        db.query(Enseignant.enseignant_id, Enseignant.nom, Enseignant.prenom,
+                 Matiere.libelle.label("matiere"), C.libelle.label("classe"))
+        .join(Affectation, Affectation.enseignant_id == Enseignant.enseignant_id)
+        .join(C, C.classe_id == Affectation.classe_id)
+        .outerjoin(Matiere, Matiere.matiere_id == Affectation.matiere_id)
+        .filter(Affectation.classe_id.in_(classe_ids), Affectation.statut == "ACTIVE")
+        .order_by(Enseignant.nom, Enseignant.prenom)
+        .all()
+    )
+    # Un même prof peut enseigner plusieurs matières : on le liste une fois,
+    # avec ses matières regroupées.
+    par_prof: dict = {}
+    for r in lignes:
+        g = par_prof.setdefault(r.enseignant_id, {
+            "enseignant_id": r.enseignant_id,
+            "nom": r.nom, "prenom": r.prenom,
+            "matieres": set(), "classes": set(),
+        })
+        if r.matiere:
+            g["matieres"].add(r.matiere)
+        if r.classe:
+            g["classes"].add(r.classe)
+    return [
+        {"enseignant_id": g["enseignant_id"], "nom": g["nom"], "prenom": g["prenom"],
+         "matieres": sorted(g["matieres"]), "classes": sorted(g["classes"])}
+        for g in par_prof.values()
+    ]
 
 
 @router.post("/{parent_id}/messages/envoyer")
 def envoyer_message_parent(parent_id: int, data: ParentMessageSend, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
-    """Parent envoie un message à l'administration."""
+    """Parent écrit à l'administration, ou directement à un professeur de son enfant."""
     parent = db.query(Parent).filter(Parent.parent_id == parent_id).first()
     if not parent:
         raise HTTPException(404, "Parent non trouvé")
@@ -870,12 +999,29 @@ def envoyer_message_parent(parent_id: int, data: ParentMessageSend, _auth: dict 
             ),
         )
 
+    destinataire_type, destinataire_id = "ADMIN", None
+    if data.enseignant_id:
+        # On ne laisse pas un parent écrire à n'importe quel professeur : il
+        # doit enseigner à l'un de ses enfants. Sinon 403, sans confirmer que
+        # le professeur existe ailleurs.
+        eleve_ids = [e for (e,) in db.query(EleveParent.eleve_id).filter(EleveParent.parent_id == parent_id).all()]
+        classe_ids = [c for (c,) in db.query(Inscription.classe_id).filter(
+            Inscription.eleve_id.in_(eleve_ids or [0]), Inscription.statut == "ACTIVE").distinct().all()]
+        autorise = db.query(Affectation.affectation_id).filter(
+            Affectation.enseignant_id == data.enseignant_id,
+            Affectation.classe_id.in_(classe_ids or [0]),
+            Affectation.statut == "ACTIVE",
+        ).first()
+        if not autorise:
+            raise HTTPException(403, "Ce professeur n'enseigne pas à votre enfant.")
+        destinataire_type, destinataire_id = "ENSEIGNANT", data.enseignant_id
+
     msg = Message(
         etablissement_id=etablissement_id,
         expediteur_type="PARENT",
         expediteur_id=parent_id,
-        destinataire_type="ADMIN",
-        destinataire_id=None,
+        destinataire_type=destinataire_type,
+        destinataire_id=destinataire_id,
         objet_type=data.objet_type,
         sujet=data.sujet,
         contenu=data.contenu,

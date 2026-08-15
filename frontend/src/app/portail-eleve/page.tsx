@@ -225,7 +225,7 @@ export default function PortailEleve() {
                                         {eleveId && (
                                             <ClassementEpreuves
                                                 baseUrl={`/api/portail-eleve/${eleveId}`}
-                                                trimestreId={bulletinTrimestre}
+                                                trimestreId={typeof bulletinTrimestre === 'number' ? bulletinTrimestre : null}
                                                 couleur={couleurPortail}
                                             />
                                         )}

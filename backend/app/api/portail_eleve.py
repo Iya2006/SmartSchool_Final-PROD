@@ -471,26 +471,48 @@ def get_periodes_eleve(
     periodes = db.query(Trimestre).filter(
         Trimestre.annee_id == inscription.annee_id
     ).order_by(Trimestre.numero, Trimestre.date_debut).all()
-    return [
+    liste = [
         {
             "trimestre_id": p.trimestre_id,
             "numero": p.numero,
             "libelle": p.libelle,
             "statut": p.statut,
+            "annuel": False,
         }
         for p in periodes
     ]
+    # Le bulletin de fin d'année, s'il a été publié : une entrée à part, car il
+    # ne porte pas de période (il agrège toute l'année). Sans elle, la famille
+    # voyait ses bulletins de période mais jamais le résultat final.
+    annuel = db.query(Bulletin).filter(
+        Bulletin.inscription_id == inscription.inscription_id,
+        Bulletin.type_bulletin == "ANNUEL",
+        Bulletin.statut == "PUBLIE",
+    ).first()
+    if annuel:
+        liste.append({
+            "trimestre_id": None, "numero": 99,
+            "libelle": "Année (fin d'année)", "statut": "PUBLIE", "annuel": True,
+        })
+    return liste
 
 
 @router.get("/{eleve_id}/epreuves")
 def get_epreuves_eleve(
-    eleve_id: int, trimestre_id: Optional[int] = None,
+    eleve_id: int, trimestre_id: Optional[int] = None, toutes: bool = False,
     _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db),
 ):
-    """Épreuves consultables sur la période (uniquement celles centralisées)."""
+    """Épreuves consultables (uniquement celles centralisées).
+
+    `toutes=true` : toutes les périodes de l'année, pour retrouver n'importe
+    quelle évaluation ou composition sans changer d'onglet.
+    """
     from app.services.notation import epreuves_consultables
 
     inscription = _inscription_active(db, eleve_id)
+    if toutes:
+        return {"trimestre_id": None,
+                "epreuves": epreuves_consultables(db, inscription.classe_id, toute_annee=True)}
     trimestre_id = _periode(db, inscription, trimestre_id)
     return {
         "trimestre_id": trimestre_id,
@@ -542,24 +564,39 @@ def get_classement_eleve(
 # BULLETIN
 # ================================================================
 @router.get("/{eleve_id}/bulletin")
-def get_bulletin_eleve(eleve_id: int, trimestre_id: Optional[int] = None, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
-    """Bulletin publié de l'élève."""
+def get_bulletin_eleve(eleve_id: int, trimestre_id: Optional[int] = None, annuel: bool = False, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
+    """Bulletin publié de l'élève — de période, ou de fin d'année (`annuel=true`)."""
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
     ).first()
     if not inscription:
         return None
-    trimestre_id = _periode(db, inscription, trimestre_id)
 
-    bulletin = db.query(Bulletin).filter(
-        Bulletin.inscription_id == inscription.inscription_id,
-        Bulletin.trimestre_id == trimestre_id,
-        Bulletin.statut == "PUBLIE"
-    ).first()
+    if annuel:
+        # Le bulletin de fin d'année n'a pas de période : il agrège l'année.
+        bulletin = db.query(Bulletin).filter(
+            Bulletin.inscription_id == inscription.inscription_id,
+            Bulletin.type_bulletin == "ANNUEL",
+            Bulletin.statut == "PUBLIE",
+        ).first()
+        trimestre_id = None
+    else:
+        trimestre_id = _periode(db, inscription, trimestre_id)
+        bulletin = db.query(Bulletin).filter(
+            Bulletin.inscription_id == inscription.inscription_id,
+            Bulletin.trimestre_id == trimestre_id,
+            Bulletin.statut == "PUBLIE"
+        ).first()
     if not bulletin:
         return None
 
     from app.api.evaluations import get_bulletin_display_flags
+    # Ces quatre fonctions n'étaient importées que dans l'endpoint du
+    # classement : ici, le bulletin les appelait sans qu'elles soient en
+    # portée, et toute ouverture d'un bulletin d'élève tombait en erreur.
+    from app.services.notation import (
+        get_bareme_defaut_cycle, get_cycle_key, get_lettres_config, lettre_pour_note,
+    )
     cl_for_flags = db.query(Classe).filter(Classe.classe_id == inscription.classe_id).first()
     if not cl_for_flags:
         # Ne JAMAIS retomber sur l'établissement 1 (ancien `else 1`) : cela
@@ -593,12 +630,15 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: Optional[int] = None, _auth:
         })
 
     cl = cl_for_flags
-    tri = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+    tri = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first() if trimestre_id else None
+    libelle_periode = ("Bulletin annuel — fin d'année" if annuel
+                       else (tri.libelle if tri else f"Trimestre {trimestre_id}"))
 
     return {
         "bulletin_id": bulletin.bulletin_id,
         "classe": cl.libelle if cl else "?",
-        "trimestre": tri.libelle if tri else f"Trimestre {trimestre_id}",
+        "trimestre": libelle_periode,
+        "annuel": annuel,
         "trimestre_id": trimestre_id,
         "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
         "lettre_generale": lettre_pour_note(

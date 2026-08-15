@@ -204,3 +204,41 @@ class TestPortailParent:
         with pytest.raises(HTTPException) as exc:
             await _parent_auth(b.parent.parent_id, jeton, db)
         assert exc.value.status_code == 403
+
+    def test_un_parent_ne_recoit_pas_la_diffusion_d_une_autre_ecole(
+            self, db: Session, deux_ecoles):
+        """LE test : une diffusion « à tous les parents » de l'école B ne doit
+        jamais atterrir dans la boîte d'un parent de l'école A.
+
+        Constaté en vrai : un parent de TrillionX voyait « Information paie du
+        personnel » diffusée à tous les parents d'une autre école — un message
+        qui ne le concerne ni par son école ni par son contenu. La requête des
+        messages n'avait aucun filtre d'établissement.
+        """
+        from app.api.portail_parent import get_messages_parent
+        from app.models.academique import Message
+
+        a, b = deux_ecoles
+        # Une annonce « tous les parents » dans CHAQUE école.
+        db.add(Message(
+            etablissement_id=a.etab.etablissement_id, expediteur_type="ADMIN",
+            destinataire_type="TOUS_PARENTS", objet_type="GENERAL",
+            sujet="Réunion de rentrée — École A", contenu="…", statut="ENVOYE",
+        ))
+        db.add(Message(
+            etablissement_id=b.etab.etablissement_id, expediteur_type="ADMIN",
+            destinataire_type="TOUS_PARENTS", objet_type="PAIEMENT",
+            sujet="Information paie du personnel — École B", contenu="…", statut="ENVOYE",
+        ))
+        db.commit()
+
+        jeton = {"role": "", "type": "parent", "sub": str(a.parent.parent_id)}
+        recus = get_messages_parent(a.parent.parent_id, jeton, db)["received"]
+        sujets = [m["sujet"] for m in recus]
+
+        assert any("École A" in s for s in sujets), "sa propre annonce a disparu"
+        assert not any("École B" in s for s in sujets), "fuite : il voit l'annonce d'une autre école"
+
+        db.query(Message).filter(Message.etablissement_id.in_(
+            [a.etab.etablissement_id, b.etab.etablissement_id])).delete(synchronize_session=False)
+        db.commit()

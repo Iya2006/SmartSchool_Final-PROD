@@ -83,6 +83,8 @@ export default function NouveauPersonnel() {
     const [form, setForm] = useState({
         role: '',
         roles_secondaires: [] as string[],
+        // Le directeur général voit-il la comptabilité ? Choix du fondateur.
+        acces_comptabilite: true,
         nom: '',
         prenom: '',
         sexe: 'M',
@@ -215,6 +217,7 @@ export default function NouveauPersonnel() {
         setForm({
             role: '',
             roles_secondaires: [],
+            acces_comptabilite: true,
             nom: '',
             prenom: '',
             sexe: 'M',
@@ -273,6 +276,8 @@ export default function NouveauPersonnel() {
                 lieu_naissance: form.lieu_naissance || null,
                 adresse: form.adresse || null,
                 numero_cni: form.numero_cni || null,
+                // Le choix « voit la comptabilité » ne concerne que le DG.
+                acces_comptabilite: form.role === 'DG' ? (form.acces_comptabilite ? 'O' : 'N') : 'O',
                 nom_utilisateur: form.accesSysteme && form.nom_utilisateur ? form.nom_utilisateur : null,
                 mot_de_passe: form.accesSysteme && form.mot_de_passe ? form.mot_de_passe : null,
             };
@@ -706,6 +711,25 @@ export default function NouveauPersonnel() {
                                                 <p style={{ margin: 0, fontSize: '12px', color: '#64748b', lineHeight: 1.6 }}>Le membre pourra se connecter et rejoindre son interface selon le rôle.</p>
                                             </button>
                                         </div>
+
+                                        {/* Le directeur général voit-il la comptabilité ?
+                                            Un choix propre au DG : le fondateur tranche ici. */}
+                                        {form.role === 'DG' && (
+                                            <button type="button" onClick={() => ch('acces_comptabilite', !form.acces_comptabilite)}
+                                                style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '16px 18px', borderRadius: '18px', border: '1.5px solid', borderColor: form.acces_comptabilite ? '#16a34a' : '#e2e8f0', background: form.acces_comptabilite ? '#f0fdf4' : 'white', cursor: 'pointer', textAlign: 'left', width: '100%' }}>
+                                                <div style={{ width: 22, height: 22, borderRadius: '7px', flexShrink: 0, display: 'grid', placeItems: 'center', background: form.acces_comptabilite ? '#16a34a' : 'white', border: `1.5px solid ${form.acces_comptabilite ? '#16a34a' : '#cbd5e1'}` }}>
+                                                    {form.acces_comptabilite && <Check size={14} color="white" />}
+                                                </div>
+                                                <div>
+                                                    <p style={{ margin: 0, fontWeight: 800, fontSize: '14px', color: '#0f172a' }}>Accès à la comptabilité</p>
+                                                    <p style={{ margin: '2px 0 0', fontSize: '12.5px', color: '#64748b', lineHeight: 1.5 }}>
+                                                        {form.acces_comptabilite
+                                                            ? 'Ce directeur général verra la comptabilité (paiements, salaires, dépenses).'
+                                                            : 'Ce directeur général ne verra pas la comptabilité.'}
+                                                    </p>
+                                                </div>
+                                            </button>
+                                        )}
 
                                         <div style={{ padding: '16px 18px', background: '#eff6ff', borderRadius: '18px', border: '1px solid #bfdbfe', display: 'flex', gap: '10px' }}>
                                             <Info size={16} style={{ color: '#1d4ed8', flexShrink: 0, marginTop: '2px' }} />

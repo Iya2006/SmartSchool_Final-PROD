@@ -178,7 +178,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # ============================================================================
 # ENREGISTREMENT DE TOUS LES ROUTERS
 # ============================================================================
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from app.core.auth import get_current_user, require_module, require_roles, ADMIN_TIER_ROLES
 
 # Rôles autorisés sur les modules Finance / Comptabilité.
@@ -196,6 +196,26 @@ from app.core.auth import get_current_user, require_module, require_roles, ADMIN
 # encaissements, les salaires et le grand livre à qui savait appeler la route.
 # Un blocage qui n'existe que dans le navigateur n'est pas un blocage.
 FINANCE_ROLES = ("SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "COMPTABLE")
+
+
+def exige_acces_finance(current_user: dict = Depends(get_current_user)) -> dict:
+    """Accès à la finance — avec une exception pour le directeur général.
+
+    ADMIN, FONDATEUR, COMPTABLE et SUPER_ADMIN y ont droit sans condition. Le
+    DG, lui, n'y accède que si le fondateur l'a autorisé à sa création
+    (`acces_comptabilite == 'O'`, la valeur par défaut). Un DG à qui le
+    fondateur a fermé la comptabilité se voit répondre 403 côté serveur — pas
+    seulement un menu caché, un vrai blocage.
+    """
+    from app.core.auth import roles_du_compte
+    roles = roles_du_compte(current_user)
+    if not (roles & set(FINANCE_ROLES)):
+        raise HTTPException(status_code=403, detail="Acces refuse : privileges insuffisants pour cette ressource")
+    # Le seul rôle finance soumis au choix du fondateur est le DG.
+    if "DG" in roles and not (roles & {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "COMPTABLE"}):
+        if (current_user.get("acces_comptabilite") or "O") != "O":
+            raise HTTPException(status_code=403, detail="Ce compte n'a pas acces a la comptabilite.")
+    return current_user
 
 # RH / Personnel : direction + rôles métiers internes autorisés à consulter leur espace.
 PERSONNEL_ROLES = (
@@ -298,7 +318,7 @@ app.include_router(reinscription_router, dependencies=[Depends(get_current_user)
 app.include_router(evaluations_router, dependencies=[Depends(get_current_user), Depends(_MOD_NOTES)])
 app.include_router(notes_router, dependencies=[Depends(get_current_user), Depends(_MOD_NOTES)])
 # ── Routes COMPTABILITÉ / FINANCE / RH / PRÉSENCES AGENTS (rôles restreints) ──
-app.include_router(finance_router, dependencies=[Depends(require_roles(*FINANCE_ROLES)), Depends(_MOD_FINANCE)])
+app.include_router(finance_router, dependencies=[Depends(exige_acces_finance), Depends(_MOD_FINANCE)])
 app.include_router(vie_scolaire_router, dependencies=[Depends(get_current_user), Depends(_MOD_VIE_SCOLAIRE)])
 app.include_router(seances_admin_router, dependencies=[Depends(get_current_user), Depends(_MOD_VIE_SCOLAIRE)])
 app.include_router(parametrage_router, dependencies=[Depends(get_current_user), Depends(_MOD_PARAMETRES)])
@@ -331,7 +351,7 @@ app.include_router(bibliotheque_router)
 app.include_router(informatique_router)
 # Comptabilité générale (SYSCOHADA) : mêmes rôles que Finance, plus d'auth
 # maison séparée — l'accès passe uniquement par le JWT principal.
-app.include_router(comptabilite_router, dependencies=[Depends(require_roles(*FINANCE_ROLES)), Depends(_MOD_COMPTABILITE)])
+app.include_router(comptabilite_router, dependencies=[Depends(exige_acces_finance), Depends(_MOD_COMPTABILITE)])
 # Suivi des tâches asynchrones (Étape F) — un id de tâche valide suffit à
 # consulter son statut, mais on exige quand même une session valide (pas
 # de fuite d'information à un client non authentifié).
