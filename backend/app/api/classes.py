@@ -322,10 +322,15 @@ def _verifier_niveau_et_annee(db: Session, niveau_id: int, annee_id: int, etabli
         .first()
     )
     if not niveau:
+        # Ne renvoie PAS vers un écran de création de cycles : il n'en existe
+        # aucun. Le référentiel scolaire est semé à l'inscription de l'école
+        # (`amorcer_referentiel_scolaire`) ; s'il manque, c'est une anomalie
+        # d'installation, pas quelque chose que l'utilisateur peut corriger.
         raise HTTPException(
             status_code=404,
-            detail="Niveau introuvable pour cet établissement. Créez d'abord vos cycles "
-                   "et niveaux dans Paramètres.",
+            detail="Ce niveau n'appartient pas à votre établissement. Si la liste des "
+                   "niveaux est vide, signalez-le à votre administrateur : le "
+                   "référentiel scolaire de l'école n'a pas été installé.",
         )
 
     from app.models.academique import AnneeScolaire

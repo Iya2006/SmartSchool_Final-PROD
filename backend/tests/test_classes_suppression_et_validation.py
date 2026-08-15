@@ -95,7 +95,11 @@ class TestCreationValidee:
 
         resp = client.post("/api/classes", json=_corps(a, 999999, "X"), headers=headers)
         assert resp.status_code == 404, resp.text
-        assert "Niveau" in resp.json()["detail"]
+        detail = resp.json()["detail"].lower()
+        assert "niveau" in detail
+        # Le message ne doit PAS renvoyer vers un écran de création de cycles :
+        # aucun n'existe. Le référentiel est semé à l'inscription de l'école.
+        assert "paramètres" not in detail and "parametres" not in detail
 
     def test_niveau_dune_autre_ecole_refuse(self, client: TestClient, db: Session):
         """Le point de sécurité : sans ce contrôle, la classe était rattachée
