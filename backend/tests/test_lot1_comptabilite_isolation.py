@@ -131,16 +131,36 @@ class TestPinEtExerciceIsolesParEtablissement:
         headers_a = _login_headers(client, admin_a.nom_utilisateur)
         headers_b = _login_headers(client, admin_b.nom_utilisateur)
 
-        # École A change son PIN
-        resp = client.put("/api/comptabilite/pin", json={"ancien_pin": "123000", "nouveau_pin": "999999"}, headers=headers_a)
-        assert resp.status_code == 200, resp.text
+        # Aucune école ne reçoit plus de PIN d'usine : un même code semé
+        # partout ne protégeait rien, puisqu'il était connu de quiconque avait
+        # lu la source. Une école neuve n'a donc PAS de PIN…
+        assert client.get("/api/comptabilite/pin/status", headers=headers_a).json()["configured"] is False
+        assert client.get("/api/comptabilite/pin/status", headers=headers_b).json()["configured"] is False
 
-        # École B doit toujours avoir le PIN par défaut, inchangé
-        resp_b_wrong = client.put("/api/comptabilite/pin", json={"ancien_pin": "999999", "nouveau_pin": "111111"}, headers=headers_b)
+        # …et le définit sans avoir à saisir un « PIN actuel » inexistant.
+        # Auparavant impossible : la route répondait « PIN actuel incorrect »
+        # quelle que soit la valeur envoyée.
+        resp = client.put("/api/comptabilite/pin", json={"nouveau_pin": "999999"}, headers=headers_a)
+        assert resp.status_code == 200, resp.text
+        assert client.get("/api/comptabilite/pin/status", headers=headers_a).json()["configured"] is True
+
+        # Le PIN de A ne s'applique pas à B : B n'en a toujours aucun.
+        assert client.get("/api/comptabilite/pin/status", headers=headers_b).json()["configured"] is False
+        resp_b_ok = client.put("/api/comptabilite/pin", json={"nouveau_pin": "111111"}, headers=headers_b)
+        assert resp_b_ok.status_code == 200
+
+        # Une fois configuré, l'ancien PIN redevient exigé — et celui de
+        # l'autre école ne convient pas.
+        resp_b_wrong = client.put(
+            "/api/comptabilite/pin", json={"ancien_pin": "999999", "nouveau_pin": "222222"}, headers=headers_b
+        )
         assert resp_b_wrong.status_code == 400, "Le PIN de A ne doit pas s'appliquer à B"
 
-        resp_b_ok = client.put("/api/comptabilite/pin", json={"ancien_pin": "123000", "nouveau_pin": "111111"}, headers=headers_b)
-        assert resp_b_ok.status_code == 200
+        # Et le PIN d'usine historique est explicitement refusé.
+        resp_usine = client.put(
+            "/api/comptabilite/pin", json={"ancien_pin": "111111", "nouveau_pin": "123000"}, headers=headers_b
+        )
+        assert resp_usine.status_code == 400
 
 
 class TestBalanceEtGrandLivreCrossEcole:

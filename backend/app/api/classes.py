@@ -302,11 +302,49 @@ def get_classe_eleves(classe_id: int, db: Session = Depends(get_db), etablisseme
     ]
 
 
+def _verifier_niveau_et_annee(db: Session, niveau_id: int, annee_id: int, etablissement_id: int) -> None:
+    """Le niveau et l'année désignés doivent appartenir à CETTE école.
+
+    Deux problèmes réglés d'un coup :
+      * un `niveau_id` inexistant provoquait une violation de clé étrangère non
+        capturée, donc un **500** illisible — c'est ce que voyaient les écoles
+        neuves, dont aucun cycle n'est encore créé (« Une erreur s'est produite
+        lors de la création ») ;
+      * un `niveau_id` appartenant à une AUTRE école était accepté tel quel :
+        la classe se retrouvait rattachée au niveau d'un autre établissement.
+        `Niveau` est OWNERSHIP via `Cycle`, il faut donc joindre pour le
+        vérifier.
+    """
+    niveau = (
+        db.query(Niveau.niveau_id)
+        .join(Cycle, Cycle.cycle_id == Niveau.cycle_id)
+        .filter(Niveau.niveau_id == niveau_id, Cycle.etablissement_id == etablissement_id)
+        .first()
+    )
+    if not niveau:
+        raise HTTPException(
+            status_code=404,
+            detail="Niveau introuvable pour cet établissement. Créez d'abord vos cycles "
+                   "et niveaux dans Paramètres.",
+        )
+
+    from app.models.academique import AnneeScolaire
+
+    annee = db.query(AnneeScolaire.annee_id).filter(
+        AnneeScolaire.annee_id == annee_id,
+        AnneeScolaire.etablissement_id == etablissement_id,
+    ).first()
+    if not annee:
+        raise HTTPException(status_code=404, detail="Année scolaire introuvable pour cet établissement.")
+
+
 @router.post("", response_model=ClasseOut, status_code=201)
 def create_classe(data: ClasseCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     # `data.etablissement_id` (obligatoire dans ClasseBase) est ignoré et
     # remplacé par l'établissement authentifié — avant le Lot 7, une classe
     # pouvait être créée dans l'école de son choix.
+    _verifier_niveau_et_annee(db, data.niveau_id, data.annee_id, etablissement_id)
+
     existing = db.query(Classe).filter(
         Classe.etablissement_id == etablissement_id,
         Classe.annee_id == data.annee_id,
@@ -335,6 +373,9 @@ def update_classe(classe_id: int, data: ClasseCreate, db: Session = Depends(get_
     ).first()
     if not cl:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
+    # Même contrôle qu'à la création : sans lui, une modification pouvait
+    # rattacher la classe au niveau ou à l'année d'une autre école.
+    _verifier_niveau_et_annee(db, data.niveau_id, data.annee_id, etablissement_id)
     # `etablissement_id` retiré du payload : une classe ne peut pas être
     # déplacée vers une autre école via cette route.
     update_data = data.model_dump(exclude_unset=True)
@@ -344,6 +385,52 @@ def update_classe(classe_id: int, data: ClasseCreate, db: Session = Depends(get_
     db.commit()
     db.refresh(cl)
     return cl
+
+
+@router.delete("/{classe_id}")
+def delete_classe(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Supprime une classe créée par erreur.
+
+    Cette route n'existait pas : une classe saisie par erreur restait
+    définitivement dans l'établissement (l'API répondait 405). C'est le cas
+    d'usage visé — une coquille corrigée juste après la création.
+
+    Une classe qui a VÉCU n'est jamais supprimée : élèves inscrits, évaluations
+    passées, séances d'emploi du temps. Supprimer emporterait des notes et des
+    présences, ou laisserait des lignes orphelines. On refuse alors, en disant
+    précisément ce qui bloque, plutôt que de laisser PostgreSQL répondre par
+    une violation de clé étrangère illisible.
+    """
+    from app.models.academique import Evaluation
+
+    cl = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not cl:
+        raise HTTPException(status_code=404, detail="Classe non trouvée")
+
+    nb_inscriptions = db.query(Inscription).filter(Inscription.classe_id == classe_id).count()
+    nb_evaluations = db.query(Evaluation).filter(Evaluation.classe_id == classe_id).count()
+
+    blocages = []
+    if nb_inscriptions:
+        blocages.append(f"{nb_inscriptions} inscription(s) d'élève")
+    if nb_evaluations:
+        blocages.append(f"{nb_evaluations} évaluation(s)")
+    if blocages:
+        raise HTTPException(
+            status_code=409,
+            detail=("Cette classe ne peut pas être supprimée : elle contient "
+                    + " et ".join(blocages)
+                    + ". Archivez-la plutôt (statut INACTIVE) pour conserver son historique."),
+        )
+
+    # Les matières rattachées ne sont qu'une association, sans historique :
+    # elles se retirent avec la classe.
+    db.query(ClasseMatiere).filter(ClasseMatiere.classe_id == classe_id).delete()
+    db.delete(cl)
+    db.commit()
+    return {"message": f"Classe « {cl.libelle} » supprimée."}
 
 
 @router.get("/{classe_id}/profil")

@@ -1117,6 +1117,25 @@ function SurveillantPortal() {
     const [presenceStats, setPresenceStats] = useState<PresenceStats>({ total: 0, presents: 0, absents: 0, retards: 0, taux_presence: 0 });
     const [incidentStats, setIncidentStats] = useState<IncidentStats>({ total_incidents: 0, par_gravite: [], top_types: [] });
     const [incidents, setIncidents] = useState<IncidentItem[]>([]);
+    const [incidentEnCours, setIncidentEnCours] = useState<number | null>(null);
+
+    /** Marque un incident comme traité, puis le retire de la liste.
+     *  L'API existait (`PUT /incidents/{id}/traiter`) mais AUCUN écran ne
+     *  l'appelait : les incidents restaient donc ouverts indéfiniment. */
+    const reglerIncident = async (incidentId: number) => {
+        setIncidentEnCours(incidentId);
+        try {
+            await api.put(
+                `/api/vie-scolaire/incidents/${incidentId}/traiter`
+                + `?decision=${encodeURIComponent('Réglé')}&traite_par=${encodeURIComponent('Surveillance')}`,
+            );
+            // Retrait immédiat : attendre un rechargement donnerait l'impression
+            // que l'incident traité s'attarde.
+            setIncidents((liste) => liste.filter((i) => i.incident_id !== incidentId));
+        } catch {
+            setIncidentEnCours(null);
+        }
+    };
     const [eleves, setEleves] = useState<EleveOption[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -1366,7 +1385,10 @@ function SurveillantPortal() {
             const [presenceRes, incidentStatsRes, incidentsRes, elevesRes, classesRes, profsRes] = await Promise.all([
                 api.get<PresenceStats>(`/api/vie-scolaire/presences/stats?etablissement_id=${etablissementId}`),
                 api.get<IncidentStats>(`/api/vie-scolaire/incidents/stats?etablissement_id=${etablissementId}`),
-                api.get<IncidentItem[]>(`/api/vie-scolaire/incidents?etablissement_id=${etablissementId}&limit=30`),
+                // Seuls les incidents OUVERTS : une fois reglé, l'incident quitte la
+                // liste. Elle sert à savoir ce qu'il reste à traiter, pas à
+                // conserver un historique — celui-ci reste dans les statistiques.
+                api.get<IncidentItem[]>(`/api/vie-scolaire/incidents?etablissement_id=${etablissementId}&statut=OUVERT&limit=30`),
                 api.get<EleveOption[]>(`/api/eleves?etablissement_id=${etablissementId}&annee_id=${anneeId}&statut=ACTIF&limit=120`),
                 api.get<ClasseAppel[]>(`/api/classes?annee_id=${anneeId}&limit=200`),
                 api.get<ProfOption[]>(`/api/enseignants?limit=200`),
@@ -2084,8 +2106,20 @@ function SurveillantPortal() {
                                                 <h3 style={{ margin: '10px 0 0', color: '#0f172a', fontSize: '16px', fontWeight: 950 }}>{eleve ? `${eleve.prenom} ${eleve.nom}` : `Élève #${incident.eleve_id}`}</h3>
                                                 <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px', lineHeight: 1.65 }}>{incident.description}</p>
                                             </div>
-                                            <div style={{ textAlign: 'right', color: '#94a3b8', fontSize: '12px', fontWeight: 800 }}>
-                                                {incident.date_incident || 'Aujourd’hui'}
+                                            <div style={{ textAlign: 'right', display: 'grid', gap: '10px', justifyItems: 'end' }}>
+                                                <span style={{ color: '#94a3b8', fontSize: '12px', fontWeight: 800 }}>
+                                                    {incident.date_incident || 'Aujourd’hui'}
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => reglerIncident(incident.incident_id)}
+                                                    disabled={incidentEnCours === incident.incident_id}
+                                                    style={{ padding: '7px 12px', borderRadius: 999, border: '1px solid #bbf7d0',
+                                                             background: '#f0fdf4', color: '#166534', fontSize: '12px',
+                                                             fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                                >
+                                                    {incidentEnCours === incident.incident_id ? 'Enregistrement…' : 'Marquer réglé'}
+                                                </button>
                                             </div>
                                         </article>
                                     );

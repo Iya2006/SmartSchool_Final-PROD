@@ -361,6 +361,16 @@ class EleveParent(Base):
 
 
 class Enseignant(Base):
+    """Un enseignant peut exercer dans PLUSIEURS établissements : il a alors une
+    fiche par école, avec le même téléphone et le même e-mail. Leur unicité est
+    donc PAR ÉTABLISSEMENT — voir `app/core/identifiants.py` (`par_ecole=True`)
+    et la migration `2026_08_multi_01_parents_enseignants_multi_ecoles.py`.
+
+    Le `matricule`, lui, reste unique GLOBALEMENT : il est généré au format
+    `ENS-{etablissement_id}-{n}` (`app/core/matricules.py`), donc déjà distinct
+    d'une école à l'autre par construction. Le contraindre par école
+    n'ajouterait rien.
+    """
     __tablename__ = "ss_enseignants"
     enseignant_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
