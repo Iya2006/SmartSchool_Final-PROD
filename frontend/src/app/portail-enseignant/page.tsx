@@ -1700,7 +1700,7 @@ export default function PortailEnseignant() {
                                                         <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><ClipboardList size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Type d&apos;évaluation</label>
                                                         <select value={selectedTypeEval || ''} onChange={e => setSelectedTypeEval(Number(e.target.value))}
                                                             style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
-                                                            {typesEval.map(t => <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle} ({t.poids_pourcentage}%)</option>)}
+                                                            {typesEval.map(t => <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle} (coef. {t.coefficient ?? 1})</option>)}
                                                             {typesEval.length === 0 && <option value="">Aucun type</option>}
                                                         </select>
                                                     </div>
@@ -1718,13 +1718,11 @@ export default function PortailEnseignant() {
                                                 </div>
                                                 {(() => {
                                                     const typeActuel = typesEval.find(t => t.type_eval_id === selectedTypeEval);
-                                                    const estComposition = typeActuel?.code === 'COMPO';
+                                                    const coefType = typeActuel?.coefficient ?? 1;
                                                     return (
-                                                        <p style={{ margin: 0, fontSize: '11.5px', color: estComposition ? '#b45309' : '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                             <ClipboardList size={13} />
-                                                            {estComposition
-                                                                ? `Composition : le coefficient de la matière (${selectedClass.coefficient}) s'applique automatiquement à cette note.`
-                                                                : "Écrite / orale / devoirs : comptent pour un poids de 1 (le coefficient ne s'applique qu'à la composition). Si vous saisissez plusieurs évaluations du même type, seule la meilleure note sera retenue dans la moyenne."}
+                                                            {`Ce type compte pour un coefficient de ${coefType} dans la matière. Si vous saisissez plusieurs évaluations de ce type, c'est leur moyenne qui est retenue (pas la meilleure note). La moyenne de la matière est ensuite pondérée par son propre coefficient (${selectedClass.coefficient}).`}
                                                         </p>
                                                     );
                                                 })()}

@@ -212,7 +212,8 @@ export default function EleveBulletin({
 
                     {/* Note explicative du calcul — transparence pédagogique */}
                     <p style={{ margin: 0, padding: '10px 24px 16px', fontSize: '11px', color: '#94a3b8', fontStyle: 'italic', lineHeight: 1.5 }}>
-                        Moyenne de chaque matière = (meilleure note écrite + meilleure note orale + note de composition × coefficient) ÷ (1 + 1 + coefficient).
+                        Moyenne de chaque matière = somme (moyenne du type × coefficient du type) ÷ somme des coefficients de type.
+                        La moyenne d&apos;un type est la moyenne de ses notes.
                         Moyenne générale = somme (moyenne matière × coefficient matière) ÷ somme des coefficients matières.
                     </p>
                 </div>
