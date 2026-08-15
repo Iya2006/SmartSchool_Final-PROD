@@ -257,3 +257,61 @@ class TestLaDirectionGardeLaMain:
                                                  "mot_de_passe": "motdepasse123"})
         assert r.status_code == 200
         assert r.json()["user"]["role"] == "COMPTABLE"
+
+
+class TestSeulLeFondateurGeleLeComptable:
+    """Désactiver/réactiver le comptable est un geste de clôture du fondateur.
+
+    Le directeur général et le directeur de niveau font tourner l'école au
+    quotidien, mais couper l'accès de la comptabilité appartient au propriétaire
+    seul — la séparation des pouvoirs vaut aussi entre la direction et lui.
+    """
+
+    def test_le_dg_ne_peut_pas_desactiver_le_comptable(self, client: TestClient, db: Session):
+        etab = _ecole(db)
+        _compte(db, etab.etablissement_id, "ADMIN")
+        dg = _compte(db, etab.etablissement_id, "DG")
+        comptable = _compte(db, etab.etablissement_id, "COMPTABLE", 900000)
+
+        r = client.patch(f"/api/personnel/{comptable.utilisateur_id}/statut?statut=INACTIF",
+                         headers=_headers(client, dg.nom_utilisateur))
+        assert r.status_code == 403, r.text
+        db.refresh(comptable)
+        assert comptable.statut == "ACTIF", "le comptable ne devait pas être désactivé par le DG"
+
+    def test_le_directeur_de_niveau_non_plus(self, client: TestClient, db: Session):
+        etab = _ecole(db)
+        _compte(db, etab.etablissement_id, "ADMIN")
+        dn = _compte(db, etab.etablissement_id, "DIRECTEUR_NIVEAU")
+        comptable = _compte(db, etab.etablissement_id, "COMPTABLE", 900000)
+
+        r = client.patch(f"/api/personnel/{comptable.utilisateur_id}/statut?statut=INACTIF",
+                         headers=_headers(client, dn.nom_utilisateur))
+        assert r.status_code == 403, r.text
+
+    def test_le_fondateur_desactive_puis_reactive(self, client: TestClient, db: Session):
+        etab = _ecole(db)
+        admin = _compte(db, etab.etablissement_id, "ADMIN")  # le fondateur = ADMIN de l'école
+        comptable = _compte(db, etab.etablissement_id, "COMPTABLE", 900000)
+
+        r = client.patch(f"/api/personnel/{comptable.utilisateur_id}/statut?statut=INACTIF",
+                         headers=_headers(client, admin.nom_utilisateur))
+        assert r.status_code == 200, r.text
+        db.refresh(comptable); assert comptable.statut == "INACTIF"
+
+        r2 = client.patch(f"/api/personnel/{comptable.utilisateur_id}/statut?statut=ACTIF",
+                          headers=_headers(client, admin.nom_utilisateur))
+        assert r2.status_code == 200, r2.text
+        db.refresh(comptable); assert comptable.statut == "ACTIF"
+
+    def test_le_dg_gere_toujours_les_autres_comptes(self, client: TestClient, db: Session):
+        """La restriction ne vise QUE le comptable : le DG garde la main sur le
+        reste du personnel."""
+        etab = _ecole(db)
+        _compte(db, etab.etablissement_id, "ADMIN")
+        dg = _compte(db, etab.etablissement_id, "DG")
+        surveillant = _compte(db, etab.etablissement_id, "SURVEILLANT")
+
+        r = client.patch(f"/api/personnel/{surveillant.utilisateur_id}/statut?statut=INACTIF",
+                         headers=_headers(client, dg.nom_utilisateur))
+        assert r.status_code == 200, r.text

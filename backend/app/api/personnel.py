@@ -399,6 +399,20 @@ def change_statut(
     if not p:
         raise HTTPException(status_code=404, detail="Membre du personnel introuvable")
 
+    # LE COMPTE COMPTABLE NE SE GÈLE QU'À LA MAIN DU FONDATEUR
+    # Désactiver le comptable en fin d'année (puis le réactiver à la
+    # réouverture) est un geste de clôture qui appartient au fondateur seul.
+    # Le directeur général et le directeur de niveau, eux, ne doivent pas
+    # pouvoir couper l'accès de la comptabilité — la séparation des pouvoirs
+    # vaut aussi entre la direction et le propriétaire de l'école.
+    from app.core.auth import roles_du_compte
+    FONDATEUR_SEUL = {"SUPER_ADMIN", "FONDATEUR", "ADMIN"}
+    if p.role == "COMPTABLE" and not (roles_du_compte(current_user) & FONDATEUR_SEUL):
+        raise HTTPException(
+            status_code=403,
+            detail="Seul le fondateur de l'école peut activer ou désactiver le compte du comptable.",
+        )
+
     if statut != "ACTIF":
         # Se désactiver soi-même verrouille l'école dehors : plus personne pour
         # rouvrir le compte, et le support doit intervenir en base.
