@@ -470,8 +470,8 @@ def get_edt_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_parent_
 # BULLETIN D'UN ENFANT (pour le parent)
 # ================================================================
 @router.get("/{parent_id}/enfant/{eleve_id}/bulletin")
-def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
-    """Bulletin complet d'un enfant, avec lignes par matière."""
+def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None, annuel: bool = False, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
+    """Bulletin complet d'un enfant — de période, ou de fin d'année (`annuel=true`)."""
     link = db.query(EleveParent).filter(
         EleveParent.parent_id == parent_id,
         EleveParent.eleve_id == eleve_id
@@ -495,14 +495,22 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[in
         # appliquait les réglages d'affichage d'une autre école au bulletin.
         raise HTTPException(404, "Classe introuvable pour cette inscription")
 
-    if trimestre_id is None:
-        trimestre_id = get_active_trimestre_id(db, cl.etablissement_id)
-
-    bulletin = db.query(Bulletin).filter(
-        Bulletin.inscription_id == inscription.inscription_id,
-        Bulletin.trimestre_id == trimestre_id,
-        Bulletin.statut == "PUBLIE"
-    ).first()
+    if annuel:
+        # Le bulletin de fin d'année n'a pas de période : il agrège l'année.
+        bulletin = db.query(Bulletin).filter(
+            Bulletin.inscription_id == inscription.inscription_id,
+            Bulletin.type_bulletin == "ANNUEL",
+            Bulletin.statut == "PUBLIE",
+        ).first()
+        trimestre_id = None
+    else:
+        if trimestre_id is None:
+            trimestre_id = get_active_trimestre_id(db, cl.etablissement_id)
+        bulletin = db.query(Bulletin).filter(
+            Bulletin.inscription_id == inscription.inscription_id,
+            Bulletin.trimestre_id == trimestre_id,
+            Bulletin.statut == "PUBLIE"
+        ).first()
     if not bulletin:
         return None
 
@@ -548,6 +556,7 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[in
         "bulletin_id": bulletin.bulletin_id,
         "classe": cl.libelle if cl else "?",
         "trimestre_id": trimestre_id,
+        "annuel": annuel,
         "moyenne_generale": float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
         "lettre_generale": lettre_pour_note(
             float(bulletin.moyenne_generale) if bulletin.moyenne_generale is not None else None,
@@ -620,30 +629,50 @@ def get_periodes_enfant(
     periodes = db.query(Trimestre).filter(
         Trimestre.annee_id == inscription.annee_id
     ).order_by(Trimestre.numero, Trimestre.date_debut).all()
-    return [
+    liste = [
         {
             "trimestre_id": p.trimestre_id,
             "numero": p.numero,
             "libelle": p.libelle,
             "statut": p.statut,
+            "annuel": False,
         }
         for p in periodes
     ]
+    # Le bulletin de fin d'année, s'il est publié : une entrée à part (il agrège
+    # toute l'année et ne porte pas de période). Sans elle, le parent voyait les
+    # bulletins de période mais jamais le résultat final.
+    annuel = db.query(Bulletin).filter(
+        Bulletin.inscription_id == inscription.inscription_id,
+        Bulletin.type_bulletin == "ANNUEL",
+        Bulletin.statut == "PUBLIE",
+    ).first()
+    if annuel:
+        liste.append({
+            "trimestre_id": None, "numero": 99,
+            "libelle": "Année (fin d'année)", "statut": "PUBLIE", "annuel": True,
+        })
+    return liste
 
 
 @router.get("/{parent_id}/enfant/{eleve_id}/epreuves")
 def get_epreuves_enfant(
-    parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None,
+    parent_id: int, eleve_id: int, trimestre_id: Optional[int] = None, toutes: bool = False,
     _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db),
 ):
-    """Épreuves consultables pour cet enfant sur la période.
+    """Épreuves consultables pour cet enfant.
 
-    Le parent choisit ensuite ce qu'il veut regarder : le classement du seul
-    mois de janvier, celui d'une composition, ou celui de toute la période.
+    Le parent choisit ensuite ce qu'il veut regarder : le classement d'une
+    évaluation précise, d'une composition, ou de toute la période. `toutes=true`
+    rassemble les épreuves de toutes les périodes de l'année, pour retrouver
+    n'importe quelle évaluation sans changer d'onglet.
     """
     from app.services.notation import epreuves_consultables
 
     inscription = _inscription_enfant(db, parent_id, eleve_id)
+    if toutes:
+        return {"trimestre_id": None,
+                "epreuves": epreuves_consultables(db, inscription.classe_id, toute_annee=True)}
     trimestre_id = _periode(db, inscription, trimestre_id)
     return {
         "trimestre_id": trimestre_id,

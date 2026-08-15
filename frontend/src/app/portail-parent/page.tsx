@@ -96,8 +96,9 @@ export default function PortailParent() {
     // La période part vide : on ne devine pas le découpage de l'année. Le
     // sélecteur se remplit avec les périodes réelles de l'école de l'enfant,
     // et le serveur choisit celle en cours tant qu'aucune n'est demandée.
-    const [selectedTrimestre, setSelectedTrimestre] = useState<number | null>(null);
-    const [periodes, setPeriodes] = useState<{ trimestre_id: number; libelle: string; statut: string }[]>([]);
+    // « annuel » = bulletin de fin d'année (sans période).
+    const [selectedTrimestre, setSelectedTrimestre] = useState<number | 'annuel' | null>(null);
+    const [periodes, setPeriodes] = useState<{ trimestre_id: number | null; libelle: string; statut: string; annuel?: boolean }[]>([]);
     const [absencesData, setAbsencesData] = useState<any>(null);
     const [absencesLoading, setAbsencesLoading] = useState(false);
 
@@ -205,7 +206,8 @@ export default function PortailParent() {
             const parentId = data.parent.parent_id;
             const eleveId = data.enfants[selectedChild].eleve_id;
             setBulletinLoading(true);
-            const periode = selectedTrimestre ? `?trimestre_id=${selectedTrimestre}` : '';
+            const periode = selectedTrimestre === 'annuel' ? '?annuel=true'
+                : (selectedTrimestre ? `?trimestre_id=${selectedTrimestre}` : '');
             api.get(`/api/portail-parent/${parentId}/enfant/${eleveId}/bulletin${periode}`)
                 .then(res => setBulletinData(res.data))
                 .catch(() => setBulletinData(null))
@@ -875,7 +877,7 @@ export default function PortailParent() {
                                                 <div style={{ padding: '4px 24px 24px' }}>
                                                     <ClassementEpreuves
                                                         baseUrl={`/api/portail-parent/${data.parent.parent_id}/enfant/${child.eleve_id}`}
-                                                        trimestreId={selectedTrimestre}
+                                                        trimestreId={typeof selectedTrimestre === 'number' ? selectedTrimestre : null}
                                                         couleur="#7c3aed"
                                                     />
                                                 </div>
@@ -1217,11 +1219,14 @@ export default function PortailParent() {
                                         <div style={{ background: 'white', borderRadius: '16px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', border: '1px solid #e2e8f0' }}>
                                             <div style={{ padding: '20px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                 <h5 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}><FileText size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Bulletin Scolaire — {child.classe}</h5>
-                                                <select value={selectedTrimestre ?? ''} onChange={e => setSelectedTrimestre(Number(e.target.value))}
+                                                <select
+                                                    value={selectedTrimestre === 'annuel' ? 'annuel' : (selectedTrimestre ?? '')}
+                                                    onChange={e => setSelectedTrimestre(e.target.value === 'annuel' ? 'annuel' : Number(e.target.value))}
                                                     style={{ padding: '8px 16px', borderRadius: '10px', border: '2px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
                                                     {periodes.length === 0 && <option value="">Période en cours</option>}
                                                     {periodes.map(p => (
-                                                        <option key={p.trimestre_id} value={p.trimestre_id}>{p.libelle}</option>
+                                                        <option key={p.annuel ? 'annuel' : `t${p.trimestre_id}`}
+                                                            value={p.annuel ? 'annuel' : String(p.trimestre_id)}>{p.libelle}</option>
                                                     ))}
                                                 </select>
                                             </div>

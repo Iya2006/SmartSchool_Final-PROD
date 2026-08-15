@@ -1230,17 +1230,40 @@ def calculer_resultats_periode(
 # Consultation familiale (portails parent et élève)
 # ════════════════════════════════════════════════════════════
 
-def epreuves_consultables(db: Session, classe_id: int, trimestre_id: int) -> List[dict]:
-    """Épreuves qu'une famille peut consulter sur une période.
+def epreuves_consultables(
+    db: Session, classe_id: int, trimestre_id: Optional[int] = None,
+    *, toute_annee: bool = False,
+) -> List[dict]:
+    """Épreuves qu'une famille peut consulter.
 
     Uniquement les épreuves **entièrement centralisées** : tant que toutes les
     matières d'une composition ne sont pas remontées, un classement partiel
     donnerait un rang faux, que la famille prendrait pour définitif.
+
+    Par défaut, les épreuves d'UNE période (`trimestre_id`). Avec
+    `toute_annee=True`, celles de TOUTES les périodes de l'année de la classe :
+    une famille cherche « la 3ème évaluation » sans se souvenir de son
+    trimestre, et ne devait pas avoir à changer d'onglet pour la retrouver.
+    Chaque épreuve porte alors sa période (`trimestre_id`, `periode`), pour que
+    le classement se calcule sur la bonne.
     """
-    evals = db.query(Evaluation).filter(
-        Evaluation.classe_id == classe_id,
-        Evaluation.trimestre_id == trimestre_id,
-    ).all()
+    q = db.query(Evaluation).filter(Evaluation.classe_id == classe_id)
+    periodes: Dict[int, str] = {}
+    if toute_annee:
+        # Les périodes de l'année de cette classe, pour étiqueter chaque épreuve.
+        lignes = (
+            db.query(Trimestre.trimestre_id, Trimestre.libelle, Trimestre.numero)
+            .join(Classe, Classe.annee_id == Trimestre.annee_id)
+            .filter(Classe.classe_id == classe_id)
+            .all()
+        )
+        periodes = {t_id: lib for (t_id, lib, _num) in lignes}
+        ordre = {t_id: num for (t_id, _lib, num) in lignes}
+        q = q.filter(Evaluation.trimestre_id.in_(list(periodes) or [-1]))
+    else:
+        q = q.filter(Evaluation.trimestre_id == trimestre_id)
+    evals = q.all()
+
     types = {
         t.type_eval_id: t.libelle for t in db.query(TypeEvaluation).filter(
             TypeEvaluation.etablissement_id == get_etablissement_id(db, classe_id)
@@ -1255,6 +1278,8 @@ def epreuves_consultables(db: Session, classe_id: int, trimestre_id: int) -> Lis
             "libelle": ev.libelle,
             "type": types.get(ev.type_eval_id, ""),
             "date": ev.date_evaluation.isoformat() if ev.date_evaluation else None,
+            "trimestre_id": ev.trimestre_id,
+            "periode": periodes.get(ev.trimestre_id) if toute_annee else None,
             "evaluation_ids": [],
             "nb_matieres": 0,
             "nb_centralisees": 0,
@@ -1264,10 +1289,15 @@ def epreuves_consultables(db: Session, classe_id: int, trimestre_id: int) -> Lis
         if ev.statut == "CENTRALISEE":
             g["nb_centralisees"] += 1
 
-    return sorted(
-        (g for g in groupes.values() if g["nb_centralisees"] == g["nb_matieres"]),
-        key=lambda g: g["date"] or "",
-    )
+    retenues = [g for g in groupes.values() if g["nb_centralisees"] == g["nb_matieres"]]
+    if toute_annee:
+        # Rangées par période puis par date : la 1ère évaluation avant la
+        # composition, le 1er semestre avant le 2ème.
+        ordre = {t_id: num for (t_id, _lib, num) in lignes}
+        retenues.sort(key=lambda g: (ordre.get(g["trimestre_id"], 0), g["date"] or ""))
+    else:
+        retenues.sort(key=lambda g: g["date"] or "")
+    return retenues
 
 
 def resultat_eleve_sur_epreuves(

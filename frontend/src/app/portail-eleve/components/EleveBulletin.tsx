@@ -9,10 +9,11 @@ interface EleveBulletinProps {
     bulletinData: BulletinData | null;
     // Périodes réelles de l'école : « Trimestre 1 / 2 / 3 » était écrit dans
     // le code, donc faux pour une école à deux semestres — et le numéro
-    // affiché était envoyé comme identifiant de période.
-    bulletinTrimestre: number | null;
-    setBulletinTrimestre: (trimId: number) => void;
-    periodes: { trimestre_id: number; libelle: string; statut: string }[];
+    // affiché était envoyé comme identifiant de période. La valeur « annuel »
+    // désigne le bulletin de fin d'année, qui ne porte pas de période.
+    bulletinTrimestre: number | 'annuel' | null;
+    setBulletinTrimestre: (sel: number | 'annuel') => void;
+    periodes: { trimestre_id: number | null; libelle: string; statut: string; annuel?: boolean }[];
     loading: boolean;
     couleurPortail: string;
 }
@@ -45,26 +46,30 @@ export default function EleveBulletin({
                     <p style={{ margin: '4px 0 0', fontSize: '13px', color: '#64748b' }}>Téléchargez et imprimez vos bulletins scolaires officiels.</p>
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                    {periodes.map(p => (
+                    {periodes.map(p => {
+                        const val: number | 'annuel' = p.annuel ? 'annuel' : (p.trimestre_id as number);
+                        const actif = bulletinTrimestre === val;
+                        return (
                         <button
-                            key={p.trimestre_id}
-                            onClick={() => setBulletinTrimestre(p.trimestre_id)}
+                            key={p.annuel ? 'annuel' : `t${p.trimestre_id}`}
+                            onClick={() => setBulletinTrimestre(val)}
                             style={{
                                 padding: '8px 16px',
                                 borderRadius: '10px',
-                                border: 'none',
+                                border: p.annuel ? `1.5px solid ${couleurPortail}` : 'none',
                                 cursor: 'pointer',
                                 fontWeight: 700,
                                 fontSize: '13px',
-                                background: bulletinTrimestre === p.trimestre_id ? couleurPortail : '#f1f5f9',
-                                color: bulletinTrimestre === p.trimestre_id ? 'white' : '#64748b',
+                                background: actif ? couleurPortail : '#f1f5f9',
+                                color: actif ? 'white' : (p.annuel ? couleurPortail : '#64748b'),
                                 transition: 'all 0.2s',
-                                boxShadow: bulletinTrimestre === p.trimestre_id ? `0 4px 12px ${couleurPortail}25` : 'none'
+                                boxShadow: actif ? `0 4px 12px ${couleurPortail}25` : 'none'
                             }}
                         >
                             {p.libelle}
                         </button>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
 

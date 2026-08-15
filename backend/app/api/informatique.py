@@ -163,7 +163,12 @@ def create_equipement(
 # ces deux dernières valeurs, et rien n'empêchait d'en écrire une troisième
 # par une autre voie — une machine avec un état inventé disparaissait alors
 # du compteur sans que personne ne le voie.
-ETATS_EQUIPEMENT = {"BON", "PANNE", "A_REMPLACER"}
+# REPARE = « panne résolue » : une machine tombée en panne, puis remise en
+# service. On la distingue de « BON » (jamais tombée) pour que l'informaticien
+# lise l'historique du parc — une machine réparée trois fois n'est pas neuve.
+# Elle ne compte plus dans les pannes ouvertes (le compteur ne lit que
+# PANNE/A_REMPLACER), et redevient active.
+ETATS_EQUIPEMENT = {"BON", "PANNE", "A_REMPLACER", "REPARE"}
 
 
 @router.put("/equipements/{equipement_id}")
