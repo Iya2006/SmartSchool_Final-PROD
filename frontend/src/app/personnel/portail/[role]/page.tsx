@@ -34,6 +34,7 @@ import {
     Zap,
     CalendarClock,
     QrCode,
+    Send,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
@@ -493,6 +494,17 @@ function BibliothecairePortal() {
     const [filtrePrets, setFiltrePrets] = useState<'EN_RETARD' | 'EN_COURS' | 'RENDU'>('EN_RETARD');
     const [pretsLoading, setPretsLoading] = useState(false);
     const [retourEnCours, setRetourEnCours] = useState<number | null>(null);
+    // Chercher dans la circulation : retrouver un livre ou un emprunteur sans
+    // faire défiler toute la liste.
+    const [rechercheP, setRechercheP] = useState('');
+    const [rappelsEnCours, setRappelsEnCours] = useState(false);
+    // Prêter depuis le catalogue : le livre choisi, l'élève cherché, la date.
+    const [pretOuvrage, setPretOuvrage] = useState<Ouvrage | null>(null);
+    const [pretRechercheEleve, setPretRechercheEleve] = useState('');
+    const [pretResultats, setPretResultats] = useState<EleveOption[]>([]);
+    const [pretEleve, setPretEleve] = useState<EleveOption | null>(null);
+    const [pretDate, setPretDate] = useState('');
+    const [pretEnCours, setPretEnCours] = useState(false);
 
     const chargerPrets = useCallback(async () => {
         setPretsLoading(true);
@@ -524,6 +536,69 @@ function BibliothecairePortal() {
             setError(getErrorMessage(err));
         } finally {
             setRetourEnCours(null);
+        }
+    };
+
+    // La circulation, filtrée sur ce qu'on cherche : titre, code ou emprunteur.
+    const pretsAffiches = useMemo(() => {
+        const q = rechercheP.trim().toLowerCase();
+        if (!q) return prets;
+        return prets.filter((p) => [p.titre, p.emprunteur, p.code_exemplaire, p.matricule]
+            .some((v) => (v || '').toLowerCase().includes(q)));
+    }, [prets, rechercheP]);
+
+    // Un rappel à tous les élèves en retard, d'un seul geste : ils le lisent
+    // dans leur espace au lieu qu'on les cherche un à un.
+    const envoyerRappels = async () => {
+        setRappelsEnCours(true); setError(null); setSuccess(null);
+        try {
+            const res = await api.post('/api/bibliotheque/emprunts/rappels', {});
+            setSuccess(res.data?.message || 'Rappels envoyés.');
+            await chargerPrets();
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setRappelsEnCours(false);
+        }
+    };
+
+    // Chercher l'élève à qui prêter — sur toute l'école, pas une liste tronquée.
+    useEffect(() => {
+        const terme = pretRechercheEleve.trim();
+        if (terme.length < 2) { setPretResultats([]); return; }
+        let annule = false;
+        const minuteur = setTimeout(() => {
+            api.get<EleveOption[]>(`/api/eleves?statut=ACTIF&limit=20&search=${encodeURIComponent(terme)}`)
+                .then((r) => { if (!annule) setPretResultats(r.data || []); })
+                .catch(() => { if (!annule) setPretResultats([]); });
+        }, 280);
+        return () => { annule = true; clearTimeout(minuteur); };
+    }, [pretRechercheEleve]);
+
+    const ouvrirPret = (ouvrage: Ouvrage) => {
+        setPretOuvrage(ouvrage);
+        setPretEleve(null); setPretRechercheEleve(''); setPretResultats([]);
+        // Par défaut, à rendre dans deux semaines.
+        const d = new Date(); d.setDate(d.getDate() + 14);
+        setPretDate(d.toISOString().slice(0, 10));
+    };
+
+    const confirmerPret = async () => {
+        if (!pretOuvrage || !pretEleve || !pretDate) return;
+        setPretEnCours(true); setError(null); setSuccess(null);
+        try {
+            await api.post('/api/bibliotheque/emprunts', {
+                ouvrage_id: pretOuvrage.ouvrage_id,
+                eleve_id: pretEleve.eleve_id,
+                date_retour_prevue: pretDate,
+            });
+            setSuccess(`« ${pretOuvrage.titre} » prêté à ${pretEleve.prenom} ${pretEleve.nom}, à rendre le ${new Date(pretDate).toLocaleDateString('fr-FR')}.`);
+            setPretOuvrage(null); setPretEleve(null);
+            await Promise.all([chargerPrets(), loadLibrary()]);
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setPretEnCours(false);
         }
     };
 
@@ -689,7 +764,7 @@ function BibliothecairePortal() {
                                 Enregistrer un retour remet l&apos;exemplaire au rayon.
                             </p>
                         </div>
-                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
                             {([
                                 { v: 'EN_RETARD' as const, l: 'En retard', c: '#dc2626' },
                                 { v: 'EN_COURS' as const, l: 'Dehors', c: '#7c3aed' },
@@ -700,6 +775,24 @@ function BibliothecairePortal() {
                                     {o.l}
                                 </button>
                             ))}
+                            {/* Prévenir tous les retardataires d'un geste. */}
+                            {filtrePrets === 'EN_RETARD' && (
+                                <button type="button" onClick={envoyerRappels} disabled={rappelsEnCours}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '10px 16px', borderRadius: '13px', border: 'none', background: '#dc2626', color: 'white', fontWeight: 800, fontSize: '13px', cursor: rappelsEnCours ? 'wait' : 'pointer' }}>
+                                    {rappelsEnCours ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                                    Envoyer les rappels
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Chercher dans la circulation. */}
+                    <div style={{ padding: '14px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 13px', borderRadius: '14px', background: '#f8fafc', border: '1px solid #e2e8f0', maxWidth: '420px' }}>
+                            <Search size={17} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                            <input value={rechercheP} onChange={(e) => setRechercheP(e.target.value)}
+                                placeholder="Rechercher un livre, un code ou un emprunteur…"
+                                style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '14px', color: '#0f172a' }} />
                         </div>
                     </div>
 
@@ -709,15 +802,16 @@ function BibliothecairePortal() {
                                 <Loader2 size={20} className="animate-spin" style={{ verticalAlign: 'middle', marginRight: 8 }} />
                                 Chargement…
                             </p>
-                        ) : prets.length === 0 ? (
+                        ) : pretsAffiches.length === 0 ? (
                             <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
-                                {filtrePrets === 'EN_RETARD' ? 'Aucun livre en retard — le fonds est à jour.'
+                                {rechercheP.trim() ? `Aucun résultat pour « ${rechercheP.trim()} ».`
+                                    : filtrePrets === 'EN_RETARD' ? 'Aucun livre en retard — le fonds est à jour.'
                                     : filtrePrets === 'EN_COURS' ? 'Aucun livre sorti actuellement.'
                                     : 'Aucun retour enregistré.'}
                             </p>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                {prets.map((pret, idx) => (
+                                {pretsAffiches.map((pret, idx) => (
                                     <div key={pret.emprunt_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: pret.en_retard ? '#fef2f2' : 'transparent', flexWrap: 'wrap' }}>
                                         <div style={{ minWidth: '230px', flex: '1 1 260px' }}>
                                             <p style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>{pret.titre}</p>
@@ -834,6 +928,11 @@ function BibliothecairePortal() {
                                                 {ouvrage.niveau_cible && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#eef2ff', color: '#4338ca', fontSize: '11px', fontWeight: 800 }}>{ouvrage.niveau_cible}</span>}
                                                 {ouvrage.emplacement && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#fff7ed', color: '#9a3412', fontSize: '11px', fontWeight: 800 }}>{ouvrage.emplacement}</span>}
                                             </div>
+                                            {/* Prêter ce livre à un élève, directement depuis le catalogue. */}
+                                            <button type="button" disabled={(ouvrage.nb_disponibles || 0) <= 0} onClick={() => ouvrirPret(ouvrage)}
+                                                style={{ marginTop: '14px', width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '11px', borderRadius: '14px', border: 'none', background: (ouvrage.nb_disponibles || 0) > 0 ? '#7c3aed' : '#e2e8f0', color: (ouvrage.nb_disponibles || 0) > 0 ? 'white' : '#94a3b8', fontWeight: 900, fontSize: '13.5px', cursor: (ouvrage.nb_disponibles || 0) > 0 ? 'pointer' : 'not-allowed' }}>
+                                                <BookOpen size={16} /> {(ouvrage.nb_disponibles || 0) > 0 ? 'Prêter à un élève' : 'Aucun exemplaire libre'}
+                                            </button>
                                         </div>
                                     </motion.article>
                                 ))}
@@ -868,6 +967,70 @@ function BibliothecairePortal() {
                         </div>
                     </aside>
                 </section>
+
+                {/* ═══ PRÊTER UN LIVRE ═══
+                    Depuis le catalogue : on cherche l'élève, on fixe la date de
+                    retour, le serveur retient un exemplaire disponible. */}
+                {pretOuvrage && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(8px)', zIndex: 90, display: 'grid', placeItems: 'center', padding: '20px' }} onClick={() => setPretOuvrage(null)}>
+                        <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px, 100%)', background: 'white', borderRadius: '26px', boxShadow: '0 40px 90px rgba(15,23,42,0.28)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                            <div style={{ padding: '20px 22px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #faf5ff, #eef2ff)', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                                <div>
+                                    <p style={{ margin: 0, fontSize: '12px', color: '#7c3aed', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Nouveau prêt</p>
+                                    <h2 style={{ margin: '5px 0 0', fontSize: '20px', color: '#111827', fontWeight: 950 }}>{pretOuvrage.titre}</h2>
+                                    <p style={{ margin: '3px 0 0', fontSize: '12.5px', color: '#94a3b8' }}>{pretOuvrage.nb_disponibles} exemplaire(s) disponible(s)</p>
+                                </div>
+                                <button type="button" onClick={() => setPretOuvrage(null)} style={{ width: 40, height: 40, borderRadius: '13px', border: '1px solid #e2e8f0', background: 'white', display: 'grid', placeItems: 'center', cursor: 'pointer', flexShrink: 0 }}><X size={18} /></button>
+                            </div>
+                            <div style={{ padding: '22px', display: 'grid', gap: '14px' }}>
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 900, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Élève emprunteur</label>
+                                    {pretEleve ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px', borderRadius: '14px', border: '1px solid #16a34a', background: '#f0fdf4' }}>
+                                            <UserCheck size={17} style={{ color: '#16a34a' }} />
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <p style={{ margin: 0, fontSize: '14px', fontWeight: 900, color: '#0f172a' }}>{pretEleve.prenom} {pretEleve.nom}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#15803d', fontWeight: 700 }}>{pretEleve.matricule || 'sans matricule'}{pretEleve.classe_code ? ` • ${pretEleve.classe_code}` : ''}</p>
+                                            </div>
+                                            <button type="button" onClick={() => { setPretEleve(null); setPretRechercheEleve(''); }} style={{ padding: '7px 12px', borderRadius: '11px', border: '1px solid #e2e8f0', background: 'white', color: '#64748b', fontWeight: 800, fontSize: '12.5px', cursor: 'pointer' }}>Changer</button>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px', borderRadius: '14px', border: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                                                <Search size={17} style={{ color: '#94a3b8' }} />
+                                                <input value={pretRechercheEleve} onChange={(e) => setPretRechercheEleve(e.target.value)} placeholder="Nom, prénom ou matricule…" autoComplete="off"
+                                                    style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '14px', fontWeight: 700, color: '#0f172a' }} />
+                                            </div>
+                                            {pretResultats.length > 0 && (
+                                                <div style={{ marginTop: '6px', maxHeight: '200px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '14px' }}>
+                                                    {pretResultats.map((el, i) => (
+                                                        <button key={el.eleve_id} type="button" onClick={() => setPretEleve(el)}
+                                                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', border: 'none', borderTop: i === 0 ? 'none' : '1px solid #f1f5f9', background: 'white', cursor: 'pointer' }}>
+                                                            <span style={{ display: 'block', fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>{el.prenom} {el.nom}</span>
+                                                            <span style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginTop: '2px', fontWeight: 700 }}>{el.matricule || 'sans matricule'}{el.classe_code ? ` • ${el.classe_code}` : ''}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 900, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>À rendre le</label>
+                                    <input type="date" value={pretDate} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setPretDate(e.target.value)}
+                                        style={{ width: '100%', padding: '12px 14px', borderRadius: '14px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }} />
+                                </div>
+                            </div>
+                            <div style={{ padding: '16px 22px', borderTop: '1px solid #eef2f7', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button type="button" onClick={() => setPretOuvrage(null)} style={{ padding: '11px 16px', borderRadius: '14px', border: '1px solid #e2e8f0', background: 'white', color: '#475569', fontWeight: 900, cursor: 'pointer' }}>Annuler</button>
+                                <button type="button" disabled={!pretEleve || !pretDate || pretEnCours} onClick={confirmerPret}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '11px 18px', borderRadius: '14px', border: 'none', background: (pretEleve && pretDate) ? '#7c3aed' : '#e2e8f0', color: (pretEleve && pretDate) ? 'white' : '#94a3b8', fontWeight: 900, cursor: (pretEleve && pretDate && !pretEnCours) ? 'pointer' : 'not-allowed' }}>
+                                    {pretEnCours ? <Loader2 size={16} className="animate-spin" /> : <BookOpen size={16} />} Confirmer le prêt
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {showForm && (
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.42)', backdropFilter: 'blur(10px)', zIndex: 80, display: 'grid', placeItems: 'center', padding: '20px' }}>

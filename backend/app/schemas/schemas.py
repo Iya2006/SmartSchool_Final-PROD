@@ -218,7 +218,11 @@ class ExemplaireOut(OrmBase):
     created_date: Optional[datetime] = None
 
 class EmpruntCreate(BaseModel):
-    exemplaire_id: int
+    # On peut prêter en désignant un exemplaire précis, OU seulement l'ouvrage :
+    # dans ce cas le bibliothécaire prête depuis le catalogue sans choisir la
+    # copie à la main, et le serveur retient un exemplaire disponible.
+    exemplaire_id: Optional[int] = None
+    ouvrage_id: Optional[int] = None
     eleve_id: Optional[int] = None
     enseignant_id: Optional[int] = None
     date_retour_prevue: date
