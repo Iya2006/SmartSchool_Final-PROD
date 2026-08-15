@@ -2334,14 +2334,23 @@ function InformaticienPortal() {
     const [equipEnCours, setEquipEnCours] = useState<number | null>(null);
 
     const changerEtat = async (equipement: EquipementInfo, etat: string) => {
-        setEquipEnCours(equipement.equipement_id);
+        // L'état bascule tout de suite à l'écran : l'informaticien n'attend pas
+        // l'aller-retour serveur pour voir le changement. La synchronisation se
+        // fait en fond, et on revient à l'ancien état seulement si elle échoue.
+        const ancienEtat = equipement.etat;
+        setEquipements((prev) => prev.map((e) =>
+            e.equipement_id === equipement.equipement_id ? { ...e, etat } : e));
         setError(null);
         setSuccess(null);
         try {
             await api.put(`/api/informatique/equipements/${equipement.equipement_id}`, { etat });
             setSuccess(`${equipement.code} — ${equipement.nom} : ${etat === 'BON' ? 'remis en service' : etat === 'PANNE' ? 'signale en panne' : etat === 'REPARE' ? 'panne resolue, remis en service' : 'a remplacer'}.`);
-            await loadIt();
+            // On rafraîchit les compteurs (« en panne ») sans bloquer l'écran.
+            loadIt();
         } catch (err) {
+            // Le serveur a refusé : on remet l'état d'avant, l'écran reste vrai.
+            setEquipements((prev) => prev.map((e) =>
+                e.equipement_id === equipement.equipement_id ? { ...e, etat: ancienEtat } : e));
             setError(getErrorMessage(err));
         } finally {
             setEquipEnCours(null);
