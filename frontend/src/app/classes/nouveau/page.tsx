@@ -37,7 +37,7 @@ export default function NouvelleClasse() {
                 capacite_max: parseInt(formData.capacite_max.toString()),
                 niveau_id: parseInt(formData.niveau_id.toString()),
                 etablissement_id: etablissementId,
-                annee_id: 1
+                annee_id: anneeId
             };
 
             await api.post('/api/classes', payload);
