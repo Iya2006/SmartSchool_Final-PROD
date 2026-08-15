@@ -1,12 +1,25 @@
 'use client';
 
 import { useApp } from '@/context/AppContext';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, Loader2, BookOpen, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, BookOpen, CheckCircle2, AlertTriangle } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
+
+interface NiveauOption {
+    niveau_id: number;
+    code: string;
+    libelle: string;
+}
+
+interface CycleAvecNiveaux {
+    cycle_id: number;
+    code: string;
+    libelle: string;
+    niveaux: NiveauOption[];
+}
 
 export default function NouvelleClasse() {
     const router = useRouter();
@@ -15,13 +28,32 @@ export default function NouvelleClasse() {
     const [success, setSuccess] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    // Les niveaux appartiennent à l'école via leur cycle : ils DOIVENT être
+    // chargés, jamais devinés. Ce formulaire envoyait `niveau_id: 1` en dur,
+    // c'est-à-dire le premier niveau de la première école inscrite. Pour toute
+    // autre école, la classe se retrouvait rattachée au niveau d'un
+    // établissement étranger.
+    const [cycles, setCycles] = useState<CycleAvecNiveaux[]>([]);
+    const [chargementNiveaux, setChargementNiveaux] = useState(true);
+
     const [formData, setFormData] = useState({
         libelle: '',
         code: '',
         capacite_max: 50,
-        niveau_id: 1, // Par défaut
-        statut: 'ACTIF'
+        niveau_id: '',
+        // Le backend filtre les classes sur « ACTIVE » : envoyer « ACTIF »
+        // créait une classe que la liste n'affichait jamais.
+        statut: 'ACTIVE'
     });
+
+    useEffect(() => {
+        api.get<CycleAvecNiveaux[]>('/api/parametrage/cycles')
+            .then((res) => setCycles(res.data || []))
+            .catch(() => setCycles([]))
+            .finally(() => setChargementNiveaux(false));
+    }, [etablissementId]);
+
+    const niveauxDisponibles = cycles.some((c) => (c.niveaux || []).length > 0);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -37,7 +69,9 @@ export default function NouvelleClasse() {
                 capacite_max: parseInt(formData.capacite_max.toString()),
                 niveau_id: parseInt(formData.niveau_id.toString()),
                 etablissement_id: etablissementId,
-                annee_id: 1
+                // L'année courante de CETTE école. `1` en dur désignait
+                // l'année de la première école inscrite.
+                annee_id: anneeId,
             };
 
             await api.post('/api/classes', payload);
@@ -103,6 +137,17 @@ export default function NouvelleClasse() {
                 </motion.div>
             )}
 
+            {!chargementNiveaux && !niveauxDisponibles && (
+                <div style={{ display: 'flex', gap: '10px', padding: '16px 20px', background: '#fffbeb', borderLeft: '4px solid #f59e0b', borderRadius: '8px', color: '#78350f', fontSize: '14px' }}>
+                    <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 2 }} />
+                    <span>
+                        Aucun niveau n&apos;est configuré pour cet établissement. Signalez-le à
+                        votre administrateur : le référentiel scolaire de l&apos;école n&apos;a
+                        pas été installé.
+                    </span>
+                </div>
+            )}
+
             {/* Formulaire */}
             <motion.div
                 initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -157,6 +202,29 @@ export default function NouvelleClasse() {
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Niveau *</label>
+                            <select
+                                name="niveau_id"
+                                value={formData.niveau_id}
+                                onChange={handleChange}
+                                required
+                                disabled={chargementNiveaux || !niveauxDisponibles}
+                                style={{ padding: '12px 16px', borderRadius: '8px', border: '1px solid var(--border-focus)', outline: 'none', background: 'var(--bg-body)', fontSize: '14px', cursor: 'pointer' }}
+                            >
+                                <option value="">
+                                    {chargementNiveaux ? 'Chargement…' : 'Choisissez un niveau'}
+                                </option>
+                                {cycles.map((cycle) => (
+                                    <optgroup key={cycle.cycle_id} label={cycle.libelle}>
+                                        {(cycle.niveaux || []).map((n) => (
+                                            <option key={n.niveau_id} value={n.niveau_id}>{n.libelle}</option>
+                                        ))}
+                                    </optgroup>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                             <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Statut *</label>
                             <select
                                 name="statut"
@@ -164,8 +232,8 @@ export default function NouvelleClasse() {
                                 onChange={handleChange}
                                 style={{ padding: '12px 16px', borderRadius: '8px', border: '1px solid var(--border-focus)', outline: 'none', background: 'var(--bg-body)', fontSize: '14px', cursor: 'pointer' }}
                             >
-                                <option value="ACTIF">Actif</option>
-                                <option value="INACTIF">Inactif</option>
+                                <option value="ACTIVE">Active</option>
+                                <option value="INACTIVE">Inactive</option>
                             </select>
                         </div>
                     </div>
@@ -174,7 +242,7 @@ export default function NouvelleClasse() {
                         <Link href="/classes" className="btn btn-outline" style={{ display: 'inline-flex' }}>
                             Annuler
                         </Link>
-                        <button type="submit" className="btn btn-primary" disabled={loading}>
+                        <button type="submit" className="btn btn-primary" disabled={loading || !formData.niveau_id}>
                             {loading ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                             {loading ? 'Création...' : 'Créer la classe'}
                         </button>
