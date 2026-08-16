@@ -2659,12 +2659,17 @@ def configurer_rappels(
 @router.post("/communication/notifier-impayes")
 def notifier_impayes(
     annee_id: Optional[int] = None,
+    classe_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
     """
     Déclenche l'envoi de notifications groupées aux parents des élèves en retard.
     Prépare les messages (canal SYSTEME pour l'instant, extensible SMS/Email).
+
+    `classe_id` restreint l'envoi aux parents d'UNE classe : c'est ce qui permet
+    de relancer, depuis l'écran filtré par classe, uniquement les familles de la
+    classe qui n'a pas soldé sa scolarité.
     """
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
@@ -2694,8 +2699,10 @@ def notifier_impayes(
             Inscription.annee_id == annee_id,
             Facture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE", "EN_RETARD"])
         )
-        .all()
     )
+    if classe_id:
+        impayes = impayes.filter(Inscription.classe_id == classe_id)
+    impayes = impayes.all()
 
     notifies = 0
     for facture, eleve, classe in impayes:

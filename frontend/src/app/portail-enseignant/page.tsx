@@ -143,6 +143,10 @@ export default function PortailEnseignant() {
     const [typesEval, setTypesEval] = useState<any[]>([]);
     const [selectedTrimestre, setSelectedTrimestre] = useState<number | null>(null);
     const [selectedTypeEval, setSelectedTypeEval] = useState<number | null>(null);
+    // L'enseignant ne crée plus d'évaluation : il choisit parmi celles que
+    // l'administration a créées pour sa classe/matière, puis remplit les notes.
+    const [evaluationsDispo, setEvaluationsDispo] = useState<any[]>([]);
+    const [selectedEvaluationId, setSelectedEvaluationId] = useState<number | null>(null);
     const [evalHistory, setEvalHistory] = useState<any[]>([]);
     const [expandedNotesClasse, setExpandedNotesClasse] = useState<number | null>(null);
     const [expandedPerfClasse, setExpandedPerfClasse] = useState<number | null>(null);
@@ -664,8 +668,36 @@ export default function PortailEnseignant() {
         await loadClassEleves(aff);
         setNotesData({});
         setNotesSaved('');
-        setEvalLibelle('');
-    }, [loadClassEleves]);
+        setSelectedEvaluationId(null);
+        // Charger les évaluations créées par l'administration pour cette
+        // classe/matière — c'est ce que l'enseignant vient remplir.
+        if (data) {
+            try {
+                const res = await api.get(
+                    `/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations?classe_id=${aff.classe_id}&matiere_id=${aff.matiere_id}`);
+                setEvaluationsDispo(Array.isArray(res.data) ? res.data : []);
+            } catch { setEvaluationsDispo([]); }
+        }
+    }, [loadClassEleves, data]);
+
+    // Quand l'enseignant choisit une évaluation, on précharge les notes déjà
+    // saisies (s'il revient corriger) ; le barème vient de l'évaluation.
+    const chargerNotesEvaluation = useCallback(async (evaluationId: number) => {
+        if (!data) return;
+        setNotesData({});
+        try {
+            const res = await api.get(
+                `/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations/${evaluationId}/notes`);
+            const prefill: Record<number, { valeur: string; absent: boolean }> = {};
+            (res.data?.notes || []).forEach((n: any) => {
+                prefill[n.inscription_id] = {
+                    valeur: n.valeur !== null && n.valeur !== undefined ? String(n.valeur) : '',
+                    absent: n.est_absent === 'O' || n.est_absent === true,
+                };
+            });
+            setNotesData(prefill);
+        } catch { /* pas encore de notes : on part d'une grille vide */ }
+    }, [data]);
 
     const loadClassForAppel = useCallback(async (aff: AffectationData) => {
         await loadClassEleves(aff);
@@ -686,7 +718,7 @@ export default function PortailEnseignant() {
 
     /* ═══ SAVE NOTES ═══ */
     const saveNotes = useCallback(async () => {
-        if (!data || !selectedClass || !evalLibelle.trim()) return;
+        if (!data || !selectedClass || !selectedEvaluationId) return;
         setNotesLoading(true);
         setNotesSaved('');
         try {
@@ -696,23 +728,17 @@ export default function PortailEnseignant() {
                     : (notesData[e.inscription_id]?.valeur ? parseFloat(notesData[e.inscription_id].valeur) : null),
                 est_absent: notesData[e.inscription_id]?.absent || false,
             }));
-            await api.post(`/api/portail-enseignant/${data.enseignant.enseignant_id}/notes`, {
-                classe_id: selectedClass.classe_id,
-                matiere_id: selectedClass.matiere_id,
-                trimestre_id: selectedTrimestre,
-                type_evaluation_id: selectedTypeEval,
-                libelle: evalLibelle.trim(),
-                note_sur: Math.max(1, parseFloat(evalNoteSur) || 20),
-                coefficient: selectedClass.coefficient,
-                notes: notesPayload,
-            });
-            setNotesSaved(`"${evalLibelle}" enregistrée avec succès`);
-            setNotesData({});
-            setEvalLibelle('');
+            // On REMPLIT l'évaluation créée par l'administration (upsert par
+            // élève), on n'en crée pas de nouvelle.
+            await api.post(
+                `/api/portail-enseignant/${data.enseignant.enseignant_id}/evaluations/${selectedEvaluationId}/saisir`,
+                { notes: notesPayload });
+            const evNom = evaluationsDispo.find(e => e.evaluation_id === selectedEvaluationId)?.libelle || 'Évaluation';
+            setNotesSaved(`"${evNom}" enregistrée avec succès`);
         } catch (err: any) {
             setNotesSaved(`${err.response?.data?.detail || 'Erreur'}`);
         } finally { setNotesLoading(false); }
-    }, [data, selectedClass, evalLibelle, evalNoteSur, classEleves, notesData, selectedTrimestre, selectedTypeEval]);
+    }, [data, selectedClass, selectedEvaluationId, classEleves, notesData, evaluationsDispo]);
 
     /* ═══ EVAL DETAIL: VIEW, EDIT, CENTRALIZE ═══ */
     const openEvalDetail = useCallback(async (evalId: number) => {
@@ -1735,45 +1761,31 @@ export default function PortailEnseignant() {
 
                                     {selectedClass ? (
                                         <div>
-                                            {/* Eval config — enhanced */}
+                                            {/* L'enseignant CHOISIT une évaluation créée par l'administration
+                                                (il n'en crée aucune). Le barème et le type viennent d'elle. */}
                                             <div style={{ background: '#f8fafc', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
-                                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '12px' }}>
-                                                    <div>
-                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><Calendar size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Trimestre</label>
-                                                        <select value={selectedTrimestre || ''} onChange={e => setSelectedTrimestre(Number(e.target.value))}
-                                                            style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
-                                                            {trimestres.map(t => <option key={t.trimestre_id} value={t.trimestre_id}>{t.libelle}</option>)}
-                                                            {trimestres.length === 0 && <option value="">Aucun trimestre</option>}
-                                                        </select>
-                                                    </div>
-                                                    <div>
-                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><ClipboardList size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Type d&apos;évaluation</label>
-                                                        <select value={selectedTypeEval || ''} onChange={e => setSelectedTypeEval(Number(e.target.value))}
-                                                            style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
-                                                            {typesEval.map(t => <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle} (coef. {t.coefficient ?? 1})</option>)}
-                                                            {typesEval.length === 0 && <option value="">Aucun type</option>}
-                                                        </select>
-                                                    </div>
-                                                    <div>
-                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><PenLine size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Nom de l&apos;évaluation</label>
-                                                        <input type="text" placeholder="Ex: Devoir 1, Interro 2..." value={evalLibelle}
-                                                            onChange={e => setEvalLibelle(e.target.value)}
-                                                            style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, outline: 'none', boxSizing: 'border-box' }} />
-                                                    </div>
-                                                    <div>
-                                                        <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><Target size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Note sur</label>
-                                                        <input type="number" min="1" max="100" value={evalNoteSur}
-                                                            onChange={e => setEvalNoteSur(e.target.value)}
-                                                            style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 700, outline: 'none', boxSizing: 'border-box', textAlign: 'center' }} />
-                                                    </div>
-                                                </div>
-                                                {(() => {
-                                                    const typeActuel = typesEval.find(t => t.type_eval_id === selectedTypeEval);
-                                                    const coefType = typeActuel?.coefficient ?? 1;
+                                                <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><ClipboardList size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Choisir l&apos;évaluation ou la composition (créée par l&apos;administration)</label>
+                                                <select value={selectedEvaluationId || ''}
+                                                    onChange={e => { const id = Number(e.target.value) || null; setSelectedEvaluationId(id); if (id) chargerNotesEvaluation(id); else setNotesData({}); }}
+                                                    style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
+                                                    <option value="">— Sélectionner une évaluation —</option>
+                                                    {evaluationsDispo.map(ev => (
+                                                        <option key={ev.evaluation_id} value={ev.evaluation_id}>
+                                                            {ev.libelle}{ev.type_libelle ? ` · ${ev.type_libelle}` : ''}{ev.trimestre ? ` · ${ev.trimestre}` : ''} — /{ev.note_sur}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                {evaluationsDispo.length === 0 ? (
+                                                    <p style={{ margin: '10px 0 0', fontSize: '12px', color: '#b45309', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <AlertTriangle size={14} /> Aucune évaluation créée par l&apos;administration pour cette classe/matière. Elle apparaîtra ici dès qu&apos;elle sera créée.
+                                                    </p>
+                                                ) : (() => {
+                                                    const evSel = evaluationsDispo.find(e => e.evaluation_id === selectedEvaluationId);
+                                                    if (!evSel) return null;
                                                     return (
-                                                        <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <p style={{ margin: '10px 0 0', fontSize: '11.5px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                             <ClipboardList size={13} />
-                                                            {`Ce type compte pour un coefficient de ${coefType} dans la matière. Si vous saisissez plusieurs évaluations de ce type, c'est leur moyenne qui est retenue (pas la meilleure note). La moyenne de la matière est ensuite pondérée par son propre coefficient (${selectedClass.coefficient}).`}
+                                                            {`Barème : /${evSel.note_sur} · Coefficient : ${evSel.coefficient} (configuré par l'administration). Vous saisissez seulement les notes.`}
                                                         </p>
                                                     );
                                                 })()}
@@ -1789,7 +1801,7 @@ export default function PortailEnseignant() {
                                                                 <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>#</th>
                                                                 <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Élève</th>
                                                                 <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Matricule</th>
-                                                                <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Note /{evalNoteSur}</th>
+                                                                <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Note /{evaluationsDispo.find(e => e.evaluation_id === selectedEvaluationId)?.note_sur ?? 20}</th>
                                                                 <th style={{ padding: '12px 16px', textAlign: 'center', fontWeight: 700, color: '#475569' }}>Absent</th>
                                                             </tr>
                                                         </thead>
@@ -1804,7 +1816,7 @@ export default function PortailEnseignant() {
                                                                         <code style={{ background: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', fontSize: '12px' }}>{e.matricule}</code>
                                                                     </td>
                                                                     <td style={{ padding: '10px 16px', textAlign: 'center' }}>
-                                                                        <input type="number" min="0" max={evalNoteSur} step="0.25" disabled={nd.absent}
+                                                                        <input type="number" min="0" max={evaluationsDispo.find(ev => ev.evaluation_id === selectedEvaluationId)?.note_sur ?? 20} step="0.25" disabled={nd.absent}
                                                                             value={nd.valeur} placeholder="—"
                                                                             onChange={ev => setNotesData(prev => ({ ...prev, [e.inscription_id]: { ...nd, valeur: ev.target.value } }))}
                                                                             style={{
@@ -1831,16 +1843,16 @@ export default function PortailEnseignant() {
                                                         }}>{notesSaved}</div>
                                                     )}
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', gap: '10px' }}>
-                                                        {!evalLibelle.trim() && (
-                                                            <p style={{ margin: 0, fontSize: '12px', color: '#f59e0b', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><AlertTriangle size={14} /> Remplissez le nom de l&apos;évaluation pour activer le bouton</p>
+                                                        {!selectedEvaluationId && (
+                                                            <p style={{ margin: 0, fontSize: '12px', color: '#f59e0b', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}><AlertTriangle size={14} /> Choisissez une évaluation pour activer le bouton</p>
                                                         )}
-                                                        {evalLibelle.trim() && <div />}
-                                                        <button onClick={saveNotes} disabled={notesLoading || !evalLibelle.trim()}
+                                                        {selectedEvaluationId && <div />}
+                                                        <button onClick={saveNotes} disabled={notesLoading || !selectedEvaluationId}
                                                             style={{
                                                                 padding: '12px 28px', borderRadius: '12px', border: 'none',
-                                                                background: !evalLibelle.trim() ? '#cbd5e1' : `linear-gradient(135deg, ${accentColor}, ${primaryColor})`,
-                                                                color: 'white', fontWeight: 700, fontSize: '14px', cursor: !evalLibelle.trim() ? 'not-allowed' : 'pointer',
-                                                                boxShadow: !evalLibelle.trim() ? 'none' : '0 4px 12px rgba(99,102,241,0.3)',
+                                                                background: !selectedEvaluationId ? '#cbd5e1' : `linear-gradient(135deg, ${accentColor}, ${primaryColor})`,
+                                                                color: 'white', fontWeight: 700, fontSize: '14px', cursor: !selectedEvaluationId ? 'not-allowed' : 'pointer',
+                                                                boxShadow: !selectedEvaluationId ? 'none' : '0 4px 12px rgba(99,102,241,0.3)',
                                                                 opacity: notesLoading ? 0.6 : 1, transition: 'all 0.2s',
                                                             }}>
                                                             {notesLoading ? 'Enregistrement...' : 'Enregistrer les notes'}

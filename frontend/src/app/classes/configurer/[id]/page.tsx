@@ -308,6 +308,34 @@ export default function ConfigurerClassePage() {
                         })}
                     </div>
                 )}
+                {typesFrais.length > 0 && (() => {
+                    // Ce que paie réellement une famille : la scolarité et les autres
+                    // frais + UN SEUL frais d'entrée (inscription OU réinscription,
+                    // jamais les deux). On montre donc les deux totaux.
+                    const val = (id: number) => Number(tarifs[id] || 0) || 0;
+                    const inscriptionId = typesFrais.find(tf => /inscript/i.test(tf.categorie) && !/r[ée]inscript/i.test(tf.categorie))?.type_frais_id;
+                    const reinscriptionId = typesFrais.find(tf => /r[ée]inscript/i.test(tf.categorie))?.type_frais_id;
+                    const base = typesFrais
+                        .filter(tf => tf.type_frais_id !== inscriptionId && tf.type_frais_id !== reinscriptionId)
+                        .reduce((s, tf) => s + val(tf.type_frais_id), 0);
+                    const totalNouvel = base + (inscriptionId ? val(inscriptionId) : 0);
+                    const totalReinsc = base + (reinscriptionId ? val(reinscriptionId) : 0);
+                    const fmt = (n: number) => `${n.toLocaleString('fr-GN')} GNF`;
+                    return (
+                        <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+                            <div style={{ padding: '14px 16px', borderRadius: '12px', background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+                                <p style={{ margin: 0, fontSize: '11px', fontWeight: 800, color: '#1e40af', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Total à payer — nouvel élève</p>
+                                <p style={{ margin: '4px 0 0', fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>{fmt(totalNouvel)}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#64748b' }}>scolarité + frais + inscription</p>
+                            </div>
+                            <div style={{ padding: '14px 16px', borderRadius: '12px', background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                                <p style={{ margin: 0, fontSize: '11px', fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.4px' }}>Total à payer — réinscription</p>
+                                <p style={{ margin: '4px 0 0', fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>{fmt(totalReinsc)}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#64748b' }}>scolarité + frais + réinscription</p>
+                            </div>
+                        </div>
+                    );
+                })()}
                 {typesFrais.length > 0 && (
                     <button onClick={handleSaveTarifs} disabled={savingTarifs}
                         style={{ marginTop: '18px', display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 20px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', fontWeight: 700, fontSize: '13px', cursor: 'pointer', opacity: savingTarifs ? 0.6 : 1 }}>
