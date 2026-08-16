@@ -226,3 +226,27 @@ class TestEnseignantRemplitEvaluation:
                 headers=_headers(),
             )
         assert r.status_code == 404  # l'évaluation n'est pas la sienne
+
+
+class TestClassementSurEvaluationPlanifiee:
+    """Une composition remplie côté ADMINISTRATION reste PLANIFIEE ; son
+    classement de suivi doit quand même sortir les moyennes."""
+
+    def test_moyenne_calculee_meme_si_planifiee(self, client: TestClient, db: Session):
+        from app.services.notation import calculer_resultats_periode
+        s = Scenario(db)  # evaluation créée en statut PLANIFIEE
+        # Notes posées directement (comme un remplissage admin qui ne change
+        # pas le statut de l'évaluation).
+        for insc, val in zip(s.inscriptions, [14, 11]):
+            db.add(Note(evaluation_id=s.evaluation.evaluation_id,
+                        inscription_id=insc.inscription_id, valeur=val, est_absent="N"))
+        db.commit()
+        assert s.evaluation.statut == "PLANIFIEE"
+
+        res = calculer_resultats_periode(
+            db, s.classe.classe_id, s.trimestre.trimestre_id,
+            evaluation_ids=[s.evaluation.evaluation_id], persist=False,
+            statuts_inclus=["PLANIFIEE", "PUBLIEE", "CENTRALISEE", "CALCULE"],
+        )
+        moys = {e["inscription_id"]: e["moyenne_generale"] for e in res["resultats"]}
+        assert all(v is not None and v > 0 for v in moys.values()), moys

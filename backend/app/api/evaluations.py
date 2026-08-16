@@ -823,7 +823,10 @@ def resultats_intermediaires(
         evaluation_ids=_ids(evaluation_ids),
         session_ids=_ids(session_ids),
         persist=False,
-        statuts_inclus=["PUBLIEE", "CENTRALISEE", "CALCULE"],
+        # Le suivi doit refléter TOUTE épreuve qui a des notes, y compris une
+        # évaluation encore « Planifiée » remplie côté administration : le
+        # classement ne dépend pas du statut, seulement de l'existence des notes.
+        statuts_inclus=["PLANIFIEE", "PUBLIEE", "CENTRALISEE", "CALCULE"],
     )
 
 
@@ -2031,6 +2034,13 @@ def admin_update_notes_batch(evaluation_id: int, data: AdminBatchNotesUpdate, db
             note.est_absent = "O" if item.est_absent else "N"
             note.observation = item.observation
             updated += 1
+
+    # Une évaluation qui reçoit des notes n'est plus « planifiée » : on la passe
+    # « publiée », exactement comme lorsque l'enseignant la remplit. Sans ça,
+    # une composition remplie côté administration restait PLANIFIEE et
+    # n'apparaissait pas comme telle.
+    if updated and ev.statut == "PLANIFIEE":
+        ev.statut = "PUBLIEE"
 
     db.commit()
     return {"message": f"{updated} notes mises à jour", "nb_modifiees": updated}
