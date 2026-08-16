@@ -240,7 +240,13 @@ def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_
 
     classe_id = data.get("classe_id")
     matiere_id = data.get("matiere_id")
-    annee_id = data.get("annee_id", 1)
+    # Le defaut `annee_id=1` faisait atterrir l'affectation sur une annee qui
+    # n'est presque jamais l'annee en cours : les compteurs de l'enseignant
+    # (filtres sur l'annee courante) affichaient alors 0 partout. On resout
+    # l'annee reelle de l'ecole quand l'appelant ne la precise pas.
+    annee_id = resoudre_annee(db, etablissement_id, data.get("annee_id"))
+    if not annee_id:
+        raise HTTPException(400, "Aucune annee scolaire active pour cette ecole.")
 
     if not classe_id or not matiere_id:
         raise HTTPException(400, "classe_id et matiere_id requis")
@@ -314,6 +320,86 @@ def creer_affectation(enseignant_id: int, data: dict, db: Session = Depends(get_
         "message": f"Affectation créée : {ens.prenom} {ens.nom} → {mat.libelle} en {cls.libelle}",
         "affectation_id": aff.affectation_id,
         "heures": float(nb_heures),
+        "mode_remuneration": mode,
+    }
+
+
+@router.post("/{enseignant_id}/affecter-classe", status_code=201)
+def affecter_classe_entiere(enseignant_id: int, data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Affecte un enseignant a TOUTES les matieres d'une classe, d'un seul geste.
+
+    C'est le modele du PRIMAIRE : l'instituteur d'une classe assure toutes ses
+    matieres, il en devient le titulaire. Plutot que de creer une affectation
+    par matiere a la main, on les cree toutes a partir des matieres reellement
+    rattachees a la classe.
+
+    Au COLLEGE et au LYCEE, ou chaque matiere a son propre enseignant et ou il
+    n'y a pas de professeur principal, on passe au contraire par l'affectation
+    matiere par matiere (POST /{id}/affectations).
+    """
+    ens = _enseignant_ou_404(db, enseignant_id, etablissement_id)
+
+    classe_id = data.get("classe_id")
+    if not classe_id:
+        raise HTTPException(400, "classe_id requis")
+    cls = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not cls:
+        raise HTTPException(404, "Classe non trouvee")
+
+    annee_id = resoudre_annee(db, etablissement_id, data.get("annee_id"))
+    if not annee_id:
+        raise HTTPException(400, "Aucune annee scolaire active pour cette ecole.")
+
+    # Les matieres reellement rattachees a la classe. Sans rattachement, il n'y
+    # a rien a affecter : on le dit clairement plutot que de creer une
+    # affectation vide qui laisserait les compteurs a 0.
+    liens = db.query(ClasseMatiere).filter(
+        ClasseMatiere.classe_id == classe_id,
+        ClasseMatiere.est_active == "O",
+    ).all()
+    if not liens:
+        raise HTTPException(
+            400,
+            "Cette classe n'a aucune matiere rattachee. Rattachez d'abord les "
+            "matieres a la classe (Configurer > Ajouter des matieres), puis "
+            "affectez l'enseignant.",
+        )
+
+    crees = 0
+    for lien in liens:
+        existe = db.query(Affectation).filter(
+            Affectation.enseignant_id == enseignant_id,
+            Affectation.classe_id == classe_id,
+            Affectation.matiere_id == lien.matiere_id,
+            Affectation.annee_id == annee_id,
+        ).first()
+        if existe:
+            continue
+        db.add(Affectation(
+            enseignant_id=enseignant_id,
+            matiere_id=lien.matiere_id,
+            classe_id=classe_id,
+            annee_id=annee_id,
+            nb_heures_semaine=float(lien.nb_heures_semaine or 0),
+            est_principal="O",  # titulaire de la classe au primaire
+            statut="ACTIVE",
+        ))
+        crees += 1
+    db.flush()
+
+    # Une classe de primaire fait passer l'enseignant au salaire mensuel (cf.
+    # creer_affectation) : on synchronise le mode ici aussi.
+    from app.services.paie import synchroniser_mode_remuneration
+    mode = synchroniser_mode_remuneration(db, enseignant_id)
+
+    db.commit()
+
+    return {
+        "message": f"{ens.prenom} {ens.nom} affecte a {cls.libelle} : {crees} matiere(s) ajoutee(s).",
+        "matieres_affectees": crees,
+        "matieres_totales": len(liens),
         "mode_remuneration": mode,
     }
 

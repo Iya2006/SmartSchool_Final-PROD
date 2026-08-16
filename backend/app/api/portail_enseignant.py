@@ -146,7 +146,12 @@ def get_types_evaluation(
         TypeEvaluation.etablissement_id == etablissement_id,
         TypeEvaluation.statut == "ACTIF",
     ).order_by(TypeEvaluation.type_eval_id).all()
+    # `coefficient` est ce que le moteur lit vraiment ; `poids_pourcentage` est
+    # une colonne morte conservée pour compat (cf. MIGRATION_NOTES). L'écran de
+    # saisie affichait le pourcentage mort et parlait de « meilleure note » —
+    # une règle qui n'existe plus. On renvoie le coefficient réel.
     return [{"type_eval_id": t.type_eval_id, "code": t.code, "libelle": t.libelle,
+             "coefficient": float(t.coefficient) if t.coefficient is not None else 1.0,
              "poids_pourcentage": float(t.poids_pourcentage) if t.poids_pourcentage is not None else None}
             for t in types]
 

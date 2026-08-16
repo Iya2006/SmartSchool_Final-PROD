@@ -37,10 +37,24 @@ interface ClasseInfo {
     capacite_max: number;
     effectif_actuel: number;
     niveau: { niveau_id: number; code: string; libelle: string } | null;
+    cycle_code: string | null;
+    cycle_libelle: string | null;
     professeur_principal: Enseignant | null;
     eleves: EleveDeClasse[];
     matieres: any[];
     nb_matieres: number;
+}
+
+/** Reconnaît un frais d'entrée (inscription / réinscription), quel que soit
+ *  l'accent ou la casse saisis à la création du type de frais. */
+function estFraisEntree(categorie: string | null | undefined): boolean {
+    const c = (categorie || '').toLowerCase();
+    return c.includes('inscription') || c.includes('inscrip') || c.includes('réinscr') || c.includes('reinscr');
+}
+
+/** Ordre d'affichage : inscription/réinscription en tête, le reste ensuite. */
+function rangFrais(categorie: string | null | undefined): number {
+    return estFraisEntree(categorie) ? 0 : 1;
 }
 
 export default function ConfigurerClassePage() {
@@ -263,22 +277,35 @@ export default function ConfigurerClassePage() {
                     Frais de Scolarité de cette classe
                 </h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: '0 0 20px' }}>
-                    Montant propre à cette classe pour chaque type de frais (une école n'a pas la même
-                    scolarité en maternelle qu'en terminale). Laissez à 0 pour ne rien facturer de ce type
-                    à cette classe. Modifiable également depuis Comptabilité &gt; Frais Scolaires.
+                    Montant propre à cette classe pour chaque type de frais — <strong>y compris le prix
+                    d'inscription et de réinscription</strong> (une école n'a pas la même scolarité en
+                    maternelle qu'en terminale). Laissez à 0 pour ne rien facturer de ce type à cette
+                    classe. Modifiable également depuis Comptabilité &gt; Frais Scolaires.
                 </p>
                 {typesFrais.length === 0 ? (
                     <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Aucun type de frais configuré pour l'instant (Comptabilité &gt; Frais Scolaires).</p>
                 ) : (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
-                        {typesFrais.map(tf => (
-                            <div key={tf.type_frais_id} style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '12px', borderRadius: '12px', border: '1px solid var(--border-light)' }}>
-                                <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>{tf.libelle} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({tf.categorie})</span></label>
-                                <input type="number" min="0" value={tarifs[tf.type_frais_id] || ''}
-                                    onChange={e => setTarifs(prev => ({ ...prev, [tf.type_frais_id]: e.target.value }))}
-                                    placeholder="0" style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '14px', fontWeight: 600 }} />
-                            </div>
-                        ))}
+                        {/* Inscription et réinscription d'abord, mis en avant : c'est
+                            le prix que le fondateur cherche en priorité au moment
+                            d'accueillir un élève. */}
+                        {[...typesFrais].sort((a, b) => rangFrais(a.categorie) - rangFrais(b.categorie)).map(tf => {
+                            const enAvant = estFraisEntree(tf.categorie);
+                            return (
+                                <div key={tf.type_frais_id} style={{
+                                    display: 'flex', flexDirection: 'column', gap: '4px', padding: '12px', borderRadius: '12px',
+                                    border: `1px solid ${enAvant ? '#6ee7b7' : 'var(--border-light)'}`,
+                                    background: enAvant ? '#f0fdf4' : 'transparent',
+                                }}>
+                                    <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                        {tf.libelle} <span style={{ color: enAvant ? '#059669' : 'var(--text-muted)', fontWeight: enAvant ? 700 : 400 }}>({tf.categorie})</span>
+                                    </label>
+                                    <input type="number" min="0" value={tarifs[tf.type_frais_id] || ''}
+                                        onChange={e => setTarifs(prev => ({ ...prev, [tf.type_frais_id]: e.target.value }))}
+                                        placeholder="0" style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '14px', fontWeight: 600 }} />
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
                 {typesFrais.length > 0 && (
@@ -291,15 +318,19 @@ export default function ConfigurerClassePage() {
             </motion.div>
 
             {/* ═══════════════════════════════════════════ */}
-            {/* Section 1: Professeur Principal */}
+            {/* Section 1: Professeur Principal — PRIMAIRE seulement */}
+            {/* Au collège et au lycée, il n'y a pas de professeur principal :
+                chaque matière a son enseignant. On masque donc cette section
+                hors primaire. */}
             {/* ═══════════════════════════════════════════ */}
+            {classe?.cycle_code === 'PRM' && (
             <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
                 className="card" style={{ padding: '24px' }}>
                 <h3 style={{ fontSize: '17px', fontWeight: 700, margin: '0 0 6px', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)' }}>
                     <div style={{ padding: '8px', borderRadius: '10px', background: '#dbeafe', color: '#2563eb' }}>
                         <UserCheck size={18} />
                     </div>
-                    Désigner le Professeur Principal
+                    Désigner le Professeur Principal (instituteur titulaire)
                 </h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: '0 0 20px' }}>
                     Cliquez sur un enseignant pour le sélectionner comme professeur principal de cette classe.
@@ -362,6 +393,7 @@ export default function ConfigurerClassePage() {
                     })}
                 </div>
             </motion.div>
+            )}
 
             {/* ═══════════════════════════════════════════ */}
             {/* Section 2: Chefs de Classe */}

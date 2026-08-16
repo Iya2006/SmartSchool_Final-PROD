@@ -30,7 +30,7 @@ from app.models.academique import (
     Inscription, Eleve, AnneeScolaire, AuditLog,
 )
 from app.api.portail_enseignant import _enseignant_auth
-from app.api.emploi_du_temps import JOURS
+from app.api.emploi_du_temps import JOURS_SEMAINE
 
 ADMIN_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}
 STATUTS_PRESENCE_VALIDES = {"PRESENT", "ABSENT", "ABSENT_JUSTIFIE", "RETARD"}
@@ -108,11 +108,15 @@ def _serialize_seance(db: Session, s: Seance) -> dict:
 
 def _generer_seances_du_jour(db: Session, enseignant_id: int, jour_date: date_type) -> List[Seance]:
     """Génère à la demande (idempotent) les Seance du jour depuis les
-    CreneauEmploi ACTIFS de cet enseignant pour ce jour de semaine. Aucune
-    séance créée le week-end (CreneauEmploi.jour ne connaît que LUNDI..VENDREDI)."""
-    if jour_date.weekday() >= 5:
-        return []
-    jour_nom = JOURS[jour_date.weekday()]
+    CreneauEmploi ACTIFS de cet enseignant pour ce jour de semaine.
+
+    Le samedi et le dimanche étaient écartés d'office. Depuis que les jours
+    ouvrés sont propres à chaque école, un cours du samedi existe vraiment —
+    et sans séance, l'enseignant ne pouvait pas faire l'appel ce jour-là.
+    Le calendrier ne tranche plus : c'est l'emploi du temps qui décide. Un
+    jour sans créneau ne produit aucune séance, comme avant.
+    """
+    jour_nom = JOURS_SEMAINE[jour_date.weekday()]
 
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.enseignant_id == enseignant_id,
@@ -374,13 +378,13 @@ def _materialiser_le_jour(db: Session, etablissement_id: int, jour: date_type) -
     se lit dans ce qui reste PREVUE à la fin de la journée.
 
     Idempotent : rappeler la fonction sur le même jour ne crée aucun doublon.
-    Rien le week-end — l'emploi du temps ne connaît que LUNDI..VENDREDI.
+    Le week-end n'est plus écarté d'office : une école ouverte le samedi a de
+    vrais cours ce jour-là, et sans séance il n'y a pas d'appel possible. Un
+    jour sans créneau ne produit toujours aucune séance.
     Deux requêtes au total, quel que soit le nombre de classes : jamais une
     requête par créneau.
     """
-    if jour.weekday() >= 5:
-        return 0
-    jour_nom = JOURS[jour.weekday()]
+    jour_nom = JOURS_SEMAINE[jour.weekday()]
 
     creneaux = (
         db.query(CreneauEmploi, Classe)

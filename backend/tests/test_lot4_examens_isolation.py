@@ -337,3 +337,37 @@ class TestSuperAdminPlateformeRefuseSurExamens:
 
         resp = client.get("/api/examens/sujets", headers=headers)
         assert resp.status_code == 403
+
+
+class TestListeSujetsEnseignantNeTombePasEnErreur:
+    """Régression : `GET /api/examens/sujets` renvoyait 500 pour un compte
+    enseignant.
+
+    Le filtre « mes propres sujets » comparait la colonne entière
+    enseignant_id au « sub » du jeton, qui est une chaîne. PostgreSQL refuse
+    « integer = character varying » : le Centre des Examens tombait en erreur
+    dès qu'un enseignant ouvrait la liste de ses sujets.
+    """
+
+    def test_enseignant_liste_ses_sujets_200(self, client: TestClient, db: Session):
+        ecole = Ecole(db, "LISTE")
+        _creer_sujet(db, ecole.enseignant, ecole.matiere, titre="Compo maths")
+        headers = _headers(client, ecole.enseignant.matricule)
+
+        resp = client.get("/api/examens/sujets", headers=headers)
+        assert resp.status_code == 200, resp.text
+        titres = [s["titre"] for s in resp.json()]
+        assert "Compo maths" in titres
+
+    def test_enseignant_ne_voit_que_ses_sujets(self, client: TestClient, db: Session):
+        ecole = Ecole(db, "LISTE2")
+        collegue = ecole.ajouter_enseignant(db)
+        _creer_sujet(db, ecole.enseignant, ecole.matiere, titre="A moi")
+        _creer_sujet(db, collegue, ecole.matiere, titre="Au collegue")
+        headers = _headers(client, ecole.enseignant.matricule)
+
+        resp = client.get("/api/examens/sujets", headers=headers)
+        assert resp.status_code == 200, resp.text
+        titres = [s["titre"] for s in resp.json()]
+        assert "A moi" in titres
+        assert "Au collegue" not in titres

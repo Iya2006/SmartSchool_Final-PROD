@@ -41,6 +41,7 @@ from app.core.rate_limit import limiter
 from app.core.security import hash_password
 from app.models.academique import AnneeScolaire, Etablissement, Utilisateur
 from app.services.referentiel_evaluation import amorcer_types_evaluation
+from app.services.referentiel_scolaire import amorcer_referentiel_scolaire
 
 router = APIRouter(prefix="/api/inscription-etablissement", tags=["Inscription établissement"])
 
@@ -186,6 +187,13 @@ def inscrire_etablissement(
         # Sans ses types d'évaluation, l'école ne pourrait ni créer une épreuve
         # ni calculer une moyenne le jour de son activation.
         amorcer_types_evaluation(db, etablissement.etablissement_id)
+
+        # Cycles et niveaux du programme guinéen. Sans eux, l'école est
+        # inutilisable dès son premier écran : une classe exige un niveau, et
+        # une matière un cycle. Une école inscrite ici se retrouvait à devoir
+        # « créer ses cycles dans Paramètres » — alors qu'aucun écran ne le
+        # permet, et que ce référentiel est le même pour toutes les écoles.
+        amorcer_referentiel_scolaire(db, etablissement.etablissement_id)
 
         # Le fondateur EST l'administrateur de son école. Pas un SUPER_ADMIN :
         # ce rôle est celui de l'éditeur de la plateforme, et le donner ici

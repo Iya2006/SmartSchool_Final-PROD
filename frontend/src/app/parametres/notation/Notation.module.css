@@ -206,6 +206,12 @@
 .noteSurSelect:focus { border-color: var(--brand-primary); }
 .noteSurEdited { border-color: #f59e0b; background: #fffbeb; }
 
+/* Barème saisi librement : « / » suivi d'un champ où l'on écrit la valeur
+   (20, 10, 100…), chaque école ayant son propre système de notation. */
+.noteSurField { display: flex; align-items: center; gap: 0.3rem; }
+.noteSurSlash { font-size: 0.9rem; font-weight: 800; color: #94a3b8; }
+.noteSurField .noteSurSelect { text-align: center; }
+
 .checkCell { display: flex; justify-content: center; }
 .checkIcon { color: #10b981; cursor: default; }
 

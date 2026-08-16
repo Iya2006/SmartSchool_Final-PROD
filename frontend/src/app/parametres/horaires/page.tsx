@@ -16,10 +16,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
-    AlertTriangle, ArrowLeft, Check, Clock, Coffee, Loader2, Save, Timer,
+    AlertTriangle, ArrowLeft, Check, Clock, Coffee, Loader2, Plus, Save, Timer, Trash2,
 } from 'lucide-react';
 import api from '@/lib/api';
-import { HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
+import { HORAIRES_DEFAUT, formatPauses, parsePauses, type Horaires, type Pause } from '@/lib/horaires';
 
 const CATEGORIE = 'EMPLOI_DU_TEMPS';
 
@@ -36,12 +36,19 @@ export default function HorairesPage() {
             const res = await api.get(`/api/parametrage/settings?categorie=${CATEGORIE}`);
             const lus: Record<string, string> = {};
             for (const p of res.data || []) lus[p.cle] = p.valeur;
+            let pauses = parsePauses(lus['horaires.pauses']);
+            if (pauses.length === 0) {
+                const d = lus['horaires.pause_debut'];
+                const f = lus['horaires.pause_fin'];
+                pauses = d && f ? [{ debut: d, fin: f }] : HORAIRES_DEFAUT.pauses;
+            }
             setValeurs({
                 debut: lus['horaires.debut'] || HORAIRES_DEFAUT.debut,
                 fin: lus['horaires.fin'] || HORAIRES_DEFAUT.fin,
                 dureeCours: Number(lus['horaires.duree_cours']) || HORAIRES_DEFAUT.dureeCours,
-                pauseDebut: lus['horaires.pause_debut'] || HORAIRES_DEFAUT.pauseDebut,
-                pauseFin: lus['horaires.pause_fin'] || HORAIRES_DEFAUT.pauseFin,
+                pauses,
+                pauseDebut: pauses[0]?.debut || HORAIRES_DEFAUT.pauseDebut,
+                pauseFin: pauses[0]?.fin || HORAIRES_DEFAUT.pauseFin,
                 seuilRetard: Number(lus['horaires.seuil_retard']) || HORAIRES_DEFAUT.seuilRetard,
                 seuilAbsence: Number(lus['horaires.seuil_absence']) || HORAIRES_DEFAUT.seuilAbsence,
                 joursOuvres: lus['horaires.jours_ouvres']
@@ -64,9 +71,17 @@ export default function HorairesPage() {
 
     const coherent = (() => {
         if (valeurs.fin <= valeurs.debut) return "L'heure de fin doit être après l'heure de début.";
-        if (valeurs.pauseFin <= valeurs.pauseDebut) return "La fin de pause doit être après son début.";
-        if (valeurs.pauseDebut < valeurs.debut || valeurs.pauseFin > valeurs.fin)
-            return "La pause doit se situer à l'intérieur de la journée de cours.";
+        for (const p of valeurs.pauses) {
+            if (!p.debut || !p.fin) return "Chaque pause doit avoir une heure de début et de fin.";
+            if (p.fin <= p.debut) return "La fin d'une pause doit être après son début.";
+            if (p.debut < valeurs.debut || p.fin > valeurs.fin)
+                return "Chaque pause doit se situer à l'intérieur de la journée de cours.";
+        }
+        // Deux pauses ne peuvent pas se chevaucher.
+        const triees = [...valeurs.pauses].sort((a, b) => a.debut.localeCompare(b.debut));
+        for (let i = 1; i < triees.length; i++) {
+            if (triees[i].debut < triees[i - 1].fin) return "Deux pauses se chevauchent.";
+        }
         if (valeurs.dureeCours < 15 || valeurs.dureeCours > 240)
             return "La durée d'un cours doit être comprise entre 15 et 240 minutes.";
         if (valeurs.seuilAbsence <= valeurs.seuilRetard)
@@ -83,8 +98,11 @@ export default function HorairesPage() {
                 { categorie: CATEGORIE, cle: 'horaires.debut', valeur: valeurs.debut, type_valeur: 'STRING' },
                 { categorie: CATEGORIE, cle: 'horaires.fin', valeur: valeurs.fin, type_valeur: 'STRING' },
                 { categorie: CATEGORIE, cle: 'horaires.duree_cours', valeur: String(valeurs.dureeCours), type_valeur: 'NUMBER' },
-                { categorie: CATEGORIE, cle: 'horaires.pause_debut', valeur: valeurs.pauseDebut, type_valeur: 'STRING' },
-                { categorie: CATEGORIE, cle: 'horaires.pause_fin', valeur: valeurs.pauseFin, type_valeur: 'STRING' },
+                // Liste des pauses (source de vérité) + première pause en miroir
+                // pour les écrans qui ne lisaient encore qu'une seule pause.
+                { categorie: CATEGORIE, cle: 'horaires.pauses', valeur: formatPauses(valeurs.pauses), type_valeur: 'STRING' },
+                { categorie: CATEGORIE, cle: 'horaires.pause_debut', valeur: valeurs.pauses[0]?.debut || '', type_valeur: 'STRING' },
+                { categorie: CATEGORIE, cle: 'horaires.pause_fin', valeur: valeurs.pauses[0]?.fin || '', type_valeur: 'STRING' },
                 { categorie: CATEGORIE, cle: 'horaires.seuil_retard', valeur: String(valeurs.seuilRetard), type_valeur: 'NUMBER' },
                 { categorie: CATEGORIE, cle: 'horaires.seuil_absence', valeur: String(valeurs.seuilAbsence), type_valeur: 'NUMBER' },
                 { categorie: CATEGORIE, cle: 'horaires.jours_ouvres', valeur: valeurs.joursOuvres.join(','), type_valeur: 'STRING' },
@@ -112,9 +130,15 @@ export default function HorairesPage() {
     // Nombre de créneaux tenant dans la journée : rend le réglage concret.
     const creneaux = (() => {
         const min = (h: string) => Number(h.split(':')[0]) * 60 + Number(h.split(':')[1] || 0);
-        const total = min(valeurs.fin) - min(valeurs.debut) - (min(valeurs.pauseFin) - min(valeurs.pauseDebut));
+        const pauseTotale = valeurs.pauses.reduce((s, p) => s + Math.max(0, min(p.fin) - min(p.debut)), 0);
+        const total = min(valeurs.fin) - min(valeurs.debut) - pauseTotale;
         return total > 0 ? Math.floor(total / valeurs.dureeCours) : 0;
     })();
+
+    const ajouterPause = () => setValeurs(s => ({ ...s, pauses: [...s.pauses, { debut: '', fin: '' }] }));
+    const retirerPause = (i: number) => setValeurs(s => ({ ...s, pauses: s.pauses.filter((_, idx) => idx !== i) }));
+    const modifierPause = (i: number, champ: keyof Pause, v: string) =>
+        setValeurs(s => ({ ...s, pauses: s.pauses.map((p, idx) => idx === i ? { ...p, [champ]: v } : p) }));
 
     if (chargement) {
         return (
@@ -156,13 +180,42 @@ export default function HorairesPage() {
                 </p>
             </Section>
 
-            <Section titre="Pause" icone={<Coffee size={16} />}>
-                <Grille>
-                    <Heure label="Début de la pause" valeur={valeurs.pauseDebut} onChange={v => setValeurs(s => ({ ...s, pauseDebut: v }))} />
-                    <Heure label="Fin de la pause" valeur={valeurs.pauseFin} onChange={v => setValeurs(s => ({ ...s, pauseFin: v }))} />
-                </Grille>
+            <Section titre="Pauses" icone={<Coffee size={16} />}>
+                {valeurs.pauses.length === 0 ? (
+                    <p style={{ margin: 0, fontSize: '12.5px', color: '#94a3b8' }}>
+                        Aucune pause. La journée est continue.
+                    </p>
+                ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        {valeurs.pauses.map((p, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                <div style={{ flex: '1 1 130px' }}>
+                                    <Heure label={i === 0 ? 'Début' : `Début (pause ${i + 1})`} valeur={p.debut} onChange={v => modifierPause(i, 'debut', v)} />
+                                </div>
+                                <div style={{ flex: '1 1 130px' }}>
+                                    <Heure label={i === 0 ? 'Fin' : `Fin (pause ${i + 1})`} valeur={p.fin} onChange={v => modifierPause(i, 'fin', v)} />
+                                </div>
+                                <button onClick={() => retirerPause(i)} title="Retirer cette pause" style={{
+                                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                    width: '40px', height: '40px', borderRadius: '10px', cursor: 'pointer',
+                                    border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626',
+                                }}>
+                                    <Trash2 size={16} />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+                <button onClick={ajouterPause} style={{
+                    alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: '7px',
+                    padding: '9px 15px', borderRadius: '10px', cursor: 'pointer',
+                    border: '1px solid #a5f3fc', background: '#ecfeff', color: '#0e7490', fontSize: '13px', fontWeight: 700,
+                }}>
+                    <Plus size={15} /> Ajouter une pause
+                </button>
                 <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b' }}>
-                    Aucun cours n’est placé sur ce créneau.
+                    Aucun cours n’est placé sur les créneaux de pause. Une école peut en avoir
+                    plusieurs (récréation, déjeuner, pause de l’après-midi).
                 </p>
             </Section>
 

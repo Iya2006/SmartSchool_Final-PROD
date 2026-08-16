@@ -114,6 +114,9 @@ class PersonnelBase(BaseModel):
     lieu_naissance: Optional[str] = None
     adresse: Optional[str] = None
     numero_cni: Optional[str] = None
+    # Le fondateur choisit, à la création d'un directeur général, s'il voit la
+    # comptabilité. « O » par défaut ; ignoré pour les autres rôles.
+    acces_comptabilite: Optional[str] = "O"
 
 class PersonnelCreate(PersonnelBase):
     # Si accès système : login + mot de passe ; sinon None (staff technique sans accès)
@@ -141,6 +144,7 @@ class PersonnelUpdate(BaseModel):
     lieu_naissance: Optional[str] = None
     adresse: Optional[str] = None
     numero_cni: Optional[str] = None
+    acces_comptabilite: Optional[str] = None
     mot_de_passe: Optional[str] = None
     nom_utilisateur: Optional[str] = None
 
@@ -218,7 +222,11 @@ class ExemplaireOut(OrmBase):
     created_date: Optional[datetime] = None
 
 class EmpruntCreate(BaseModel):
-    exemplaire_id: int
+    # On peut prêter en désignant un exemplaire précis, OU seulement l'ouvrage :
+    # dans ce cas le bibliothécaire prête depuis le catalogue sans choisir la
+    # copie à la main, et le serveur retient un exemplaire disponible.
+    exemplaire_id: Optional[int] = None
+    ouvrage_id: Optional[int] = None
     eleve_id: Optional[int] = None
     enseignant_id: Optional[int] = None
     date_retour_prevue: date
@@ -474,6 +482,11 @@ class MatiereBase(BaseModel):
     categorie: Optional[str] = None
     est_obligatoire: str = "O"
     nb_heures_semaine: int = 2
+    # Barème de la matière (note sur X). Sans ce champ, la valeur était bien
+    # enregistrée en base mais jamais renvoyée : l'écran la relisait donc
+    # toujours à 20. On l'expose ici pour qu'elle se conserve à la création
+    # comme après modification.
+    note_sur: Optional[float] = 20
 
 class MatiereCreate(MatiereBase): pass
 class MatiereOut(OrmBase, MatiereBase):

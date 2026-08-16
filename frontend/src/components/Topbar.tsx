@@ -20,7 +20,7 @@ import Link from 'next/link';
 import { useApp } from '@/context/AppContext';
 import { useUI } from '@/context/UIContext';
 import { useAuth } from '@/context/AuthContext';
-import { isAdminSystemRole } from '@/lib/roleAccess';
+import { isAdminSystemRole, canAccessPathForRole } from '@/lib/roleAccess';
 import TopbarNotifications from './TopbarNotifications';
 import TopbarUserMenu from './TopbarUserMenu';
 import styles from './Topbar.module.css';
@@ -70,8 +70,18 @@ export default function Topbar() {
     const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
     const searchItems = useMemo(() => {
-        return isAdminSystemRole(user?.role) ? [...SEARCH_ITEMS, MONITORING_SEARCH_ITEM] : SEARCH_ITEMS;
-    }, [user?.role]);
+        const base = isAdminSystemRole(user?.role) ? [...SEARCH_ITEMS, MONITORING_SEARCH_ITEM] : SEARCH_ITEMS;
+        // La recherche ne propose que des écrans auxquels ce compte a droit :
+        // sinon un directeur de niveau retrouvait « Comptabilité » par la
+        // recherche, un écran qui lui est justement fermé.
+        return base.filter((item) => {
+            if (!canAccessPathForRole(user?.role, item.href, user?.role_base)) return false;
+            // Un DG à qui le fondateur a fermé la comptabilité ne la retrouve
+            // pas non plus par la recherche.
+            if (item.href.startsWith('/comptabilite') && user?.role === 'DG' && user?.acces_comptabilite === 'N') return false;
+            return true;
+        });
+    }, [user?.role, user?.role_base, user?.acces_comptabilite]);
 
     const searchResults = useMemo(() => {
         const q = query.trim().toLowerCase();

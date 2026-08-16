@@ -16,6 +16,8 @@ export interface UserInfo {
     // Rôle standard dont hérite un rôle créé par l'école (« CENSEUR »).
     // Absent pour les rôles standards : ils sont leur propre espace.
     role_base?: string | null;
+    // Le DG voit-il la comptabilité ? « O »/« N », choisi par le fondateur.
+    acces_comptabilite?: string | null;
     /**
      * Établissement du compte, dérivé côté serveur au moment du login — jamais
      * fourni ni modifiable par le client. Sert uniquement à afficher la bonne

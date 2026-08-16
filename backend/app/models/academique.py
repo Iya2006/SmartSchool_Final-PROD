@@ -51,6 +51,11 @@ class Utilisateur(Base):
     lieu_naissance = Column(String(100), nullable=True)
     adresse = Column(String(255), nullable=True)
     numero_cni = Column(String(50), nullable=True)
+    # Le directeur général voit-il la comptabilité ? Le fondateur tranche à la
+    # création. « O » par défaut : les comptes existants gardent leur accès, et
+    # ce réglage ne concerne que le DG (les autres rôles finance ne le lisent
+    # jamais). Voir main.py::exige_acces_finance.
+    acces_comptabilite = Column(String(1), default="O")
     created_date = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
@@ -356,6 +361,16 @@ class EleveParent(Base):
 
 
 class Enseignant(Base):
+    """Un enseignant peut exercer dans PLUSIEURS établissements : il a alors une
+    fiche par école, avec le même téléphone et le même e-mail. Leur unicité est
+    donc PAR ÉTABLISSEMENT — voir `app/core/identifiants.py` (`par_ecole=True`)
+    et la migration `2026_08_multi_01_parents_enseignants_multi_ecoles.py`.
+
+    Le `matricule`, lui, reste unique GLOBALEMENT : il est généré au format
+    `ENS-{etablissement_id}-{n}` (`app/core/matricules.py`), donc déjà distinct
+    d'une école à l'autre par construction. Le contraindre par école
+    n'ajouterait rien.
+    """
     __tablename__ = "ss_enseignants"
     enseignant_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
@@ -443,7 +458,10 @@ class CreneauEmploi(Base):
     classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
     matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
-    jour = Column(String(10), nullable=False)       # LUNDI, MARDI, MERCREDI, JEUDI, VENDREDI
+    # Un des sept jours. Les jours REELLEMENT ouverts sont propres a chaque
+    # ecole (Parametres > Emploi du temps) : cf. `_jours_ouvres` dans
+    # app/api/emploi_du_temps.py.
+    jour = Column(String(10), nullable=False)
     heure_debut = Column(String(5), nullable=False)  # "08:00"
     heure_fin = Column(String(5), nullable=False)    # "09:00"
     salle = Column(String(50))

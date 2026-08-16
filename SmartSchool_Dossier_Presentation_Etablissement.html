@@ -1,0 +1,811 @@
+<title>Dossier de présentation SmartSchool</title>
+<meta name="description" content="Dossier de présentation de SmartSchool destiné au fondateur d'un établissement scolaire.">
+<style>
+  :root{
+    --paper:#faf8f3; --surface:#ffffff; --ink:#1b2333; --muted:#5c6577;
+    --blue:#1d4ed8; --blue-deep:#16296b; --sky:#eaf1fd; --sky-line:#d5e2fb;
+    --amber:#b45309; --amber-soft:#fef3e2; --border:#e7e2d8;
+    --good:#15803d; --good-soft:#eef6ef; --warn:#b45309; --warn-soft:#fdf3e6;
+    --serif:Georgia,'Times New Roman',serif;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .doc{max-width:860px; margin:0 auto; padding:0 26px;}
+  h1,h2,h3,h4{font-family:var(--serif); color:var(--blue-deep); line-height:1.2; text-wrap:balance;}
+  p{margin:0 0 14px;}
+  a{color:var(--blue); text-decoration:none;}
+  strong{color:var(--ink);}
+
+  /* ---- Cover ---- */
+  .cover{
+    min-height:100vh; display:flex; flex-direction:column; justify-content:space-between;
+    padding:64px 26px 48px; background:
+      radial-gradient(1200px 520px at 78% -8%, var(--sky), transparent 60%),
+      linear-gradient(180deg,#ffffff, var(--paper));
+    border-bottom:3px solid var(--blue-deep);
+  }
+  .cover-top{display:flex; align-items:center; gap:14px;}
+  .mark{width:46px; height:46px; border-radius:12px; background:linear-gradient(150deg,var(--blue),var(--blue-deep));
+    display:grid; place-items:center; color:#fff; font-family:var(--serif); font-weight:700; font-size:24px; box-shadow:0 8px 22px rgba(22,41,107,.28);}
+  .cover-brand{font-family:var(--serif); font-weight:700; font-size:22px; letter-spacing:.2px; color:var(--blue-deep);}
+  .cover-brand span{color:var(--amber);}
+  .cover-mid{max-width:680px;}
+  .eyebrow{font-size:12.5px; letter-spacing:.18em; text-transform:uppercase; color:var(--amber); font-weight:800; margin-bottom:18px;}
+  .cover h1{font-size:52px; margin:0 0 18px; color:var(--blue-deep);}
+  .cover .lede{font-size:20px; color:var(--muted); font-family:var(--serif); font-style:italic; line-height:1.5; max-width:600px;}
+  .cover-foot{display:flex; justify-content:space-between; align-items:flex-end; gap:20px; flex-wrap:wrap; color:var(--muted); font-size:14px;}
+  .cover-foot b{color:var(--ink);}
+  .flag{width:44px; height:30px; border-radius:4px; overflow:hidden; display:flex; box-shadow:0 2px 8px rgba(0,0,0,.12);}
+  .flag i{flex:1;} .flag .r{background:#ce1126;} .flag .y{background:#fcd116;} .flag .g{background:#009460;}
+
+  /* ---- Sections ---- */
+  section{padding:40px 0; border-top:1px solid var(--border);}
+  section:first-of-type{border-top:none;}
+  .kicker{display:flex; align-items:baseline; gap:12px; margin-bottom:8px;}
+  .kicker .n{font-family:var(--serif); font-size:15px; font-weight:700; color:var(--amber);
+    border:1.5px solid var(--sky-line); background:var(--sky); border-radius:8px; padding:2px 10px; color:var(--blue-deep);}
+  .kicker .lbl{font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); font-weight:800;}
+  section h2{font-size:30px; margin:0 0 14px;}
+  section h3{font-size:20px; margin:26px 0 10px; color:var(--ink);}
+  section h4{font-size:16px; margin:18px 0 6px; color:var(--blue-deep); font-family:var(--sans); font-weight:800;}
+
+  /* ---- Callouts ---- */
+  .box{border:1px solid var(--border); border-radius:14px; padding:18px 20px; margin:18px 0; background:var(--surface);}
+  .box.sky{background:var(--sky); border-color:var(--sky-line);}
+  .box.amber{background:var(--amber-soft); border-color:#f5d9b0;}
+  .box .box-t{font-weight:800; color:var(--blue-deep); margin-bottom:6px; display:flex; align-items:center; gap:8px;}
+  .box.amber .box-t{color:var(--amber);}
+  .quote{font-family:var(--serif); font-style:italic; font-size:18px; color:var(--ink); border-left:3px solid var(--amber); padding:6px 0 6px 18px; margin:18px 0;}
+
+  /* 3 questions block */
+  .q3{border:1px solid var(--border); border-radius:14px; overflow:hidden; margin:18px 0; background:var(--surface);}
+  .q3 > div{padding:14px 18px; border-top:1px solid var(--border);}
+  .q3 > div:first-child{border-top:none;}
+  .q3 .lab{font-size:11.5px; letter-spacing:.12em; text-transform:uppercase; font-weight:800; color:var(--amber); margin-bottom:3px;}
+  .q3 .lab.b{color:var(--blue);}
+
+  ul,ol{margin:0 0 14px; padding-left:22px;} li{margin:5px 0;}
+  ul.clean{list-style:none; padding-left:0;}
+  ul.clean li{padding-left:26px; position:relative;}
+  ul.clean li::before{content:'✓'; position:absolute; left:0; top:0; color:var(--good); font-weight:900;}
+
+  /* ---- Tables ---- */
+  .twrap{overflow-x:auto; margin:18px 0; border:1px solid var(--border); border-radius:12px;}
+  table{border-collapse:collapse; width:100%; font-size:14px; min-width:520px;}
+  th,td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--border);}
+  thead th{background:var(--blue-deep); color:#fff; font-family:var(--sans); font-weight:700; font-size:12.5px; letter-spacing:.03em;}
+  tbody tr:nth-child(even){background:#fbfaf6;}
+  td.c,th.c{text-align:center;}
+  .yes{color:var(--good); font-weight:800;} .no{color:#b0a99b;} .part{color:var(--amber); font-weight:700; font-size:12.5px;}
+
+  /* status chips */
+  .chip{display:inline-block; font-size:11.5px; font-weight:800; padding:2px 9px; border-radius:999px; letter-spacing:.02em;}
+  .chip.ok{background:var(--good-soft); color:var(--good);}
+  .chip.part{background:var(--warn-soft); color:var(--warn);}
+
+  /* flow diagram */
+  .flow{display:flex; flex-direction:column; gap:0; margin:20px 0;}
+  .flow .node{background:var(--surface); border:1px solid var(--sky-line); border-left:4px solid var(--blue);
+    border-radius:10px; padding:12px 16px;}
+  .flow .node b{color:var(--blue-deep);}
+  .flow .node small{color:var(--muted);}
+  .flow .arm{height:16px; width:2px; background:var(--sky-line); margin-left:22px;}
+
+  /* screenshot placeholder */
+  .shot{border:1.5px dashed var(--sky-line); background:linear-gradient(180deg,#fff,var(--sky)); border-radius:12px;
+    padding:26px; text-align:center; color:var(--muted); margin:16px 0; font-size:13.5px;}
+  .shot b{display:block; color:var(--blue-deep); font-family:var(--serif); font-size:15px; margin-bottom:4px;}
+
+  /* TOC */
+  .toc ol{counter-reset:t; list-style:none; padding:0; columns:2; column-gap:34px;}
+  .toc li{counter-increment:t; margin:5px 0; padding-left:30px; position:relative; break-inside:avoid; font-size:14.5px;}
+  .toc li::before{content:counter(t,decimal-leading-zero); position:absolute; left:0; color:var(--amber); font-family:var(--serif); font-weight:700; font-size:13px;}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:18px 20px;}
+  .card h4{margin-top:0;}
+
+  footer{padding:40px 26px 60px; text-align:center; color:var(--muted); font-size:13px; border-top:3px solid var(--blue-deep); background:linear-gradient(180deg,var(--paper),#fff);}
+
+  @media (max-width:640px){
+    .cover h1{font-size:38px;} .toc ol{columns:1;} .grid2{grid-template-columns:1fr;}
+    body{font-size:15px;}
+  }
+
+  /* ---- Print → PDF ---- */
+  @page{size:A4; margin:16mm 15mm;}
+  @media print{
+    body{background:#fff; font-size:11pt;}
+    .doc{max-width:none; padding:0;}
+    .cover{min-height:auto; padding:0 0 24px; border-bottom:2px solid var(--blue-deep); page-break-after:always;
+      background:none;}
+    .cover h1{font-size:34pt;}
+    section{page-break-inside:auto; padding:16pt 0;}
+    section h2{page-break-after:avoid;} h3,h4{page-break-after:avoid;}
+    .box,.q3,.card,.twrap,.flow,.quote{page-break-inside:avoid;}
+    .pb{page-break-before:always;}
+    a{color:var(--ink);}
+    .shot{-webkit-print-color-adjust:exact; print-color-adjust:exact;}
+    thead th{-webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  }
+</style>
+
+<div class="cover">
+  <div class="cover-top">
+    <div class="mark">S</div>
+    <div class="cover-brand">Smart<span>School</span></div>
+  </div>
+  <div class="cover-mid">
+    <div class="eyebrow">Dossier de présentation · À l'attention du fondateur</div>
+    <h1>La gestion sereine de votre établissement scolaire</h1>
+    <p class="lede">Regrouper au même endroit les informations de votre école, donner à chaque personne exactement ce dont elle a besoin, et vous permettre de suivre votre établissement même à distance.</p>
+  </div>
+  <div class="cover-foot">
+    <div>
+      <div class="flag" aria-hidden="true"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div style="margin-top:8px;"><b>SmartSchool</b> — Système d'information scolaire<br>Conçu pour les établissements de la République de Guinée</div>
+    </div>
+    <div style="text-align:right;">Document de présentation<br><b>Édition établissement</b></div>
+  </div>
+</div>
+
+<div class="doc">
+
+<!-- SOMMAIRE -->
+<section class="toc">
+  <div class="kicker"><span class="n">—</span><span class="lbl">Sommaire</span></div>
+  <h2>Ce que vous allez découvrir</h2>
+  <ol>
+    <li>Bienvenue dans SmartSchool</li>
+    <li>SmartSchool en quelques mots</li>
+    <li>Les difficultés que SmartSchool résout</li>
+    <li>Comment SmartSchool fonctionne</li>
+    <li>Commencer : inscrire votre établissement</li>
+    <li>La première configuration</li>
+    <li>Les accès et la connexion</li>
+    <li>Plusieurs établissements, un même compte</li>
+    <li>Votre espace de fondateur</li>
+    <li>L'espace administration</li>
+    <li>L'espace enseignant</li>
+    <li>L'espace élève</li>
+    <li>L'espace parent</li>
+    <li>Les autres espaces</li>
+    <li>Qui peut faire quoi (tableaux)</li>
+    <li>Classes, élèves, enseignants</li>
+    <li>Évaluations, notes et compositions</li>
+    <li>Les présences</li>
+    <li>La gestion financière</li>
+    <li>Les messages et rappels</li>
+    <li>Sur téléphone et tablette</li>
+    <li>Quand Internet est coupé</li>
+    <li>Piloter à distance</li>
+    <li>La sécurité et la confidentialité</li>
+    <li>Comment circule l'information</li>
+    <li>Avant / Avec SmartSchool</li>
+    <li>Scénarios concrets</li>
+    <li>Questions fréquentes</li>
+    <li>Pourquoi adopter SmartSchool</li>
+    <li>La prochaine étape</li>
+  </ol>
+  <div class="box sky" style="margin-top:8px;">
+    <div class="box-t">Une note d'honnêteté, dès la première page</div>
+    <p style="margin:0;">Tout ce qui est décrit dans ce dossier existe réellement dans SmartSchool aujourd'hui. Lorsqu'une fonction est encore en cours de finition, nous l'indiquons clairement par la mention <span class="chip part">En cours de finition</span>. Nous préférons vous montrer la vérité plutôt que de belles promesses : c'est aussi cela, un partenaire de confiance.</p>
+  </div>
+</section>
+
+<!-- 1 -->
+<section class="pb">
+  <div class="kicker"><span class="n">01</span><span class="lbl">Introduction</span></div>
+  <h2>Bienvenue dans SmartSchool</h2>
+  <p>Monsieur le fondateur, imaginez que nous soyons assis dans votre bureau. Je suis venu vous présenter, tranquillement, un outil pensé pour une seule chose : <strong>vous aider à mieux tenir votre établissement, sans avoir besoin d'être présent partout et à tout moment.</strong></p>
+  <p>Diriger une école, c'est jongler chaque jour avec beaucoup d'informations : les élèves, les classes, les enseignants, les notes, les présences, les paiements des familles, les salaires du personnel. Ces informations sont souvent dispersées — dans des cahiers, des fichiers, des têtes, des conversations. Quand vous cherchez un renseignement précis, il faut appeler quelqu'un, attendre, parfois se déplacer.</p>
+  <p>SmartSchool a été conçu pour rassembler tout cela au même endroit, et pour donner à chaque personne de votre école — vous, votre administration, vos enseignants, vos élèves, leurs parents — <strong>un espace qui correspond exactement à son rôle</strong>. Chacun voit ce qui le concerne, et rien d'autre.</p>
+  <p class="quote">L'objectif n'est pas de vous ajouter du travail. Au contraire : regrouper les informations et faciliter le quotidien de votre établissement.</p>
+</section>
+
+<!-- 2 -->
+<section>
+  <div class="kicker"><span class="n">02</span><span class="lbl">Vue d'ensemble</span></div>
+  <h2>SmartSchool en quelques mots</h2>
+  <p>SmartSchool est un espace de travail commun pour votre école. On y retrouve, organisées et rangées, les grandes parties de la vie d'un établissement :</p>
+  <div class="grid2">
+    <div class="card"><h4>La scolarité</h4><p style="margin:0;">Les classes, les élèves, les inscriptions et réinscriptions, les enseignants, les matières et l'emploi du temps.</p></div>
+    <div class="card"><h4>Les résultats</h4><p style="margin:0;">Les évaluations, les compositions, les notes, les bulletins par période et le bulletin de fin d'année.</p></div>
+    <div class="card"><h4>La vie scolaire</h4><p style="margin:0;">Les présences des élèves, les entrées et sorties par carte, les incidents de discipline, les cours assurés ou non.</p></div>
+    <div class="card"><h4>Les finances</h4><p style="margin:0;">Les frais de scolarité, les paiements, les impayés, les reçus, ainsi que la paie du personnel.</p></div>
+    <div class="card"><h4>Les services</h4><p style="margin:0;">La bibliothèque, le parc informatique et ses pannes, les fournitures, les évènements et activités.</p></div>
+    <div class="card"><h4>Le pilotage</h4><p style="margin:0;">Un tableau de bord, un historique des actions, et des documents à imprimer ou à exporter.</p></div>
+  </div>
+  <p style="margin-top:16px;">Le tout s'utilise depuis un ordinateur, une tablette ou un téléphone, avec une connexion Internet — et, dans certaines limites, même lorsque la connexion est coupée.</p>
+</section>
+
+<!-- 3 -->
+<section>
+  <div class="kicker"><span class="n">03</span><span class="lbl">Le besoin</span></div>
+  <h2>Les difficultés que SmartSchool résout</h2>
+  <p>Ces situations vous parleront sans doute :</p>
+  <ul>
+    <li><strong>L'information est éparpillée.</strong> Le carnet de notes chez un enseignant, la liste des impayés chez le comptable, le dossier de l'élève au secrétariat.</li>
+    <li><strong>Il faut être sur place pour savoir.</strong> Dès que vous êtes en déplacement, vous dépendez d'un coup de téléphone pour connaître une situation.</li>
+    <li><strong>Les mêmes tâches se répètent.</strong> Recopier des listes, recalculer des moyennes, refaire des reçus.</li>
+    <li><strong>Le suivi est difficile.</strong> Savoir précisément qui a payé, quel cours n'a pas été assuré, quel élève est souvent absent demande un vrai effort.</li>
+    <li><strong>La communication prend du temps.</strong> Prévenir les familles, transmettre un bulletin, rappeler une échéance.</li>
+  </ul>
+  <div class="box amber">
+    <div class="box-t">Ce que SmartSchool change</div>
+    <p style="margin:0;">Les informations sont <strong>centralisées</strong>, <strong>rangées par métier</strong> et <strong>accessibles selon le rôle de chacun</strong>. Vous cessez de dépendre uniquement d'une présence physique pour savoir ce qui se passe chez vous.</p>
+  </div>
+</section>
+
+<!-- 4 -->
+<section>
+  <div class="kicker"><span class="n">04</span><span class="lbl">Le principe</span></div>
+  <h2>Comment SmartSchool fonctionne</h2>
+  <p>Le fonctionnement repose sur une idée simple : <strong>chaque personne dispose de son propre accès et de son propre espace.</strong></p>
+  <p>Quand quelqu'un se connecte, SmartSchool sait qui il est et quel est son rôle dans l'école. Il ouvre alors l'espace qui lui correspond : un enseignant arrive sur ses classes et ses notes, un comptable sur les paiements, un parent sur la scolarité de son enfant. Personne n'a besoin de chercher : chacun est conduit là où se trouve son travail.</p>
+  <p>Et surtout, <strong>chaque école a son propre espace</strong>. Les informations de votre établissement restent séparées de celles des autres écoles. Personne d'une autre école ne peut voir vos élèves, vos notes ou vos comptes.</p>
+  <div class="box sky">
+    <div class="box-t">En une phrase</div>
+    <p style="margin:0;">SmartSchool réunit les informations de votre école en un seul endroit, et remet à chaque personne exactement les accès dont elle a besoin — ni plus, ni moins.</p>
+  </div>
+</section>
+
+<!-- 5 -->
+<section class="pb">
+  <div class="kicker"><span class="n">05</span><span class="lbl">Démarrer</span></div>
+  <h2>Commencer : inscrire votre établissement</h2>
+  <p>Le tout début est volontairement simple. Depuis la page d'inscription de SmartSchool, vous remplissez une courte demande pour votre école. On vous demande :</p>
+  <ul>
+    <li>le <strong>nom de l'établissement</strong> et son <strong>type</strong> (par exemple école primaire, collège, lycée) ;</li>
+    <li>la <strong>ville</strong> et l'<strong>adresse</strong> ;</li>
+    <li>un <strong>téléphone</strong> et un <strong>e-mail</strong> de contact pour l'école ;</li>
+    <li>votre <strong>nom, prénom, e-mail et téléphone</strong> en tant que responsable, ainsi qu'un <strong>mot de passe</strong>.</li>
+  </ul>
+  <p>Une fois la demande envoyée, elle est <strong>vérifiée par l'équipe SmartSchool</strong> avant que votre école ne soit activée. C'est une sécurité : on s'assure qu'un établissement est réel avant de lui ouvrir la porte. Vous êtes prévenu par e-mail dès que c'est validé, et vous pouvez alors vous connecter.</p>
+  <div class="box">
+    <div class="box-t">Ce que SmartSchool prépare automatiquement pour vous</div>
+    <p style="margin:0 0 6px;">Dès la création de votre école, SmartSchool met déjà en place, sans que vous ayez à le faire :</p>
+    <ul class="clean" style="margin:0;">
+      <li>l'<strong>année scolaire en cours</strong> ;</li>
+      <li>votre <strong>compte de responsable</strong>, qui devient l'administrateur de votre école ;</li>
+      <li>les <strong>types d'épreuves de départ</strong>, pour que vous puissiez créer des évaluations et calculer des moyennes dès le premier jour.</li>
+    </ul>
+  </div>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Page d'inscription de l'établissement — le court formulaire de demande.</div>
+</section>
+
+<!-- 6 -->
+<section>
+  <div class="kicker"><span class="n">06</span><span class="lbl">Mise en route</span></div>
+  <h2>La première configuration</h2>
+  <p>Après validation, vous vous connectez et vous préparez votre école. Voici le chemin naturel :</p>
+  <div class="flow">
+    <div class="node"><b>1. Vous vous connectez</b> <small>— avec votre e-mail et votre mot de passe de responsable.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>2. Vous créez les comptes de votre équipe</b> <small>— administration, comptable, surveillant, enseignants… chacun avec son rôle.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>3. Vous mettez en place les classes</b> <small>— les niveaux, les classes, et les matières enseignées.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>4. Vous ajoutez enseignants et élèves</b> <small>— vous affectez les enseignants aux classes et aux matières, vous inscrivez les élèves.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>5. Vous réglez la scolarité</b> <small>— les frais par classe, pour que les factures se préparent toutes seules à l'inscription.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>6. L'école vit</b> <small>— notes, présences, paiements, communication : le travail quotidien commence.</small></div>
+  </div>
+  <p>Vous n'êtes pas obligé de tout faire vous-même : c'est le rôle de votre administration. Vous pouvez déléguer la saisie et garder, vous, la vue d'ensemble.</p>
+</section>
+
+<!-- 7 -->
+<section>
+  <div class="kicker"><span class="n">07</span><span class="lbl">Les accès</span></div>
+  <h2>Les accès et la connexion</h2>
+  <p>Chaque personne dispose de son propre accès. C'est ce qui garantit que seules les personnes autorisées entrent dans leur espace.</p>
+  <h4>Le personnel de l'école</h4>
+  <p>Les membres du personnel (administration, comptable, surveillant, etc.) se connectent avec un identifiant — leur e-mail, leur téléphone ou leur nom d'utilisateur — et leur mot de passe.</p>
+  <h4>Les enseignants et les parents</h4>
+  <p>Ils disposent d'un accès dédié à leur établissement. Comme une même personne peut travailler dans plusieurs écoles, elle indique le <strong>code de son établissement</strong> pour être conduite au bon endroit. Un élève, lui, se connecte avec son matricule.</p>
+  <div class="box sky">
+    <div class="box-t">Un compte sans mot de passe ne peut pas entrer</div>
+    <p style="margin:0;">Si un compte n'a pas encore reçu de mot de passe, l'accès est refusé et un message clair invite à en demander un à l'administration. Ainsi, un simple numéro de téléphone connu de tous ne suffit jamais à entrer dans un espace.</p>
+  </div>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Page de connexion — accès du personnel, et accès dédié « enseignant ou parent ».</div>
+</section>
+
+<!-- 8 -->
+<section class="pb">
+  <div class="kicker"><span class="n">08</span><span class="lbl">Cas particulier</span></div>
+  <h2>Plusieurs établissements, un même compte</h2>
+  <p>C'est une situation fréquente : un enseignant intervient dans deux écoles, ou un parent a des enfants dans deux établissements. SmartSchool en tient compte.</p>
+  <p class="quote">Une personne qui travaille dans plusieurs établissements peut retrouver chacun de ses établissements et accéder uniquement aux informations correspondant à celui qu'elle a choisi.</p>
+  <p>Concrètement : au moment de se connecter, la personne indique le <strong>code de l'établissement</strong> qu'elle souhaite ouvrir. SmartSchool la conduit alors dans cet établissement précis, et lui montre seulement les informations de cette école. Pour aller dans son autre école, elle sélectionne l'autre établissement.</p>
+  <div class="box amber">
+    <div class="box-t">L'essentiel à retenir</div>
+    <p style="margin:0;">Les données des différents établissements <strong>ne se mélangent jamais</strong>. Ce qui se passe dans une école reste dans cette école. Une personne ne peut pas, depuis un établissement, apercevoir les informations d'un autre.</p>
+  </div>
+  <h4>Un exemple</h4>
+  <p>Monsieur Diallo enseigne les mathématiques dans votre lycée et donne aussi des cours dans un collège voisin. Avec SmartSchool, il ouvre le matin votre lycée avec votre code d'établissement : il y voit vos classes, vos élèves, vos notes. L'après-midi, il ouvre le collège : il n'y retrouve que les informations de ce collège. Vos données ne lui apparaissent jamais quand il est ailleurs.</p>
+</section>
+
+<!-- 9 -->
+<section>
+  <div class="kicker"><span class="n">09</span><span class="lbl">Votre espace</span></div>
+  <h2>Votre espace de fondateur</h2>
+  <p>Cette partie compte particulièrement, parce qu'elle vous concerne directement. SmartSchool ne se contente pas de ranger des informations : il vous aide à <strong>piloter</strong> votre établissement.</p>
+  <p>En tant que fondateur, vous êtes le responsable de votre école — son administrateur principal. Depuis votre espace, vous disposez d'une vue d'ensemble et d'un accès étendu à ce qui compte.</p>
+
+  <h3>Ce que vous pouvez faire — et pourquoi c'est utile</h3>
+
+  <h4>Consulter la situation de votre établissement</h4>
+  <div class="q3">
+    <div><div class="lab">À quoi ça sert</div>Retrouver, au même endroit, les grandes informations de votre école : effectifs, classes, situation des paiements, activité récente.</div>
+    <div><div class="lab b">Ce que vous pouvez faire</div>Ouvrir votre tableau de bord et parcourir chaque partie : élèves, enseignants, classes, finances, vie scolaire.</div>
+    <div><div class="lab">Ce que cela vous apporte</div>Vous n'attendez plus qu'une personne présente sur place vous transmette une information : vous la retrouvez vous-même.</div>
+  </div>
+
+  <h4>Gérer les comptes et les rôles</h4>
+  <div class="q3">
+    <div><div class="lab">À quoi ça sert</div>Décider qui fait partie de votre école et ce que chacun peut faire.</div>
+    <div><div class="lab b">Ce que vous pouvez faire</div>Créer les comptes de votre équipe, leur attribuer un rôle (administration, comptable, surveillant, enseignant…), et voir qui occupe chaque poste.</div>
+    <div><div class="lab">Ce que cela vous apporte</div>Vous maîtrisez qui accède à quoi. Chacun reçoit précisément les accès de son travail.</div>
+  </div>
+
+  <h4>Suivre les résultats, les présences et les finances</h4>
+  <div class="q3">
+    <div><div class="lab">À quoi ça sert</div>Garder l'œil sur la marche réelle de l'établissement.</div>
+    <div><div class="lab b">Ce que vous pouvez faire</div>Consulter les notes et bulletins, l'état des présences et des cours assurés, les paiements reçus et les impayés, la paie du personnel.</div>
+    <div><div class="lab">Ce que cela vous apporte</div>Vous prenez vos décisions à partir d'informations réelles, pas d'impressions.</div>
+  </div>
+
+  <h4>Éditer des documents et exporter des données</h4>
+  <div class="q3">
+    <div><div class="lab">À quoi ça sert</div>Obtenir des documents propres à imprimer ou à conserver.</div>
+    <div><div class="lab b">Ce que vous pouvez faire</div>Imprimer des bulletins, des reçus, des fiches de classement ; exporter des listes (élèves, classes, notes).</div>
+    <div><div class="lab">Ce que cela vous apporte</div>Vous gardez une trace et vous produisez rapidement les documents officiels de votre école.</div>
+  </div>
+
+  <div class="box sky">
+    <div class="box-t">Un historique qui garde la mémoire</div>
+    <p style="margin:0;">SmartSchool conserve un journal des actions importantes réalisées dans votre école. En cas de doute, vous pouvez savoir ce qui a été fait, et par qui.</p>
+  </div>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Tableau de bord du fondateur / de la direction — la vue d'ensemble de l'école.</div>
+</section>
+
+<!-- 10 -->
+<section class="pb">
+  <div class="kicker"><span class="n">10</span><span class="lbl">Administration</span></div>
+  <h2>L'espace administration</h2>
+  <p>L'administration, c'est le cœur du travail quotidien. Là où le fondateur pilote et décide, l'administration <strong>fait fonctionner l'école au jour le jour</strong>.</p>
+  <div class="grid2">
+    <div class="card"><h4>Ses responsabilités</h4>
+      <ul style="margin:0;"><li>Inscrire et suivre les élèves</li><li>Gérer les enseignants et le personnel</li><li>Organiser les classes et les matières</li><li>Préparer l'emploi du temps</li><li>Suivre la vie de l'établissement</li></ul>
+    </div>
+    <div class="card"><h4>Ses outils</h4>
+      <ul style="margin:0;"><li>Un tableau de bord</li><li>La gestion des élèves et des familles</li><li>La gestion des enseignants</li><li>Les classes, matières et affectations</li><li>Les documents à imprimer et exporter</li></ul>
+    </div>
+  </div>
+  <div class="box">
+    <div class="box-t">Fondateur et administration : quelle différence ?</div>
+    <p style="margin:0;">Dans SmartSchool, le fondateur est le responsable de l'établissement — il a la vue la plus large. L'administration partage l'essentiel de ces outils de gestion pour faire tourner l'école, mais certains sujets sensibles, comme les finances, relèvent de rôles précis (direction, comptable). Chacun a ce qu'il lui faut pour son travail, sans plus.</p>
+  </div>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Espace administration — gestion des élèves et des classes.</div>
+</section>
+
+<!-- 11 -->
+<section>
+  <div class="kicker"><span class="n">11</span><span class="lbl">Enseignant</span></div>
+  <h2>L'espace enseignant</h2>
+  <p class="quote">« Qu'est-ce que SmartSchool va réellement changer dans mon travail ? »</p>
+  <p>L'enseignant retrouve dans son espace ses classes, ses matières, son emploi du temps, et les outils pour noter et suivre ses élèves.</p>
+
+  <h4>Les évaluations et les notes</h4>
+  <p><em>Avant SmartSchool :</em> le carnet de notes est personnel, les moyennes se calculent à la main, et transmettre les résultats à la direction demande du temps.<br>
+  <em>Avec SmartSchool :</em> l'enseignant crée ses évaluations, saisit ses notes, et les moyennes se calculent selon les règles de l'établissement. Les résultats rejoignent directement le dossier de l'élève.</p>
+
+  <h4>L'appel et les présences</h4>
+  <p><em>Avant :</em> l'appel se fait sur une feuille, se recopie, se perd parfois.<br>
+  <em>Avec :</em> l'enseignant fait l'appel de son cours dans SmartSchool. Au collège et au lycée, l'appel se fait cours par cours ; au primaire, une fois pour la demi-journée.</p>
+
+  <h4>L'emploi du temps et les cours</h4>
+  <p>L'enseignant retrouve ses cours de la journée, et peut ouvrir chacun pour faire l'appel. Un cours peut être marqué comme non assuré, avec un motif.</p>
+
+  <div class="box sky">
+    <div class="box-t">Un principe juste</div>
+    <p style="margin:0;">L'enseignant travaille sur ses classes et ses élèves. Il ne voit pas les salaires, ni les comptes de l'école, ni les données des autres écoles. Chacun son espace.</p>
+  </div>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Espace enseignant — saisie des notes et appel de la classe.</div>
+</section>
+
+<!-- 12 -->
+<section>
+  <div class="kicker"><span class="n">12</span><span class="lbl">Élève</span></div>
+  <h2>L'espace élève</h2>
+  <p>Pourquoi un élève utilise-t-il SmartSchool ? Pour <strong>suivre sa propre scolarité</strong>, simplement et à tout moment.</p>
+  <div class="grid2">
+    <div class="card"><h4>Ce qu'il consulte</h4>
+      <ul style="margin:0;"><li>Ses notes, évaluation par évaluation</li><li>Ses compositions et son classement par épreuve</li><li>Son emploi du temps</li><li>Ses absences</li><li>Des documents et informations scolaires</li></ul>
+    </div>
+    <div class="card"><h4>Ses limites</h4>
+      <p style="margin:0;">L'élève consulte ce qui le concerne, <strong>lui</strong>. Il ne modifie pas ses notes, ne voit pas celles des autres, et n'a accès à aucune information de gestion de l'école.</p>
+    </div>
+  </div>
+  <div class="box amber">
+    <div class="box-t">En cours de finition</div>
+    <p style="margin:0;">L'affichage du <strong>classement mensuel, par semestre et annuel</strong> et du <strong>bulletin de fin d'année</strong> dans l'espace élève est en cours de finition. Les notes, compositions et le classement par épreuve sont, eux, déjà disponibles.</p>
+  </div>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Espace élève — notes et résultats.</div>
+</section>
+
+<!-- 13 -->
+<section class="pb">
+  <div class="kicker"><span class="n">13</span><span class="lbl">Parent</span></div>
+  <h2>L'espace parent</h2>
+  <p>L'espace parent est pensé pour la <strong>tranquillité et le suivi</strong>. Le parent peut suivre la scolarité de son enfant sans dépendre uniquement d'un appel téléphonique ou d'un déplacement à l'école.</p>
+  <h4>Comment le parent accède</h4>
+  <p>Le parent se connecte à l'espace de l'établissement de son enfant. Son compte est <strong>relié à son ou ses enfants</strong> : il retrouve chacun d'eux et bascule de l'un à l'autre.</p>
+  <div class="grid2">
+    <div class="card"><h4>Ce qu'il suit</h4>
+      <ul style="margin:0;"><li>Les résultats et les notes de son enfant</li><li>Les bulletins par période</li><li>Les présences et absences</li><li>L'emploi du temps</li><li>La situation des paiements (factures, reçus)</li><li>Les messages de l'établissement</li></ul>
+    </div>
+    <div class="card"><h4>Ce qui reste protégé</h4>
+      <p style="margin:0;">Un parent ne voit que <strong>ses propres enfants</strong>, et uniquement dans l'école concernée. Il ne voit pas les informations des autres familles, ni celles réservées au personnel de l'établissement.</p>
+    </div>
+  </div>
+  <div class="box amber">
+    <div class="box-t">En cours de finition</div>
+    <p style="margin:0;">Le <strong>bulletin de fin d'année</strong> côté parent et une <strong>messagerie directe entre parent et enseignant</strong> sont en cours de finition. Aujourd'hui, le parent peut consulter les bulletins de période (une fois publiés par l'école) et échanger avec l'administration.</p>
+  </div>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Espace parent — suivi de l'enfant : notes, présences, paiements.</div>
+</section>
+
+<!-- 14 -->
+<section>
+  <div class="kicker"><span class="n">14</span><span class="lbl">Autres espaces</span></div>
+  <h2>Les autres espaces</h2>
+  <p>Une école, ce n'est pas que la direction et les enseignants. SmartSchool prévoit des espaces pour d'autres métiers :</p>
+  <div class="grid2">
+    <div class="card"><h4>Le comptable</h4><p style="margin:0;">Gère les frais, les paiements des familles, les impayés, les reçus, ainsi que la paie du personnel.</p></div>
+    <div class="card"><h4>Le surveillant</h4><p style="margin:0;">Fait l'appel des élèves, enregistre les incidents de discipline, voit les cours du jour et signale un cours non assuré.</p></div>
+    <div class="card"><h4>Le bibliothécaire</h4><p style="margin:0;">Suit les livres, les prêts en cours, les retards et les retours.</p></div>
+    <div class="card"><h4>Le responsable informatique</h4><p style="margin:0;">Gère le parc de matériel et le suivi des pannes, jusqu'à la résolution.</p></div>
+  </div>
+  <div class="box">
+    <div class="box-t">Le secrétariat — <span class="chip part">En cours de finition</span></div>
+    <p style="margin:0;">Un espace secrétariat existe, aujourd'hui surtout en consultation. La saisie complète des inscriptions par le secrétariat est en cours de finition ; en attendant, l'administration et le comptable réalisent ces opérations.</p>
+  </div>
+</section>
+
+<!-- 15 -->
+<section class="pb">
+  <div class="kicker"><span class="n">15</span><span class="lbl">Rôles &amp; accès</span></div>
+  <h2>Qui peut faire quoi</h2>
+  <p>Voici, de façon lisible, la répartition des accès. Chaque personne dispose des possibilités correspondant à son rôle.</p>
+
+  <h3>Les espaces et leur objet</h3>
+  <div class="twrap">
+    <table>
+      <thead><tr><th>Rôle</th><th>Son espace sert à…</th></tr></thead>
+      <tbody>
+        <tr><td>Fondateur / Direction</td><td>Piloter et superviser l'ensemble de l'établissement</td></tr>
+        <tr><td>Administration</td><td>Gérer élèves, enseignants, classes et scolarité au quotidien</td></tr>
+        <tr><td>Comptable</td><td>Suivre les paiements, les impayés et la paie</td></tr>
+        <tr><td>Surveillant</td><td>Présences, discipline, suivi des cours assurés</td></tr>
+        <tr><td>Enseignant</td><td>Notes, appel, emploi du temps de ses classes</td></tr>
+        <tr><td>Bibliothécaire</td><td>Livres, prêts et retours</td></tr>
+        <tr><td>Informatique</td><td>Matériel et pannes</td></tr>
+        <tr><td>Élève</td><td>Consulter sa propre scolarité</td></tr>
+        <tr><td>Parent</td><td>Suivre la scolarité de ses enfants</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Aperçu des possibilités par grande fonction</h3>
+  <p style="font-size:14px; color:var(--muted);">✓ accès complet · <span class="part">partiel</span> · — sans accès. Les possibilités réelles dépendent du réglage précis de chaque école.</p>
+  <div class="twrap">
+    <table>
+      <thead><tr><th>Fonction</th><th class="c">Fondateur</th><th class="c">Admin.</th><th class="c">Comptable</th><th class="c">Enseignant</th><th class="c">Élève</th><th class="c">Parent</th></tr></thead>
+      <tbody>
+        <tr><td>Élèves &amp; inscriptions</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td></tr>
+        <tr><td>Enseignants &amp; classes</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td></tr>
+        <tr><td>Notes &amp; bulletins</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c yes">✓</td><td class="c part">voir</td><td class="c part">voir</td></tr>
+        <tr><td>Présences</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c yes">✓</td><td class="c part">voir</td><td class="c part">voir</td></tr>
+        <tr><td>Finances &amp; paie</td><td class="c yes">✓</td><td class="c part">partiel</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td><td class="c part">ses frais</td></tr>
+        <tr><td>Documents &amp; exports</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c part">finance</td><td class="c part">ses classes</td><td class="c no">—</td><td class="c no">—</td></tr>
+        <tr><td>Réglages de l'école</td><td class="c yes">✓</td><td class="c yes">✓</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td><td class="c no">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="box sky"><div class="box-t">À retenir</div><p style="margin:0;">Un enseignant n'a pas les mêmes possibilités qu'un fondateur ou qu'un élève. Chacun dispose uniquement des accès nécessaires à son travail. C'est ce qui protège les informations sensibles de votre école.</p></div>
+</section>
+
+<!-- 16 -->
+<section class="pb">
+  <div class="kicker"><span class="n">16</span><span class="lbl">Organisation scolaire</span></div>
+  <h2>Classes, élèves et enseignants</h2>
+  <p>SmartSchool relie entre elles les grandes pièces de votre organisation :</p>
+  <div class="flow">
+    <div class="node"><b>Établissement</b> <small>— votre école, son année scolaire.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>Classes</b> <small>— rangées par niveau, avec leurs matières.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>Élèves</b> <small>— inscrits dans une classe, avec leur dossier et leur scolarité.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>Enseignants</b> <small>— affectés aux classes et aux matières.</small></div>
+  </div>
+  <p>Le système permet notamment d'<strong>affecter un enseignant</strong> à une classe et à une matière, d'<strong>inscrire</strong> un nouvel élève et de le placer dans sa classe, de gérer les <strong>niveaux</strong>, et d'organiser le passage d'une année à l'autre (promotion et réinscription).</p>
+  <div class="box">
+    <div class="box-t">La scolarité suit l'élève</div>
+    <p style="margin:0;">Quand vous inscrivez un élève dans une classe, SmartSchool prépare tout seul sa scolarité à partir des <strong>frais que vous avez réglés pour cette classe</strong>. Vous ne risquez pas d'oublier une facture : elle se crée automatiquement, au bon montant.</p>
+  </div>
+</section>
+
+<!-- 17 -->
+<section>
+  <div class="kicker"><span class="n">17</span><span class="lbl">Résultats</span></div>
+  <h2>Évaluations, notes et compositions</h2>
+  <p>C'est le cœur d'une école, et SmartSchool le traite avec soin — en s'adaptant à <strong>votre</strong> façon de noter, pas à une règle imposée.</p>
+  <h4>Qui fait quoi</h4>
+  <ul>
+    <li>L'<strong>enseignant</strong> crée ses évaluations et saisit les notes de ses élèves.</li>
+    <li>La <strong>direction et l'administration</strong> supervisent, centralisent et publient les bulletins.</li>
+    <li>L'<strong>élève et le parent</strong> consultent les résultats une fois disponibles.</li>
+  </ul>
+  <h4>Des règles à votre main</h4>
+  <p>Chaque école définit ses <strong>coefficients</strong> (par matière et par type d'épreuve), son <strong>barème</strong> et son <strong>nombre de périodes</strong> (par exemple deux semestres ou trois trimestres). Les moyennes se calculent selon ces réglages.</p>
+  <h4>Les compositions</h4>
+  <p>Une composition couvre en général toutes les matières d'une classe. SmartSchool permet de la préparer en une seule fois pour toute la classe, puis chaque enseignant saisit ses notes.</p>
+  <h4>Les bulletins</h4>
+  <p>SmartSchool produit les <strong>bulletins par période</strong> et le <strong>bulletin de fin d'année</strong>. L'école les vérifie, puis les <strong>publie</strong> aux familles quand elle est prête — c'est vous qui décidez du moment.</p>
+  <div class="box amber">
+    <div class="box-t">Les classes d'examen</div>
+    <p style="margin:0;">Pour les classes qui passent un examen national, le passage ne dépend pas d'une moyenne interne mais du <strong>résultat officiel</strong>. SmartSchool prévoit la saisie de ces résultats, y compris par import d'un fichier, et bloque le passage tant que le résultat officiel n'est pas connu.</p>
+  </div>
+</section>
+
+<!-- 18 -->
+<section class="pb">
+  <div class="kicker"><span class="n">18</span><span class="lbl">Vie scolaire</span></div>
+  <h2>Les présences</h2>
+  <p>SmartSchool distingue deux choses simples mais importantes :</p>
+  <div class="grid2">
+    <div class="card"><h4>La présence à l'école</h4><p style="margin:0;">Grâce à la carte de l'élève scannée à l'entrée, on sait qu'il est <strong>arrivé dans l'établissement</strong>, et à quelle heure. Un passage par jour suffit.</p></div>
+    <div class="card"><h4>La présence en cours</h4><p style="margin:0;">Grâce à l'appel fait en classe, on sait qu'il était <strong>présent au cours</strong>. Au collège et au lycée, à chaque cours ; au primaire, une fois dans la journée.</p></div>
+  </div>
+  <p>Les deux se rejoignent : la feuille d'appel indique qui est entré dans l'école, et signale le cas important de l'élève <strong>présent à l'école mais absent d'un cours</strong>.</p>
+  <h4>Les absences des enseignants</h4>
+  <p>SmartSchool applique une règle claire et juste : <strong>le surveillant constate, la direction décide.</strong> Le surveillant signale qu'un cours n'a pas été assuré ; tant que la direction n'a pas validé, <strong>aucune retenue n'est appliquée sur un salaire</strong>. Un enseignant peut manquer un cours et revenir en assurer un autre : le signalement porte sur les heures réellement manquées, pas sur toute la journée.</p>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Suivi des présences — appel de la classe et cours du jour.</div>
+</section>
+
+<!-- 19 -->
+<section>
+  <div class="kicker"><span class="n">19</span><span class="lbl">Finances</span></div>
+  <h2>La gestion financière</h2>
+  <p>SmartSchool réunit la partie financière de votre école, réservée à la direction et au comptable.</p>
+  <div class="grid2">
+    <div class="card"><h4>Du côté des familles</h4>
+      <ul style="margin:0;"><li>Les frais par classe et les factures</li><li>Les paiements et les reçus</li><li>Les impayés et les rappels</li><li>La solvabilité et le solde de chaque élève</li></ul>
+    </div>
+    <div class="card"><h4>Du côté de l'école</h4>
+      <ul style="margin:0;"><li>La paie du personnel</li><li>Les primes, avances et acomptes</li><li>Les dépenses et les fournisseurs</li><li>Les rapports et le tableau de bord financier</li></ul>
+    </div>
+  </div>
+  <p style="margin-top:14px;">La direction dispose ainsi d'une <strong>vue claire des rentrées et des sorties</strong>, et peut suivre qui a payé, qui reste à jour, et où en est la paie du personnel.</p>
+  <div class="box sky"><div class="box-t">Une valeur concrète</div><p style="margin:0;">Vous n'avez plus besoin d'être physiquement présent pour savoir combien il reste d'impayés ou si un reçu a été remis. L'information est là, à jour, réservée aux personnes autorisées.</p></div>
+  <div class="shot"><b>Emplacement pour capture d'écran</b>Espace comptabilité — paiements, impayés, reçus.</div>
+</section>
+
+<!-- 20 -->
+<section>
+  <div class="kicker"><span class="n">20</span><span class="lbl">Communication</span></div>
+  <h2>Les messages et les rappels</h2>
+  <p>SmartSchool permet à l'établissement de <strong>communiquer avec les familles et le personnel</strong> : informations générales, rappels de paiement, messages liés à la scolarité.</p>
+  <p>Un message peut être adressé à une personne, à tous les parents, aux parents d'une classe, ou aux enseignants. Côté finances, des <strong>avis et rappels de paiement</strong> peuvent être générés.</p>
+  <div class="box amber">
+    <div class="box-t">Ce qui est protégé, et ce qui vient</div>
+    <p style="margin:0 0 6px;">Un parent ne reçoit que les messages de <strong>son</strong> école — jamais ceux d'un autre établissement. Cette séparation est en place.</p>
+    <p style="margin:0;"><span class="chip part">En cours de finition</span> Une messagerie directe entre parent et enseignant (le parent écrit, l'enseignant répond) est en préparation. Aujourd'hui, le parent échange avec l'administration.</p>
+  </div>
+</section>
+
+<!-- 21 -->
+<section class="pb">
+  <div class="kicker"><span class="n">21</span><span class="lbl">Mobilité</span></div>
+  <h2>Sur téléphone et tablette</h2>
+  <p>SmartSchool s'utilise aussi bien sur un ordinateur que sur une tablette ou un téléphone. L'affichage s'adapte à l'écran.</p>
+  <p>SmartSchool peut également s'<strong>installer sur le téléphone</strong> comme une application, pour un accès rapide depuis l'écran d'accueil.</p>
+  <div class="twrap">
+    <table>
+      <thead><tr><th>Pour…</th><th>L'intérêt du mobile</th></tr></thead>
+      <tbody>
+        <tr><td>Le fondateur</td><td>Consulter la situation de l'école depuis n'importe où, en déplacement.</td></tr>
+        <tr><td>L'administration</td><td>Accéder aux informations sans être devant un ordinateur.</td></tr>
+        <tr><td>L'enseignant</td><td>Faire l'appel ou consulter son emploi du temps depuis la classe.</td></tr>
+        <tr><td>L'élève</td><td>Regarder ses notes et son emploi du temps sur son téléphone.</td></tr>
+        <tr><td>Le parent</td><td>Suivre son enfant depuis la maison ou le travail.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:14px; color:var(--muted);">SmartSchool s'utilise depuis le navigateur de l'appareil et peut s'installer comme une application. Ce n'est pas une application à télécharger sur un magasin d'applications.</p>
+</section>
+
+<!-- 22 -->
+<section>
+  <div class="kicker"><span class="n">22</span><span class="lbl">Continuité</span></div>
+  <h2>Quand Internet est coupé</h2>
+  <p>Dans beaucoup d'établissements, la connexion Internet n'est pas toujours stable. SmartSchool en tient compte.</p>
+  <p>Lorsque la connexion est interrompue, <strong>certaines informations et certaines actions restent disponibles</strong>, selon les possibilités prévues. Le travail commencé n'est pas perdu. Lorsque la connexion revient, les informations sont <strong>remises à jour</strong> pour que le travail continue normalement.</p>
+  <div class="box amber">
+    <div class="box-t">Une précision honnête</div>
+    <p style="margin:0;">SmartSchool <strong>ne fonctionne pas entièrement sans Internet</strong>. Certaines opérations en ont besoin. Ce qui est prévu, c'est de <strong>limiter l'interruption du travail</strong> lors des coupures, pas de tout remplacer.</p>
+  </div>
+</section>
+
+<!-- 23 -->
+<section>
+  <div class="kicker"><span class="n">23</span><span class="lbl">À distance</span></div>
+  <h2>Piloter à distance</h2>
+  <p class="quote">Votre établissement, même lorsque vous n'êtes pas sur place.</p>
+  <h4>Scénario 1 — Vous êtes en voyage</h4>
+  <p>Vous voulez savoir comment se porte votre école. Depuis votre téléphone, vous ouvrez votre espace et consultez les effectifs, la situation des paiements, l'activité récente — sans appeler personne.</p>
+  <h4>Scénario 2 — Vous voulez vérifier une information</h4>
+  <p>Un parent vous interpelle sur une facture. Vous retrouvez vous-même l'état de son paiement dans SmartSchool, et vous répondez en connaissance de cause.</p>
+  <h4>Scénario 3 — Une opération a été faite en votre absence</h4>
+  <p>Le comptable a enregistré des paiements, le surveillant a signalé une absence d'enseignant. Vous retrouvez ces informations dans votre espace, et l'historique vous dit ce qui a été fait.</p>
+  <h4>Scénario 4 — La direction travaille pendant votre absence</h4>
+  <p>La vie de l'école continue. Vous gardez une visibilité sur l'essentiel et vous pouvez, à distance, suivre les résultats, les présences et les finances.</p>
+</section>
+
+<!-- 24 -->
+<section class="pb">
+  <div class="kicker"><span class="n">24</span><span class="lbl">Confiance</span></div>
+  <h2>La sécurité et la confidentialité</h2>
+  <p>Vos informations sont sensibles. SmartSchool est construit pour les protéger.</p>
+  <ul class="clean">
+    <li><strong>Chaque personne a son propre accès</strong>, protégé par un mot de passe. Seules les personnes autorisées entrent.</li>
+    <li><strong>Chacun ne voit que ce qui le concerne.</strong> Un enseignant, un élève, un parent n'ont pas les accès de la direction.</li>
+    <li><strong>Chaque école est séparée des autres.</strong> Les informations d'un établissement ne sont jamais visibles depuis un autre.</li>
+    <li><strong>Un journal garde la trace</strong> des actions importantes, pour savoir ce qui a été fait, et par qui.</li>
+    <li><strong>Les tentatives répétées de connexion sont limitées</strong>, pour décourager les accès non autorisés.</li>
+  </ul>
+  <div class="box sky"><div class="box-t">Dit simplement</div><p style="margin:0;">La sécurité de SmartSchool ne repose pas sur un détail d'affichage, mais sur le fait que le système remet à chaque compte uniquement ce qui lui revient. C'est la règle de fond, appliquée partout.</p></div>
+</section>
+
+<!-- 25 -->
+<section>
+  <div class="kicker"><span class="n">25</span><span class="lbl">Circulation</span></div>
+  <h2>Comment circule l'information</h2>
+  <p>Chaque acteur dispose d'un espace adapté à ses responsabilités, et l'information circule naturellement de l'un à l'autre.</p>
+  <div class="flow">
+    <div class="node"><b>Établissement</b> <small>— le cadre commun : année scolaire, classes, réglages.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>Fondateur &amp; Direction</b> <small>— pilotent et supervisent.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>Administration</b> <small>— gère élèves, enseignants, classes, scolarité.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>Enseignants</b> <small>— notent, font l'appel, suivent leurs classes.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>Élèves</b> <small>— consultent leurs résultats et leur scolarité.</small></div>
+    <div class="arm"></div>
+    <div class="node"><b>Parents</b> <small>— suivent leurs enfants et échangent avec l'école.</small></div>
+  </div>
+  <p>Une note saisie par un enseignant devient consultable par l'élève et son parent une fois publiée. Un paiement enregistré par le comptable met à jour la situation de la famille. Une absence signalée par le surveillant remonte à la direction. Tout est relié.</p>
+</section>
+
+<!-- 26 -->
+<section class="pb">
+  <div class="kicker"><span class="n">26</span><span class="lbl">Comparaison</span></div>
+  <h2>Avant / Avec SmartSchool</h2>
+  <div class="grid2">
+    <div class="card" style="border-color:#e6c9c9; background:#fdf6f6;">
+      <h4 style="color:#a03030;">Avant SmartSchool</h4>
+      <ul style="margin:0;">
+        <li>Informations dispersées dans des cahiers et des fichiers</li>
+        <li>Recherche lente d'un renseignement</li>
+        <li>Nécessité d'être présent pour savoir</li>
+        <li>Calculs et recopies répétitifs</li>
+        <li>Suivi difficile des paiements et des absences</li>
+        <li>Communication avec les familles longue et incertaine</li>
+      </ul>
+    </div>
+    <div class="card" style="border-color:#c9e0cd; background:#f4faf5;">
+      <h4 style="color:var(--good);">Avec SmartSchool</h4>
+      <ul style="margin:0;">
+        <li>Informations réunies et rangées au même endroit</li>
+        <li>Accès rapide à ce que l'on cherche</li>
+        <li>Visibilité à distance, sur téléphone ou ordinateur</li>
+        <li>Moyennes et documents préparés par le système</li>
+        <li>Suivi clair des paiements, des présences, des cours</li>
+        <li>Messages et rappels vers les bonnes personnes</li>
+      </ul>
+    </div>
+  </div>
+  <p style="font-size:14px; color:var(--muted); margin-top:12px;">Nous ne promettons pas de chiffres d'économie miracles. Nous promettons de l'organisation, de la visibilité et de la continuité — ce qui, au quotidien, fait une vraie différence.</p>
+</section>
+
+<!-- 27 -->
+<section>
+  <div class="kicker"><span class="n">27</span><span class="lbl">Une journée</span></div>
+  <h2>Scénarios concrets</h2>
+  <h4>Un lundi matin dans une école équipée de SmartSchool</h4>
+  <p>À l'entrée, les élèves passent leur carte : les arrivées sont enregistrées. En classe, chaque enseignant fait l'appel de son cours. Au bureau, le comptable enregistre les paiements du matin. À la surveillance, un cours non assuré est signalé à la direction. Et vous, depuis votre téléphone dans un embouteillage, vous jetez un œil à la situation de l'école.</p>
+  <h4>Un enseignant saisit une note</h4>
+  <p>Madame Camara termine de corriger sa composition. Elle saisit les notes dans SmartSchool. La moyenne se calcule selon les règles de l'école. Une fois le bulletin publié, l'élève et son parent peuvent la consulter — sans qu'aucune feuille ne circule.</p>
+  <h4>Un parent veut vérifier une information</h4>
+  <p>Le père d'un élève se demande si la scolarité est à jour. Le soir, chez lui, il ouvre l'espace parent, sélectionne son enfant, et voit l'état de ses paiements et de ses reçus. Il est rassuré, sans avoir appelé l'école.</p>
+</section>
+
+<!-- 28 -->
+<section class="pb">
+  <div class="kicker"><span class="n">28</span><span class="lbl">Parcours</span></div>
+  <h2>De l'inscription à l'utilisation quotidienne</h2>
+  <ol>
+    <li><strong>Inscription</strong> de l'établissement et vérification par SmartSchool.</li>
+    <li><strong>Création de l'école</strong> et de votre compte de responsable (préparés automatiquement).</li>
+    <li><strong>Configuration</strong> : classes, niveaux, matières.</li>
+    <li><strong>Création des comptes</strong> de l'équipe et <strong>attribution des rôles</strong>.</li>
+    <li><strong>Ajout des enseignants</strong> et affectation aux classes et matières.</li>
+    <li><strong>Inscription des élèves</strong> et rattachement des parents.</li>
+    <li><strong>Réglage de la scolarité</strong> (frais par classe).</li>
+    <li><strong>Utilisation quotidienne</strong> : notes, présences, paiements, communication.</li>
+    <li><strong>Suivi et pilotage</strong> depuis votre espace, y compris à distance.</li>
+    <li><strong>Fin d'année</strong> : bulletins, résultats, passage et réinscription.</li>
+  </ol>
+</section>
+
+<!-- 29 -->
+<section>
+  <div class="kicker"><span class="n">29</span><span class="lbl">FAQ</span></div>
+  <h2>Questions fréquentes</h2>
+  <div class="q3" style="border:none; padding:0;">
+  </div>
+  <h4>SmartSchool fonctionne-t-il sur téléphone ?</h4>
+  <p>Oui. Il s'utilise sur ordinateur, tablette et téléphone, et peut s'installer sur le téléphone comme une application.</p>
+  <h4>Que se passe-t-il si Internet est coupé ?</h4>
+  <p>Certaines informations et certaines actions restent disponibles selon ce qui est prévu, et les informations sont remises à jour au retour de la connexion. SmartSchool ne fonctionne toutefois pas entièrement sans Internet.</p>
+  <h4>Puis-je gérer mon établissement à distance ?</h4>
+  <p>Oui. Vous pouvez consulter la situation de votre école depuis n'importe où, sur votre téléphone ou votre ordinateur.</p>
+  <h4>Chaque utilisateur voit-il toutes les informations ?</h4>
+  <p>Non. Chacun ne voit que ce qui correspond à son rôle. C'est une règle appliquée partout.</p>
+  <h4>Un enseignant peut-il travailler dans plusieurs établissements ?</h4>
+  <p>Oui. Il accède à chacun de ses établissements séparément, en indiquant le code de l'école, et ne voit à chaque fois que les informations de celle-ci.</p>
+  <h4>Un élève peut-il avoir son propre compte ?</h4>
+  <p>Oui. Il se connecte avec son matricule et consulte sa scolarité.</p>
+  <h4>Un parent peut-il suivre son enfant ?</h4>
+  <p>Oui. Son compte est relié à ses enfants ; il suit leurs résultats, présences et paiements dans l'école concernée.</p>
+  <h4>Qui peut modifier les informations ?</h4>
+  <p>Seules les personnes dont le rôle le permet. Un élève ou un parent consulte, mais ne modifie pas les données de l'école.</p>
+  <h4>Comment les données de deux établissements sont-elles séparées ?</h4>
+  <p>Chaque école dispose de son propre espace. Les informations d'un établissement ne sont jamais visibles depuis un autre.</p>
+</section>
+
+<!-- 30 -->
+<section class="pb">
+  <div class="kicker"><span class="n">30</span><span class="lbl">Décision</span></div>
+  <h2>Pourquoi adopter SmartSchool, et la prochaine étape</h2>
+  <p>SmartSchool n'est pas seulement un logiciel où l'on range des informations. C'est un <strong>espace commun de gestion, de coordination et de pilotage</strong> de votre établissement, dans lequel chaque personne dispose des outils et des informations correspondant à son rôle.</p>
+  <div class="grid2">
+    <div class="card"><h4>Pour vous, fondateur</h4><p style="margin:0;">Une vue d'ensemble, à distance, sans dépendre d'une présence permanente.</p></div>
+    <div class="card"><h4>Pour votre administration</h4><p style="margin:0;">Un quotidien plus simple, des informations rangées et partagées.</p></div>
+    <div class="card"><h4>Pour vos enseignants</h4><p style="margin:0;">Moins de recopies, des notes et un appel centralisés.</p></div>
+    <div class="card"><h4>Pour vos élèves et parents</h4><p style="margin:0;">Un accès clair aux informations qui les concernent.</p></div>
+  </div>
+  <div class="box amber" style="margin-top:20px;">
+    <div class="box-t">La prochaine étape</div>
+    <p style="margin:0;">Le mieux, maintenant, est une <strong>démonstration</strong> de SmartSchool avec vos propres besoins en tête. Nous pourrons parcourir ensemble les espaces, répondre à vos questions, et envisager une mise en place dans votre établissement, à votre rythme.</p>
+  </div>
+  <p class="quote" style="margin-top:24px;">SmartSchool a été pensé pour vous permettre de mieux suivre votre établissement, sans avoir besoin d'être présent partout et à tout moment. C'est tout l'objet de cet outil : vous simplifier la gestion, et vous redonner de la visibilité.</p>
+</section>
+
+</div>
+
+<footer>
+  <div style="font-family:var(--serif); font-size:18px; color:var(--blue-deep); margin-bottom:6px;">Smart<span style="color:var(--amber);">School</span></div>
+  Dossier de présentation à l'attention du fondateur d'établissement · République de Guinée<br>
+  Les fonctions signalées « en cours de finition » ne sont pas présentées comme disponibles.
+</footer>

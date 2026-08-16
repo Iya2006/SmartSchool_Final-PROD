@@ -579,6 +579,38 @@ enseignant**. C'est un manque d'usage, pas de logiciel.
 
 ---
 
+## 7. Le portail parent ne montre que son école (14/08/2026)
+
+Couvert par `tests/test_portails_isolation.py::test_un_parent_ne_recoit_pas_la_diffusion_d_une_autre_ecole`.
+
+La requête des messages du portail parent (`get_messages_parent`,
+`count_non_lus_parent`, `marquer_lu_parent`) n'avait **aucun filtre
+d'établissement**. Les diffusions `TOUS_PARENTS` / `TOUS` partant sans borne, un
+parent de TrillionX voyait « Information paie du personnel » diffusée à tous les
+parents d'une **autre** école — un message qui ne le concerne ni par son école
+ni par son contenu. Constaté en vrai : parent id 1 de l'école 3 recevait trois
+messages `etablissement_id=1`.
+
+Corrigé : `_ecoles_du_parent(db, parent_id)` renvoie l'ensemble des écoles des
+enfants réels du parent (un parent peut en avoir dans deux écoles — Cas B), et
+les trois requêtes bornent `Message.etablissement_id` à cet ensemble. Après
+correction, ce parent voit 0 message fantôme.
+
+**À faire encore côté portails famille (signalé, non traité) :**
+- *Bulletins* : ils existent (calculés) mais restent `CALCULE` tant que l'école
+  ne les publie pas — c'est le garde-fou correct (`PUT /bulletins/…/publier`,
+  `…/publier-tout`). Les bulletins de démo de l'école 3 ont été publiés en base
+  pour la recette. Le **bulletin annuel** (`trimestre_id` NULL) n'est atteignable
+  ni par `publier-tout` (qui exige un `trimestre_id`) ni par l'UI parent (qui
+  n'affiche que des boutons de période) : vrai manque à combler.
+- *Messagerie parent ↔ enseignant* : le parent n'écrit aujourd'hui qu'à
+  l'administration (`envoyer_message_parent`). Une vraie messagerie interne
+  parent↔professeur (et la réponse du professeur) reste à construire.
+- *Classement élève* : le portail montre les notes et le classement par épreuve ;
+  le classement mensuel / par semestre / annuel demandé n'est pas encore exposé.
+
+---
+
 ### Reste à faire
 
 - [ ] Recette fonctionnelle par l'établissement pilote sur une classe réelle

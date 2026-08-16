@@ -34,6 +34,7 @@ import {
     Zap,
     CalendarClock,
     QrCode,
+    Send,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
@@ -230,6 +231,28 @@ type CoursDuJour = {
     heure_fin_prevue: string;
     statut: string;
     appel_fait: boolean;
+};
+
+/** Une séance dans l'historique des appels : ce qui était prévu, et la réalité
+ *  de l'appel (présents / absents / retards). */
+type SeanceHist = {
+    seance_id: number;
+    classe: string;
+    matiere: string;
+    enseignant_prevu: string;
+    enseignant_reel: string | null;
+    date_seance: string;
+    heure_debut_prevue: string;
+    heure_fin_prevue: string;
+    statut: string;
+    appel_fait: boolean;
+    nb_presents: number | null;
+    nb_absents: number | null;
+    nb_retards: number | null;
+};
+
+type SeanceHistDetail = SeanceHist & {
+    eleves: { eleve: string; matricule: string | null; statut: string }[];
 };
 
 type ClasseAppel = { classe_id: number; libelle: string };
@@ -493,6 +516,17 @@ function BibliothecairePortal() {
     const [filtrePrets, setFiltrePrets] = useState<'EN_RETARD' | 'EN_COURS' | 'RENDU'>('EN_RETARD');
     const [pretsLoading, setPretsLoading] = useState(false);
     const [retourEnCours, setRetourEnCours] = useState<number | null>(null);
+    // Chercher dans la circulation : retrouver un livre ou un emprunteur sans
+    // faire défiler toute la liste.
+    const [rechercheP, setRechercheP] = useState('');
+    const [rappelsEnCours, setRappelsEnCours] = useState(false);
+    // Prêter depuis le catalogue : le livre choisi, l'élève cherché, la date.
+    const [pretOuvrage, setPretOuvrage] = useState<Ouvrage | null>(null);
+    const [pretRechercheEleve, setPretRechercheEleve] = useState('');
+    const [pretResultats, setPretResultats] = useState<EleveOption[]>([]);
+    const [pretEleve, setPretEleve] = useState<EleveOption | null>(null);
+    const [pretDate, setPretDate] = useState('');
+    const [pretEnCours, setPretEnCours] = useState(false);
 
     const chargerPrets = useCallback(async () => {
         setPretsLoading(true);
@@ -524,6 +558,69 @@ function BibliothecairePortal() {
             setError(getErrorMessage(err));
         } finally {
             setRetourEnCours(null);
+        }
+    };
+
+    // La circulation, filtrée sur ce qu'on cherche : titre, code ou emprunteur.
+    const pretsAffiches = useMemo(() => {
+        const q = rechercheP.trim().toLowerCase();
+        if (!q) return prets;
+        return prets.filter((p) => [p.titre, p.emprunteur, p.code_exemplaire, p.matricule]
+            .some((v) => (v || '').toLowerCase().includes(q)));
+    }, [prets, rechercheP]);
+
+    // Un rappel à tous les élèves en retard, d'un seul geste : ils le lisent
+    // dans leur espace au lieu qu'on les cherche un à un.
+    const envoyerRappels = async () => {
+        setRappelsEnCours(true); setError(null); setSuccess(null);
+        try {
+            const res = await api.post('/api/bibliotheque/emprunts/rappels', {});
+            setSuccess(res.data?.message || 'Rappels envoyés.');
+            await chargerPrets();
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setRappelsEnCours(false);
+        }
+    };
+
+    // Chercher l'élève à qui prêter — sur toute l'école, pas une liste tronquée.
+    useEffect(() => {
+        const terme = pretRechercheEleve.trim();
+        if (terme.length < 2) { setPretResultats([]); return; }
+        let annule = false;
+        const minuteur = setTimeout(() => {
+            api.get<EleveOption[]>(`/api/eleves?statut=ACTIF&limit=20&search=${encodeURIComponent(terme)}`)
+                .then((r) => { if (!annule) setPretResultats(r.data || []); })
+                .catch(() => { if (!annule) setPretResultats([]); });
+        }, 280);
+        return () => { annule = true; clearTimeout(minuteur); };
+    }, [pretRechercheEleve]);
+
+    const ouvrirPret = (ouvrage: Ouvrage) => {
+        setPretOuvrage(ouvrage);
+        setPretEleve(null); setPretRechercheEleve(''); setPretResultats([]);
+        // Par défaut, à rendre dans deux semaines.
+        const d = new Date(); d.setDate(d.getDate() + 14);
+        setPretDate(d.toISOString().slice(0, 10));
+    };
+
+    const confirmerPret = async () => {
+        if (!pretOuvrage || !pretEleve || !pretDate) return;
+        setPretEnCours(true); setError(null); setSuccess(null);
+        try {
+            await api.post('/api/bibliotheque/emprunts', {
+                ouvrage_id: pretOuvrage.ouvrage_id,
+                eleve_id: pretEleve.eleve_id,
+                date_retour_prevue: pretDate,
+            });
+            setSuccess(`« ${pretOuvrage.titre} » prêté à ${pretEleve.prenom} ${pretEleve.nom}, à rendre le ${new Date(pretDate).toLocaleDateString('fr-FR')}.`);
+            setPretOuvrage(null); setPretEleve(null);
+            await Promise.all([chargerPrets(), loadLibrary()]);
+        } catch (err) {
+            setError(getErrorMessage(err));
+        } finally {
+            setPretEnCours(false);
         }
     };
 
@@ -689,7 +786,7 @@ function BibliothecairePortal() {
                                 Enregistrer un retour remet l&apos;exemplaire au rayon.
                             </p>
                         </div>
-                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
                             {([
                                 { v: 'EN_RETARD' as const, l: 'En retard', c: '#dc2626' },
                                 { v: 'EN_COURS' as const, l: 'Dehors', c: '#7c3aed' },
@@ -700,6 +797,24 @@ function BibliothecairePortal() {
                                     {o.l}
                                 </button>
                             ))}
+                            {/* Prévenir tous les retardataires d'un geste. */}
+                            {filtrePrets === 'EN_RETARD' && (
+                                <button type="button" onClick={envoyerRappels} disabled={rappelsEnCours}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '10px 16px', borderRadius: '13px', border: 'none', background: '#dc2626', color: 'white', fontWeight: 800, fontSize: '13px', cursor: rappelsEnCours ? 'wait' : 'pointer' }}>
+                                    {rappelsEnCours ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                                    Envoyer les rappels
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Chercher dans la circulation. */}
+                    <div style={{ padding: '14px 24px', borderBottom: '1px solid #f1f5f9' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 13px', borderRadius: '14px', background: '#f8fafc', border: '1px solid #e2e8f0', maxWidth: '420px' }}>
+                            <Search size={17} style={{ color: '#94a3b8', flexShrink: 0 }} />
+                            <input value={rechercheP} onChange={(e) => setRechercheP(e.target.value)}
+                                placeholder="Rechercher un livre, un code ou un emprunteur…"
+                                style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '14px', color: '#0f172a' }} />
                         </div>
                     </div>
 
@@ -709,15 +824,16 @@ function BibliothecairePortal() {
                                 <Loader2 size={20} className="animate-spin" style={{ verticalAlign: 'middle', marginRight: 8 }} />
                                 Chargement…
                             </p>
-                        ) : prets.length === 0 ? (
+                        ) : pretsAffiches.length === 0 ? (
                             <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
-                                {filtrePrets === 'EN_RETARD' ? 'Aucun livre en retard — le fonds est à jour.'
+                                {rechercheP.trim() ? `Aucun résultat pour « ${rechercheP.trim()} ».`
+                                    : filtrePrets === 'EN_RETARD' ? 'Aucun livre en retard — le fonds est à jour.'
                                     : filtrePrets === 'EN_COURS' ? 'Aucun livre sorti actuellement.'
                                     : 'Aucun retour enregistré.'}
                             </p>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column' }}>
-                                {prets.map((pret, idx) => (
+                                {pretsAffiches.map((pret, idx) => (
                                     <div key={pret.emprunt_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: pret.en_retard ? '#fef2f2' : 'transparent', flexWrap: 'wrap' }}>
                                         <div style={{ minWidth: '230px', flex: '1 1 260px' }}>
                                             <p style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: '#0f172a' }}>{pret.titre}</p>
@@ -834,6 +950,11 @@ function BibliothecairePortal() {
                                                 {ouvrage.niveau_cible && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#eef2ff', color: '#4338ca', fontSize: '11px', fontWeight: 800 }}>{ouvrage.niveau_cible}</span>}
                                                 {ouvrage.emplacement && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#fff7ed', color: '#9a3412', fontSize: '11px', fontWeight: 800 }}>{ouvrage.emplacement}</span>}
                                             </div>
+                                            {/* Prêter ce livre à un élève, directement depuis le catalogue. */}
+                                            <button type="button" disabled={(ouvrage.nb_disponibles || 0) <= 0} onClick={() => ouvrirPret(ouvrage)}
+                                                style={{ marginTop: '14px', width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '11px', borderRadius: '14px', border: 'none', background: (ouvrage.nb_disponibles || 0) > 0 ? '#7c3aed' : '#e2e8f0', color: (ouvrage.nb_disponibles || 0) > 0 ? 'white' : '#94a3b8', fontWeight: 900, fontSize: '13.5px', cursor: (ouvrage.nb_disponibles || 0) > 0 ? 'pointer' : 'not-allowed' }}>
+                                                <BookOpen size={16} /> {(ouvrage.nb_disponibles || 0) > 0 ? 'Prêter à un élève' : 'Aucun exemplaire libre'}
+                                            </button>
                                         </div>
                                     </motion.article>
                                 ))}
@@ -868,6 +989,70 @@ function BibliothecairePortal() {
                         </div>
                     </aside>
                 </section>
+
+                {/* ═══ PRÊTER UN LIVRE ═══
+                    Depuis le catalogue : on cherche l'élève, on fixe la date de
+                    retour, le serveur retient un exemplaire disponible. */}
+                {pretOuvrage && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(8px)', zIndex: 90, display: 'grid', placeItems: 'center', padding: '20px' }} onClick={() => setPretOuvrage(null)}>
+                        <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px, 100%)', background: 'white', borderRadius: '26px', boxShadow: '0 40px 90px rgba(15,23,42,0.28)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                            <div style={{ padding: '20px 22px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #faf5ff, #eef2ff)', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                                <div>
+                                    <p style={{ margin: 0, fontSize: '12px', color: '#7c3aed', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Nouveau prêt</p>
+                                    <h2 style={{ margin: '5px 0 0', fontSize: '20px', color: '#111827', fontWeight: 950 }}>{pretOuvrage.titre}</h2>
+                                    <p style={{ margin: '3px 0 0', fontSize: '12.5px', color: '#94a3b8' }}>{pretOuvrage.nb_disponibles} exemplaire(s) disponible(s)</p>
+                                </div>
+                                <button type="button" onClick={() => setPretOuvrage(null)} style={{ width: 40, height: 40, borderRadius: '13px', border: '1px solid #e2e8f0', background: 'white', display: 'grid', placeItems: 'center', cursor: 'pointer', flexShrink: 0 }}><X size={18} /></button>
+                            </div>
+                            <div style={{ padding: '22px', display: 'grid', gap: '14px' }}>
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 900, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>Élève emprunteur</label>
+                                    {pretEleve ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px', borderRadius: '14px', border: '1px solid #16a34a', background: '#f0fdf4' }}>
+                                            <UserCheck size={17} style={{ color: '#16a34a' }} />
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <p style={{ margin: 0, fontSize: '14px', fontWeight: 900, color: '#0f172a' }}>{pretEleve.prenom} {pretEleve.nom}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#15803d', fontWeight: 700 }}>{pretEleve.matricule || 'sans matricule'}{pretEleve.classe_code ? ` • ${pretEleve.classe_code}` : ''}</p>
+                                            </div>
+                                            <button type="button" onClick={() => { setPretEleve(null); setPretRechercheEleve(''); }} style={{ padding: '7px 12px', borderRadius: '11px', border: '1px solid #e2e8f0', background: 'white', color: '#64748b', fontWeight: 800, fontSize: '12.5px', cursor: 'pointer' }}>Changer</button>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 14px', borderRadius: '14px', border: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                                                <Search size={17} style={{ color: '#94a3b8' }} />
+                                                <input value={pretRechercheEleve} onChange={(e) => setPretRechercheEleve(e.target.value)} placeholder="Nom, prénom ou matricule…" autoComplete="off"
+                                                    style={{ flex: 1, border: 'none', outline: 'none', background: 'transparent', fontSize: '14px', fontWeight: 700, color: '#0f172a' }} />
+                                            </div>
+                                            {pretResultats.length > 0 && (
+                                                <div style={{ marginTop: '6px', maxHeight: '200px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '14px' }}>
+                                                    {pretResultats.map((el, i) => (
+                                                        <button key={el.eleve_id} type="button" onClick={() => setPretEleve(el)}
+                                                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 14px', border: 'none', borderTop: i === 0 ? 'none' : '1px solid #f1f5f9', background: 'white', cursor: 'pointer' }}>
+                                                            <span style={{ display: 'block', fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>{el.prenom} {el.nom}</span>
+                                                            <span style={{ display: 'block', fontSize: '11.5px', color: '#94a3b8', marginTop: '2px', fontWeight: 700 }}>{el.matricule || 'sans matricule'}{el.classe_code ? ` • ${el.classe_code}` : ''}</span>
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </>
+                                    )}
+                                </div>
+                                <div>
+                                    <label style={{ display: 'block', fontSize: '12px', fontWeight: 900, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>À rendre le</label>
+                                    <input type="date" value={pretDate} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setPretDate(e.target.value)}
+                                        style={{ width: '100%', padding: '12px 14px', borderRadius: '14px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }} />
+                                </div>
+                            </div>
+                            <div style={{ padding: '16px 22px', borderTop: '1px solid #eef2f7', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button type="button" onClick={() => setPretOuvrage(null)} style={{ padding: '11px 16px', borderRadius: '14px', border: '1px solid #e2e8f0', background: 'white', color: '#475569', fontWeight: 900, cursor: 'pointer' }}>Annuler</button>
+                                <button type="button" disabled={!pretEleve || !pretDate || pretEnCours} onClick={confirmerPret}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '11px 18px', borderRadius: '14px', border: 'none', background: (pretEleve && pretDate) ? '#7c3aed' : '#e2e8f0', color: (pretEleve && pretDate) ? 'white' : '#94a3b8', fontWeight: 900, cursor: (pretEleve && pretDate && !pretEnCours) ? 'pointer' : 'not-allowed' }}>
+                                    {pretEnCours ? <Loader2 size={16} className="animate-spin" /> : <BookOpen size={16} />} Confirmer le prêt
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {showForm && (
                     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.42)', backdropFilter: 'blur(10px)', zIndex: 80, display: 'grid', placeItems: 'center', padding: '20px' }}>
@@ -932,6 +1117,25 @@ function SurveillantPortal() {
     const [presenceStats, setPresenceStats] = useState<PresenceStats>({ total: 0, presents: 0, absents: 0, retards: 0, taux_presence: 0 });
     const [incidentStats, setIncidentStats] = useState<IncidentStats>({ total_incidents: 0, par_gravite: [], top_types: [] });
     const [incidents, setIncidents] = useState<IncidentItem[]>([]);
+    const [incidentEnCours, setIncidentEnCours] = useState<number | null>(null);
+
+    /** Marque un incident comme traité, puis le retire de la liste.
+     *  L'API existait (`PUT /incidents/{id}/traiter`) mais AUCUN écran ne
+     *  l'appelait : les incidents restaient donc ouverts indéfiniment. */
+    const reglerIncident = async (incidentId: number) => {
+        setIncidentEnCours(incidentId);
+        try {
+            await api.put(
+                `/api/vie-scolaire/incidents/${incidentId}/traiter`
+                + `?decision=${encodeURIComponent('Réglé')}&traite_par=${encodeURIComponent('Surveillance')}`,
+            );
+            // Retrait immédiat : attendre un rechargement donnerait l'impression
+            // que l'incident traité s'attarde.
+            setIncidents((liste) => liste.filter((i) => i.incident_id !== incidentId));
+        } catch {
+            setIncidentEnCours(null);
+        }
+    };
     const [eleves, setEleves] = useState<EleveOption[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -1066,6 +1270,14 @@ function SurveillantPortal() {
        Ici il les voit, et un cours reste « a venir » en fin de journee est
        precisement un cours qui n'a pas eu lieu. */
     const [coursDuJour, setCoursDuJour] = useState<CoursDuJour[]>([]);
+    // L'HISTORIQUE DES APPELS : le surveillant retrouve, pour un jour et une
+    // classe, ce que chaque cours a réellement donné à l'appel — sans se
+    // déplacer. Le fondateur et la direction ont la même vue dans « Séances ».
+    const [histDate, setHistDate] = useState(new Date().toISOString().slice(0, 10));
+    const [histClasse, setHistClasse] = useState('');
+    const [histSeances, setHistSeances] = useState<SeanceHist[]>([]);
+    const [histLoading, setHistLoading] = useState(false);
+    const [histDetail, setHistDetail] = useState<SeanceHistDetail | null>(null);
     const [coursLoading, setCoursLoading] = useState(false);
 
     const chargerCoursDuJour = useCallback(async () => {
@@ -1082,6 +1294,31 @@ function SurveillantPortal() {
     }, [signalement.date_absence]);
 
     useEffect(() => { chargerCoursDuJour(); }, [chargerCoursDuJour]);
+
+    // L'historique des appels pour le jour (et la classe) choisis.
+    const chargerHistorique = useCallback(async () => {
+        setHistLoading(true);
+        try {
+            const res = await api.get<SeanceHist[]>(
+                `/api/seances?date=${histDate}${histClasse ? `&classe_id=${histClasse}` : ''}`);
+            setHistSeances(res.data || []);
+        } catch {
+            setHistSeances([]);
+        } finally {
+            setHistLoading(false);
+        }
+    }, [histDate, histClasse]);
+
+    useEffect(() => { chargerHistorique(); }, [chargerHistorique]);
+
+    const ouvrirDetailSeance = async (seanceId: number) => {
+        try {
+            const res = await api.get<SeanceHistDetail>(`/api/seances/${seanceId}`);
+            setHistDetail(res.data);
+        } catch (err) {
+            setError(getErrorMessage(err));
+        }
+    };
 
     /** Depuis un cours precis : le professeur, la date et le motif sont deja
      *  connus, il n'y a plus rien a ressaisir de memoire. */
@@ -1148,7 +1385,10 @@ function SurveillantPortal() {
             const [presenceRes, incidentStatsRes, incidentsRes, elevesRes, classesRes, profsRes] = await Promise.all([
                 api.get<PresenceStats>(`/api/vie-scolaire/presences/stats?etablissement_id=${etablissementId}`),
                 api.get<IncidentStats>(`/api/vie-scolaire/incidents/stats?etablissement_id=${etablissementId}`),
-                api.get<IncidentItem[]>(`/api/vie-scolaire/incidents?etablissement_id=${etablissementId}&limit=30`),
+                // Seuls les incidents OUVERTS : une fois reglé, l'incident quitte la
+                // liste. Elle sert à savoir ce qu'il reste à traiter, pas à
+                // conserver un historique — celui-ci reste dans les statistiques.
+                api.get<IncidentItem[]>(`/api/vie-scolaire/incidents?etablissement_id=${etablissementId}&statut=OUVERT&limit=30`),
                 api.get<EleveOption[]>(`/api/eleves?etablissement_id=${etablissementId}&annee_id=${anneeId}&statut=ACTIF&limit=120`),
                 api.get<ClasseAppel[]>(`/api/classes?annee_id=${anneeId}&limit=200`),
                 api.get<ProfOption[]>(`/api/enseignants?limit=200`),
@@ -1374,6 +1614,113 @@ function SurveillantPortal() {
                         )}
                     </div>
                 </section>
+
+                {/* ═══ HISTORIQUE DES APPELS ═══
+                    Le surveillant retrouve, pour un jour et une classe, ce que
+                    chaque cours a donné à l'appel — présents, absents, retards —
+                    sans se déplacer de classe en classe. La direction et le
+                    fondateur ont la même vue dans « Séances pédagogiques ». */}
+                <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                    <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #eef2ff)' }}>
+                        <p style={{ margin: 0, fontSize: '12px', color: '#4f46e5', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Traçabilité</p>
+                        <h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Historique des appels</h2>
+                        <p style={{ margin: '6px 0 0', fontSize: '13.5px', color: '#64748b', maxWidth: '640px' }}>
+                            Quel jour, quelle classe, quelle matière : l&apos;appel qui a été fait, et son résultat. Cliquez une ligne pour la liste nominative.
+                        </p>
+                    </div>
+
+                    <div style={{ padding: '16px 24px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', borderBottom: '1px solid #f1f5f9' }}>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569' }}>
+                            Jour
+                            <input type="date" value={histDate} max={new Date().toISOString().slice(0, 10)}
+                                onChange={(e) => setHistDate(e.target.value)}
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }} />
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px', fontWeight: 800, color: '#475569', minWidth: '210px', flex: '1 1 210px' }}>
+                            Classe
+                            <select value={histClasse} onChange={(e) => setHistClasse(e.target.value)}
+                                style={{ padding: '11px 12px', borderRadius: '13px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, fontSize: '14px' }}>
+                                <option value="">Toutes les classes</option>
+                                {classes.map((cl) => <option key={cl.classe_id} value={cl.classe_id}>{cl.libelle}</option>)}
+                            </select>
+                        </label>
+                    </div>
+
+                    <div>
+                        {histLoading ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                <Loader2 size={20} className="animate-spin" style={{ verticalAlign: 'middle', marginRight: 8 }} /> Chargement…
+                            </p>
+                        ) : histSeances.length === 0 ? (
+                            <p style={{ textAlign: 'center', padding: '34px', color: '#94a3b8', fontWeight: 700 }}>
+                                Aucun cours ce jour-là — week-end, ou emploi du temps vide.
+                            </p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '460px', overflowY: 'auto' }}>
+                                {histSeances.map((s, idx) => {
+                                    const fait = s.appel_fait;
+                                    return (
+                                        <button key={s.seance_id} type="button" onClick={() => ouvrirDetailSeance(s.seance_id)}
+                                            style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: 'transparent', flexWrap: 'wrap', textAlign: 'left', border: 'none', cursor: 'pointer', width: '100%' }}>
+                                            <div style={{ minWidth: '104px' }}>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 900, color: '#0f172a' }}>{s.heure_debut_prevue?.slice(0, 5)}–{s.heure_fin_prevue?.slice(0, 5)}</p>
+                                            </div>
+                                            <div style={{ minWidth: '200px', flex: '1 1 220px' }}>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 800, color: '#0f172a' }}>{s.matiere}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#94a3b8' }}>{s.classe} · {s.enseignant_reel || s.enseignant_prevu}</p>
+                                            </div>
+                                            {fait ? (
+                                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                    <span style={{ padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 800, background: '#f0fdf4', color: '#166534' }}>{s.nb_presents ?? 0} présents</span>
+                                                    <span style={{ padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 800, background: '#fef2f2', color: '#991b1b' }}>{s.nb_absents ?? 0} absents</span>
+                                                    <span style={{ padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 800, background: '#fffbeb', color: '#92400e' }}>{s.nb_retards ?? 0} retards</span>
+                                                </div>
+                                            ) : (
+                                                <span style={{ marginLeft: 'auto', padding: '5px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 800, background: '#f1f5f9', color: '#64748b' }}>
+                                                    {s.statut === 'NON_EFFECTUEE' ? 'Cours non assuré' : 'Appel non fait'}
+                                                </span>
+                                            )}
+                                            <Search size={15} style={{ color: '#cbd5e1', marginLeft: fait ? 'auto' : '0' }} />
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </section>
+
+                {/* Détail nominatif d'une séance de l'historique. */}
+                {histDetail && (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(8px)', zIndex: 90, display: 'grid', placeItems: 'center', padding: '20px' }} onClick={() => setHistDetail(null)}>
+                        <div onClick={(e) => e.stopPropagation()} style={{ width: 'min(520px, 100%)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', background: 'white', borderRadius: '24px', overflow: 'hidden', boxShadow: '0 40px 90px rgba(15,23,42,0.28)' }}>
+                            <div style={{ padding: '20px 22px', background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', color: 'white' }}>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                    <button type="button" onClick={() => setHistDetail(null)} style={{ width: 34, height: 34, borderRadius: '11px', border: 'none', background: 'rgba(255,255,255,0.18)', color: 'white', cursor: 'pointer', display: 'grid', placeItems: 'center' }}><X size={17} /></button>
+                                </div>
+                                <p style={{ margin: 0, fontSize: '18px', fontWeight: 900 }}>{histDetail.matiere}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '13px', opacity: 0.9 }}>{histDetail.classe} · {histDetail.date_seance} · {histDetail.heure_debut_prevue?.slice(0, 5)}–{histDetail.heure_fin_prevue?.slice(0, 5)}</p>
+                                <p style={{ margin: '6px 0 0', fontSize: '12.5px', opacity: 0.9 }}>{histDetail.enseignant_reel || histDetail.enseignant_prevu}</p>
+                            </div>
+                            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 4px' }}>
+                                {histDetail.eleves.length === 0 ? (
+                                    <p style={{ textAlign: 'center', padding: '30px', color: '#94a3b8', fontWeight: 700, fontSize: '13.5px' }}>Aucun appel enregistré pour cette séance.</p>
+                                ) : histDetail.eleves.map((e, i) => {
+                                    const c = e.statut === 'PRESENT' ? '#16a34a' : e.statut === 'RETARD' ? '#f59e0b' : e.statut === 'ABSENT_JUSTIFIE' ? '#8b5cf6' : '#dc2626';
+                                    const l = e.statut === 'PRESENT' ? 'Présent' : e.statut === 'RETARD' ? 'Retard' : e.statut === 'ABSENT_JUSTIFIE' ? 'Excusé' : 'Absent';
+                                    return (
+                                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 20px', borderBottom: '1px solid #f1f5f9' }}>
+                                            <div>
+                                                <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: '#1e293b' }}>{e.eleve}</p>
+                                                {e.matricule && <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>{e.matricule}</p>}
+                                            </div>
+                                            <span style={{ fontSize: '12px', fontWeight: 800, padding: '3px 11px', borderRadius: '999px', background: `${c}18`, color: c }}>{l}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* ═══ SIGNALER L'ABSENCE D'UN ENSEIGNANT ═══
                     Constater n'est pas decider : ce formulaire cree un
@@ -1759,8 +2106,20 @@ function SurveillantPortal() {
                                                 <h3 style={{ margin: '10px 0 0', color: '#0f172a', fontSize: '16px', fontWeight: 950 }}>{eleve ? `${eleve.prenom} ${eleve.nom}` : `Élève #${incident.eleve_id}`}</h3>
                                                 <p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px', lineHeight: 1.65 }}>{incident.description}</p>
                                             </div>
-                                            <div style={{ textAlign: 'right', color: '#94a3b8', fontSize: '12px', fontWeight: 800 }}>
-                                                {incident.date_incident || 'Aujourd’hui'}
+                                            <div style={{ textAlign: 'right', display: 'grid', gap: '10px', justifyItems: 'end' }}>
+                                                <span style={{ color: '#94a3b8', fontSize: '12px', fontWeight: 800 }}>
+                                                    {incident.date_incident || 'Aujourd’hui'}
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => reglerIncident(incident.incident_id)}
+                                                    disabled={incidentEnCours === incident.incident_id}
+                                                    style={{ padding: '7px 12px', borderRadius: 999, border: '1px solid #bbf7d0',
+                                                             background: '#f0fdf4', color: '#166534', fontSize: '12px',
+                                                             fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                                >
+                                                    {incidentEnCours === incident.incident_id ? 'Enregistrement…' : 'Marquer réglé'}
+                                                </button>
                                             </div>
                                         </article>
                                     );
@@ -2116,8 +2475,12 @@ function InformaticienPortal() {
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState<ItForm>({ mode: 'ticket', code: '', nom: '', type_equipement: 'ORDINATEUR', marque: '', etat: 'BON', titre: '', description: '', priorite: 'NORMALE', equipement_id: '' });
 
-    const loadIt = useCallback(async () => {
-        setLoading(true);
+    // `silencieux` : rafraîchir les données SANS repasser tout l'écran en état
+    // de chargement. Sans cela, chaque changement d'état d'une machine faisait
+    // clignoter toute la liste (spinner plein écran puis retour) — instable à
+    // l'œil. Le premier chargement, lui, montre bien le spinner.
+    const loadIt = useCallback(async (silencieux = false) => {
+        if (!silencieux) setLoading(true);
         setError(null);
         try {
             const [statsRes, equipementsRes, ticketsRes] = await Promise.all([
@@ -2131,7 +2494,7 @@ function InformaticienPortal() {
         } catch (err) {
             setError(getErrorMessage(err));
         } finally {
-            setLoading(false);
+            if (!silencieux) setLoading(false);
         }
     }, [etablissementId]);
 
@@ -2171,14 +2534,23 @@ function InformaticienPortal() {
     const [equipEnCours, setEquipEnCours] = useState<number | null>(null);
 
     const changerEtat = async (equipement: EquipementInfo, etat: string) => {
-        setEquipEnCours(equipement.equipement_id);
+        // L'état bascule tout de suite à l'écran : l'informaticien n'attend pas
+        // l'aller-retour serveur pour voir le changement. La synchronisation se
+        // fait en fond, et on revient à l'ancien état seulement si elle échoue.
+        const ancienEtat = equipement.etat;
+        setEquipements((prev) => prev.map((e) =>
+            e.equipement_id === equipement.equipement_id ? { ...e, etat } : e));
         setError(null);
         setSuccess(null);
         try {
             await api.put(`/api/informatique/equipements/${equipement.equipement_id}`, { etat });
-            setSuccess(`${equipement.code} — ${equipement.nom} : ${etat === 'BON' ? 'remis en service' : etat === 'PANNE' ? 'signale en panne' : 'a remplacer'}.`);
-            await loadIt();
+            setSuccess(`${equipement.code} — ${equipement.nom} : ${etat === 'BON' ? 'remis en service' : etat === 'PANNE' ? 'signale en panne' : etat === 'REPARE' ? 'panne resolue, remis en service' : 'a remplacer'}.`);
+            // Rafraîchir les compteurs SANS faire clignoter la liste.
+            loadIt(true);
         } catch (err) {
+            // Le serveur a refusé : on remet l'état d'avant, l'écran reste vrai.
+            setEquipements((prev) => prev.map((e) =>
+                e.equipement_id === equipement.equipement_id ? { ...e, etat: ancienEtat } : e));
             setError(getErrorMessage(err));
         } finally {
             setEquipEnCours(null);
@@ -2270,7 +2642,7 @@ function InformaticienPortal() {
                 <section style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 360px', gap: '20px', alignItems: 'start' }}>
                     <main style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
                         <div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #f0f9ff)' }}><p style={{ margin: 0, fontSize: '12px', color: '#0284c7', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Inventaire réel</p><h2 style={{ margin: '6px 0 0', fontSize: '24px', color: '#111827', fontWeight: 950 }}>Parc matériel</h2></div>
-                        {loading ? <div style={{ minHeight: '260px', display: 'grid', placeItems: 'center', color: '#0284c7', fontWeight: 900 }}><Loader2 size={28} className="animate-spin" /> Chargement informatique…</div> : equipements.length === 0 ? <div style={{ padding: '52px 24px', textAlign: 'center' }}><div style={{ width: 84, height: 84, borderRadius: '28px', margin: '0 auto 18px', background: '#f0f9ff', color: '#0284c7', display: 'grid', placeItems: 'center' }}><Monitor size={34} /></div><h3 style={{ margin: 0, color: '#0c4a6e', fontSize: '22px', fontWeight: 950 }}>Aucun équipement inventorié</h3><p style={{ margin: '10px auto 0', maxWidth: '520px', color: '#64748b', lineHeight: 1.7 }}>Ajoutez les ordinateurs, imprimantes et projecteurs pour construire le parc réel.</p></div> : <div style={{ padding: '20px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(235px, 1fr))', gap: '14px' }}>{equipements.map((eq) => <article key={eq.equipement_id} style={{ padding: '16px', borderRadius: '20px', background: '#fcfdff', border: '1px solid #edf2f7' }}><div style={{ width: 48, height: 48, borderRadius: '16px', background: 'linear-gradient(135deg, #0284c7, #7c3aed)', color: 'white', display: 'grid', placeItems: 'center', marginBottom: '12px' }}><Monitor size={22} /></div><h3 style={{ margin: 0, color: '#0f172a', fontSize: '16px', fontWeight: 950 }}>{eq.nom}</h3><p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px', fontWeight: 750 }}>{eq.code} • {eq.type_equipement}</p><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}><span style={{ padding: '6px 9px', borderRadius: 999, background: eq.etat === 'BON' ? '#f0fdf4' : '#fff7ed', color: eq.etat === 'BON' ? '#166534' : '#9a3412', fontSize: '11px', fontWeight: 900 }}>{eq.etat}</span>{eq.marque && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#f8fafc', color: '#475569', fontSize: '11px', fontWeight: 900 }}>{eq.marque}</span>}</div><div style={{ display: 'flex', gap: '5px', marginTop: '12px', flexWrap: 'wrap' }}>{([{ e: 'BON', l: 'En service', c: '#16a34a' }, { e: 'PANNE', l: 'En panne', c: '#f59e0b' }, { e: 'A_REMPLACER', l: 'A remplacer', c: '#dc2626' }]).map((o) => (<button key={o.e} type="button" disabled={equipEnCours === eq.equipement_id || eq.etat === o.e} onClick={() => changerEtat(eq, o.e)} style={{ padding: '6px 10px', borderRadius: '10px', border: eq.etat === o.e ? `1px solid ${o.c}` : '1px solid #e2e8f0', background: eq.etat === o.e ? o.c : 'white', color: eq.etat === o.e ? 'white' : '#64748b', fontSize: '11px', fontWeight: 800, cursor: eq.etat === o.e ? 'default' : 'pointer' }}>{o.l}</button>))}</div>{eq.observation && <p style={{ margin: '9px 0 0', fontSize: '11.5px', color: '#94a3b8', lineHeight: 1.5 }}>{eq.observation}</p>}</article>)}</div>}
+                        {loading ? <div style={{ minHeight: '260px', display: 'grid', placeItems: 'center', color: '#0284c7', fontWeight: 900 }}><Loader2 size={28} className="animate-spin" /> Chargement informatique…</div> : equipements.length === 0 ? <div style={{ padding: '52px 24px', textAlign: 'center' }}><div style={{ width: 84, height: 84, borderRadius: '28px', margin: '0 auto 18px', background: '#f0f9ff', color: '#0284c7', display: 'grid', placeItems: 'center' }}><Monitor size={34} /></div><h3 style={{ margin: 0, color: '#0c4a6e', fontSize: '22px', fontWeight: 950 }}>Aucun équipement inventorié</h3><p style={{ margin: '10px auto 0', maxWidth: '520px', color: '#64748b', lineHeight: 1.7 }}>Ajoutez les ordinateurs, imprimantes et projecteurs pour construire le parc réel.</p></div> : <div style={{ padding: '20px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(235px, 1fr))', gap: '14px' }}>{equipements.map((eq) => <article key={eq.equipement_id} style={{ padding: '16px', borderRadius: '20px', background: '#fcfdff', border: '1px solid #edf2f7' }}><div style={{ width: 48, height: 48, borderRadius: '16px', background: 'linear-gradient(135deg, #0284c7, #7c3aed)', color: 'white', display: 'grid', placeItems: 'center', marginBottom: '12px' }}><Monitor size={22} /></div><h3 style={{ margin: 0, color: '#0f172a', fontSize: '16px', fontWeight: 950 }}>{eq.nom}</h3><p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '13px', fontWeight: 750 }}>{eq.code} • {eq.type_equipement}</p><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}><span style={{ padding: '6px 9px', borderRadius: 999, background: (eq.etat === 'BON' || eq.etat === 'REPARE') ? '#f0fdf4' : '#fff7ed', color: (eq.etat === 'BON' || eq.etat === 'REPARE') ? '#166534' : '#9a3412', fontSize: '11px', fontWeight: 900 }}>{eq.etat === 'REPARE' ? 'PANNE RÉSOLUE' : eq.etat === 'A_REMPLACER' ? 'À REMPLACER' : eq.etat}</span>{eq.marque && <span style={{ padding: '6px 9px', borderRadius: 999, background: '#f8fafc', color: '#475569', fontSize: '11px', fontWeight: 900 }}>{eq.marque}</span>}</div><div style={{ display: 'flex', gap: '5px', marginTop: '12px', flexWrap: 'wrap' }}>{([{ e: 'BON', l: 'En service', c: '#16a34a' }, { e: 'PANNE', l: 'En panne', c: '#f59e0b' }, { e: 'REPARE', l: 'Panne résolue', c: '#0284c7' }, { e: 'A_REMPLACER', l: 'A remplacer', c: '#dc2626' }]).map((o) => (<button key={o.e} type="button" disabled={equipEnCours === eq.equipement_id || eq.etat === o.e} onClick={() => changerEtat(eq, o.e)} style={{ padding: '6px 10px', borderRadius: '10px', border: eq.etat === o.e ? `1px solid ${o.c}` : '1px solid #e2e8f0', background: eq.etat === o.e ? o.c : 'white', color: eq.etat === o.e ? 'white' : '#64748b', fontSize: '11px', fontWeight: 800, cursor: eq.etat === o.e ? 'default' : 'pointer' }}>{o.l}</button>))}</div>{eq.observation && <p style={{ margin: '9px 0 0', fontSize: '11.5px', color: '#94a3b8', lineHeight: 1.5 }}>{eq.observation}</p>}</article>)}</div>}
                     </main>
                     <aside style={{ display: 'flex', flexDirection: 'column', gap: '18px', position: 'sticky', top: '24px' }}>
                         <div style={{ background: 'white', borderRadius: '28px', border: '1px solid #e2e8f0', boxShadow: '0 22px 54px rgba(15,23,42,0.06)', padding: '22px' }}><p style={{ margin: 0, fontSize: '12px', color: '#0284c7', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Tickets de panne</p><div style={{ marginTop: '14px', display: 'grid', gap: '10px' }}>{tickets.length === 0 ? <p style={{ margin: 0, color: '#64748b', lineHeight: 1.7, fontSize: '13px' }}>Aucun ticket ouvert pour le moment.</p> : tickets.slice(0, 8).map((ticket) => <div key={ticket.ticket_id} style={{ padding: '12px 14px', borderRadius: '16px', background: '#f8fafc', border: '1px solid #f1f5f9' }}><div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}><strong style={{ color: '#0f172a', fontSize: '13px' }}>{ticket.titre}</strong><span style={{ color: ticket.priorite === 'URGENTE' ? '#dc2626' : '#f59e0b', fontSize: '11px', fontWeight: 900 }}>{ticket.priorite}</span></div><p style={{ margin: '6px 0 0', color: '#64748b', fontSize: '12px', lineHeight: 1.55 }}>{ticket.description}</p>{ticket.statut === 'RESOLU' ? <p style={{ margin: '8px 0 0', fontSize: '11.5px', color: '#166534', fontWeight: 800 }}>Resolu</p> : <button type="button" disabled={ticketEnCours === ticket.ticket_id} onClick={() => resoudreTicket(ticket)} style={{ marginTop: '9px', padding: '7px 13px', borderRadius: '11px', border: 'none', background: '#0284c7', color: 'white', fontSize: '12px', fontWeight: 800, cursor: ticketEnCours === ticket.ticket_id ? 'wait' : 'pointer' }}>{ticketEnCours === ticket.ticket_id ? 'Enregistrement…' : 'Marquer resolu'}</button>}</div>)}</div></div>
@@ -2278,7 +2650,7 @@ function InformaticienPortal() {
                     </aside>
                 </section>
 
-                {showForm && <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.42)', backdropFilter: 'blur(10px)', zIndex: 80, display: 'grid', placeItems: 'center', padding: '20px' }}><motion.form initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} onSubmit={submitIt} style={{ width: 'min(680px, 100%)', background: 'white', borderRadius: '30px', boxShadow: '0 40px 90px rgba(15,23,42,0.26)', border: '1px solid #e2e8f0', overflow: 'hidden' }}><div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', display: 'flex', justifyContent: 'space-between', gap: '14px', background: 'linear-gradient(135deg, #f0f9ff, #eef2ff)' }}><div><p style={{ margin: 0, color: '#0284c7', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{form.mode === 'equipement' ? 'Inventaire' : 'Support'}</p><h2 style={{ margin: '6px 0 0', color: '#111827', fontSize: '24px', fontWeight: 950 }}>{form.mode === 'equipement' ? 'Ajouter un équipement' : 'Créer un ticket'}</h2></div><button type="button" onClick={() => setShowForm(false)} style={{ width: 42, height: 42, borderRadius: '14px', border: '1px solid #e2e8f0', background: 'white', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><X size={18} /></button></div><div style={{ padding: '24px', display: 'grid', gap: '14px' }}>{form.mode === 'equipement' ? <><input required value={form.code} onChange={(e) => setForm((prev) => ({ ...prev, code: e.target.value }))} placeholder="Code équipement ex: PC-001" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }} /><input required value={form.nom} onChange={(e) => setForm((prev) => ({ ...prev, nom: e.target.value }))} placeholder="Nom équipement" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }} /><input value={form.marque} onChange={(e) => setForm((prev) => ({ ...prev, marque: e.target.value }))} placeholder="Marque" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }} /><select value={form.etat} onChange={(e) => setForm((prev) => ({ ...prev, etat: e.target.value }))} style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }}><option value="BON">Bon</option><option value="PANNE">En panne</option><option value="A_REMPLACER">À remplacer</option></select></> : <><select value={form.equipement_id} onChange={(e) => setForm((prev) => ({ ...prev, equipement_id: e.target.value }))} style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }}><option value="">Équipement concerné optionnel</option>{equipements.map((eq) => <option key={eq.equipement_id} value={eq.equipement_id}>{eq.code} — {eq.nom}</option>)}</select><input required value={form.titre} onChange={(e) => setForm((prev) => ({ ...prev, titre: e.target.value }))} placeholder="Titre du ticket" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }} /><select value={form.priorite} onChange={(e) => setForm((prev) => ({ ...prev, priorite: e.target.value }))} style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }}><option value="BASSE">Basse</option><option value="NORMALE">Normale</option><option value="URGENTE">Urgente</option></select><textarea required value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} rows={5} placeholder="Décrire la panne ou la demande…" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, resize: 'vertical' }} /></>}</div><div style={{ padding: '18px 24px', borderTop: '1px solid #eef2f7', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}><button type="button" onClick={() => setShowForm(false)} style={{ padding: '12px 16px', borderRadius: '15px', border: '1px solid #e2e8f0', background: 'white', color: '#475569', fontWeight: 900, cursor: 'pointer' }}>Annuler</button><button type="submit" disabled={saving} style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', padding: '12px 16px', borderRadius: '15px', border: 'none', background: '#0284c7', color: 'white', fontWeight: 900, cursor: saving ? 'wait' : 'pointer' }}>{saving ? <Loader2 size={17} className="animate-spin" /> : <Plus size={17} />} Enregistrer</button></div></motion.form></div>}
+                {showForm && <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.42)', backdropFilter: 'blur(10px)', zIndex: 80, display: 'grid', placeItems: 'center', padding: '20px' }}><motion.form initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} onSubmit={submitIt} style={{ width: 'min(680px, 100%)', background: 'white', borderRadius: '30px', boxShadow: '0 40px 90px rgba(15,23,42,0.26)', border: '1px solid #e2e8f0', overflow: 'hidden' }}><div style={{ padding: '22px 24px', borderBottom: '1px solid #eef2f7', display: 'flex', justifyContent: 'space-between', gap: '14px', background: 'linear-gradient(135deg, #f0f9ff, #eef2ff)' }}><div><p style={{ margin: 0, color: '#0284c7', fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{form.mode === 'equipement' ? 'Inventaire' : 'Support'}</p><h2 style={{ margin: '6px 0 0', color: '#111827', fontSize: '24px', fontWeight: 950 }}>{form.mode === 'equipement' ? 'Ajouter un équipement' : 'Créer un ticket'}</h2></div><button type="button" onClick={() => setShowForm(false)} style={{ width: 42, height: 42, borderRadius: '14px', border: '1px solid #e2e8f0', background: 'white', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><X size={18} /></button></div><div style={{ padding: '24px', display: 'grid', gap: '14px' }}>{form.mode === 'equipement' ? <><input required value={form.code} onChange={(e) => setForm((prev) => ({ ...prev, code: e.target.value }))} placeholder="Code équipement ex: PC-001" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }} /><input required value={form.nom} onChange={(e) => setForm((prev) => ({ ...prev, nom: e.target.value }))} placeholder="Nom équipement" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }} /><input value={form.marque} onChange={(e) => setForm((prev) => ({ ...prev, marque: e.target.value }))} placeholder="Marque" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }} /><select value={form.etat} onChange={(e) => setForm((prev) => ({ ...prev, etat: e.target.value }))} style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }}><option value="BON">Bon</option><option value="PANNE">En panne</option><option value="REPARE">Panne résolue</option><option value="A_REMPLACER">À remplacer</option></select></> : <><select value={form.equipement_id} onChange={(e) => setForm((prev) => ({ ...prev, equipement_id: e.target.value }))} style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }}><option value="">Équipement concerné optionnel</option>{equipements.map((eq) => <option key={eq.equipement_id} value={eq.equipement_id}>{eq.code} — {eq.nom}</option>)}</select><input required value={form.titre} onChange={(e) => setForm((prev) => ({ ...prev, titre: e.target.value }))} placeholder="Titre du ticket" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }} /><select value={form.priorite} onChange={(e) => setForm((prev) => ({ ...prev, priorite: e.target.value }))} style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700 }}><option value="BASSE">Basse</option><option value="NORMALE">Normale</option><option value="URGENTE">Urgente</option></select><textarea required value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} rows={5} placeholder="Décrire la panne ou la demande…" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', background: '#f8fafc', fontWeight: 700, resize: 'vertical' }} /></>}</div><div style={{ padding: '18px 24px', borderTop: '1px solid #eef2f7', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}><button type="button" onClick={() => setShowForm(false)} style={{ padding: '12px 16px', borderRadius: '15px', border: '1px solid #e2e8f0', background: 'white', color: '#475569', fontWeight: 900, cursor: 'pointer' }}>Annuler</button><button type="submit" disabled={saving} style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', padding: '12px 16px', borderRadius: '15px', border: 'none', background: '#0284c7', color: 'white', fontWeight: 900, cursor: saving ? 'wait' : 'pointer' }}>{saving ? <Loader2 size={17} className="animate-spin" /> : <Plus size={17} />} Enregistrer</button></div></motion.form></div>}
             </div>
         </div>
     );

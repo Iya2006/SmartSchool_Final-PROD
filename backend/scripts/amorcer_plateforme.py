@@ -58,6 +58,9 @@ from app.models.academique import AnneeScolaire, Etablissement, Utilisateur  # n
 from app.services.referentiel_evaluation import (  # noqa: E402
     amorcer_types_evaluation, types_manquants,
 )
+from app.services.referentiel_scolaire import (  # noqa: E402
+    amorcer_referentiel_scolaire, cycles_manquants, niveaux_manquants,
+)
 
 from app.services.referentiel_evaluation import TYPES_REFERENCE  # noqa: E402
 TYPES_REFERENCE_TAILLE = TYPES_REFERENCE
@@ -135,6 +138,27 @@ def main() -> int:
         elif cible is None:
             actions.append(
                 f"CREER {len(TYPES_REFERENCE_TAILLE)} type(s) d'evaluation pour la nouvelle ecole"
+            )
+
+        # Cycles et niveaux : une classe exige un niveau, et un niveau
+        # appartient a un cycle. Sans eux, l'ecran « Nouvelle classe » echoue et
+        # les matieres restent vides — l'ecole est inutilisable.
+        if cible is not None and cible.etablissement_id is not None:
+            manquants_cycles = cycles_manquants(db, cible.etablissement_id)
+            manquants_niveaux = niveaux_manquants(db, cible.etablissement_id)
+            if manquants_cycles or manquants_niveaux:
+                actions.append(
+                    f"CREER le referentiel scolaire guineen : "
+                    f"{len(manquants_cycles)} cycle(s), {len(manquants_niveaux)} niveau(x)"
+                )
+                if appliquer:
+                    amorcer_referentiel_scolaire(db, cible.etablissement_id)
+            else:
+                print("[OK] Les cycles et niveaux existent deja. Aucune creation.")
+        elif cible is None:
+            actions.append(
+                "CREER le referentiel scolaire guineen (3 cycles, 19 niveaux) "
+                "pour la nouvelle ecole"
             )
 
         # Un SUPER_ADMIN rattache a une ecole est une erreur : il devient un

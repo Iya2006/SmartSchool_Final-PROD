@@ -3,11 +3,10 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Phone, Mail, MapPin, Calendar, Activity, BookOpen, Clock, Award, Loader2, MessageSquare, Edit, Droplet, Users, CheckCircle, UserCheck, Scan, X } from 'lucide-react';
+import { ArrowLeft, Phone, Mail, MapPin, Calendar, BookOpen, Loader2, MessageSquare, Edit, Droplet, UserCheck, Scan, X, FileText, ChevronRight } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import ParentsEleve from '@/components/ParentsEleve';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import BadgeCarte from '@/components/BadgeCarte';
 import { QRCodeSVG } from 'qrcode.react';
 import { AnimatePresence } from 'framer-motion';
@@ -64,18 +63,6 @@ export default function ProfilEleve() {
             </div>
         );
     }
-
-    const scheduleData = [
-        { heure: '08:00 - 10:00', matiere: 'Mathématiques', prof: 'M. Diallo', salle: 'Salle 101', statut: 'Terminé' },
-        { heure: '10:15 - 12:15', matiere: 'Physique', prof: 'Mme Camara', salle: 'Salle 102', statut: 'En cours' },
-        { heure: '13:00 - 15:00', matiere: 'Français', prof: 'M. Sylla', salle: 'Salle 204', statut: 'À venir' },
-    ];
-
-    const activitiesData = [
-        { date: '10 Mars 2026', type: 'Devoir', titre: 'Exposé d\'Histoire', statut: 'En attente', color: 'warning' },
-        { date: '12 Mars 2026', type: 'Quiz', titre: 'Évaluation Continue - SVT', statut: 'À venir', color: 'info' },
-        { date: '05 Mars 2026', type: 'Réunion', titre: 'Rencontre Parents-Profs', statut: 'Terminé', color: 'success' },
-    ];
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -180,16 +167,6 @@ export default function ProfilEleve() {
                                 </span>
                             </div>
 
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', borderTop: '1px solid var(--border-light)', paddingTop: '16px' }}>
-                                <div>
-                                    <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Assiduité</p>
-                                    <p style={{ fontWeight: 700, color: '#10b981' }}>95%</p>
-                                </div>
-                                <div>
-                                    <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Performance</p>
-                                    <p style={{ fontWeight: 700, color: '#3b82f6' }}>Excellente</p>
-                                </div>
-                            </div>
                         </div>
 
                         {/* Infos Personnelles */}
@@ -273,113 +250,43 @@ export default function ProfilEleve() {
                 {/* ---------- COLONNE DE DROITE (Académique & Activités) ---------- */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
-                    {/* Stats KPIs (Simulées) */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px' }}>
-                        <motion.div className="kpi-card" style={{ padding: '20px' }} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                <div>
-                                    <p className="kpi-label">Moyenne Générale</p>
-                                    <p className="kpi-value">16.5 <span style={{ fontSize: '14px', color: 'var(--text-muted)' }}>/ 20</span></p>
-                                </div>
-                                <div style={{ background: '#3b82f615', color: '#3b82f6', padding: '10px', borderRadius: '10px' }}>
-                                    <BookOpen size={20} />
-                                </div>
-                            </div>
-                        </motion.div>
-                        <motion.div className="kpi-card" style={{ padding: '20px' }} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                <div>
-                                    <p className="kpi-label">Devoirs Rendus</p>
-                                    <p className="kpi-value">45</p>
-                                    <p style={{ fontSize: '12px', color: '#10b981', marginTop: '4px' }}>+5 cette semaine</p>
-                                </div>
-                                <div style={{ background: '#10b98115', color: '#10b981', padding: '10px', borderRadius: '10px' }}>
-                                    <CheckCircle size={20} />
-                                </div>
-                            </div>
-                        </motion.div>
-                        <motion.div className="kpi-card" style={{ padding: '20px' }} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                <div>
-                                    <p className="kpi-label">Points Mérite</p>
-                                    <p className="kpi-value">120<span style={{ fontSize: '14px', color: 'var(--text-muted)' }}> pts</span></p>
-                                </div>
-                                <div style={{ background: '#f59e0b15', color: '#f59e0b', padding: '10px', borderRadius: '10px' }}>
-                                    <Award size={20} />
-                                </div>
-                            </div>
-                        </motion.div>
-                    </div>
+                    {/* CE QUE CETTE FICHE NE SAIT PAS, ELLE NE L'INVENTE PAS
 
-                    {/* Emploi du temps (Cours d'aujourd'hui) */}
-                    <motion.div className="card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }}>
-                        <div className="card-header">
-                            <h5>Emploi du temps — Aujourd'hui</h5>
-                            <button className="btn btn-outline btn-sm">Voir tout</button>
-                        </div>
-                        <div className="card-body table-scroll" style={{ padding: 0 }}>
-                            <table className="sp-table" style={{ minWidth: '520px' }}>
-                                <thead>
-                                    <tr>
-                                        <th>Horaire</th>
-                                        <th>Matière</th>
-                                        <th>Enseignant</th>
-                                        <th>Salle</th>
-                                        <th>Statut</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {scheduleData.map((cours, i) => (
-                                        <tr key={i}>
-                                            <td style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
-                                                <Clock size={14} style={{ display: 'inline', marginRight: '6px', verticalAlign: 'middle' }} />
-                                                {cours.heure}
-                                            </td>
-                                            <td style={{ fontWeight: 600 }}>{cours.matiere}</td>
-                                            <td><div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                <Users size={14} color="var(--text-muted)" /> {cours.prof}
-                                            </div></td>
-                                            <td>{cours.salle}</td>
-                                            <td>
-                                                <span className={`badge ${cours.statut === 'Terminé' ? 'badge-subtle-success' : cours.statut === 'En cours' ? 'badge-primary' : 'badge-subtle-warning'}`}>
-                                                    {cours.statut}
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </motion.div>
+                        Trois blocs occupaient cette colonne : une moyenne
+                        generale de 16,5/20, un emploi du temps (Mathematiques
+                        avec M. Diallo en salle 101) et des activites datees de
+                        mars 2026. Aucune de ces valeurs ne venait de la base :
+                        elles etaient ecrites dans le fichier et s'affichaient
+                        a l'identique sur CHAQUE eleve de CHAQUE ecole.
 
-                    {/* Activités & Événements */}
-                    <motion.div className="card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.7 }}>
+                        Une moyenne inventee sur un dossier scolaire n'est pas
+                        un defaut d'affichage : un parent ou un directeur peut
+                        decider sur ce chiffre. Les blocs sont retires, et on
+                        renvoie vers les ecrans qui detiennent la vraie donnee. */}
+                    <motion.div className="card" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
                         <div className="card-header">
-                            <h5>Activités & Évaluations à venir</h5>
+                            <h5>Suivi scolaire</h5>
                         </div>
-                        <div className="card-body table-scroll" style={{ padding: 0 }}>
-                            <table className="sp-table">
-                                <tbody>
-                                    {activitiesData.map((act, i) => (
-                                        <tr key={i}>
-                                            <td style={{ width: '150px' }}>
-                                                <span style={{ fontSize: '13px', color: 'var(--text-secondary)', fontWeight: 600 }}>{act.date}</span>
-                                            </td>
-                                            <td>
-                                                <span className={`badge badge-subtle-${act.color}`} style={{ marginBottom: '4px', display: 'inline-block' }}>
-                                                    {act.type}
-                                                </span>
-                                                <p style={{ fontWeight: 600, fontSize: '14px', margin: 0 }}>{act.titre}</p>
-                                            </td>
-                                            <td style={{ textAlign: 'right' }}>
-                                                <span className={`badge badge-${act.statut === 'Terminé' ? 'success' : act.statut === 'À venir' ? 'info' : 'warning'}`}>
-                                                    {act.statut}
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                        <div className="card-body" style={{ padding: '8px' }}>
+                            {[
+                                { href: '/notes', icone: <BookOpen size={16} />, titre: 'Notes et evaluations', detail: 'Saisie et consultation des notes par classe' },
+                                { href: '/bulletins', icone: <FileText size={16} />, titre: 'Bulletins', detail: 'Bulletins de la classe, par trimestre' },
+                                { href: '/emploi-du-temps', icone: <Calendar size={16} />, titre: 'Emploi du temps', detail: 'Semaine type de la classe' },
+                            ].map(l => (
+                                <Link key={l.href} href={l.href} style={{
+                                    display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px',
+                                    borderRadius: '10px', textDecoration: 'none', color: 'inherit',
+                                }}>
+                                    <div style={{ padding: '9px', borderRadius: '9px', background: '#f1f5f9', color: '#475569', display: 'flex' }}>
+                                        {l.icone}
+                                    </div>
+                                    <div style={{ flex: 1 }}>
+                                        <p style={{ margin: 0, fontSize: '14px', fontWeight: 700 }}>{l.titre}</p>
+                                        <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>{l.detail}</p>
+                                    </div>
+                                    <ChevronRight size={16} color="var(--text-muted)" />
+                                </Link>
+                            ))}
                         </div>
                     </motion.div>
 

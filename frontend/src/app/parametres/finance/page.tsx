@@ -292,7 +292,10 @@ export default function FinancePage() {
         if (pinForm.nouveau !== pinForm.confirmer) { setPinMsg({ text: 'La confirmation ne correspond pas au nouveau PIN', type: 'error' }); return; }
         setPinSaving(true);
         try {
-            await api.put('/api/comptabilite/pin', { ancien_pin: pinForm.ancien, nouveau_pin: pinForm.nouveau });
+            await api.put('/api/comptabilite/pin', {
+                ...(pinConfigured ? { ancien_pin: pinForm.ancien } : {}),
+                nouveau_pin: pinForm.nouveau,
+            });
             setPinMsg({ text: 'PIN mis à jour avec succès', type: 'success' });
             setPinForm({ ancien: '', nouveau: '', confirmer: '' });
             setPinConfigured(true);
@@ -676,11 +679,23 @@ export default function FinancePage() {
                                 )}
                             </div>
 
+                            {/* Voir /profil : le PIN est enregistre mais aucune
+                                route ne le verifie encore. */}
+                            <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderLeft: '4px solid #f59e0b', borderRadius: 10, padding: '12px 14px', marginBottom: 16, color: '#78350f', fontSize: 13, lineHeight: 1.5 }}>
+                                <strong>Ce code n&apos;est pas encore appliqué.</strong> Vous pouvez le
+                                définir, mais aucun écran ne le demande avant une opération comptable.
+                                Son activation est prévue ultérieurement.
+                            </div>
                             <form className={styles.pinForm} onSubmit={submitPinChange}>
-                                <div className={styles.pinFormRow}>
-                                    <label>PIN actuel</label>
-                                    <input type="password" className={styles.inputFancy} value={pinForm.ancien} onChange={e => setPinForm(v => ({ ...v, ancien: e.target.value }))} required />
-                                </div>
+                                {/* Masqué tant qu'aucun PIN n'existe : réclamer un
+                                    « PIN actuel » jamais choisi rendait la première
+                                    configuration impossible. */}
+                                {pinConfigured && (
+                                    <div className={styles.pinFormRow}>
+                                        <label>PIN actuel</label>
+                                        <input type="password" className={styles.inputFancy} value={pinForm.ancien} onChange={e => setPinForm(v => ({ ...v, ancien: e.target.value }))} required />
+                                    </div>
+                                )}
                                 <div className
 ={styles.pinFormRow}>
                                     <label>Nouveau PIN</label>

@@ -10,6 +10,8 @@ import Pagination from '@/components/Pagination';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 import MesSeances from './_components/MesSeances';
 import { startAutoSync } from '@/lib/syncEngine';
+import { LIBELLE_JOUR } from '@/lib/horaires';
+import { useJoursOuvres } from '@/hooks/useJoursOuvres';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Phone, User, GraduationCap, BookOpen, Clock, Calendar, AlertCircle,
@@ -22,8 +24,10 @@ import {
     School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip
 } from 'lucide-react';
 
-const DISPO_JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
-const DISPO_JOURS_L: Record<string, string> = { LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi' };
+// Jours ouvres de l'ecole (Parametres > Emploi du temps) : les listes etaient
+// figees du lundi au vendredi, donc ni la grille ni la declaration de
+// disponibilite ne connaissaient le samedi.
+const DISPO_JOURS_L = LIBELLE_JOUR;
 const DISPO_HEURES = [
     { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
     { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
@@ -61,8 +65,7 @@ interface EleveItem {
 }
 
 /* ═══ CONSTANTS ═══ */
-const JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi'];
-const HEURES = ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
+const HEURES =['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00'];
 const SLOT_COLORS: Record<string, {bg:string;border:string;text:string}> = {
     'default': { bg: '#f1f5f9', border: '#94a3b8', text: '#475569' },
 };
@@ -85,6 +88,8 @@ function getSlotColor(index: number) {
 export default function PortailEnseignant() {
     const { user, logout } = useAuth();
     const { etablissementNom, etablissementLogo, theme, applyTheme } = useApp();
+    const JOURS = useJoursOuvres();
+    const DISPO_JOURS = JOURS;
 
     const primaryColor = theme.couleurEnseignant || '#8b5cf6';
     const accentColor = theme.couleurEnseignant ? theme.couleurEnseignant + 'cc' : '#6366f1';
@@ -499,10 +504,15 @@ export default function PortailEnseignant() {
         if (!data || !replyText.trim()) return;
         setReplySending(true);
         try {
+            // La réponse revient à qui a écrit : à un parent si c'est lui qui a
+            // ouvert l'échange, sinon à l'administration. Répondre toujours à
+            // l'admin renvoyait la réponse du professeur au mauvais endroit.
+            const versParent = parentMsg.expediteur_type === 'PARENT' && parentMsg.expediteur_id;
             await api.post('/api/communication/messages', {
                 expediteur_type: 'ENSEIGNANT',
                 expediteur_id: data.enseignant.enseignant_id,
-                destinataire_type: 'ADMIN',
+                destinataire_type: versParent ? 'PARENT' : 'ADMIN',
+                destinataire_id: versParent ? parentMsg.expediteur_id : undefined,
                 objet_type: parentMsg.objet_type,
                 sujet: `RE: ${parentMsg.sujet}`,
                 contenu: replyText.trim(),
@@ -1459,7 +1469,7 @@ export default function PortailEnseignant() {
                                         <thead>
                                             <tr>
                                                 <th style={{ padding: '10px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'center', width: '70px', borderBottom: '2px solid #f1f5f9' }}>HEURE</th>
-                                                {JOURS.map(j => <th key={j} style={{ padding: '10px', fontSize: '12px', fontWeight: 700, color: '#475569', textAlign: 'center', borderBottom: '2px solid #f1f5f9' }}>{j}</th>)}
+                                                {JOURS.map(j => <th key={j} style={{ padding: '10px', fontSize: '12px', fontWeight: 700, color: '#475569', textAlign: 'center', borderBottom: '2px solid #f1f5f9' }}>{DISPO_JOURS_L[j] || j}</th>)}
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -1700,7 +1710,7 @@ export default function PortailEnseignant() {
                                                         <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><ClipboardList size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Type d&apos;évaluation</label>
                                                         <select value={selectedTypeEval || ''} onChange={e => setSelectedTypeEval(Number(e.target.value))}
                                                             style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer', outline: 'none', background: 'white' }}>
-                                                            {typesEval.map(t => <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle} ({t.poids_pourcentage}%)</option>)}
+                                                            {typesEval.map(t => <option key={t.type_eval_id} value={t.type_eval_id}>{t.libelle} (coef. {t.coefficient ?? 1})</option>)}
                                                             {typesEval.length === 0 && <option value="">Aucun type</option>}
                                                         </select>
                                                     </div>
@@ -1718,13 +1728,11 @@ export default function PortailEnseignant() {
                                                 </div>
                                                 {(() => {
                                                     const typeActuel = typesEval.find(t => t.type_eval_id === selectedTypeEval);
-                                                    const estComposition = typeActuel?.code === 'COMPO';
+                                                    const coefType = typeActuel?.coefficient ?? 1;
                                                     return (
-                                                        <p style={{ margin: 0, fontSize: '11.5px', color: estComposition ? '#b45309' : '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        <p style={{ margin: 0, fontSize: '11.5px', color: '#64748b', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                                                             <ClipboardList size={13} />
-                                                            {estComposition
-                                                                ? `Composition : le coefficient de la matière (${selectedClass.coefficient}) s'applique automatiquement à cette note.`
-                                                                : "Écrite / orale / devoirs : comptent pour un poids de 1 (le coefficient ne s'applique qu'à la composition). Si vous saisissez plusieurs évaluations du même type, seule la meilleure note sera retenue dans la moyenne."}
+                                                            {`Ce type compte pour un coefficient de ${coefType} dans la matière. Si vous saisissez plusieurs évaluations de ce type, c'est leur moyenne qui est retenue (pas la meilleure note). La moyenne de la matière est ensuite pondérée par son propre coefficient (${selectedClass.coefficient}).`}
                                                         </p>
                                                     );
                                                 })()}

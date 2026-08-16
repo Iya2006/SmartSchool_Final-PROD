@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
+import { chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, LIBELLE_JOUR, type Horaires } from '@/lib/horaires';
 
 interface Classe { classe_id: number; libelle: string; code: string; }
 interface MatiereOption { matiere_id: number; code: string; libelle: string; categorie: string | null; }
@@ -21,16 +22,10 @@ interface Creneau {
     jour: string; heure_debut: string; heure_fin: string; salle: string;
 }
 
-const JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI'];
-const JOURS_LABEL: Record<string, string> = {
-    LUNDI: 'Lundi', MARDI: 'Mardi', MERCREDI: 'Mercredi', JEUDI: 'Jeudi', VENDREDI: 'Vendredi'
-};
-const HEURES = [
-    { debut: '08:00', fin: '09:00' }, { debut: '09:00', fin: '10:00' },
-    { debut: '10:00', fin: '11:00' }, { debut: '11:00', fin: '12:00' },
-    { debut: '14:00', fin: '15:00' }, { debut: '15:00', fin: '16:00' },
-    { debut: '16:00', fin: '17:00' },
-];
+// Les jours ne sont plus figes du lundi au vendredi : ils viennent de
+// Parametres > Emploi du temps. Beaucoup d'ecoles ont cours le samedi, et la
+// grille ne leur laissait aucun moyen de le poser.
+const JOURS_LABEL = LIBELLE_JOUR;
 
 const CAT_COLORS: Record<string, { bg: string; text: string; border: string; light: string }> = {
     'Sciences': { bg: '#dbeafe', text: '#1d4ed8', border: '#93c5fd', light: '#eff6ff' },
@@ -47,6 +42,8 @@ export default function EmploiDuTempsPage() {
     const [matieres, setMatieres] = useState<MatiereOption[]>([]);
     const [enseignants, setEnseignants] = useState<EnseignantOption[]>([]);
     const { etablissementId, anneeId } = useApp();
+    const [horaires, setHoraires] = useState<Horaires>(HORAIRES_DEFAUT);
+    const JOURS = horaires.joursOuvres;
     const [loading, setLoading] = useState(true);
     const [loadingEmploi, setLoadingEmploi] = useState(false);
     const [generating, setGenerating] = useState(false);
@@ -75,10 +72,12 @@ export default function EmploiDuTempsPage() {
     useEffect(() => {
         const init = async () => {
             try {
-                const [clRes, ensRes] = await Promise.all([
+                const [clRes, ensRes, h] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
                     api.get(`/api/enseignants?etablissement_id=${etablissementId}&skip=0&limit=200`),
+                    chargerHoraires(),
                 ]);
+                setHoraires(h);
                 setClasses(clRes.data);
                 setEnseignants(ensRes.data);
                 if (clRes.data.length > 0) {
@@ -115,14 +114,16 @@ export default function EmploiDuTempsPage() {
     // lisible.
     const lignesHoraires = React.useMemo(() => {
         const debuts = new Map<string, string>();
-        HEURES.forEach(h => debuts.set(h.debut, h.fin));
+        // Les lignes de base suivent les horaires REELS de l'ecole (debut, fin,
+        // duree d'un cours, pause) au lieu des sept heures pleines codees ici.
+        creneauxDeLaJournee(horaires).forEach(h => debuts.set(h.debut, h.fin));
         creneaux.forEach(c => {
             if (c.heure_debut) debuts.set(c.heure_debut, c.heure_fin || '');
         });
         return Array.from(debuts.entries())
             .map(([debut, fin]) => ({ debut, fin }))
             .sort((a, b) => a.debut.localeCompare(b.debut));
-    }, [creneaux]);
+    }, [creneaux, horaires]);
 
     // Get creneau for a specific cell
     const getCreneau = (jour: string, heure: string): Creneau | undefined => {
@@ -144,7 +145,7 @@ export default function EmploiDuTempsPage() {
             setFormJour(jour);
             setFormHeure(heure);
             // Une heure par defaut, modifiable : on propose la case cliquee.
-            setFormHeureFin(HEURES.find(h => h.debut === heure)?.fin || heure);
+            setFormHeureFin(lignesHoraires.find(h => h.debut === heure)?.fin || heure);
             setFormMatiereId(matieres.length > 0 ? matieres[0].matiere_id : null);
             setFormEnseignantId(null);
             setFormSalle('');
@@ -360,16 +361,21 @@ export default function EmploiDuTempsPage() {
                             <tbody>
                                 {/* PAUSE indicator before afternoon */}
                                 {lignesHoraires.map((h, hi) => {
-                                    const isPause = h.debut === '14:00';
+                                    // Une école peut avoir plusieurs pauses : on insère un bandeau
+                                    // avant CHAQUE créneau qui suit la fin d'une pause.
+                                    const pauses = horaires.pauses?.length
+                                        ? horaires.pauses
+                                        : [{ debut: horaires.pauseDebut, fin: horaires.pauseFin }];
+                                    const pauseAvant = pauses.find(p => p.fin === h.debut);
                                     return (
                                         <React.Fragment key={`slot-${h.debut}`}>
-                                            {isPause && (
-                                                <tr key="pause">
-                                                    <td colSpan={6} style={{
+                                            {pauseAvant && (
+                                                <tr key={`pause-${pauseAvant.debut}`}>
+                                                    <td colSpan={JOURS.length + 1} style={{
                                                         padding: '8px', textAlign: 'center', background: '#fef3c7',
                                                         borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
                                                     }}>
-                                                        <Utensils size={12} style={{display:'inline',verticalAlign:'middle',marginRight:'4px'}}/> 12:00 — 14:00 • Pause Déjeuner
+                                                        <Utensils size={12} style={{display:'inline',verticalAlign:'middle',marginRight:'4px'}}/> {pauseAvant.debut} — {pauseAvant.fin} • Pause
                                                     </td>
                                                 </tr>
                                             )}
@@ -475,6 +481,16 @@ export default function EmploiDuTempsPage() {
                             <span>Cliquer pour ajouter</span>
                         </div>
                     </div>
+
+                    {/* Sans ce renvoi, une ecole qui a cours le samedi n'a aucun
+                        moyen de deviner ou l'ajouter : le reglage existe, mais
+                        il est dans un autre ecran. */}
+                    <p style={{ margin: '14px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                        Semaine affichée : {JOURS.map(j => JOURS_LABEL[j]).join(', ')}.{' '}
+                        <Link href="/parametres/horaires" style={{ color: '#0d9488', fontWeight: 700 }}>
+                            Ajouter ou retirer un jour
+                        </Link>
+                    </p>
                 </motion.div>
             )}
 
@@ -521,6 +537,28 @@ export default function EmploiDuTempsPage() {
 
                             {/* Modal Body */}
                             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                {/* Sans matière rattachée à la classe, il n'y a rien à mettre
+                                    dans le menu Matière : on le dit clairement et on pointe vers
+                                    l'écran de rattachement, au lieu d'un menu vide inexplicable. */}
+                                {matieres.length === 0 && (
+                                    <div style={{
+                                        display: 'flex', gap: '10px', alignItems: 'flex-start',
+                                        padding: '14px 16px', borderRadius: '12px',
+                                        background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e',
+                                    }}>
+                                        <AlertCircle size={18} style={{ flexShrink: 0, marginTop: 1 }} />
+                                        <div style={{ fontSize: '13px', lineHeight: 1.55 }}>
+                                            <strong>Cette classe n’a aucune matière rattachée.</strong> Rattachez d’abord
+                                            les matières à la classe, puis revenez placer les cours.
+                                            {selectedClasseId && (
+                                                <Link href={`/classes/configurer/${selectedClasseId}`}
+                                                    style={{ display: 'inline-block', marginTop: '8px', color: '#b45309', fontWeight: 700, textDecoration: 'underline' }}>
+                                                    Rattacher des matières →
+                                                </Link>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                                 <div style={{ display: 'flex', gap: '12px' }}>
                                     <div style={{ flex: 1 }}>
                                         <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Jour</label>
