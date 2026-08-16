@@ -10,7 +10,7 @@ import Pagination from '@/components/Pagination';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 import MesSeances from './_components/MesSeances';
 import { startAutoSync } from '@/lib/syncEngine';
-import { LIBELLE_JOUR } from '@/lib/horaires';
+import { LIBELLE_JOUR, chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
 import { useJoursOuvres } from '@/hooks/useJoursOuvres';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -21,7 +21,7 @@ import {
     Settings, LogOut, ChevronDown, Key, Mail as MailIcon, Save,
     Camera, ImageIcon, Activity, PieChart, Target, Zap, Hash, Building2,
     ExternalLink, Link as LinkIcon, Banknote, Download, UserCheck,
-    School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip
+    School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip, Utensils
 } from 'lucide-react';
 
 // Jours ouvres de l'ecole (Parametres > Emploi du temps) : les listes etaient
@@ -117,6 +117,21 @@ export default function PortailEnseignant() {
     const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'seances'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
     const [edtLoading, setEdtLoading] = useState(false);
+    // Horaires configurés de l'école (Paramètres > Emploi du temps) : la grille
+    // de l'enseignant doit être IDENTIQUE à celle de l'administration, donc
+    // suivre les mêmes heures et les mêmes pauses, pas une grille figée.
+    const [horaires, setHoraires] = useState<Horaires>(HORAIRES_DEFAUT);
+    useEffect(() => { chargerHoraires().then(setHoraires).catch(() => {}); }, []);
+    const lignesHoraires = React.useMemo(() => {
+        const debuts = new Map<string, string>();
+        creneauxDeLaJournee(horaires).forEach(h => debuts.set(h.debut, h.fin));
+        // On ajoute aussi les heures réelles des cours posés, pour qu'un créneau
+        // à une heure non standard apparaisse quand même.
+        edtSlots.forEach(s => { if (s.heure_debut) debuts.set(s.heure_debut.slice(0, 5), (s.heure_fin || '').slice(0, 5)); });
+        return Array.from(debuts.entries())
+            .map(([debut, fin]) => ({ debut, fin }))
+            .sort((a, b) => a.debut.localeCompare(b.debut));
+    }, [edtSlots, horaires]);
     const [selectedClass, setSelectedClass] = useState<AffectationData|null>(null);
     const [classEleves, setClassEleves] = useState<EleveItem[]>([]);
     const [elevesLoading, setElevesLoading] = useState(false);
@@ -1499,15 +1514,26 @@ export default function PortailEnseignant() {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {HEURES.map(h => {
-                                                const endH = `${String(parseInt(h.split(':')[0]) + 1).padStart(2, '0')}:00`;
+                                            {lignesHoraires.map(({ debut: h, fin: endH }) => {
+                                                // Bandeau de pause avant le créneau qui suit la fin d'une pause,
+                                                // exactement comme la grille de l'administration.
+                                                const pauses = horaires.pauses?.length ? horaires.pauses : [{ debut: horaires.pauseDebut, fin: horaires.pauseFin }];
+                                                const pauseAvant = pauses.find(p => p.fin === h);
                                                 return (
-                                                    <tr key={h} style={{ borderBottom: '1px solid #f8fafc' }}>
+                                                    <Fragment key={h}>
+                                                    {pauseAvant && (
+                                                        <tr key={`pause-${pauseAvant.debut}`}>
+                                                            <td colSpan={JOURS.length + 1} style={{ padding: '6px', textAlign: 'center', background: '#fef3c7', fontSize: '11px', color: '#92400e', fontWeight: 700 }}>
+                                                                <Utensils size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> {pauseAvant.debut} — {pauseAvant.fin} • Pause
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                    <tr style={{ borderBottom: '1px solid #f8fafc' }}>
                                                         <td style={{ padding: '8px', fontSize: '11px', color: '#94a3b8', textAlign: 'center', fontWeight: 600, verticalAlign: 'top' }}>
                                                             {h}<br /><span style={{ fontSize: '10px' }}>{endH}</span>
                                                         </td>
                                                         {JOURS.map(j => {
-                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut.startsWith(h));
+                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut.slice(0, 5) === h);
                                                             if (!slot) return <td key={j} style={{ padding: '4px' }} />;
                                                             const ci = Math.max(0, affectations.findIndex(a => a.classe === slot.classe && a.matiere === slot.matiere));
                                                             const colors = getSlotColor(ci);
@@ -1525,6 +1551,7 @@ export default function PortailEnseignant() {
                                                             );
                                                         })}
                                                     </tr>
+                                                    </Fragment>
                                                 );
                                             })}
                                         </tbody>
