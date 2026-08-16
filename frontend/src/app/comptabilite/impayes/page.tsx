@@ -181,10 +181,14 @@ export default function ImpayesPage() {
     };
 
     const sendNotifications = async () => {
-        if (!confirm('Envoyer les rappels de paiement à tous les parents concernés ?')) return;
+        const classeNom = filterClasse ? (classes.find((c: any) => String(c.classe_id) === String(filterClasse))?.libelle || 'cette classe') : null;
+        const cible = classeNom ? `aux parents de ${classeNom} non soldés` : 'à tous les parents concernés';
+        if (!confirm(`Envoyer les rappels de paiement ${cible} ?`)) return;
         setNotifying(true);
         try {
-            const res = await api.post(`/api/finance/communication/notifier-impayes?etablissement_id=${etablissementId}&annee_id=${filterAnnee}`);
+            const params = new URLSearchParams({ etablissement_id: String(etablissementId), annee_id: String(filterAnnee) });
+            if (filterClasse) params.set('classe_id', String(filterClasse));
+            const res = await api.post(`/api/finance/communication/notifier-impayes?${params}`);
             showMsg(`${res.data.nb_notifies} notification(s) envoyée(s) aux parents`, 'success');
         } catch { showMsg('Erreur lors de l\'envoi', 'error'); }
         setNotifying(false);
