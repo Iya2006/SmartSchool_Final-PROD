@@ -1041,21 +1041,19 @@ export default function NotationPage() {
                                                                         </div>
                                                                         <div style={{ display: 'flex', gap: '4px', alignItems: 'center', width: '100%' }}>
                                                                             <span style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600, minWidth: '24px' }}>/ </span>
-                                                                            <select
+                                                                            <input
+                                                                                type="number" min={1} max={100} step={1}
                                                                                 value={noteSur}
+                                                                                title="Barème : sur combien la matière est notée (ex : 20, 10, 100…)"
                                                                                 style={{
                                                                                     width: '52px', padding: '2px 4px', borderRadius: '6px', fontSize: '0.78rem',
-                                                                                    fontWeight: 600, color: '#64748b',
+                                                                                    fontWeight: 600, color: '#64748b', textAlign: 'center',
                                                                                     border: `1.5px solid ${isEdited ? '#f59e0b' : '#e2e8f0'}`,
                                                                                     background: isEdited ? '#fef9ee' : 'white',
-                                                                                    outline: 'none', cursor: 'pointer'
+                                                                                    outline: 'none'
                                                                                 }}
                                                                                 onChange={e => editSerieCoef(serie, m.matiere_id, 'note_sur', Number(e.target.value))}
-                                                                            >
-                                                                                <option value={10}>10</option>
-                                                                                <option value={20}>20</option>
-                                                                                <option value={100}>100</option>
-                                                                            </select>
+                                                                            />
                                                                         </div>
                                                                     </div>
                                                                 );
@@ -1105,15 +1103,16 @@ export default function NotationPage() {
                                                         className={`${styles.coefInput} ${isEdited && 'coefficient' in serieEdit ? styles.coefInputEdited : ''}`}
                                                         onChange={e => editSerieCoef(lyceeSerie, m.matiere_id, 'coefficient', Number(e.target.value))}
                                                     />
-                                                    <select
-                                                        value={noteSur}
-                                                        className={`${styles.noteSurSelect} ${isEdited && 'note_sur' in serieEdit ? styles.noteSurEdited : ''}`}
-                                                        onChange={e => editSerieCoef(lyceeSerie, m.matiere_id, 'note_sur', Number(e.target.value))}
-                                                    >
-                                                        <option value={10}>/ 10</option>
-                                                        <option value={20}>/ 20</option>
-                                                        <option value={100}>/ 100</option>
-                                                    </select>
+                                                    <div className={styles.noteSurField}>
+                                                        <span className={styles.noteSurSlash}>/</span>
+                                                        <input
+                                                            type="number" min={1} max={100} step={1}
+                                                            value={noteSur}
+                                                            title="Barème : sur combien la matière est notée (ex : 20, 10, 100…)"
+                                                            className={`${styles.noteSurSelect} ${isEdited && 'note_sur' in serieEdit ? styles.noteSurEdited : ''}`}
+                                                            onChange={e => editSerieCoef(lyceeSerie, m.matiere_id, 'note_sur', Number(e.target.value))}
+                                                        />
+                                                    </div>
                                                     <div className={styles.checkCell}>
                                                         {isEdited
                                                             ? <Pencil size={14} color="#f59e0b" />
@@ -1168,15 +1167,16 @@ export default function NotationPage() {
                                                         className={`${styles.coefInput} ${isEdited && 'coefficient_defaut' in edited ? styles.coefInputEdited : ''}`}
                                                         onChange={e => editCoef(m.matiere_id, 'coefficient_defaut', Number(e.target.value))}
                                                     />
-                                                    <select
-                                                        value={noteSur}
-                                                        className={`${styles.noteSurSelect} ${isEdited && 'note_sur' in edited ? styles.noteSurEdited : ''}`}
-                                                        onChange={e => editCoef(m.matiere_id, 'note_sur', Number(e.target.value))}
-                                                    >
-                                                        <option value={10}>/ 10</option>
-                                                        <option value={20}>/ 20</option>
-                                                        <option value={100}>/ 100</option>
-                                                    </select>
+                                                    <div className={styles.noteSurField}>
+                                                        <span className={styles.noteSurSlash}>/</span>
+                                                        <input
+                                                            type="number" min={1} max={100} step={1}
+                                                            value={noteSur}
+                                                            title="Barème : sur combien la matière est notée (ex : 20, 10, 100…)"
+                                                            className={`${styles.noteSurSelect} ${isEdited && 'note_sur' in edited ? styles.noteSurEdited : ''}`}
+                                                            onChange={e => editCoef(m.matiere_id, 'note_sur', Number(e.target.value))}
+                                                        />
+                                                    </div>
                                                     <div className={styles.checkCell}>
                                                         {isEdited
                                                             ? <Pencil size={14} color="#f59e0b" />
