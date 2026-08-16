@@ -1,12 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, type ReactNode, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     BookOpen, Loader2, Sparkles, Search, Plus, Zap,
     GraduationCap, Clock, Hash, Trash2, CheckCircle,
     AlertTriangle, X, School, Flag, Globe, BookOpenCheck,
-    Languages, Compass, PenTool, FileText, Info
+    Languages, Compass, PenTool, FileText, Info, Pencil, Save
 } from 'lucide-react';
 import api from '@/lib/api';
 import styles from './Matieres.module.css';
@@ -116,6 +116,50 @@ export default function MatieresPage() {
         type: 'warning' | 'danger' | 'info';
         action: () => void;
     } | null>(null);
+
+    // Édition d'une matière existante.
+    const [editMatiere, setEditMatiere] = useState<Matiere | null>(null);
+    const [editForm, setEditForm] = useState({ libelle: '', code: '', coefficient_defaut: 1, nb_heures_semaine: 2, note_sur: 20, categorie: '' });
+    const [editSaving, setEditSaving] = useState(false);
+
+    const ouvrirEditionMatiere = (m: Matiere) => {
+        setEditForm({
+            libelle: m.libelle, code: m.code,
+            coefficient_defaut: m.coefficient_defaut ?? 1,
+            nb_heures_semaine: m.nb_heures_semaine ?? 2,
+            note_sur: (m as Matiere & { note_sur?: number }).note_sur ?? 20,
+            categorie: m.categorie || '',
+        });
+        setEditMatiere(m);
+    };
+
+    const enregistrerEditionMatiere = async () => {
+        if (!editMatiere) return;
+        if (!editForm.libelle.trim() || !editForm.code.trim()) {
+            showToast('Le nom et le code sont obligatoires', 'error');
+            return;
+        }
+        setEditSaving(true);
+        try {
+            await api.put(`/api/matieres/${editMatiere.matiere_id}`, {
+                cycle_id: editMatiere.cycle_id,
+                code: editForm.code.trim(),
+                libelle: editForm.libelle.trim(),
+                coefficient_defaut: Number(editForm.coefficient_defaut) || 1,
+                nb_heures_semaine: Number(editForm.nb_heures_semaine) || 1,
+                note_sur: Number(editForm.note_sur) || 20,
+                categorie: editForm.categorie || null,
+                est_obligatoire: editMatiere.est_obligatoire || 'O',
+            });
+            setEditMatiere(null);
+            showToast('Matière modifiée !');
+            await fetchAll();
+        } catch (e: any) {
+            showToast(e.response?.data?.detail || 'La modification a échoué', 'error');
+        } finally {
+            setEditSaving(false);
+        }
+    };
 
     // Deploy tab state
     const [deployMode, setDeployMode] = useState<'guinee' | 'custom'>('guinee');
@@ -555,6 +599,14 @@ export default function MatieresPage() {
                                                                     </span>
                                                                     <button
                                                                         className={styles.deleteBtn}
+                                                                        onClick={() => ouvrirEditionMatiere(mat)}
+                                                                        title="Modifier"
+                                                                        style={{ color: '#2563eb' }}
+                                                                    >
+                                                                        <Pencil size={13} />
+                                                                    </button>
+                                                                    <button
+                                                                        className={styles.deleteBtn}
                                                                         onClick={() => handleDelete(mat.matiere_id, mat.libelle)}
                                                                         title="Supprimer"
                                                                     >
@@ -653,6 +705,61 @@ export default function MatieresPage() {
 
             {/* ── Toast notifications ── */}
             <AnimatePresence>
+                {editMatiere && (
+                    <motion.div
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '24px' }}
+                        onClick={() => !editSaving && setEditMatiere(null)}
+                    >
+                        <motion.div
+                            initial={{ y: 28, opacity: 0, scale: 0.97 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 18, opacity: 0, scale: 0.97 }}
+                            style={{ background: 'white', borderRadius: '16px', width: '100%', maxWidth: '460px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div style={{ padding: '18px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+                                <h2 style={{ fontSize: '16px', fontWeight: 800, margin: 0, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <Pencil size={16} /> Modifier la matière
+                                </h2>
+                                <button onClick={() => !editSaving && setEditMatiere(null)} style={{ width: '30px', height: '30px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#64748b' }}>
+                                    <X size={16} />
+                                </button>
+                            </div>
+                            <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    <span style={champLabel}>Nom de la matière</span>
+                                    <input value={editForm.libelle} onChange={e => setEditForm(f => ({ ...f, libelle: e.target.value }))} style={champInput} placeholder="Ex : Mathématiques" />
+                                </label>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <span style={champLabel}>Code</span>
+                                        <input value={editForm.code} onChange={e => setEditForm(f => ({ ...f, code: e.target.value }))} style={champInput} placeholder="Ex : MATH" />
+                                    </label>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <span style={champLabel}>Coefficient</span>
+                                        <input type="number" min={0.5} step={0.5} value={editForm.coefficient_defaut} onChange={e => setEditForm(f => ({ ...f, coefficient_defaut: Number(e.target.value) }))} style={champInput} />
+                                    </label>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <span style={champLabel}>Heures / semaine</span>
+                                        <input type="number" min={0} value={editForm.nb_heures_semaine} onChange={e => setEditForm(f => ({ ...f, nb_heures_semaine: Number(e.target.value) }))} style={champInput} />
+                                    </label>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <span style={champLabel}>Note sur (barème)</span>
+                                        <input type="number" min={1} max={100} value={editForm.note_sur} onChange={e => setEditForm(f => ({ ...f, note_sur: Number(e.target.value) }))} style={champInput} />
+                                    </label>
+                                </div>
+                            </div>
+                            <div style={{ padding: '14px 22px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button onClick={() => setEditMatiere(null)} disabled={editSaving} style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', color: '#64748b', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>Annuler</button>
+                                <button onClick={enregistrerEditionMatiere} disabled={editSaving} style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '10px 20px', borderRadius: '10px', border: 'none', background: '#4f46e5', color: 'white', fontSize: '13px', fontWeight: 700, cursor: editSaving ? 'not-allowed' : 'pointer', opacity: editSaving ? 0.6 : 1 }}>
+                                    {editSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Enregistrer
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+
                 {toast && (
                     <motion.div className={`${styles.toast} ${toast.type === 'error' ? styles.toastError : ''}`}
                         initial={{ opacity: 0, x: 80 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 80 }}>
@@ -664,3 +771,10 @@ export default function MatieresPage() {
         </div>
     );
 }
+
+const champLabel: CSSProperties = { fontSize: '12px', fontWeight: 700, color: '#475569' };
+const champInput: CSSProperties = {
+    width: '100%', padding: '10px 12px', borderRadius: '10px',
+    border: '1px solid #cbd5e1', fontSize: '13.5px', outline: 'none',
+    color: '#0f172a', background: 'white', fontFamily: 'inherit',
+};
