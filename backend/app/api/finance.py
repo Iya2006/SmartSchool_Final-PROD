@@ -1426,6 +1426,16 @@ def create_depense(data: DepenseCreate, db: Session = Depends(get_db), etablisse
     _verifier_annee_modifiable(db, data.annee_id)
     if data.montant <= 0:
         raise HTTPException(status_code=400, detail="Le montant doit être supérieur à 0")
+    # On ne dépense pas plus que ce qu'il y a en caisse — même règle que pour
+    # les salaires et les règlements fournisseurs. Sans ce garde-fou, la caisse
+    # pouvait passer en négatif sans que personne ne le voie.
+    annee_depense = resoudre_annee(db, etablissement_id, data.annee_id)
+    solde_disponible = _get_solde_caisse(db, etablissement_id, annee_depense)
+    if float(data.montant) > solde_disponible:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Solde en caisse insuffisant. Disponible : {solde_disponible:,.0f} GNF".replace(',', ' '),
+        )
     # data.etablissement_id vient du corps de la requête (schéma DepenseBase) —
     # ignoré ici et remplacé par l'établissement authentifié : avant le Lot 2,
     # n'importe quel client pouvait choisir librement l'école propriétaire de

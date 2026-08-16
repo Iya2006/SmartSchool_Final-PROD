@@ -107,6 +107,30 @@ def _type_frais(db: Session, etablissement_id: int) -> TypeFrais:
     return tf
 
 
+def _approvisionner_caisse(db: Session, ecole, montant: int = 5000000) -> None:
+    """Encaisse de quoi remplir la caisse de l'école.
+
+    Depuis le blocage des dépenses supérieures au solde, une école sans
+    encaissement a 0 GNF en caisse et ne peut plus enregistrer la moindre
+    dépense. On y injecte donc d'abord un paiement validé. Le préfixe « 0- »
+    évite que ce numéro soit pris pour le dernier numéro réel (cf. la note du
+    test de salaire).
+    """
+    uid = _uid()
+    facture = Facture(
+        inscription_id=ecole.inscription.inscription_id, annee_id=ecole.annee.annee_id,
+        numero_facture=f"0-FACDEP-{ecole.etab.etablissement_id}-{uid}", montant_total=montant,
+        montant_net=montant, montant_paye=montant, montant_restant=0, statut="PAYEE",
+    )
+    db.add(facture); db.commit(); db.refresh(facture)
+    paiement = Paiement(
+        facture_id=facture.facture_id, annee_id=ecole.annee.annee_id,
+        numero_recu=f"RECDEP-{ecole.etab.etablissement_id}-{uid}", montant=montant,
+        mode_paiement="Cash", statut="VALIDE",
+    )
+    db.add(paiement); db.commit()
+
+
 class TestIdentifierEmployeIsole:
     def test_paiement_salaire_cross_ecole_refuse(self, client: TestClient, db: Session):
         """École A ne doit jamais pouvoir payer le salaire d'un enseignant de l'école B."""
@@ -310,6 +334,7 @@ class TestDepenseIsolation:
         ecole_a = Ecole(db, "DEPA")
         ecole_b = Ecole(db, "DEPB")
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
+        _approvisionner_caisse(db, ecole_a)  # sinon la dépense est bloquée (solde 0)
 
         resp = client.post(
             "/api/finance/depenses",
@@ -332,6 +357,7 @@ class TestDepenseIsolation:
         ecole_b = Ecole(db, "VALB")
         headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
         headers_b = _headers(client, ecole_b.admin.nom_utilisateur)
+        _approvisionner_caisse(db, ecole_b)  # sinon la dépense est bloquée (solde 0)
 
         resp = client.post(
             "/api/finance/depenses",
@@ -343,6 +369,31 @@ class TestDepenseIsolation:
 
         resp = client.put(f"/api/finance/depenses/{depense_id}/valider", headers=headers_a)
         assert resp.status_code == 404
+
+    def test_depense_superieure_a_la_caisse_est_bloquee(self, client: TestClient, db: Session):
+        """On ne dépense pas plus que ce qu'il y a en caisse."""
+        ecole = Ecole(db, "CAISSE")
+        headers = _headers(client, ecole.admin.nom_utilisateur)
+        _approvisionner_caisse(db, ecole, montant=100000)  # 100 000 en caisse
+
+        # Dépense de 500 000 alors qu'il n'y a que 100 000 : refusée.
+        resp = client.post(
+            "/api/finance/depenses",
+            json={"etablissement_id": ecole.etab.etablissement_id, "annee_id": ecole.annee.annee_id,
+                  "categorie": "FOURNITURES", "libelle": "Trop cher", "montant": 500000},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "insuffisant" in resp.json()["detail"].lower()
+
+        # Une dépense dans les limites passe.
+        resp = client.post(
+            "/api/finance/depenses",
+            json={"etablissement_id": ecole.etab.etablissement_id, "annee_id": ecole.annee.annee_id,
+                  "categorie": "FOURNITURES", "libelle": "Ok", "montant": 80000},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
 
     def test_liste_depenses_isolee(self, client: TestClient, db: Session):
         ecole_a = Ecole(db, "LDA")

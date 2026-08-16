@@ -4,7 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock } from 'lucide-react';
+import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock, Info } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
@@ -380,6 +380,18 @@ export default function NouveauEleve() {
                         </div>
                     </div>
                     <div style={{ padding: '24px 28px' }}>
+                        {/* L'identifiant n'a pas de champ à remplir : c'est le matricule,
+                            généré automatiquement. On le dit ici pour lever la question
+                            « où est le champ identifiant ? ». */}
+                        <div style={{ padding: '14px 18px', borderRadius: '12px', background: '#eff6ff', border: '1px solid #bfdbfe', marginBottom: '14px' }}>
+                            <p style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: 0, fontSize: '13px', color: '#1e40af', fontWeight: 600 }}>
+                                <Info size={14} /> Identifiant de connexion = le <strong>matricule</strong>
+                            </p>
+                            <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#1e3a8a' }}>
+                                Pas de champ à remplir : le matricule (ex&nbsp;: <code style={{ background: '#fff', padding: '1px 6px', borderRadius: '5px', fontFamily: 'monospace' }}>ELV-10-00001</code>) est
+                                généré automatiquement à la création et affiché à la fin. Vous n&apos;avez qu&apos;à définir le mot de passe ci-dessous.
+                            </p>
+                        </div>
                         <div style={{ padding: '14px 18px', borderRadius: '12px', background: '#fef3c7', border: '1px solid #fde68a', marginBottom: '18px' }}>
                             <p style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: 0, fontSize: '13px', color: '#92400e', fontWeight: 600 }}>
                                 <AlertTriangle size={14} /> Mot de passe par défaut : <code style={{ background: '#fff', padding: '2px 8px', borderRadius: '6px', fontFamily: 'monospace', fontSize: '14px', border: '1px solid #fed7aa' }}>smartschool</code>
