@@ -224,6 +224,39 @@ def get_enseignant_stats(enseignant_id: int, annee_id: int = Depends(resolve_ann
     }
 
 
+@router.get("/classe/{classe_id}")
+def enseignants_de_la_classe(classe_id: int, annee_id: int = Depends(resolve_annee_id), db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Les enseignants réellement affectés à une classe (année en cours).
+
+    Sert à l'emploi du temps : on ne propose que les enseignants qui donnent
+    cours dans CETTE classe, pas tout le corps enseignant de l'école — un
+    professeur d'histoire du lycée n'a rien à faire dans le menu d'une classe
+    de primaire où il n'intervient pas.
+    """
+    classe = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+
+    lignes = (
+        db.query(Enseignant.enseignant_id, Enseignant.nom, Enseignant.prenom, Enseignant.specialite)
+        .join(Affectation, Affectation.enseignant_id == Enseignant.enseignant_id)
+        .filter(
+            Affectation.classe_id == classe_id,
+            Affectation.annee_id == annee_id,
+            Affectation.statut == "ACTIVE",
+        )
+        .distinct()
+        .all()
+    )
+    return [
+        {"enseignant_id": e_id, "nom": nom, "prenom": prenom, "specialite": specialite}
+        for (e_id, nom, prenom, specialite) in lignes
+    ]
+
+
 # ================================================================
 # CRUD AFFECTATIONS
 # ================================================================

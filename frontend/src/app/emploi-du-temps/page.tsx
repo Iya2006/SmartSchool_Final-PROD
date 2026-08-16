@@ -68,20 +68,24 @@ export default function EmploiDuTempsPage() {
     const showSuccess = (msg: string) => { setSuccessMsg(msg); setTimeout(() => setSuccessMsg(null), 3000); };
     const showError = (msg: string) => { setErrorMsg(msg); setTimeout(() => setErrorMsg(null), 4000); };
 
-    // Load classes + enseignants on mount
+    // Load classes on mount (les enseignants sont chargés par classe, voir
+    // loadEmploi : on ne propose que ceux qui donnent cours dans la classe).
     useEffect(() => {
         const init = async () => {
             try {
-                const [clRes, ensRes, h] = await Promise.all([
+                const [clRes, h] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
-                    api.get(`/api/enseignants?etablissement_id=${etablissementId}&skip=0&limit=200`),
                     chargerHoraires(),
                 ]);
                 setHoraires(h);
                 setClasses(clRes.data);
-                setEnseignants(ensRes.data);
                 if (clRes.data.length > 0) {
-                    setSelectedClasseId(clRes.data[0].classe_id);
+                    // Si on arrive depuis la fiche d'un élève (?classe=…), on
+                    // ouvre directement l'emploi du temps de SA classe ; sinon
+                    // la première classe de l'école.
+                    const demande = Number(new URLSearchParams(window.location.search).get('classe'));
+                    const existe = clRes.data.some((c: Classe) => c.classe_id === demande);
+                    setSelectedClasseId(existe ? demande : clRes.data[0].classe_id);
                 }
             } catch (err) { console.error(err); }
             finally { setLoading(false); }
@@ -89,16 +93,19 @@ export default function EmploiDuTempsPage() {
         init();
     }, []);
 
-    // Load timetable + matieres when class changes
+    // Load timetable + matieres + enseignants when class changes
     const loadEmploi = useCallback(async (classeId: number) => {
         setLoadingEmploi(true);
         try {
-            const [emRes, matRes] = await Promise.all([
+            const [emRes, matRes, ensRes] = await Promise.all([
                 api.get(`/api/emploi-du-temps/classe/${classeId}`),
                 api.get(`/api/matieres/classe/${classeId}`),
+                // Seulement les enseignants affectés à CETTE classe.
+                api.get(`/api/enseignants/classe/${classeId}`),
             ]);
             setCreneaux(emRes.data.creneaux);
             setMatieres(matRes.data.matieres || []);
+            setEnseignants(Array.isArray(ensRes.data) ? ensRes.data : []);
         } catch (err) { console.error(err); }
         finally { setLoadingEmploi(false); }
     }, []);
