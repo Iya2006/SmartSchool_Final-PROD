@@ -813,11 +813,17 @@ def resultats_intermediaires(
 
     _classe_ou_404(db, classe_id, etablissement_id)
 
+    # Le classement de SUIVI se calcule dès que les notes sont saisies, sans
+    # attendre la centralisation officielle : une évaluation « Publiée » (notes
+    # remplies par l'enseignant) doit déjà donner une moyenne et un rang. Le
+    # calcul officiel des bulletins, lui, ne retient toujours que les épreuves
+    # centralisées — c'est une autre route (calculer-moyennes, persist=True).
     return calculer_resultats_periode(
         db, classe_id, trimestre_id,
         evaluation_ids=_ids(evaluation_ids),
         session_ids=_ids(session_ids),
         persist=False,
+        statuts_inclus=["PUBLIEE", "CENTRALISEE", "CALCULE"],
     )
 
 
