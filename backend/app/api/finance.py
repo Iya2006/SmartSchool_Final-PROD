@@ -1380,6 +1380,9 @@ def list_depenses(
     categorie: Optional[str] = None,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
+    mode_paiement: Optional[str] = None,
+    date_debut: Optional[date_type] = None,
+    date_fin: Optional[date_type] = None,
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
@@ -1409,6 +1412,15 @@ def list_depenses(
         query = query.filter(Depense.classe_id == classe_id)
     if statut:
         query = query.filter(Depense.statut == statut)
+    # Tri par moyen de paiement (Orange Money, especes, virement...) et periode
+    # (jour / semaine / mois) : c'est ce qui rend l'historique des depenses
+    # exploitable pour un rapprochement de caisse.
+    if mode_paiement:
+        query = query.filter(func.upper(func.coalesce(Depense.mode_paiement, "")) == mode_paiement.upper())
+    if date_debut:
+        query = query.filter(Depense.date_depense >= date_debut)
+    if date_fin:
+        query = query.filter(Depense.date_depense <= date_fin)
     if search:
         like = f"%{search.strip()}%"
         query = query.filter(

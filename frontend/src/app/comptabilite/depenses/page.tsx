@@ -47,6 +47,29 @@ const CATEGORIES = [
 
 const MODES = ['ESPECES', 'VIREMENT', 'CHEQUE', 'MOBILE_MONEY'];
 
+const LIBELLE_MODE: Record<string, string> = {
+    ESPECES: 'Espèces', VIREMENT: 'Virement', CHEQUE: 'Chèque',
+    MOBILE_MONEY: 'Mobile money (Orange, MTN…)',
+};
+
+/** Bornes de date pour l'historique. Renvoie null pour « tout l'historique ». */
+function bornesPeriode(p: 'tout' | 'jour' | 'semaine' | 'mois'): { debut: string; fin: string } | null {
+    if (p === 'tout') return null;
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    const fin = new Date();
+    const debut = new Date();
+    if (p === 'jour') {
+        // aujourd'hui
+    } else if (p === 'semaine') {
+        // depuis lundi de la semaine en cours
+        const jour = (debut.getDay() + 6) % 7; // lundi = 0
+        debut.setDate(debut.getDate() - jour);
+    } else if (p === 'mois') {
+        debut.setDate(1);
+    }
+    return { debut: iso(debut), fin: iso(fin) };
+}
+
 const STATUTS: Record<string, { libelle: string; fond: string; texte: string }> = {
     EN_ATTENTE: { libelle: 'En attente', fond: '#fffbeb', texte: '#b45309' },
     VALIDE:     { libelle: 'Validée',    fond: '#f0fdf4', texte: '#15803d' },
@@ -67,6 +90,9 @@ export default function DepensesPage() {
     const [message, setMessage] = useState<string | null>(null);
     const [recherche, setRecherche] = useState('');
     const [filtreStatut, setFiltreStatut] = useState('');
+    // Historique : période (jour / semaine / mois / tout) et moyen de paiement.
+    const [periode, setPeriode] = useState<'tout' | 'jour' | 'semaine' | 'mois'>('tout');
+    const [filtreMode, setFiltreMode] = useState('');
     const [formulaire, setFormulaire] = useState(false);
     const [enCours, setEnCours] = useState<number | null>(null);
 
@@ -76,6 +102,12 @@ export default function DepensesPage() {
         try {
             const params = new URLSearchParams({ limit: '200' });
             if (filtreStatut) params.set('statut', filtreStatut);
+            if (filtreMode) params.set('mode_paiement', filtreMode);
+            const bornes = bornesPeriode(periode);
+            if (bornes) {
+                params.set('date_debut', bornes.debut);
+                params.set('date_fin', bornes.fin);
+            }
             const [liste, resume] = await Promise.all([
                 api.get(`/api/finance/depenses?${params}`),
                 api.get('/api/finance/depenses/stats').catch(() => ({ data: null })),
@@ -91,7 +123,7 @@ export default function DepensesPage() {
         } finally {
             setChargement(false);
         }
-    }, [filtreStatut]);
+    }, [filtreStatut, filtreMode, periode]);
 
     useEffect(() => { charger(); }, [charger]);
     useEffect(() => {
@@ -153,6 +185,41 @@ export default function DepensesPage() {
                     <Carte titre="Total des dépenses" valeur={montant(stats.total_depenses)} accent="#b45309" />
                     <Carte titre="Validées" valeur={montant(stats.total_valide)} accent="#15803d" />
                     <Carte titre="En attente d'approbation" valeur={montant(stats.total_en_attente)} accent="#64748b" />
+                </div>
+            )}
+
+            {/* Historique : période + moyen de paiement. */}
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '6px', background: '#f1f5f9', padding: '4px', borderRadius: '10px' }}>
+                    {([['tout', 'Tout'], ['jour', "Aujourd'hui"], ['semaine', 'Cette semaine'], ['mois', 'Ce mois']] as const).map(([cle, lib]) => (
+                        <button key={cle} onClick={() => setPeriode(cle)} style={{
+                            padding: '7px 13px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                            fontSize: '12.5px', fontWeight: periode === cle ? 800 : 600,
+                            background: periode === cle ? '#fff' : 'transparent',
+                            color: periode === cle ? '#b45309' : '#64748b',
+                            boxShadow: periode === cle ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                        }}>{lib}</button>
+                    ))}
+                </div>
+                <select value={filtreMode} onChange={e => setFiltreMode(e.target.value)} style={{ ...champ, width: 'auto', minWidth: '160px' }}>
+                    <option value="">Tous les moyens de paiement</option>
+                    {MODES.map(m => <option key={m} value={m}>{LIBELLE_MODE[m] || m}</option>)}
+                </select>
+            </div>
+
+            {/* Répartition par moyen de paiement sur la période/filtre courant. */}
+            {!chargement && visibles.length > 0 && (
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    {MODES.map(m => {
+                        const total = visibles.filter(d => (d.mode_paiement || '').toUpperCase() === m)
+                            .reduce((s, d) => s + (Number(d.montant) || 0), 0);
+                        if (total <= 0) return null;
+                        return (
+                            <span key={m} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 12px', borderRadius: '99px', background: '#fff', border: '1px solid #e2e8f0', fontSize: '12.5px', fontWeight: 700, color: '#334155' }}>
+                                {LIBELLE_MODE[m] || m} : <span style={{ color: '#b45309' }}>{montant(total)}</span>
+                            </span>
+                        );
+                    })}
                 </div>
             )}
 
