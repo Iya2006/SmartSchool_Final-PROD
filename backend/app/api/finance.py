@@ -3107,7 +3107,12 @@ def creer_reglement_fournisseur(
     description = data.get("description", "")
     reference = data.get("reference", "")
     fournisseur = data.get("fournisseur") or data.get("beneficiaire") or ""
-    annee_id = data.get("annee_id") or 1
+    # Le defaut `or 1` calculait le solde sur l'annee 1, qui n'a aucun
+    # encaissement pour la plupart des ecoles : la caisse affichait alors
+    # « 0 GNF disponible » et bloquait tout decaissement alors que l'argent
+    # etait bien la. On resout l'annee en cours de l'ecole quand elle n'est
+    # pas fournie.
+    annee_id = resoudre_annee(db, etablissement_id, data.get("annee_id"))
     classe_id = data.get("classe_id") or None
     eleve_id = data.get("eleve_id") or None
 
