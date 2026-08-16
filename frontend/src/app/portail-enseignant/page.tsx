@@ -10,7 +10,7 @@ import Pagination from '@/components/Pagination';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 import MesSeances from './_components/MesSeances';
 import { startAutoSync } from '@/lib/syncEngine';
-import { LIBELLE_JOUR } from '@/lib/horaires';
+import { LIBELLE_JOUR, chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
 import { useJoursOuvres } from '@/hooks/useJoursOuvres';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -22,7 +22,7 @@ import {
     Settings, LogOut, ChevronDown, Key, Mail as MailIcon, Save,
     Camera, ImageIcon, Activity, PieChart, Target, Zap, Hash, Building2,
     ExternalLink, Link as LinkIcon, Banknote, Download, UserCheck,
-    School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip, Menu
+    School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip, Utensils, Menu
 } from 'lucide-react';
 
 // Jours ouvres de l'ecole (Parametres > Emploi du temps) : les listes etaient
@@ -39,7 +39,7 @@ const DISPO_HEURES = [
 /* ═══ TYPES ═══ */
 interface AffectationData {
     affectation_id: number; classe_id: number; classe_code: string; classe: string;
-    niveau: string; matiere_id: number; matiere: string; coefficient: number;
+    niveau: string; cycle_code: string | null; matiere_id: number; matiere: string; coefficient: number;
     heures_semaine: number; effectif: number; nb_notes: number;
 }
 interface EnseignantInfo {
@@ -122,6 +122,21 @@ export default function PortailEnseignant() {
     const isMobile = useIsMobile();
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
     const [edtLoading, setEdtLoading] = useState(false);
+    // Horaires configurés de l'école (Paramètres > Emploi du temps) : la grille
+    // de l'enseignant doit être IDENTIQUE à celle de l'administration, donc
+    // suivre les mêmes heures et les mêmes pauses, pas une grille figée.
+    const [horaires, setHoraires] = useState<Horaires>(HORAIRES_DEFAUT);
+    useEffect(() => { chargerHoraires().then(setHoraires).catch(() => {}); }, []);
+    const lignesHoraires = React.useMemo(() => {
+        const debuts = new Map<string, string>();
+        creneauxDeLaJournee(horaires).forEach(h => debuts.set(h.debut, h.fin));
+        // On ajoute aussi les heures réelles des cours posés, pour qu'un créneau
+        // à une heure non standard apparaisse quand même.
+        edtSlots.forEach(s => { if (s.heure_debut) debuts.set(s.heure_debut.slice(0, 5), (s.heure_fin || '').slice(0, 5)); });
+        return Array.from(debuts.entries())
+            .map(([debut, fin]) => ({ debut, fin }))
+            .sort((a, b) => a.debut.localeCompare(b.debut));
+    }, [edtSlots, horaires]);
     const [selectedClass, setSelectedClass] = useState<AffectationData|null>(null);
     const [classEleves, setClassEleves] = useState<EleveItem[]>([]);
     const [elevesLoading, setElevesLoading] = useState(false);
@@ -835,7 +850,9 @@ export default function PortailEnseignant() {
             // lib/api.ts) si le réseau manque au moment de l'appel.
             const res = await api.post(`/api/sync/${data.enseignant.enseignant_id}/presences`, {
                 classe_id: selectedClass.classe_id,
-                demi_journee: appelDemiJournee,
+                // Au primaire, un seul appel par jour : on l'enregistre sous une
+                // demi-journée unique « JOURNEE » plutôt que Matin/Après-midi.
+                demi_journee: selectedClass.cycle_code === 'PRM' ? 'JOURNEE' : appelDemiJournee,
                 items,
             });
             setAppelSaved(`${res.data.message}`);
@@ -1539,15 +1556,26 @@ export default function PortailEnseignant() {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {HEURES.map(h => {
-                                                const endH = `${String(parseInt(h.split(':')[0]) + 1).padStart(2, '0')}:00`;
+                                            {lignesHoraires.map(({ debut: h, fin: endH }) => {
+                                                // Bandeau de pause avant le créneau qui suit la fin d'une pause,
+                                                // exactement comme la grille de l'administration.
+                                                const pauses = horaires.pauses?.length ? horaires.pauses : [{ debut: horaires.pauseDebut, fin: horaires.pauseFin }];
+                                                const pauseAvant = pauses.find(p => p.fin === h);
                                                 return (
-                                                    <tr key={h} style={{ borderBottom: '1px solid #f8fafc' }}>
+                                                    <Fragment key={h}>
+                                                    {pauseAvant && (
+                                                        <tr key={`pause-${pauseAvant.debut}`}>
+                                                            <td colSpan={JOURS.length + 1} style={{ padding: '6px', textAlign: 'center', background: '#fef3c7', fontSize: '11px', color: '#92400e', fontWeight: 700 }}>
+                                                                <Utensils size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> {pauseAvant.debut} — {pauseAvant.fin} • Pause
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                    <tr style={{ borderBottom: '1px solid #f8fafc' }}>
                                                         <td style={{ padding: '8px', fontSize: '11px', color: '#94a3b8', textAlign: 'center', fontWeight: 600, verticalAlign: 'top' }}>
                                                             {h}<br /><span style={{ fontSize: '10px' }}>{endH}</span>
                                                         </td>
                                                         {JOURS.map(j => {
-                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut.startsWith(h));
+                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut.slice(0, 5) === h);
                                                             if (!slot) return <td key={j} style={{ padding: '4px' }} />;
                                                             const ci = Math.max(0, affectations.findIndex(a => a.classe === slot.classe && a.matiere === slot.matiere));
                                                             const colors = getSlotColor(ci);
@@ -1565,6 +1593,7 @@ export default function PortailEnseignant() {
                                                             );
                                                         })}
                                                     </tr>
+                                                    </Fragment>
                                                 );
                                             })}
                                         </tbody>
@@ -2093,11 +2122,20 @@ export default function PortailEnseignant() {
                                         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Sélectionnez une classe pour l&apos;appel</p>
                                     </div>
                                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px' }}>
-                                        <select value={appelDemiJournee} onChange={e => setAppelDemiJournee(e.target.value)}
-                                            style={{ padding: '8px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
-                                            <option value="MATIN">Matin</option>
-                                            <option value="APRES_MIDI">Après-midi</option>
-                                        </select>
+                                        {/* Au PRIMAIRE, un seul appel par jour suffit (l'instituteur
+                                            a sa classe toute la journée). Au COLLÈGE/LYCÉE, l'appel se
+                                            fait par cours dans « Mes Séances » : pas de demi-journée ici. */}
+                                        {selectedClass?.cycle_code === 'PRM' ? (
+                                            <span style={{ padding: '8px 14px', borderRadius: '10px', background: '#ecfdf5', color: '#059669', fontSize: '13px', fontWeight: 700 }}>
+                                                Appel du jour
+                                            </span>
+                                        ) : (!selectedClass || selectedClass.cycle_code === 'PRM') ? (
+                                            <select value={appelDemiJournee} onChange={e => setAppelDemiJournee(e.target.value)}
+                                                style={{ padding: '8px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                                                <option value="MATIN">Matin</option>
+                                                <option value="APRES_MIDI">Après-midi</option>
+                                            </select>
+                                        ) : null}
                                         <span style={{ fontSize: '12px', color: accentColor, fontWeight: 600 }}>
                                             {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
                                         </span>
@@ -2156,7 +2194,24 @@ export default function PortailEnseignant() {
 
                                     {selectedClass ? (
                                         <div>
-                                            {elevesLoading ? (
+                                            {(selectedClass.cycle_code === 'CLG' || selectedClass.cycle_code === 'LYC') ? (
+                                                /* Collège / Lycée : l'appel se fait PAR MATIÈRE, à l'heure
+                                                   du cours, dans « Mes Séances ». Pas d'appel de classe ici. */
+                                                <div style={{ padding: '24px', borderRadius: '16px', background: '#eff6ff', border: '1px solid #bfdbfe', textAlign: 'center' }}>
+                                                    <Clock size={30} style={{ color: '#2563eb' }} />
+                                                    <p style={{ margin: '10px 0 4px', fontSize: '15px', fontWeight: 800, color: '#1e3a8a' }}>
+                                                        Au {selectedClass.cycle_code === 'CLG' ? 'collège' : 'lycée'}, l’appel se fait par cours
+                                                    </p>
+                                                    <p style={{ margin: '0 0 16px', fontSize: '13px', color: '#1e40af', lineHeight: 1.5 }}>
+                                                        Chaque enseignant marque les présences <strong>dans sa matière</strong>, à l’heure
+                                                        de son cours. Ouvre <strong>Mes Séances</strong> pour faire l’appel de {selectedClass.matiere} en {selectedClass.classe}.
+                                                    </p>
+                                                    <button onClick={() => setActiveTab('seances')}
+                                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '11px 20px', borderRadius: '11px', border: 'none', background: 'linear-gradient(135deg,#2563eb,#1d4ed8)', color: 'white', fontSize: '14px', fontWeight: 700, cursor: 'pointer' }}>
+                                                        <Clock size={16} /> Aller à Mes Séances
+                                                    </button>
+                                                </div>
+                                            ) : elevesLoading ? (
                                                 <div style={{ textAlign: 'center', padding: '40px' }}><Loader2 size={28} className="animate-spin" color="#10b981" /></div>
                                             ) : classEleves.length > 0 ? (
                                                 <div>
@@ -2297,7 +2352,7 @@ export default function PortailEnseignant() {
                                                             <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
                                                                 <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1e293b' }}>{new Date(a.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}</td>
                                                                 <td style={{ padding: '10px 12px' }}><span style={{ background: '#eff6ff', color: '#3b82f6', padding: '2px 8px', borderRadius: '6px', fontWeight: 600, fontSize: '11px' }}>{a.classe}</span></td>
-                                                                <td style={{ padding: '10px 12px', color: '#64748b' }}>{a.demi_journee === 'MATIN' ? 'Matin' : 'Après-midi'}</td>
+                                                                <td style={{ padding: '10px 12px', color: '#64748b' }}>{a.demi_journee === 'MATIN' ? 'Matin' : a.demi_journee === 'JOURNEE' ? 'Journée' : 'Après-midi'}</td>
                                                                 <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: '#f0fdf4', color: '#10b981', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.presents}</span></td>
                                                                 <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: a.absents > 0 ? '#fef2f2' : '#f8fafc', color: a.absents > 0 ? '#ef4444' : '#94a3b8', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.absents}</span></td>
                                                                 <td style={{ padding: '10px 12px', textAlign: 'center' }}><span style={{ background: a.retards > 0 ? '#fffbeb' : '#f8fafc', color: a.retards > 0 ? '#f59e0b' : '#94a3b8', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>{a.retards}</span></td>

@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.security import verify_password, hash_password
 from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import (
-    Enseignant, Affectation, CreneauEmploi, Classe, Matiere, Niveau,
+    Enseignant, Affectation, CreneauEmploi, Classe, Matiere, Niveau, Cycle,
     Note, Evaluation, Inscription, Eleve, Presence, Trimestre, TypeEvaluation,
     AnneeScolaire, RessourcePedagogique, ClasseMatiere, ParametreEtablissement
 )
@@ -387,9 +387,11 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
         Matiere.libelle.label("matiere"),
         Matiere.coefficient_defaut.label("coefficient"),
         Niveau.libelle.label("niveau"),
+        Cycle.code.label("cycle_code"),
     ).join(Classe, Affectation.classe_id == Classe.classe_id
     ).join(Matiere, Affectation.matiere_id == Matiere.matiere_id
     ).join(Niveau, Classe.niveau_id == Niveau.niveau_id
+    ).join(Cycle, Niveau.cycle_id == Cycle.cycle_id
     ).filter(
         Affectation.enseignant_id == enseignant_id,
         Affectation.statut == "ACTIVE"
@@ -425,6 +427,7 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
             "classe_code": a.classe_code,
             "classe": a.classe_libelle,
             "niveau": a.niveau,
+            "cycle_code": a.cycle_code,
             "matiere_id": a.matiere_id,
             "matiere": a.matiere,
             "coefficient": float(a.coefficient or 1),

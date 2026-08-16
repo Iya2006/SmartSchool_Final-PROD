@@ -526,14 +526,35 @@ def get_classe_profil(classe_id: int, db: Session = Depends(get_db), etablisseme
     nb_garcons = len([e for e in eleves if e["sexe"] == "M"])
     nb_filles = len([e for e in eleves if e["sexe"] == "F"])
     
-    # Simuler top 10 (moyenne générale simulée basée sur hash du matricule)
-    import hashlib
-    top10 = []
-    for e in eleves:
-        seed = int(hashlib.md5(e["matricule"].encode()).hexdigest()[:8], 16)
-        moyenne = round(8 + (seed % 1200) / 100, 2)
-        top10.append({**e, "moyenne_simulee": moyenne})
-    top10.sort(key=lambda x: x["moyenne_simulee"], reverse=True)
+    # Top 10 sur les VRAIES moyennes : on ne fabrique jamais de note. On lit le
+    # bulletin le plus récent de chaque élève (l'annuel s'il existe, sinon le
+    # dernier trimestre calculé). Un élève sans moyenne calculée n'apparaît pas
+    # — mieux vaut une liste courte que des notes inventées.
+    from app.models.academique import Bulletin
+    insc_rows = db.query(Inscription.inscription_id, Inscription.eleve_id).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE"
+    ).all()
+    insc_to_eleve = {r.inscription_id: r.eleve_id for r in insc_rows}
+    moyennes_reelles = {}
+    if insc_to_eleve:
+        bulletins = (
+            db.query(Bulletin.inscription_id, Bulletin.moyenne_generale, Bulletin.trimestre_id)
+            .filter(
+                Bulletin.inscription_id.in_(list(insc_to_eleve.keys())),
+                Bulletin.moyenne_generale.isnot(None),
+            )
+            # trimestre_id NULL = bulletin annuel : on le veut en dernier pour
+            # qu'il prime (le plus récent) si présent.
+            .order_by(func.coalesce(Bulletin.trimestre_id, 999999).asc())
+            .all()
+        )
+        for b in bulletins:
+            moyennes_reelles[insc_to_eleve[b.inscription_id]] = round(float(b.moyenne_generale), 2)
+    top10 = [
+        {**e, "moyenne_generale": moyennes_reelles[e["eleve_id"]]}
+        for e in eleves if e["eleve_id"] in moyennes_reelles
+    ]
+    top10.sort(key=lambda x: x["moyenne_generale"], reverse=True)
     top10 = top10[:10]
     
     return {

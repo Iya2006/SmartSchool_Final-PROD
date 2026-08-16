@@ -2,6 +2,7 @@
 
 import { useApp } from '@/context/AppContext';
 import { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter, useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Save, Edit, CheckCircle2, Loader2, BookOpen } from 'lucide-react';
@@ -17,6 +18,7 @@ interface Classe {
 export default function ModifierEleve() {
     const router = useRouter();
     const { id } = useParams();
+    const queryClient = useQueryClient();
     const { etablissementId, anneeId } = useApp();
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState(false);
@@ -89,6 +91,16 @@ export default function ModifierEleve() {
             }
 
             await api.put(`/api/eleves/${id}`, payload);
+            // Sans invalidation, les listes (annuaire, classes) et la fiche
+            // gardaient l'ancienne version en cache : la modification ne se
+            // voyait nulle part tant qu'on ne rechargeait pas la page.
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ['eleves'] }),
+                queryClient.invalidateQueries({ queryKey: ['eleves-classes'] }),
+                queryClient.invalidateQueries({ queryKey: ['classes'] }),
+                queryClient.invalidateQueries({ queryKey: ['classes-stats'] }),
+                queryClient.invalidateQueries({ queryKey: ['eleve', id] }),
+            ]);
             setSuccess(true);
             setTimeout(() => {
                 router.push('/eleves');

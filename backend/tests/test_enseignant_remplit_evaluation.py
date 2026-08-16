@@ -174,6 +174,33 @@ class TestEnseignantRemplitEvaluation:
         db.refresh(note0)
         assert float(note0.valeur) == 18
 
+    def test_classement_se_calcule_des_les_notes_saisies(self, client: TestClient, db: Session):
+        """Le classement de suivi donne une moyenne dès que l'enseignant a
+        rempli les notes (évaluation « Publiée »), sans attendre la
+        centralisation."""
+        from app.services.notation import calculer_resultats_periode
+        s = Scenario(db)
+        i0, i1 = s.inscriptions[0].inscription_id, s.inscriptions[1].inscription_id
+        with _mock(s.enseignant.enseignant_id):
+            client.post(
+                f"/api/portail-enseignant/{s.enseignant.enseignant_id}/evaluations/{s.evaluation.evaluation_id}/saisir",
+                json={"notes": [
+                    {"inscription_id": i0, "valeur": 16, "est_absent": False},
+                    {"inscription_id": i1, "valeur": 12, "est_absent": False},
+                ]},
+                headers=_headers(),
+            )
+        res = calculer_resultats_periode(
+            db, s.classe.classe_id, s.trimestre.trimestre_id,
+            evaluation_ids=[s.evaluation.evaluation_id], persist=False,
+            statuts_inclus=["PUBLIEE", "CENTRALISEE", "CALCULE"],
+        )
+        moyennes = {e["inscription_id"]: e["moyenne_generale"] for e in res["resultats"]}
+        assert moyennes[i0] is not None and moyennes[i0] > 0
+        assert moyennes[i1] is not None and moyennes[i1] > 0
+        # Le mieux noté est premier.
+        assert moyennes[i0] > moyennes[i1]
+
     def test_note_hors_bareme_refusee(self, client: TestClient, db: Session):
         s = Scenario(db)
         with _mock(s.enseignant.enseignant_id):
@@ -199,3 +226,27 @@ class TestEnseignantRemplitEvaluation:
                 headers=_headers(),
             )
         assert r.status_code == 404  # l'évaluation n'est pas la sienne
+
+
+class TestClassementSurEvaluationPlanifiee:
+    """Une composition remplie côté ADMINISTRATION reste PLANIFIEE ; son
+    classement de suivi doit quand même sortir les moyennes."""
+
+    def test_moyenne_calculee_meme_si_planifiee(self, client: TestClient, db: Session):
+        from app.services.notation import calculer_resultats_periode
+        s = Scenario(db)  # evaluation créée en statut PLANIFIEE
+        # Notes posées directement (comme un remplissage admin qui ne change
+        # pas le statut de l'évaluation).
+        for insc, val in zip(s.inscriptions, [14, 11]):
+            db.add(Note(evaluation_id=s.evaluation.evaluation_id,
+                        inscription_id=insc.inscription_id, valeur=val, est_absent="N"))
+        db.commit()
+        assert s.evaluation.statut == "PLANIFIEE"
+
+        res = calculer_resultats_periode(
+            db, s.classe.classe_id, s.trimestre.trimestre_id,
+            evaluation_ids=[s.evaluation.evaluation_id], persist=False,
+            statuts_inclus=["PLANIFIEE", "PUBLIEE", "CENTRALISEE", "CALCULE"],
+        )
+        moys = {e["inscription_id"]: e["moyenne_generale"] for e in res["resultats"]}
+        assert all(v is not None and v > 0 for v in moys.values()), moys
