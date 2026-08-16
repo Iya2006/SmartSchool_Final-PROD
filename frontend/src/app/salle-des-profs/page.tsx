@@ -58,6 +58,10 @@ export default function SalleDesProfsPage() {
     const [showModal, setShowModal] = useState(false);
     const [modalClasse, setModalClasse] = useState<ClasseAvecMatieres | null>(null);
     const [modalMatiere, setModalMatiere] = useState<MatiereClasse | null>(null);
+    // Vrai au primaire : on affecte l'instituteur à TOUTE la classe (toutes les
+    // matières) plutôt qu'à une seule. Au collège/lycée, chaque matière a son
+    // propre enseignant, donc ce mode reste faux.
+    const [modalTouteClasse, setModalTouteClasse] = useState(false);
     const [selectedEnseignantId, setSelectedEnseignantId] = useState(0);
     const [saving, setSaving] = useState(false);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -95,27 +99,47 @@ export default function SalleDesProfsPage() {
     const openAssignModal = (classe: ClasseAvecMatieres, matiere: MatiereClasse) => {
         setModalClasse(classe);
         setModalMatiere(matiere);
+        setModalTouteClasse(false);
+        setSelectedEnseignantId(0);
+        setSearchEns('');
+        setShowModal(true);
+    };
+
+    const openWholeClassModal = (classe: ClasseAvecMatieres) => {
+        setModalClasse(classe);
+        setModalMatiere(null);
+        setModalTouteClasse(true);
         setSelectedEnseignantId(0);
         setSearchEns('');
         setShowModal(true);
     };
 
     const handleAssign = async () => {
-        if (!modalClasse || !modalMatiere || !selectedEnseignantId) return;
+        if (!modalClasse || !selectedEnseignantId) return;
+        if (!modalTouteClasse && !modalMatiere) return;
         setSaving(true);
         try {
-            await api.post(`/api/enseignants/${selectedEnseignantId}/affectations`, {
-                classe_id: modalClasse.classe_id,
-                matiere_id: modalMatiere.matiere_id,
-                annee_id: anneeId,
-            });
+            if (modalTouteClasse) {
+                // Primaire : l'instituteur prend toutes les matières de la classe.
+                const res = await api.post(`/api/enseignants/${selectedEnseignantId}/affecter-classe`, {
+                    classe_id: modalClasse.classe_id,
+                    annee_id: anneeId,
+                });
+                setSuccessMsg(res.data?.message || 'Instituteur affecté à toute la classe.');
+            } else {
+                await api.post(`/api/enseignants/${selectedEnseignantId}/affectations`, {
+                    classe_id: modalClasse.classe_id,
+                    matiere_id: modalMatiere!.matiere_id,
+                    annee_id: anneeId,
+                });
+                setSuccessMsg('Enseignant affecté avec succès !');
+            }
             setShowModal(false);
-            setSuccessMsg('Enseignant affecté avec succès !');
-            setTimeout(() => setSuccessMsg(null), 3000);
+            setTimeout(() => setSuccessMsg(null), 3500);
             await loadData();
         } catch (e: any) {
             setErrorMsg(e.response?.data?.detail || 'Erreur lors de l\'affectation');
-            setTimeout(() => setErrorMsg(null), 4000);
+            setTimeout(() => setErrorMsg(null), 5000);
         } finally { setSaving(false); }
     };
 
@@ -321,6 +345,40 @@ export default function SalleDesProfsPage() {
                                                     exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
                                                     style={{ overflow: 'hidden', borderTop: '1px solid var(--border-light)' }}
                                                 >
+                                                    {/* Au PRIMAIRE, l'instituteur assure toutes les matières :
+                                                        un seul geste l'affecte à la classe entière. Au collège
+                                                        et au lycée, chaque matière se pourvoit séparément. */}
+                                                    {cls.cycle_code === 'PRM' && (
+                                                        <div style={{
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                                            gap: '12px', flexWrap: 'wrap', padding: '12px 20px',
+                                                            background: '#fffbeb', borderBottom: '1px solid #fde68a',
+                                                        }}>
+                                                            <span style={{ fontSize: '12.5px', color: '#92400e', fontWeight: 600 }}>
+                                                                Au primaire, l’instituteur assure toutes les matières de sa classe.
+                                                            </span>
+                                                            <button onClick={() => openWholeClassModal(cls)}
+                                                                disabled={cls.nb_matieres === 0}
+                                                                title={cls.nb_matieres === 0 ? 'Rattachez d’abord des matières à la classe' : undefined}
+                                                                style={{
+                                                                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                                                                    padding: '8px 14px', borderRadius: '9px', fontSize: '12.5px', fontWeight: 700,
+                                                                    border: 'none', cursor: cls.nb_matieres === 0 ? 'not-allowed' : 'pointer',
+                                                                    background: cls.nb_matieres === 0 ? '#e5e7eb' : 'linear-gradient(135deg,#d97706,#f59e0b)',
+                                                                    color: cls.nb_matieres === 0 ? '#9ca3af' : 'white',
+                                                                }}>
+                                                                <UserCheck size={14} /> Affecter un instituteur à toute la classe
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                    {cls.nb_matieres === 0 && (
+                                                        <div style={{ padding: '12px 20px', fontSize: '12.5px', color: '#92400e', background: '#fffbeb' }}>
+                                                            Cette classe n’a aucune matière rattachée.{' '}
+                                                            <Link href={`/classes/configurer/${cls.classe_id}`} style={{ color: '#b45309', fontWeight: 700, textDecoration: 'underline' }}>
+                                                                Rattacher des matières →
+                                                            </Link>
+                                                        </div>
+                                                    )}
                                                     <div className="table-scroll" style={{ padding: '12px 20px' }}>
                                                         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
                                                             <thead>
@@ -410,7 +468,7 @@ export default function SalleDesProfsPage() {
 
             {/* ═══════ MODAL: AFFECTER UN ENSEIGNANT ═══════ */}
             <AnimatePresence>
-                {showModal && modalClasse && modalMatiere && (
+                {showModal && modalClasse && (modalMatiere || modalTouteClasse) && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                         style={{
                             position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)',
@@ -424,9 +482,13 @@ export default function SalleDesProfsPage() {
                             <div style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', padding: '20px 24px', color: 'white' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
-                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>Affecter un Enseignant</h3>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
+                                            {modalTouteClasse ? 'Affecter un instituteur à la classe' : 'Affecter un Enseignant'}
+                                        </h3>
                                         <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>
-                                            {modalMatiere.libelle} → {modalClasse.libelle}
+                                            {modalTouteClasse
+                                                ? `Toutes les matières → ${modalClasse.libelle}`
+                                                : `${modalMatiere!.libelle} → ${modalClasse.libelle}`}
                                         </p>
                                     </div>
                                     <button onClick={() => setShowModal(false)}
@@ -440,8 +502,17 @@ export default function SalleDesProfsPage() {
                             <div style={{ padding: '20px 24px' }}>
                                 {/* Info Box */}
                                 <div style={{ background: '#f5f3ff', borderRadius: '10px', padding: '12px 14px', fontSize: '12px', color: '#5b21b6', marginBottom: '16px', lineHeight: 1.6 }}>
-                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BookOpen size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /></span> <strong>{modalMatiere.libelle}</strong> — Coef {modalMatiere.coefficient} • {modalMatiere.nb_heures}h/sem
-                                    <br/><span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><School size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Classe :</span> <strong>{modalClasse.libelle}</strong> ({modalClasse.cycle})
+                                    {modalTouteClasse ? (
+                                        <>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BookOpen size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /></span> L’instituteur sera affecté aux <strong>{modalClasse.nb_matieres} matière{modalClasse.nb_matieres > 1 ? 's' : ''}</strong> de la classe.
+                                            <br/><span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><School size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Classe :</span> <strong>{modalClasse.libelle}</strong> ({modalClasse.cycle})
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BookOpen size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /></span> <strong>{modalMatiere!.libelle}</strong> — Coef {modalMatiere!.coefficient} • {modalMatiere!.nb_heures}h/sem
+                                            <br/><span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><School size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Classe :</span> <strong>{modalClasse.libelle}</strong> ({modalClasse.cycle})
+                                        </>
+                                    )}
                                 </div>
 
                                 {/* Search dans la liste */}
