@@ -216,6 +216,9 @@
     border: 1.5px solid #e2e8f0; border-radius: 11px; margin-bottom: 0.65rem;
 }
 .reductionRow:hover { background: #f1f5f9; border-color: #cbd5e1; }
+@media (max-width: 640px) {
+    .reductionRow { grid-template-columns: 1fr; }
+}
 .reductionBadge {
     display: flex; align-items: center; justify-content: center; gap: 0.4rem;
     font-size: 0.85rem; font-weight: 800; color: #059669;

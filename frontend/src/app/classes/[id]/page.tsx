@@ -1,11 +1,14 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, type CSSProperties } from 'react';
 import { useParams } from 'next/navigation';
-import { motion } from 'framer-motion';
+import { useApp } from '@/context/AppContext';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useQuery } from '@tanstack/react-query';
 import {
     Users, BookOpen, ChevronRight, Loader2, Eye, Settings, UserCheck,
-    Clock, Hash, ArrowLeft, Phone, Crown, Calendar, TrendingUp, Award, Star, AlertTriangle, Utensils, User, RotateCcw, UserRound
+    Clock, Hash, ArrowLeft, Phone, Crown, Calendar, TrendingUp, Award, Star, AlertTriangle, Utensils, User, RotateCcw, UserRound,
+    Edit, Save, X
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -84,6 +87,7 @@ interface RealCreneau {
 export default function ClasseProfilPage() {
     const params = useParams();
     const classeId = params.id as string;
+    const { etablissementId, anneeId } = useApp();
     const JOURS_API = useJoursOuvres();
 
     const [profil, setProfil] = useState<ClasseProfil | null>(null);
@@ -93,23 +97,81 @@ export default function ClasseProfilPage() {
     const [elevesPage, setElevesPage] = useState(1);
     const ELEVES_PAGE_SIZE = 25;
 
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [profilRes, emploiRes] = await Promise.all([
-                    api.get(`/api/classes/${classeId}/profil`),
-                    api.get(`/api/emploi-du-temps/classe/${classeId}`),
-                ]);
-                setProfil(profilRes.data);
-                setCreneaux(emploiRes.data.creneaux || []);
-            } catch (err) {
-                console.error(err);
-            } finally {
-                setLoading(false);
-            }
-        };
-        if (classeId) fetchData();
+    // Édition de la classe (nom, code, capacité, niveau) — déplacée depuis la
+    // page liste : le bouton « Modifier » vit maintenant ici, dans le profil,
+    // pas dans la barre au survol des cartes.
+    const [editOpen, setEditOpen] = useState(false);
+    const [editForm, setEditForm] = useState({ libelle: '', code: '', capacite_max: 50, niveau_id: 0 });
+    const [editSaving, setEditSaving] = useState(false);
+    const [editError, setEditError] = useState<string | null>(null);
+
+    const { data: cyclesData } = useQuery({
+        queryKey: ['cycles-niveaux'],
+        queryFn: async () => {
+            const res = await api.get('/api/parametrage/cycles');
+            return res.data as { cycle_id: number; libelle: string; niveaux: { niveau_id: number; libelle: string }[] }[];
+        },
+        enabled: editOpen,
+    });
+
+    const fetchData = useCallback(async () => {
+        try {
+            const [profilRes, emploiRes] = await Promise.all([
+                api.get(`/api/classes/${classeId}/profil`),
+                api.get(`/api/emploi-du-temps/classe/${classeId}`),
+            ]);
+            setProfil(profilRes.data);
+            setCreneaux(emploiRes.data.creneaux || []);
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setLoading(false);
+        }
     }, [classeId]);
+
+    useEffect(() => {
+        if (classeId) fetchData();
+    }, [classeId, fetchData]);
+
+    const ouvrirEdition = () => {
+        if (!profil) return;
+        setEditError(null);
+        setEditForm({
+            libelle: profil.libelle, code: profil.code,
+            capacite_max: profil.capacite_max, niveau_id: profil.niveau?.niveau_id || 0,
+        });
+        setEditOpen(true);
+    };
+
+    const enregistrerEdition = async () => {
+        if (!profil) return;
+        if (!editForm.libelle.trim() || !editForm.code.trim() || !editForm.niveau_id) {
+            setEditError('Le nom, le code et le niveau sont obligatoires.');
+            return;
+        }
+        setEditSaving(true);
+        setEditError(null);
+        try {
+            await api.put(`/api/classes/${profil.classe_id}`, {
+                etablissement_id: etablissementId,
+                annee_id: anneeId,
+                niveau_id: Number(editForm.niveau_id),
+                code: editForm.code.trim(),
+                libelle: editForm.libelle.trim(),
+                capacite_max: Number(editForm.capacite_max) || 1,
+                statut: profil.statut || 'ACTIVE',
+            });
+            setEditOpen(false);
+            await fetchData();
+        } catch (err: unknown) {
+            const detail = typeof err === 'object' && err !== null && 'response' in err
+                ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+                : undefined;
+            setEditError(detail || "La modification a échoué. Rien n'a été changé.");
+        } finally {
+            setEditSaving(false);
+        }
+    };
 
     const getCreneauFor = (jour: string, heure: string): RealCreneau | undefined => {
         return creneaux.find(c => c.jour === jour && c.heure_debut === heure);
@@ -151,6 +213,13 @@ export default function ClasseProfilPage() {
                     }}>
                         <ArrowLeft size={15} /> Retour
                     </Link>
+                    <button onClick={ouvrirEdition} style={{
+                        display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px',
+                        border: '1px solid var(--border-light)', color: 'var(--text-secondary)',
+                        fontSize: '13px', fontWeight: 600, background: 'white', cursor: 'pointer'
+                    }}>
+                        <Edit size={15} /> Modifier
+                    </button>
                     <Link href={`/classes/configurer/${profil.classe_id}`} style={{
                         display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', borderRadius: '10px',
                         background: 'linear-gradient(135deg, #2563eb, #1d4ed8)', color: 'white', textDecoration: 'none',
@@ -273,7 +342,7 @@ export default function ClasseProfilPage() {
             </motion.div>
 
             {/* Two-Column Row: Prof Principal + Chefs de Classe */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
                 {/* Prof Principal */}
                 <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
                     className="card" style={{ padding: '24px' }}>
@@ -685,7 +754,7 @@ export default function ClasseProfilPage() {
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
                     {/* Gender Distribution */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '20px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px' }}>
                         {/* Donut-like Gender Chart */}
                         <div className="card" style={{ padding: '24px' }}>
                             <h3 style={{ fontSize: '15px', fontWeight: 700, margin: '0 0 20px', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)' }}>
@@ -784,20 +853,20 @@ export default function ClasseProfilPage() {
                                         <motion.div key={e.eleve_id}
                                             initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
                                             transition={{ delay: i * 0.06 }}
-                                            style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                             {/* Rang */}
                                             <div style={{
-                                                width: '32px', height: '32px', borderRadius: '50%',
+                                                width: '28px', height: '28px', borderRadius: '50%',
                                                 background: i < 3 ? barColor + '20' : '#f1f5f9',
                                                 color: i < 3 ? barColor : '#64748b',
                                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                fontWeight: 800, fontSize: '13px', flexShrink: 0,
+                                                fontWeight: 800, fontSize: '12px', flexShrink: 0,
                                                 border: i < 3 ? `2px solid ${barColor}` : 'none'
                                             }}>
                                                 {medal || `${i + 1}`}
                                             </div>
                                             {/* Name */}
-                                            <div style={{ width: '150px', flexShrink: 0, minWidth: 0 }}>
+                                            <div style={{ width: '86px', flexShrink: 0, minWidth: 0 }}>
                                                 <p style={{ fontWeight: 600, margin: 0, fontSize: '13px', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                                     {e.prenom} {e.nom}
                                                 </p>
@@ -819,20 +888,21 @@ export default function ClasseProfilPage() {
                                             </div>
                                             {/* Score */}
                                             <div style={{
-                                                fontWeight: 800, fontSize: '15px', width: '55px', textAlign: 'right',
+                                                fontWeight: 800, fontSize: '14px', width: '42px', textAlign: 'right',
                                                 color: i < 3 ? barColor : 'var(--text-primary)', flexShrink: 0
                                             }}>
                                                 {e.moyenne_simulee}/20
                                             </div>
                                             {/* Profile Button */}
                                             <Link href={`/eleves/${e.eleve_id}`}
+                                                title="Notes"
                                                 style={{
-                                                    display: 'flex', alignItems: 'center', gap: '3px',
-                                                    padding: '5px 10px', borderRadius: '7px', fontSize: '11px',
-                                                    background: '#f0f9ff', color: '#0284c7', fontWeight: 600,
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    width: '26px', height: '26px', borderRadius: '7px',
+                                                    background: '#f0f9ff', color: '#0284c7',
                                                     textDecoration: 'none', border: '1px solid #bae6fd', flexShrink: 0
                                                 }}>
-                                                <Eye size={11} /> Notes
+                                                <Eye size={13} />
                                             </Link>
                                         </motion.div>
                                     );
@@ -842,6 +912,91 @@ export default function ClasseProfilPage() {
                     </div>
                 </motion.div>
             )}
+
+            {/* ═══ Modifier la classe ═══ */}
+            <AnimatePresence>
+                {editOpen && (
+                    <motion.div
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{
+                            position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(4px)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '24px'
+                        }}
+                        onClick={() => !editSaving && setEditOpen(false)}
+                    >
+                        <motion.div
+                            initial={{ y: 30, opacity: 0, scale: 0.97 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 20, opacity: 0, scale: 0.97 }}
+                            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                            style={{ background: 'white', borderRadius: '16px', width: '100%', maxWidth: '480px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
+                                <h2 style={{ fontSize: '16px', fontWeight: 800, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <Edit size={17} /> Modifier la classe
+                                </h2>
+                                <button onClick={() => !editSaving && setEditOpen(false)} style={{ width: '30px', height: '30px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                                    <X size={16} />
+                                </button>
+                            </div>
+
+                            <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                {editError && (
+                                    <div style={{ padding: '11px 14px', background: '#fef2f2', color: '#b91c1c', borderRadius: '10px', fontSize: '13px', border: '1px solid #fecaca' }}>
+                                        {editError}
+                                    </div>
+                                )}
+                                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Nom de la classe</span>
+                                    <input value={editForm.libelle} onChange={e => setEditForm(f => ({ ...f, libelle: e.target.value }))}
+                                        style={champStyle} placeholder="Ex : 6ème A" />
+                                </label>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Code</span>
+                                        <input value={editForm.code} onChange={e => setEditForm(f => ({ ...f, code: e.target.value }))}
+                                            style={champStyle} placeholder="Ex : 6A" />
+                                    </label>
+                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Capacité</span>
+                                        <input type="number" min={1} value={editForm.capacite_max} onChange={e => setEditForm(f => ({ ...f, capacite_max: Number(e.target.value) }))}
+                                            style={champStyle} />
+                                    </label>
+                                </div>
+                                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Niveau</span>
+                                    <select value={editForm.niveau_id} onChange={e => setEditForm(f => ({ ...f, niveau_id: Number(e.target.value) }))} style={champStyle}>
+                                        <option value={0}>Choisissez un niveau</option>
+                                        {(cyclesData || []).map(cycle => (
+                                            <optgroup key={cycle.cycle_id} label={cycle.libelle}>
+                                                {(cycle.niveaux || []).map(n => (
+                                                    <option key={n.niveau_id} value={n.niveau_id}>{n.libelle}</option>
+                                                ))}
+                                            </optgroup>
+                                        ))}
+                                    </select>
+                                </label>
+                            </div>
+
+                            <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border-light)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                                <button onClick={() => setEditOpen(false)} disabled={editSaving}
+                                    style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'white', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                                    Annuler
+                                </button>
+                                <button onClick={enregistrerEdition} disabled={editSaving}
+                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '10px 20px', borderRadius: '10px', border: 'none', background: 'var(--brand-primary)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: editSaving ? 'not-allowed' : 'pointer', opacity: editSaving ? 0.6 : 1 }}>
+                                    {editSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Enregistrer
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }
+
+const champStyle: CSSProperties = {
+    width: '100%', padding: '10px 12px', borderRadius: '10px',
+    border: '1px solid var(--border-light)', fontSize: '13.5px', outline: 'none',
+    color: 'var(--text-primary)', background: 'white', fontFamily: 'inherit',
+};

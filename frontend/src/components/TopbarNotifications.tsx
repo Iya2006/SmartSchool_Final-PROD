@@ -213,7 +213,7 @@ export default function TopbarNotifications() {
     const unreadLabel = unreadCount > 0 ? `${unreadCount} non lu${unreadCount > 1 ? 's' : ''}` : 'Tout est lu';
 
     return (
-        <div ref={notifRef} style={{ position: 'relative' }}>
+        <div ref={notifRef}>
             <button
                 id="topbar-notifications-btn"
                 onClick={handleToggle}

@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     ArrowLeft, Phone, Mail, Briefcase, GraduationCap, Clock, Award,
     CheckCircle, Loader2, Edit, Calendar, BookOpen, Plus,
-    X, Trash2, Camera, User, MapPin, Building, Star, TrendingUp, FileText,
+    X, Trash2, Camera, User, MapPin, Building, FileText,
     UserCheck, Scan, MessageSquare
 } from 'lucide-react';
 import api from '@/lib/api';
@@ -245,7 +245,7 @@ export default function ProfilEnseignant() {
             </div>
 
             {/* ═══════ HEADER: TITLE + QUICK ACTIONS ═══════ */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <Link href="/enseignants" style={{
                         width: '36px', height: '36px', borderRadius: '10px', border: '1px solid var(--border-light)',
@@ -391,53 +391,6 @@ export default function ProfilEnseignant() {
                                     <p style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{item.value}</p>
                                 </div>
                             ))}
-                        </div>
-                    </motion.div>
-
-                    {/* Points & Rewards */}
-                    <motion.div className="card" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-                        <div className="card-header">
-                            <h5 style={{ fontSize: '16px', fontWeight: 700 }}>Points & Récompenses</h5>
-                        </div>
-                        <div style={{ padding: '20px 24px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '16px' }}>
-                                <div style={{
-                                    width: '52px', height: '52px', borderRadius: '50%', background: '#fef3c7',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                }}>
-                                    <Award size={26} color="#f59e0b" />
-                                </div>
-                                <div style={{ flex: 1 }}>
-                                    <p style={{ margin: 0, fontSize: '28px', fontWeight: 800 }}>{stats?.nb_creneaux ? stats.nb_creneaux * 30 : 0}</p>
-                                    <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-muted)' }}>Cours dispensés</p>
-                                </div>
-                                <div style={{ textAlign: 'right' }}>
-                                    <div style={{ width: '100px', height: '6px', background: '#f1f5f9', borderRadius: '3px', overflow: 'hidden' }}>
-                                        <div style={{ width: '75%', height: '100%', background: 'linear-gradient(90deg, #f59e0b, #10b981)', borderRadius: '3px' }} />
-                                    </div>
-                                    <p style={{ margin: '4px 0 0', fontSize: '10px', color: 'var(--text-muted)' }}>Objectif mensuel</p>
-                                </div>
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-                                {[
-                                    { icon: <Award size={20} />, label: 'Distinctions', color: '#f59e0b', bg: '#fef3c7' },
-                                    { icon: <Star size={20} />, label: 'Avis Élèves', color: '#6366f1', bg: '#ede9fe' },
-                                    { icon: <TrendingUp size={20} />, label: 'Assiduité', color: '#10b981', bg: '#d1fae5' },
-                                ].map((r, i) => (
-                                    <div key={i} style={{
-                                        padding: '16px 10px', borderRadius: '12px', border: '1px solid var(--border-light)',
-                                        textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s',
-                                    }}
-                                    onMouseOver={e => { e.currentTarget.style.borderColor = r.color; e.currentTarget.style.boxShadow = `0 4px 12px ${r.color}20`; }}
-                                    onMouseOut={e => { e.currentTarget.style.borderColor = 'var(--border-light)'; e.currentTarget.style.boxShadow = 'none'; }}
-                                    >
-                                        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: r.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 8px', color: r.color }}>
-                                            {r.icon}
-                                        </div>
-                                        <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>{r.label}</p>
-                                    </div>
-                                ))}
-                            </div>
                         </div>
                     </motion.div>
                 </div>
