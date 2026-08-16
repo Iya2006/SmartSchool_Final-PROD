@@ -46,6 +46,10 @@ export default function NouvelleClasse() {
         statut: 'ACTIVE'
     });
 
+    // Prix de la classe, saisis dès la création (scolarité + frais d'entrée).
+    // Ils sont enregistrés comme tarifs de la classe juste après sa création.
+    const [prix, setPrix] = useState({ scolarite: '', inscription: '', reinscription: '' });
+
     useEffect(() => {
         api.get<CycleAvecNiveaux[]>('/api/parametrage/cycles')
             .then((res) => setCycles(res.data || []))
@@ -74,7 +78,39 @@ export default function NouvelleClasse() {
                 annee_id: anneeId,
             };
 
-            await api.post('/api/classes', payload);
+            const creation = await api.post('/api/classes', payload);
+            const classeId = creation.data?.classe_id;
+
+            // Enregistrer les prix de la classe (scolarité + inscription +
+            // réinscription). On s'assure d'abord que les types de frais
+            // existent, puis on pose le tarif de cette classe pour chacun.
+            const saisis = [
+                { cat: 'scolarite', montant: parseFloat(prix.scolarite) || 0 },
+                { cat: 'inscription', montant: parseFloat(prix.inscription) || 0 },
+                { cat: 'reinscription', montant: parseFloat(prix.reinscription) || 0 },
+            ].filter(p => p.montant > 0);
+
+            if (classeId && saisis.length > 0) {
+                try {
+                    const typesRes = await api.post('/api/finance/types-frais/assurer-entree');
+                    const types: { type_frais_id: number; categorie: string }[] = typesRes.data || [];
+                    const trouverType = (cat: string) => {
+                        const c = (s: string) => (s || '').toLowerCase();
+                        if (cat === 'reinscription') return types.find(t => c(t.categorie).includes('réinscr') || c(t.categorie).includes('reinscr'));
+                        if (cat === 'inscription') return types.find(t => c(t.categorie).includes('inscription') && !c(t.categorie).includes('réinscr') && !c(t.categorie).includes('reinscr'));
+                        return types.find(t => c(t.categorie).startsWith('scolar'));
+                    };
+                    const entries = saisis
+                        .map(p => ({ type: trouverType(p.cat), montant: p.montant }))
+                        .filter(e => e.type)
+                        .map(e => ({ type_frais_id: e.type!.type_frais_id, classe_id: classeId, montant: e.montant }));
+                    if (entries.length > 0) await api.put('/api/finance/tarifs-classe', entries);
+                } catch {
+                    // La classe est créée ; si les tarifs échouent, on ne bloque
+                    // pas — ils restent réglables dans Configurer.
+                }
+            }
+
             setSuccess(true);
             setTimeout(() => {
                 router.push('/classes');
@@ -235,6 +271,34 @@ export default function NouvelleClasse() {
                                 <option value="ACTIVE">Active</option>
                                 <option value="INACTIVE">Inactive</option>
                             </select>
+                        </div>
+                    </div>
+
+                    {/* Prix de la classe — saisis dès la création, enregistrés
+                        comme tarifs de la classe. Modifiables ensuite dans Configurer. */}
+                    <div style={{ marginTop: '24px', paddingTop: '20px', borderTop: '1px solid var(--border-light)' }}>
+                        <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 4px' }}>Prix de la classe</h3>
+                        <p style={{ fontSize: '12.5px', color: 'var(--text-secondary)', margin: '0 0 14px' }}>
+                            Scolarité de l&apos;année, plus le prix d&apos;inscription (nouvel élève) et de réinscription (élève qui continue).
+                            Laissez à 0 si non concerné. Modifiable ensuite dans « Configurer ».
+                        </p>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
+                            {([
+                                { cle: 'scolarite' as const, label: 'Scolarité (année)' },
+                                { cle: 'inscription' as const, label: "Prix d'inscription" },
+                                { cle: 'reinscription' as const, label: 'Prix de réinscription' },
+                            ]).map(f => (
+                                <div key={f.cle} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{f.label}</label>
+                                    <div style={{ position: 'relative' }}>
+                                        <input type="number" min="0" value={prix[f.cle]}
+                                            onChange={e => setPrix(p => ({ ...p, [f.cle]: e.target.value }))}
+                                            placeholder="0"
+                                            style={{ padding: '12px 46px 12px 16px', borderRadius: '8px', border: '1px solid var(--border-focus)', outline: 'none', background: 'var(--bg-body)', fontSize: '14px', width: '100%', boxSizing: 'border-box' }} />
+                                        <span style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>GNF</span>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     </div>
 

@@ -289,6 +289,52 @@ def create_type_frais(
     return tf
 
 
+@router.post("/types-frais/assurer-entree", response_model=List[TypeFraisOut])
+def assurer_frais_entree(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Garantit l'existence des frais d'entrée (Inscription, Réinscription) et
+    de la Scolarité pour l'école, puis renvoie tous ses types de frais actifs.
+
+    Sans ces types, impossible de fixer un prix d'inscription/réinscription par
+    classe : il n'y a rien à tarifer. On les crée à 0 (le montant réel se règle
+    par classe dans Configurer). Idempotent — appelé à l'ouverture des écrans de
+    classe.
+    """
+    from app.api.reinscription import _est_frais_inscription, _est_frais_reinscription
+    types = db.query(TypeFrais).filter(TypeFrais.etablissement_id == etablissement_id).all()
+    codes = {t.code for t in types}
+
+    def _code_libre(base: str) -> str:
+        if base not in codes:
+            codes.add(base)
+            return base
+        i = 2
+        while f"{base}{i}" in codes:
+            i += 1
+        codes.add(f"{base}{i}")
+        return f"{base}{i}"
+
+    a_creer = []
+    if not any(_est_frais_inscription(t.categorie) for t in types):
+        a_creer.append((_code_libre("INSCR"), "Frais d'inscription", "Inscription"))
+    if not any(_est_frais_reinscription(t.categorie) for t in types):
+        a_creer.append((_code_libre("REINSCR"), "Frais de réinscription", "Réinscription"))
+    if not any((t.categorie or "").lower().startswith("scolar") for t in types):
+        a_creer.append((_code_libre("SCOL"), "Frais de scolarité", "Scolarité"))
+
+    for code, libelle, categorie in a_creer:
+        db.add(TypeFrais(
+            etablissement_id=etablissement_id, code=code, libelle=libelle,
+            categorie=categorie, montant_defaut=0, est_obligatoire="O",
+            frequence="UNIQUE", statut="ACTIF",
+        ))
+    if a_creer:
+        db.commit()
+
+    return db.query(TypeFrais).filter(
+        TypeFrais.etablissement_id == etablissement_id, TypeFrais.statut == "ACTIF"
+    ).all()
+
+
 @router.put("/types-frais/{type_frais_id}", response_model=TypeFraisOut)
 def update_type_frais(
     type_frais_id: int,
