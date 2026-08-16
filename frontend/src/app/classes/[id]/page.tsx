@@ -43,7 +43,7 @@ interface ClasseProfil {
     }[];
     top10: {
         eleve_id: number; matricule: string; nom: string; prenom: string;
-        sexe: string; moyenne_simulee: number;
+        sexe: string; moyenne_generale: number;
     }[];
 }
 
@@ -129,7 +129,7 @@ export default function ClasseProfilPage() {
     );
 
     const occupancy = profil.capacite_max > 0 ? Math.round((profil.eleves.length / profil.capacite_max) * 100) : 0;
-    const maxMoyenne = profil.top10.length > 0 ? profil.top10[0].moyenne_simulee : 20;
+    const maxMoyenne = profil.top10.length > 0 ? profil.top10[0].moyenne_generale : 20;
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -769,15 +769,15 @@ export default function ClasseProfilPage() {
                             Top 10 — Meilleurs Élèves
                         </h3>
                         <p style={{ color: 'var(--text-muted)', fontSize: '12px', margin: '0 0 24px' }}>
-                            Classement basé sur les moyennes simulées (les notes réelles seront gérées plus tard).
+                            Classement basé sur les moyennes réelles des bulletins déjà calculés.
                         </p>
 
                         {profil.top10.length === 0 ? (
-                            <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '32px' }}>Pas encore de données.</p>
+                            <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '32px' }}>Aucune moyenne calculée pour l&apos;instant. Le classement apparaîtra dès que des bulletins seront calculés.</p>
                         ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                                 {profil.top10.map((e, i) => {
-                                    const barWidth = maxMoyenne > 0 ? Math.round((e.moyenne_simulee / 20) * 100) : 0;
+                                    const barWidth = maxMoyenne > 0 ? Math.round((e.moyenne_generale / 20) * 100) : 0;
                                     const barColor = TOP_COLORS[i];
                                     const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : null;
                                     return (
@@ -822,7 +822,7 @@ export default function ClasseProfilPage() {
                                                 fontWeight: 800, fontSize: '15px', width: '55px', textAlign: 'right',
                                                 color: i < 3 ? barColor : 'var(--text-primary)', flexShrink: 0
                                             }}>
-                                                {e.moyenne_simulee}/20
+                                                {e.moyenne_generale}/20
                                             </div>
                                             {/* Profile Button */}
                                             <Link href={`/eleves/${e.eleve_id}`}
