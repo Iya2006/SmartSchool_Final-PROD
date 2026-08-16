@@ -37,6 +37,8 @@ interface ClasseInfo {
     capacite_max: number;
     effectif_actuel: number;
     niveau: { niveau_id: number; code: string; libelle: string } | null;
+    cycle_code: string | null;
+    cycle_libelle: string | null;
     professeur_principal: Enseignant | null;
     eleves: EleveDeClasse[];
     matieres: any[];
@@ -291,15 +293,19 @@ export default function ConfigurerClassePage() {
             </motion.div>
 
             {/* ═══════════════════════════════════════════ */}
-            {/* Section 1: Professeur Principal */}
+            {/* Section 1: Professeur Principal — PRIMAIRE seulement */}
+            {/* Au collège et au lycée, il n'y a pas de professeur principal :
+                chaque matière a son enseignant. On masque donc cette section
+                hors primaire. */}
             {/* ═══════════════════════════════════════════ */}
+            {classe?.cycle_code === 'PRM' && (
             <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
                 className="card" style={{ padding: '24px' }}>
                 <h3 style={{ fontSize: '17px', fontWeight: 700, margin: '0 0 6px', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)' }}>
                     <div style={{ padding: '8px', borderRadius: '10px', background: '#dbeafe', color: '#2563eb' }}>
                         <UserCheck size={18} />
                     </div>
-                    Désigner le Professeur Principal
+                    Désigner le Professeur Principal (instituteur titulaire)
                 </h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: '0 0 20px' }}>
                     Cliquez sur un enseignant pour le sélectionner comme professeur principal de cette classe.
@@ -362,6 +368,7 @@ export default function ConfigurerClassePage() {
                     })}
                 </div>
             </motion.div>
+            )}
 
             {/* ═══════════════════════════════════════════ */}
             {/* Section 2: Chefs de Classe */}
