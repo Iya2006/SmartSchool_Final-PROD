@@ -449,9 +449,12 @@ def get_classe_profil(classe_id: int, db: Session = Depends(get_db), etablisseme
     if not cl:
         raise HTTPException(404, "Classe non trouvée")
     
-    # Niveau
+    # Niveau + cycle (le cycle sert au frontend a distinguer le primaire, ou il
+    # y a un instituteur titulaire, du college/lycee, ou chaque matiere a son
+    # enseignant et ou il n'y a pas de professeur principal).
     niveau = db.query(Niveau).filter(Niveau.niveau_id == cl.niveau_id).first()
-    
+    cycle = db.query(Cycle).filter(Cycle.cycle_id == niveau.cycle_id).first() if niveau else None
+
     # Prof principal
     prof = None
     if cl.professeur_principal:
@@ -538,6 +541,8 @@ def get_classe_profil(classe_id: int, db: Session = Depends(get_db), etablisseme
         "capacite_max": cl.capacite_max, "effectif_actuel": cl.effectif_actuel,
         "statut": cl.statut,
         "niveau": {"niveau_id": niveau.niveau_id, "code": niveau.code, "libelle": niveau.libelle} if niveau else None,
+        "cycle_code": cycle.code if cycle else None,
+        "cycle_libelle": cycle.libelle if cycle else None,
         "professeur_principal": prof,
         "chefs_de_classe": chefs,
         "nb_garcons": nb_garcons, "nb_filles": nb_filles,

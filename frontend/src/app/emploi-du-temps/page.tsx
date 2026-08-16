@@ -361,18 +361,21 @@ export default function EmploiDuTempsPage() {
                             <tbody>
                                 {/* PAUSE indicator before afternoon */}
                                 {lignesHoraires.map((h, hi) => {
-                                    // La pause etait annoncee « 12:00 — 14:00 » quels que soient
-                                    // les reglages de l'ecole. Elle suit desormais l'horaire reel.
-                                    const isPause = h.debut === horaires.pauseFin;
+                                    // Une école peut avoir plusieurs pauses : on insère un bandeau
+                                    // avant CHAQUE créneau qui suit la fin d'une pause.
+                                    const pauses = horaires.pauses?.length
+                                        ? horaires.pauses
+                                        : [{ debut: horaires.pauseDebut, fin: horaires.pauseFin }];
+                                    const pauseAvant = pauses.find(p => p.fin === h.debut);
                                     return (
                                         <React.Fragment key={`slot-${h.debut}`}>
-                                            {isPause && (
-                                                <tr key="pause">
+                                            {pauseAvant && (
+                                                <tr key={`pause-${pauseAvant.debut}`}>
                                                     <td colSpan={JOURS.length + 1} style={{
                                                         padding: '8px', textAlign: 'center', background: '#fef3c7',
                                                         borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
                                                     }}>
-                                                        <Utensils size={12} style={{display:'inline',verticalAlign:'middle',marginRight:'4px'}}/> {horaires.pauseDebut} — {horaires.pauseFin} • Pause Déjeuner
+                                                        <Utensils size={12} style={{display:'inline',verticalAlign:'middle',marginRight:'4px'}}/> {pauseAvant.debut} — {pauseAvant.fin} • Pause
                                                     </td>
                                                 </tr>
                                             )}
@@ -534,6 +537,28 @@ export default function EmploiDuTempsPage() {
 
                             {/* Modal Body */}
                             <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                {/* Sans matière rattachée à la classe, il n'y a rien à mettre
+                                    dans le menu Matière : on le dit clairement et on pointe vers
+                                    l'écran de rattachement, au lieu d'un menu vide inexplicable. */}
+                                {matieres.length === 0 && (
+                                    <div style={{
+                                        display: 'flex', gap: '10px', alignItems: 'flex-start',
+                                        padding: '14px 16px', borderRadius: '12px',
+                                        background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e',
+                                    }}>
+                                        <AlertCircle size={18} style={{ flexShrink: 0, marginTop: 1 }} />
+                                        <div style={{ fontSize: '13px', lineHeight: 1.55 }}>
+                                            <strong>Cette classe n’a aucune matière rattachée.</strong> Rattachez d’abord
+                                            les matières à la classe, puis revenez placer les cours.
+                                            {selectedClasseId && (
+                                                <Link href={`/classes/configurer/${selectedClasseId}`}
+                                                    style={{ display: 'inline-block', marginTop: '8px', color: '#b45309', fontWeight: 700, textDecoration: 'underline' }}>
+                                                    Rattacher des matières →
+                                                </Link>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                                 <div style={{ display: 'flex', gap: '12px' }}>
                                     <div style={{ flex: 1 }}>
                                         <label style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>Jour</label>

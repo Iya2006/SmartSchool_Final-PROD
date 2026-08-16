@@ -327,3 +327,64 @@ class TestSuperAdminPlateformeRefuseSurEnseignants:
 
         resp = client.get("/api/enseignants", headers=headers)
         assert resp.status_code == 403
+
+
+class TestAffecterClasseEntierePrimaire:
+    """Le geste du primaire : affecter un instituteur a toute sa classe.
+
+    Regression du "0 partout" : une affectation creee sans annee explicite
+    tombait sur `annee_id=1` et devenait invisible aux compteurs (qui filtrent
+    sur l'annee courante). Ici on ne passe PAS d'annee : l'endpoint doit
+    resoudre l'annee en cours, et le tableau de bord doit compter 1 classe /
+    1 matiere.
+    """
+
+    def test_affecter_toute_la_classe_cree_les_matieres(self, client: TestClient, db: Session):
+        ecole = Ecole(db, "PRIM")
+        headers = _headers(client, ecole.admin.nom_utilisateur)
+
+        resp = client.post(
+            f"/api/enseignants/{ecole.enseignant.enseignant_id}/affecter-classe",
+            json={"classe_id": ecole.classe.classe_id},  # pas d'annee_id volontairement
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["matieres_affectees"] == 1
+
+        stats = client.get(
+            f"/api/enseignants/{ecole.enseignant.enseignant_id}/dashboard-stats",
+            headers=headers,
+        )
+        assert stats.status_code == 200, stats.text
+        assert stats.json()["nb_classes"] == 1
+        assert stats.json()["nb_matieres"] == 1
+
+    def test_classe_sans_matiere_refuse_avec_message(self, client: TestClient, db: Session):
+        ecole = Ecole(db, "VIDE")
+        uid = _uid()
+        classe_vide = Classe(
+            etablissement_id=ecole.etab.etablissement_id, annee_id=ecole.annee.annee_id,
+            niveau_id=ecole.niveau.niveau_id, code=f"CLV{uid}", libelle=f"Vide {uid}", statut="ACTIVE",
+        )
+        db.add(classe_vide); db.commit(); db.refresh(classe_vide)
+        headers = _headers(client, ecole.admin.nom_utilisateur)
+
+        resp = client.post(
+            f"/api/enseignants/{ecole.enseignant.enseignant_id}/affecter-classe",
+            json={"classe_id": classe_vide.classe_id},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "matiere" in resp.json()["detail"].lower()
+
+    def test_affecter_classe_autre_ecole_refuse(self, client: TestClient, db: Session):
+        ecole_a = Ecole(db, "AFA")
+        ecole_b = Ecole(db, "AFB")
+        headers_a = _headers(client, ecole_a.admin.nom_utilisateur)
+
+        resp = client.post(
+            f"/api/enseignants/{ecole_a.enseignant.enseignant_id}/affecter-classe",
+            json={"classe_id": ecole_b.classe.classe_id},
+            headers=headers_a,
+        )
+        assert resp.status_code == 404
