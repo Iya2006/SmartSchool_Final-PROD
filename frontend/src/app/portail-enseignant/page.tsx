@@ -697,7 +697,7 @@ export default function PortailEnseignant() {
                 trimestre_id: selectedTrimestre,
                 type_evaluation_id: selectedTypeEval,
                 libelle: evalLibelle.trim(),
-                note_sur: parseFloat(evalNoteSur) || 20,
+                note_sur: Math.max(1, parseFloat(evalNoteSur) || 20),
                 coefficient: selectedClass.coefficient,
                 notes: notesPayload,
             });
@@ -1722,7 +1722,8 @@ export default function PortailEnseignant() {
                                                     </div>
                                                     <div>
                                                         <label style={{ display: 'block', fontSize: '11px', fontWeight: 700, color: '#64748b', marginBottom: '4px' }}><Target size={12} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> Note sur</label>
-                                                        <input type="number" value={evalNoteSur} onChange={e => setEvalNoteSur(e.target.value)}
+                                                        <input type="number" min="1" max="100" value={evalNoteSur}
+                                                            onChange={e => setEvalNoteSur(e.target.value)}
                                                             style={{ width: '100%', padding: '10px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 700, outline: 'none', boxSizing: 'border-box', textAlign: 'center' }} />
                                                     </div>
                                                 </div>
