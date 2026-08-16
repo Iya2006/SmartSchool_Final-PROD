@@ -361,18 +361,21 @@ export default function EmploiDuTempsPage() {
                             <tbody>
                                 {/* PAUSE indicator before afternoon */}
                                 {lignesHoraires.map((h, hi) => {
-                                    // La pause etait annoncee « 12:00 — 14:00 » quels que soient
-                                    // les reglages de l'ecole. Elle suit desormais l'horaire reel.
-                                    const isPause = h.debut === horaires.pauseFin;
+                                    // Une école peut avoir plusieurs pauses : on insère un bandeau
+                                    // avant CHAQUE créneau qui suit la fin d'une pause.
+                                    const pauses = horaires.pauses?.length
+                                        ? horaires.pauses
+                                        : [{ debut: horaires.pauseDebut, fin: horaires.pauseFin }];
+                                    const pauseAvant = pauses.find(p => p.fin === h.debut);
                                     return (
                                         <React.Fragment key={`slot-${h.debut}`}>
-                                            {isPause && (
-                                                <tr key="pause">
+                                            {pauseAvant && (
+                                                <tr key={`pause-${pauseAvant.debut}`}>
                                                     <td colSpan={JOURS.length + 1} style={{
                                                         padding: '8px', textAlign: 'center', background: '#fef3c7',
                                                         borderRadius: '8px', fontSize: '12px', color: '#92400e', fontWeight: 700
                                                     }}>
-                                                        <Utensils size={12} style={{display:'inline',verticalAlign:'middle',marginRight:'4px'}}/> {horaires.pauseDebut} — {horaires.pauseFin} • Pause Déjeuner
+                                                        <Utensils size={12} style={{display:'inline',verticalAlign:'middle',marginRight:'4px'}}/> {pauseAvant.debut} — {pauseAvant.fin} • Pause
                                                     </td>
                                                 </tr>
                                             )}

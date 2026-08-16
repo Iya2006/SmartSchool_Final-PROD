@@ -14,11 +14,23 @@
  */
 import api from '@/lib/api';
 
+export interface Pause {
+    debut: string;
+    fin: string;
+}
+
 export interface Horaires {
     debut: string;
     fin: string;
     /** Durée d'un créneau, en minutes. */
     dureeCours: number;
+    /**
+     * Les pauses de la journée. Une école peut en avoir plusieurs (récréation
+     * du matin, déjeuner, pause de l'après-midi…). `pauseDebut`/`pauseFin`
+     * restent exposés — ils pointent sur la PREMIÈRE pause — pour les écrans
+     * qui n'en lisaient qu'une, mais la source de vérité est `pauses`.
+     */
+    pauses: Pause[];
     pauseDebut: string;
     pauseFin: string;
     /** Minutes de retard à partir desquelles l'élève est noté « en retard ». */
@@ -26,6 +38,32 @@ export interface Horaires {
     /** Au-delà, il est compté absent plutôt qu'en retard. */
     seuilAbsence: number;
     joursOuvres: string[];
+}
+
+/**
+ * Les pauses sont stockées dans un seul réglage `horaires.pauses`, sous la
+ * forme `"12:00-13:00,15:30-15:45"`. On garde aussi `horaires.pause_debut`/
+ * `horaires.pause_fin` (première pause) pour ne rien casser des écrans qui les
+ * lisaient encore.
+ */
+export function parsePauses(valeur: string | undefined | null): Pause[] {
+    if (!valeur) return [];
+    return valeur
+        .split(',')
+        .map(p => p.trim())
+        .filter(Boolean)
+        .map(p => {
+            const [debut, fin] = p.split('-').map(s => s.trim());
+            return debut && fin ? { debut, fin } : null;
+        })
+        .filter((p): p is Pause => p !== null);
+}
+
+export function formatPauses(pauses: Pause[]): string {
+    return pauses
+        .filter(p => p.debut && p.fin)
+        .map(p => `${p.debut}-${p.fin}`)
+        .join(',');
 }
 
 /**
@@ -56,6 +94,7 @@ export const HORAIRES_DEFAUT: Horaires = {
     debut: '08:00',
     fin: '17:00',
     dureeCours: 60,
+    pauses: [{ debut: '12:00', fin: '13:00' }],
     pauseDebut: '12:00',
     pauseFin: '13:00',
     seuilRetard: 10,
@@ -78,12 +117,21 @@ export async function chargerHoraires(): Promise<Horaires> {
         const res = await api.get(`/api/parametrage/settings?categorie=${CATEGORIE}`);
         const lus: Record<string, string> = {};
         for (const p of res.data || []) lus[p.cle] = p.valeur;
+        // Pauses : on lit d'abord la liste `horaires.pauses` ; à défaut, on
+        // reconstitue depuis l'ancienne pause unique ; à défaut encore, défaut.
+        let pauses = parsePauses(lus['horaires.pauses']);
+        if (pauses.length === 0) {
+            const d = lus['horaires.pause_debut'];
+            const f = lus['horaires.pause_fin'];
+            pauses = d && f ? [{ debut: d, fin: f }] : HORAIRES_DEFAUT.pauses;
+        }
         cache = {
             debut: lus['horaires.debut'] || HORAIRES_DEFAUT.debut,
             fin: lus['horaires.fin'] || HORAIRES_DEFAUT.fin,
             dureeCours: Number(lus['horaires.duree_cours']) || HORAIRES_DEFAUT.dureeCours,
-            pauseDebut: lus['horaires.pause_debut'] || HORAIRES_DEFAUT.pauseDebut,
-            pauseFin: lus['horaires.pause_fin'] || HORAIRES_DEFAUT.pauseFin,
+            pauses,
+            pauseDebut: pauses[0]?.debut || HORAIRES_DEFAUT.pauseDebut,
+            pauseFin: pauses[0]?.fin || HORAIRES_DEFAUT.pauseFin,
             seuilRetard: Number(lus['horaires.seuil_retard']) || HORAIRES_DEFAUT.seuilRetard,
             seuilAbsence: Number(lus['horaires.seuil_absence']) || HORAIRES_DEFAUT.seuilAbsence,
             // Une école qui n'aurait plus aucun jour ouvré ne pourrait plus
@@ -123,17 +171,21 @@ function enHeure(minutes: number): string {
 export function creneauxDeLaJournee(h: Horaires): { debut: string; fin: string }[] {
     const creneaux: { debut: string; fin: string }[] = [];
     const finJournee = enMinutes(h.fin);
-    const pauseDebut = enMinutes(h.pauseDebut);
-    const pauseFin = enMinutes(h.pauseFin);
+    // Toutes les pauses de la journée, triées, en minutes.
+    const pauses = (h.pauses?.length ? h.pauses : [{ debut: h.pauseDebut, fin: h.pauseFin }])
+        .map(p => ({ debut: enMinutes(p.debut), fin: enMinutes(p.fin) }))
+        .filter(p => p.fin > p.debut)
+        .sort((a, b) => a.debut - b.debut);
 
     let courant = enMinutes(h.debut);
     // Garde-fou : une durée nulle ou négative boucle à l'infini.
     const duree = Math.max(5, h.dureeCours);
 
     while (courant + duree <= finJournee) {
-        // Un créneau qui chevauche la pause est repoussé après elle.
-        if (courant < pauseFin && courant + duree > pauseDebut) {
-            courant = pauseFin;
+        // Un créneau qui chevauche une pause est repoussé après CETTE pause.
+        const chevauchee = pauses.find(p => courant < p.fin && courant + duree > p.debut);
+        if (chevauchee) {
+            courant = chevauchee.fin;
             continue;
         }
         creneaux.push({ debut: enHeure(courant), fin: enHeure(courant + duree) });
