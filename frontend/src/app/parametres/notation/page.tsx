@@ -611,7 +611,7 @@ export default function NotationPage() {
                                     <TrendingUp size={18} style={{ color: 'var(--brand-primary)' }} />
                                     <span style={{ fontWeight: 700, color: '#1e293b', fontSize: '0.95rem' }}>Calcul du Classement (Rang)</span>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
                                     {[
                                         { value: 'classe', label: 'Par classe', desc: "L'élève est classé parmi tous les élèves de sa classe uniquement." },
                                         { value: 'niveau', label: 'Par niveau', desc: "L'élève est classé parmi tous les élèves du même niveau (ex: toutes les 7ème)." },

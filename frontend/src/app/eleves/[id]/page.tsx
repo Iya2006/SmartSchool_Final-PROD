@@ -10,10 +10,12 @@ import ParentsEleve from '@/components/ParentsEleve';
 import BadgeCarte from '@/components/BadgeCarte';
 import { QRCodeSVG } from 'qrcode.react';
 import { AnimatePresence } from 'framer-motion';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 export default function ProfilEleve() {
     const { id } = useParams();
     const router = useRouter();
+    const isMobile = useIsMobile();
     const [eleve, setEleve] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [badgeEleve, setBadgeEleve] = useState<any>(null);
@@ -116,7 +118,7 @@ export default function ProfilEleve() {
             </AnimatePresence>
 
             {/* Header / Actions */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                     <Link href="/eleves" className="btn btn-outline btn-sm" style={{ padding: '8px', color: 'var(--text-secondary)' }}>
                         <ArrowLeft size={18} />
@@ -139,7 +141,7 @@ export default function ProfilEleve() {
                 </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 1fr) 2.2fr', gap: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(300px, 1fr) 2.2fr', gap: '24px' }}>
 
                 {/* ---------- COLONNE DE GAUCHE (Identité & Infos) ---------- */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>

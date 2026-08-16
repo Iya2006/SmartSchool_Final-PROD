@@ -15,7 +15,7 @@
  */
 
 import { useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useIsRestoring } from '@tanstack/react-query';
 import api from '@/lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -124,7 +124,13 @@ export function useEleves({
         ? (classes.find((c) => c.code === classeCode)?.effectif_actuel ?? eleves.length)
         : (elevesQuery.data?.count.total ?? 0);
 
-    const loading = elevesQuery.isLoading;
+    // Cache React Query persiste en localStorage (offline-first) : au tout
+    // premier rendu client, avant restauration du cache, isLoading tombe a
+    // false sans donnees alors que le serveur (pas de localStorage) affiche
+    // encore le chargement — mismatch d'hydratation. Meme correctif que
+    // classes/page.tsx.
+    const isRestoring = useIsRestoring();
+    const loading = elevesQuery.isLoading || isRestoring;
     const error = elevesQuery.isError ? 'Impossible de charger les élèves. Vérifiez la connexion au serveur.' : null;
 
     const fetchEleves = useCallback(async () => {

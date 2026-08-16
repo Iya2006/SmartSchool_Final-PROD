@@ -200,7 +200,7 @@ export default function ProfilPage() {
                     <div style={{
                         background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%)',
                         borderRadius: '24px',
-                        padding: '36px',
+                        padding: isMobile ? '20px' : '36px',
                         color: 'white',
                         marginBottom: '32px',
                         boxShadow: '0 20px 40px rgba(15, 23, 42, 0.25)',
@@ -282,7 +282,7 @@ export default function ProfilPage() {
                     </div>
 
                     {/* Actions de l'en-tête */}
-                    <div style={{ display: 'flex', gap: '12px' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
                         <button
                             onClick={() => setActiveTab('profil')}
                             style={{
@@ -416,7 +416,7 @@ export default function ProfilPage() {
                                 disabled={!editMode}
                                 value={prenom}
                                 onChange={e => setPrenom(e.target.value)}
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', fontSize: '14px', outline: 'none' }}
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', outline: 'none' }}
                             />
                         </div>
 
@@ -427,7 +427,7 @@ export default function ProfilPage() {
                                 disabled={!editMode}
                                 value={nom}
                                 onChange={e => setNom(e.target.value)}
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', fontSize: '14px', outline: 'none' }}
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', outline: 'none' }}
                             />
                         </div>
 
@@ -438,7 +438,7 @@ export default function ProfilPage() {
                                 disabled={!editMode}
                                 value={email}
                                 onChange={e => setEmail(e.target.value)}
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', fontSize: '14px', outline: 'none' }}
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', outline: 'none' }}
                             />
                         </div>
 
@@ -449,7 +449,7 @@ export default function ProfilPage() {
                                 disabled={!editMode}
                                 value={telephone}
                                 onChange={e => setTelephone(e.target.value)}
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', fontSize: '14px', outline: 'none' }}
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: editMode ? 'white' : '#f8fafc', outline: 'none' }}
                             />
                         </div>
 
@@ -459,7 +459,7 @@ export default function ProfilPage() {
                                 type="text"
                                 disabled
                                 value={fonction}
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '14px', outline: 'none' }}
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#f8fafc', outline: 'none' }}
                             />
                             <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#94a3b8' }}>Non modifiable ici — géré dans Personnel.</p>
                         </div>
@@ -470,7 +470,7 @@ export default function ProfilPage() {
                                 type="text"
                                 disabled
                                 value={etablissementNom}
-                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#f8fafc', fontSize: '14px', outline: 'none' }}
+                                style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', background: '#f8fafc', outline: 'none' }}
                             />
                             <p style={{ margin: '6px 0 0', fontSize: '11px', color: '#94a3b8' }}>Non modifiable ici — géré dans Paramètres.</p>
                         </div>
@@ -504,7 +504,7 @@ export default function ProfilPage() {
                                     type={showPass ? 'text' : 'password'}
                                     value={oldPassword}
                                     onChange={e => setOldPassword(e.target.value)}
-                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '14px' }}
+                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none' }}
                                 />
                             </div>
 
@@ -514,7 +514,7 @@ export default function ProfilPage() {
                                     type={showPass ? 'text' : 'password'}
                                     value={newPassword}
                                     onChange={e => setNewPassword(e.target.value)}
-                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '14px' }}
+                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none' }}
                                 />
                             </div>
 
@@ -524,7 +524,7 @@ export default function ProfilPage() {
                                     type={showPass ? 'text' : 'password'}
                                     value={confirmPassword}
                                     onChange={e => setConfirmPassword(e.target.value)}
-                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none', fontSize: '14px' }}
+                                    style={{ width: '100%', padding: '12px 16px', borderRadius: '12px', border: '1px solid #e2e8f0', outline: 'none' }}
                                 />
                             </div>
 

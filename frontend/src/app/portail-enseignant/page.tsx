@@ -12,6 +12,7 @@ import MesSeances from './_components/MesSeances';
 import { startAutoSync } from '@/lib/syncEngine';
 import { LIBELLE_JOUR, chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
 import { useJoursOuvres } from '@/hooks/useJoursOuvres';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Phone, User, GraduationCap, BookOpen, Clock, Calendar, AlertCircle,
@@ -21,7 +22,7 @@ import {
     Settings, LogOut, ChevronDown, Key, Mail as MailIcon, Save,
     Camera, ImageIcon, Activity, PieChart, Target, Zap, Hash, Building2,
     ExternalLink, Link as LinkIcon, Banknote, Download, UserCheck,
-    School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip, Utensils
+    School, PenLine, XCircle, AlertTriangle, Smartphone, CheckCircle2, Lightbulb, Package, RefreshCw, Wallet, MessageSquare, Megaphone, Search, Rocket, Paperclip, Utensils, Menu
 } from 'lucide-react';
 
 // Jours ouvres de l'ecole (Parametres > Emploi du temps) : les listes etaient
@@ -115,6 +116,10 @@ export default function PortailEnseignant() {
 
     const [data, setData] = useState<DashData | null>(null);
     const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'seances'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
+    // Tiroir mobile — meme motif que portail-parent/portail-eleve (aucun
+    // traitement responsive n'existait ici avant ce correctif).
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const isMobile = useIsMobile();
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
     const [edtLoading, setEdtLoading] = useState(false);
     // Horaires configurés de l'école (Paramètres > Emploi du temps) : la grille
@@ -885,8 +890,23 @@ export default function PortailEnseignant() {
                 @keyframes notifSlideIn{from{opacity:0;transform:translateY(-8px) scale(0.95)}to{opacity:1;transform:translateY(0) scale(1)}}
             `}</style>
 
-            {/* SIDEBAR ENSEIGNANT (Ambre) */}
-            <div style={{ width: '240px', background: `linear-gradient(180deg, ${primaryColor} 0%, ${accentColor} 100%)`, display: 'flex', flexDirection: 'column', flexShrink: 0, boxShadow: '4px 0 24px rgba(0,0,0,0.2)' }}>
+            {/* SIDEBAR ENSEIGNANT (Ambre) — tiroir sous 768px, meme motif que portail-parent */}
+            <div style={isMobile ? {
+                width: 'min(240px, 84vw)', background: `linear-gradient(180deg, ${primaryColor} 0%, ${accentColor} 100%)`,
+                display: 'flex', flexDirection: 'column', flexShrink: 0,
+                position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 200,
+                transform: mobileMenuOpen ? 'translateX(0)' : 'translateX(-100%)',
+                transition: 'transform 0.3s ease',
+                boxShadow: mobileMenuOpen ? '10px 0 34px rgba(0,0,0,0.25)' : 'none',
+                paddingLeft: 'env(safe-area-inset-left)',
+                paddingTop: 'env(safe-area-inset-top)',
+                paddingBottom: 'env(safe-area-inset-bottom)',
+                boxSizing: 'border-box',
+            } : {
+                width: '240px', background: `linear-gradient(180deg, ${primaryColor} 0%, ${accentColor} 100%)`,
+                display: 'flex', flexDirection: 'column', flexShrink: 0,
+                boxShadow: '4px 0 24px rgba(0,0,0,0.2)'
+            }}>
                 {/* Logo */}
                 <div style={{ padding: '24px 20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -932,7 +952,7 @@ export default function PortailEnseignant() {
                         const badge = item.key === 'messages' ? messages.filter(m => m.statut === 'ENVOYE' && m.expediteur_type === 'ADMIN').length : 0;
                         return (
                             <button key={item.key}
-                                onClick={() => { setActiveTab(item.key); setSelectedClass(null); }}
+                                onClick={() => { setActiveTab(item.key); setSelectedClass(null); setMobileMenuOpen(false); }}
                                 style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 14px', borderRadius: '10px', border: 'none', cursor: 'pointer', marginBottom: '2px', transition: 'all 0.15s', background: isActive ? 'rgba(255,255,255,0.15)' : 'transparent', color: isActive ? 'white' : 'rgba(255,255,255,0.55)', fontWeight: isActive ? 700 : 500, fontSize: '13px', borderLeft: isActive ? `3px solid ${primaryColor}` : '3px solid transparent' }}>
                                 <item.icon size={16} />
                                 {item.label}
@@ -946,37 +966,57 @@ export default function PortailEnseignant() {
                 </div>
             </div>
 
+            {/* Overlay du tiroir mobile — clic pour fermer */}
+            {isMobile && mobileMenuOpen && (
+                <div
+                    onClick={() => setMobileMenuOpen(false)}
+                    aria-hidden="true"
+                    style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 190 }}
+                />
+            )}
+
             {/* CONTENU PRINCIPAL */}
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 {/* ── HEADER ── */}
-                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '16px', padding: '0 32px', flexShrink: 0, position: 'relative' }}>
-                    <SyncStatusIndicator />
-                    <div ref={dropdownRef} style={{ position: 'relative' }}>
-                        <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
-                            <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#f59e0b', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>
-                                {data?.enseignant?.prenom[0]}{data?.enseignant?.nom[0]}
-                            </div>
-                            <div style={{ textAlign: 'left' }}>
-                                <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{data?.enseignant?.prenom} {data?.enseignant?.nom}</p>
-                                <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>Enseignant</p>
-                            </div>
-                            <ChevronDown size={14} color="#64748b" />
+                <div style={{ height: '60px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: isMobile ? 'space-between' : 'flex-end', gap: '16px', padding: isMobile ? '0 14px' : '0 32px', flexShrink: 0, position: 'relative' }}>
+                    {isMobile && (
+                        <button
+                            onClick={() => setMobileMenuOpen(o => !o)}
+                            aria-label="Ouvrir le menu de navigation"
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#334155', padding: '6px' }}
+                        >
+                            <Menu size={22} />
                         </button>
-                        <AnimatePresence>
-                            {showProfileDropdown && (
-                                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} style={{ position: 'absolute', top: 'calc(100% + 5px)', right: 0, width: '200px', background: 'white', borderRadius: '12px', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', border: '1px solid #e2e8f0', overflow: 'hidden', zIndex: 100 }}>
-                                    <button onClick={() => { setActiveTab('parametres'); setShowProfileDropdown(false); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155', borderBottom: '1px solid #f1f5f9' }}>
-                                        <Settings size={16} /> Mon Profil
-                                    </button>
-                                    <button onClick={() => { setActiveTab('carte'); setShowProfileDropdown(false); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155', borderBottom: '1px solid #f1f5f9' }}>
-                                        <UserCheck size={16} /> Ma Carte (Badge)
-                                    </button>
-                                    <button onClick={() => { logout(); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#ef4444' }}>
-                                        <LogOut size={16} /> Déconnexion
-                                    </button>
-                                </motion.div>
-                            )}
-                        </AnimatePresence>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        <SyncStatusIndicator />
+                        <div ref={dropdownRef} style={{ position: 'relative' }}>
+                            <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
+                                <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: '#f59e0b', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>
+                                    {data?.enseignant?.prenom[0]}{data?.enseignant?.nom[0]}
+                                </div>
+                                <div style={{ textAlign: 'left' }}>
+                                    <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{data?.enseignant?.prenom} {data?.enseignant?.nom}</p>
+                                    <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>Enseignant</p>
+                                </div>
+                                <ChevronDown size={14} color="#64748b" />
+                            </button>
+                            <AnimatePresence>
+                                {showProfileDropdown && (
+                                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} style={{ position: 'absolute', top: 'calc(100% + 5px)', right: 0, width: '200px', background: 'white', borderRadius: '12px', boxShadow: '0 4px 20px rgba(0,0,0,0.1)', border: '1px solid #e2e8f0', overflow: 'hidden', zIndex: 100 }}>
+                                        <button onClick={() => { setActiveTab('parametres'); setShowProfileDropdown(false); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155', borderBottom: '1px solid #f1f5f9' }}>
+                                            <Settings size={16} /> Mon Profil
+                                        </button>
+                                        <button onClick={() => { setActiveTab('carte'); setShowProfileDropdown(false); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#334155', borderBottom: '1px solid #f1f5f9' }}>
+                                            <UserCheck size={16} /> Ma Carte (Badge)
+                                        </button>
+                                        <button onClick={() => { logout(); }} style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '10px', border: 'none', background: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 500, color: '#ef4444' }}>
+                                            <LogOut size={16} /> Déconnexion
+                                        </button>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </div>
                     </div>
                 </div>
 
@@ -1021,10 +1061,10 @@ export default function PortailEnseignant() {
                     {activeTab === 'overview' && (
                         <motion.div key="overview" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                             {/* Profile Hero Banner */}
-                            <div style={{ background: `linear-gradient(135deg, #1e1b4b, #4338ca, ${accentColor})`, borderRadius: '24px', padding: '32px', marginBottom: '20px', position: 'relative', overflow: 'hidden' }}>
+                            <div style={{ background: `linear-gradient(135deg, #1e1b4b, #4338ca, ${accentColor})`, borderRadius: '24px', padding: isMobile ? '20px' : '32px', marginBottom: '20px', position: 'relative', overflow: 'hidden' }}>
                                 <div style={{ position: 'absolute', top: '-50px', right: '-30px', width: '220px', height: '220px', borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
                                 <div style={{ position: 'absolute', bottom: '-40px', left: '20%', width: '160px', height: '160px', borderRadius: '50%', background: 'rgba(255,255,255,0.03)' }} />
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '28px', position: 'relative', zIndex: 1 }}>
+                                <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'center', gap: isMobile ? '16px' : '28px', position: 'relative', zIndex: 1 }}>
                                     {/* Photo with upload */}
                                     <div style={{ position: 'relative', flexShrink: 0 }}>
                                         <div onClick={() => ens.photo_url && setLightboxUrl(`${API_BASE}${ens.photo_url}`)}
@@ -1091,7 +1131,7 @@ export default function PortailEnseignant() {
                             </div>
 
                             {/* Profile Details Grid */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px' }}>
                                 {/* Informations Personnelles */}
                                 <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                                     <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1276,7 +1316,7 @@ export default function PortailEnseignant() {
                             </div>
 
                             {/* Charge horaire par niveau (Visual Progress) */}
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '20px', marginBottom: '24px' }}>
                                 <div style={{ background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
                                         <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: '#ede9fe', display: 'flex', alignItems: 'center', justifyContent: 'center', color: accentColor }}>
@@ -1638,7 +1678,7 @@ export default function PortailEnseignant() {
                                             </div>
                                         ) : (
                                             <div style={{ overflowX: 'auto' }}>
-                                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '600px' }}>
                                                     <thead>
                                                         <tr style={{ background: '#f8fafc' }}>
                                                             <th style={{ padding: '12px 16px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'left' }}>#</th>
@@ -1782,7 +1822,7 @@ export default function PortailEnseignant() {
                                                 <div style={{ textAlign: 'center', padding: '40px' }}><Loader2 size={28} className="animate-spin" color={accentColor} /></div>
                                             ) : classEleves.length > 0 ? (
                                                 <div style={{ overflowX: 'auto' }}>
-                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '600px' }}>
                                                         <thead>
                                                             <tr style={{ background: '#f1f5f9' }}>
                                                                 <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>#</th>
@@ -1877,7 +1917,7 @@ export default function PortailEnseignant() {
                                     <div style={{ padding: '0 24px 16px' }}>
                                         {evalHistory.length > 0 ? (
                                             <div style={{ overflowX: 'auto' }}>
-                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '600px' }}>
                                                     <thead>
                                                         <tr style={{ background: '#f8fafc' }}>
                                                             <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Date</th>
@@ -1955,7 +1995,7 @@ export default function PortailEnseignant() {
                                         </div>
 
                                         {/* Stats bar */}
-                                        <div style={{ padding: '12px 28px', background: '#f8fafc', display: 'flex', gap: '20px', borderBottom: '1px solid #e2e8f0' }}>
+                                        <div style={{ padding: '12px 28px', background: '#f8fafc', display: 'flex', flexWrap: 'wrap', gap: '20px', borderBottom: '1px solid #e2e8f0' }}>
                                             {[{ label: 'Élèves', value: evalDetailData.stats.total_eleves, color: accentColor },
                                               { label: 'Notes saisies', value: evalDetailData.stats.nb_notes_saisies, color: '#10b981' },
                                               { label: 'Absents', value: evalDetailData.stats.nb_absents, color: '#ef4444' },
@@ -2074,12 +2114,12 @@ export default function PortailEnseignant() {
                     {activeTab === 'appel' && (
                         <motion.div key="appel" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
                             <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-                                <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                                     <div>
                                         <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><CheckCircle2 size={16} /> Faire l&apos;Appel</h3>
                                         <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#94a3b8' }}>Sélectionnez une classe pour l&apos;appel</p>
                                     </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px' }}>
                                         <select value={appelDemiJournee} onChange={e => setAppelDemiJournee(e.target.value)}
                                             style={{ padding: '8px 14px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
                                             <option value="MATIN">Matin</option>
@@ -2267,7 +2307,7 @@ export default function PortailEnseignant() {
                                     <div style={{ padding: '0 24px 16px' }}>
                                         {appelHistory.length > 0 ? (
                                             <div style={{ overflowX: 'auto' }}>
-                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '600px' }}>
                                                     <thead>
                                                         <tr style={{ background: '#f8fafc' }}>
                                                             <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: 700, color: '#475569' }}>Date</th>
@@ -2313,7 +2353,7 @@ export default function PortailEnseignant() {
                     {/* ──── MESSAGES TAB ──── */}
                     {activeTab === 'messages' && (
                         <motion.div key="messages" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: selectedMessage ? '380px 1fr' : '1fr', gap: '20px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: selectedMessage && !isMobile ? '380px 1fr' : '1fr', gap: '20px' }}>
                                 {/* Message list */}
                                 <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                                     <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
@@ -2498,7 +2538,7 @@ export default function PortailEnseignant() {
 
                         return (
                             <motion.div key="devoirs" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
                                     <div>
                                         <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#1e293b', display: 'flex', alignItems: 'center', gap: '10px' }}>
                                             <BookOpen size={22} color="#f59e0b" /> Devoirs
@@ -2519,7 +2559,7 @@ export default function PortailEnseignant() {
                                             <h3 style={{ margin: '0 0 20px', fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <Plus size={16} color="#f59e0b" /> Créer un devoir
                                             </h3>
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', gridColumn: '1/-1' }}>
                                                     <label style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Titre du devoir *</label>
                                                     <input value={devoirForm.titre} onChange={e => setDevoirForm({...devoirForm, titre: e.target.value})}
@@ -2687,7 +2727,7 @@ export default function PortailEnseignant() {
                                     </div>
                                 ) : (
                                     <div style={{ overflowX: 'auto' }}>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '600px' }}>
                                             <thead>
                                                 <tr style={{ borderBottom: '2px solid #f1f5f9', textAlign: 'left', color: '#64748b' }}>
                                                     <th style={{ padding: '12px 16px' }}>Titre du sujet</th>
@@ -2765,7 +2805,7 @@ export default function PortailEnseignant() {
                     {/* ──── PARAMETRES TAB ──── */}
                     {activeTab === 'parametres' && (
                         <motion.div key="parametres" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                            <div style={{ maxWidth: '700px' }}>
+                            <div style={{ maxWidth: '700px', margin: '0 auto' }}>
                                 <h2 style={{ fontSize: '22px', fontWeight: 800, color: '#1e293b', margin: '0 0 20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
                                     <Settings size={22} color={primaryColor} /> Paramètres
                                 </h2>
@@ -2787,7 +2827,7 @@ export default function PortailEnseignant() {
                                         </div>
                                     </div>
                                     <div style={{ padding: '20px 24px' }}>
-                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '14px' }}>
                                             {[
                                                 { label: 'Téléphone', value: ens.telephone, icon: <Smartphone size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
                                                 { label: 'Email', value: ens.email || '—', icon: <MailIcon size={14} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> },
@@ -2853,7 +2893,7 @@ export default function PortailEnseignant() {
 
                                 {/* Statut Parent d'Élève Section */}
                                 <div style={{ background: 'white', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: '20px' }}>
-                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                                         <div>
                                             <h4 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <Users size={16} /> Statut Parent d'Élève
@@ -2972,7 +3012,7 @@ export default function PortailEnseignant() {
                                     </p>
                                 </div>
                                 {data?.enseignant && (
-                                    <BadgeCarte agent={data.enseignant} id="enseignant-badge-view" />
+                                    <BadgeCarte agent={{ ...data.enseignant, role: 'ENSEIGNANT' }} id="enseignant-badge-view" />
                                 )}
                                 <div style={{ display: 'flex', gap: '16px' }}>
                                     <button 
@@ -3131,7 +3171,7 @@ export default function PortailEnseignant() {
 
                                     {/* Table */}
                                     <div style={{ overflowX: 'auto' }}>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '600px' }}>
                                             <thead>
                                                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                                                     <th style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: '11px', textTransform: 'uppercase' }}>Date</th>
@@ -3206,7 +3246,7 @@ export default function PortailEnseignant() {
                                                         <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>Mode : {selectedBulletin.bulletin?.mode_paiement || 'VIREMENT'}</p>
                                                     </div>
                                                 </div>
-                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '600px' }}>
                                                     <tbody>
                                                         <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                                                             <td style={{ padding: '12px 0', color: '#475569' }}>Salaire de Base</td>
@@ -3714,6 +3754,7 @@ const DOC_TYPES = [
 ];
 
 function DocumentsTab({ enseignantId }: { enseignantId?: number }) {
+  const isMobile = useIsMobile();
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -3766,7 +3807,7 @@ function DocumentsTab({ enseignantId }: { enseignantId?: number }) {
         {showForm && (
           <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             style={{ background: 'white', borderRadius: '14px', border: '1.5px solid #fde68a', padding: '20px', marginBottom: '20px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>Titre *</label>
                 <input value={form.titre} onChange={e => setForm(p => ({ ...p, titre: e.target.value }))} placeholder="Ex: Cours Mathématiques T1"
@@ -3856,6 +3897,7 @@ const LINK_CATS = [
 ];
 
 function LiensExternesTab({ enseignantId }: { enseignantId?: number }) {
+  const isMobile = useIsMobile();
   const [liens, setLiens] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -3909,7 +3951,7 @@ function LiensExternesTab({ enseignantId }: { enseignantId?: number }) {
         {showForm && (
           <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             style={{ background: 'white', borderRadius: '14px', border: '1.5px solid #fde68a', padding: '20px', marginBottom: '20px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: 700, color: '#374151', textTransform: 'uppercase' as const }}>Titre *</label>
                 <input value={form.titre} onChange={e => setForm(p => ({ ...p, titre: e.target.value }))} placeholder="Ex: Khan Academy"
