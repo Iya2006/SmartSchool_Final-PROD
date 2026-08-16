@@ -289,6 +289,52 @@ def create_type_frais(
     return tf
 
 
+@router.post("/types-frais/assurer-entree", response_model=List[TypeFraisOut])
+def assurer_frais_entree(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Garantit l'existence des frais d'entrée (Inscription, Réinscription) et
+    de la Scolarité pour l'école, puis renvoie tous ses types de frais actifs.
+
+    Sans ces types, impossible de fixer un prix d'inscription/réinscription par
+    classe : il n'y a rien à tarifer. On les crée à 0 (le montant réel se règle
+    par classe dans Configurer). Idempotent — appelé à l'ouverture des écrans de
+    classe.
+    """
+    from app.api.reinscription import _est_frais_inscription, _est_frais_reinscription
+    types = db.query(TypeFrais).filter(TypeFrais.etablissement_id == etablissement_id).all()
+    codes = {t.code for t in types}
+
+    def _code_libre(base: str) -> str:
+        if base not in codes:
+            codes.add(base)
+            return base
+        i = 2
+        while f"{base}{i}" in codes:
+            i += 1
+        codes.add(f"{base}{i}")
+        return f"{base}{i}"
+
+    a_creer = []
+    if not any(_est_frais_inscription(t.categorie) for t in types):
+        a_creer.append((_code_libre("INSCR"), "Frais d'inscription", "Inscription"))
+    if not any(_est_frais_reinscription(t.categorie) for t in types):
+        a_creer.append((_code_libre("REINSCR"), "Frais de réinscription", "Réinscription"))
+    if not any((t.categorie or "").lower().startswith("scolar") for t in types):
+        a_creer.append((_code_libre("SCOL"), "Frais de scolarité", "Scolarité"))
+
+    for code, libelle, categorie in a_creer:
+        db.add(TypeFrais(
+            etablissement_id=etablissement_id, code=code, libelle=libelle,
+            categorie=categorie, montant_defaut=0, est_obligatoire="O",
+            frequence="UNIQUE", statut="ACTIF",
+        ))
+    if a_creer:
+        db.commit()
+
+    return db.query(TypeFrais).filter(
+        TypeFrais.etablissement_id == etablissement_id, TypeFrais.statut == "ACTIF"
+    ).all()
+
+
 @router.put("/types-frais/{type_frais_id}", response_model=TypeFraisOut)
 def update_type_frais(
     type_frais_id: int,
@@ -1380,6 +1426,9 @@ def list_depenses(
     categorie: Optional[str] = None,
     classe_id: Optional[int] = None,
     statut: Optional[str] = None,
+    mode_paiement: Optional[str] = None,
+    date_debut: Optional[date_type] = None,
+    date_fin: Optional[date_type] = None,
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
@@ -1409,6 +1458,15 @@ def list_depenses(
         query = query.filter(Depense.classe_id == classe_id)
     if statut:
         query = query.filter(Depense.statut == statut)
+    # Tri par moyen de paiement (Orange Money, especes, virement...) et periode
+    # (jour / semaine / mois) : c'est ce qui rend l'historique des depenses
+    # exploitable pour un rapprochement de caisse.
+    if mode_paiement:
+        query = query.filter(func.upper(func.coalesce(Depense.mode_paiement, "")) == mode_paiement.upper())
+    if date_debut:
+        query = query.filter(Depense.date_depense >= date_debut)
+    if date_fin:
+        query = query.filter(Depense.date_depense <= date_fin)
     if search:
         like = f"%{search.strip()}%"
         query = query.filter(
@@ -1426,6 +1484,16 @@ def create_depense(data: DepenseCreate, db: Session = Depends(get_db), etablisse
     _verifier_annee_modifiable(db, data.annee_id)
     if data.montant <= 0:
         raise HTTPException(status_code=400, detail="Le montant doit être supérieur à 0")
+    # On ne dépense pas plus que ce qu'il y a en caisse — même règle que pour
+    # les salaires et les règlements fournisseurs. Sans ce garde-fou, la caisse
+    # pouvait passer en négatif sans que personne ne le voie.
+    annee_depense = resoudre_annee(db, etablissement_id, data.annee_id)
+    solde_disponible = _get_solde_caisse(db, etablissement_id, annee_depense)
+    if float(data.montant) > solde_disponible:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Solde en caisse insuffisant. Disponible : {solde_disponible:,.0f} GNF".replace(',', ' '),
+        )
     # data.etablissement_id vient du corps de la requête (schéma DepenseBase) —
     # ignoré ici et remplacé par l'établissement authentifié : avant le Lot 2,
     # n'importe quel client pouvait choisir librement l'école propriétaire de
@@ -3107,7 +3175,12 @@ def creer_reglement_fournisseur(
     description = data.get("description", "")
     reference = data.get("reference", "")
     fournisseur = data.get("fournisseur") or data.get("beneficiaire") or ""
-    annee_id = data.get("annee_id") or 1
+    # Le defaut `or 1` calculait le solde sur l'annee 1, qui n'a aucun
+    # encaissement pour la plupart des ecoles : la caisse affichait alors
+    # « 0 GNF disponible » et bloquait tout decaissement alors que l'argent
+    # etait bien la. On resout l'annee en cours de l'ecole quand elle n'est
+    # pas fournie.
+    annee_id = resoudre_annee(db, etablissement_id, data.get("annee_id"))
     classe_id = data.get("classe_id") or None
     eleve_id = data.get("eleve_id") or None
 

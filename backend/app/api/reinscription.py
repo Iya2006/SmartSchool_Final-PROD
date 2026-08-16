@@ -54,8 +54,21 @@ def _inscription_ou_404(db: Session, inscription_id: int, etablissement_id: int)
     return insc
 
 
+def _est_frais_reinscription(categorie) -> bool:
+    """Un frais de RÉinscription (élève qui continue dans l'école)."""
+    c = (categorie or "").lower()
+    return "réinscr" in c or "reinscr" in c
+
+
+def _est_frais_inscription(categorie) -> bool:
+    """Un frais d'inscription (nouvel élève) — sans confondre avec réinscription,
+    dont « inscription » est un sous-mot."""
+    c = (categorie or "").lower()
+    return "inscription" in c and not _est_frais_reinscription(categorie)
+
+
 def _generer_frais_reinscription(db: Session, inscription: Inscription, classe: Classe,
-                                 etablissement_id: int) -> int:
+                                 etablissement_id: int, type_inscription: str = "NOUVELLE") -> int:
     """
     Génère les factures des frais OBLIGATOIRES configurés (TarifClasse) pour la
     classe cible — grille tarifaire réelle de l'année comme seule source de
@@ -90,9 +103,19 @@ def _generer_frais_reinscription(db: Session, inscription: Inscription, classe: 
         f.type_frais_id for f in db.query(Facture).filter(Facture.inscription_id == inscription.inscription_id).all()
     }
 
+    # Frais d'ENTRÉE : un nouvel élève paie l'inscription, pas la réinscription ;
+    # un élève qui continue paie la réinscription, pas l'inscription. On écarte
+    # donc le frais d'entrée qui ne correspond pas au type d'inscription. La
+    # scolarité et les autres frais obligatoires, eux, s'appliquent aux deux.
+    est_reinscription = (type_inscription or "NOUVELLE").upper() == "REINSCRIPTION"
+
     created = 0
     for tarif, type_frais in tarifs:
         if type_frais.type_frais_id in deja_facture:
+            continue
+        if est_reinscription and _est_frais_inscription(type_frais.categorie):
+            continue
+        if not est_reinscription and _est_frais_reinscription(type_frais.categorie):
             continue
         montant = float(tarif.montant)
         numero_facture = generer_numero_facture(
