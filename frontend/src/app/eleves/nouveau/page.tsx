@@ -208,7 +208,7 @@ export default function NouveauEleve() {
 
                 {resultData && (
                     <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.2 }}>
-                        <BadgeCarte 
+                        <BadgeCarte
                             agent={{
                                 nom: resultData.eleve.nom,
                                 prenom: resultData.eleve.prenom,
@@ -218,8 +218,38 @@ export default function NouveauEleve() {
                                 date_naissance: resultData.eleve.date_naissance,
                                 adresse: resultData.eleve.adresse,
                                 groupe_sanguin: resultData.eleve.groupe_sanguin
-                            }} 
+                            }}
                         />
+                    </motion.div>
+                )}
+
+                {/* Identifiants de connexion — l'identifiant, c'est le matricule.
+                    On l'affiche noir sur blanc à côté du mot de passe : sans ça,
+                    le fondateur voyait le mot de passe mais cherchait en vain
+                    « où est son identifiant ». */}
+                {resultData && (
+                    <motion.div initial={{ y: 16, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.3 }}
+                        style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '14px', padding: '18px 20px', maxWidth: '440px', width: '100%' }}>
+                        <p style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: '#0369a1', margin: '0 0 12px 0', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                            <Lock size={15} /> Accès au portail élève
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '13px', color: '#475569', fontWeight: 600 }}>Identifiant de connexion</span>
+                                <code style={{ background: '#fff', border: '1px solid #bae6fd', padding: '5px 12px', borderRadius: '8px', fontSize: '15px', fontWeight: 800, color: '#0f172a', letterSpacing: '0.5px' }}>
+                                    {resultData.eleve.matricule}
+                                </code>
+                            </div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: '13px', color: '#475569', fontWeight: 600 }}>Mot de passe</span>
+                                <code style={{ background: '#fff', border: '1px solid #bae6fd', padding: '5px 12px', borderRadius: '8px', fontSize: '15px', fontWeight: 800, color: '#0f172a', letterSpacing: '0.5px' }}>
+                                    {formData.eleve_mot_de_passe.trim() || 'smartschool'}
+                                </code>
+                            </div>
+                        </div>
+                        <p style={{ fontSize: '11.5px', color: '#64748b', margin: '12px 0 0 0', lineHeight: 1.5 }}>
+                            L&apos;élève se connecte avec son <strong>matricule</strong> comme identifiant. Notez-les : le mot de passe pourra être changé plus tard.
+                        </p>
                     </motion.div>
                 )}
 
