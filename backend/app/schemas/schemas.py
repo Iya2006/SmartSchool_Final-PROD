@@ -482,6 +482,11 @@ class MatiereBase(BaseModel):
     categorie: Optional[str] = None
     est_obligatoire: str = "O"
     nb_heures_semaine: int = 2
+    # Barème de la matière (note sur X). Sans ce champ, la valeur était bien
+    # enregistrée en base mais jamais renvoyée : l'écran la relisait donc
+    # toujours à 20. On l'expose ici pour qu'elle se conserve à la création
+    # comme après modification.
+    note_sur: Optional[float] = 20
 
 class MatiereCreate(MatiereBase): pass
 class MatiereOut(OrmBase, MatiereBase):
