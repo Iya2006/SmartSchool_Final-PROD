@@ -250,3 +250,31 @@ class TestClassementSurEvaluationPlanifiee:
         )
         moys = {e["inscription_id"]: e["moyenne_generale"] for e in res["resultats"]}
         assert all(v is not None and v > 0 for v in moys.values()), moys
+
+
+class TestBulletinOfficielDesLesNotesSaisies:
+    """Le calcul officiel des bulletins (persist=True) doit produire des
+    moyennes des que les notes sont saisies, sans centralisation prealable."""
+
+    def test_bulletin_calcule_depuis_notes_saisies(self, client: TestClient, db: Session):
+        from app.services.notation import calculer_resultats_periode
+        from app.models.academique import Bulletin
+        s = Scenario(db)
+        for insc, val in zip(s.inscriptions, [15, 9]):
+            db.add(Note(evaluation_id=s.evaluation.evaluation_id,
+                        inscription_id=insc.inscription_id, valeur=val, est_absent="N"))
+        # notes saisies -> l'evaluation passe publiee comme le fait la saisie
+        s.evaluation.statut = "PUBLIEE"
+        db.commit()
+
+        res = calculer_resultats_periode(
+            db, s.classe.classe_id, s.trimestre.trimestre_id, persist=True,
+        )
+        assert res["bulletins_total"] == 2
+        # Les bulletins portent une vraie moyenne, pas None.
+        for insc in s.inscriptions:
+            b = db.query(Bulletin).filter(
+                Bulletin.inscription_id == insc.inscription_id,
+                Bulletin.trimestre_id == s.trimestre.trimestre_id,
+            ).first()
+            assert b is not None and b.moyenne_generale is not None and float(b.moyenne_generale) > 0
