@@ -414,7 +414,7 @@ export default function ConfigurerClassePage() {
                     </div>
 
                     {/* Chips Selection Summary */}
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
                         <span style={{
                             padding: '6px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 700,
                             background: chefDeClasse.length === 3 ? '#dcfce7' : '#f1f5f9',

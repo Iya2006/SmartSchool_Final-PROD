@@ -1,10 +1,10 @@
 'use client';
 
 import { useApp } from '@/context/AppContext';
-import { useState, useEffect, useRef, type CSSProperties } from 'react';
-import { useQuery, useQueryClient, useIsRestoring } from '@tanstack/react-query';
+import { useState, useEffect, useRef } from 'react';
+import { useQuery, useIsRestoring } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, X, Eye, Edit, ChevronRight, ChevronLeft, Loader2, BookOpen, UserCheck, Plus, Settings, Search, ArrowLeft, Save } from 'lucide-react';
+import { Users, X, Eye, Edit, ChevronRight, ChevronLeft, Loader2, BookOpen, UserCheck, Plus, Settings, Search, ArrowLeft } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -50,61 +50,6 @@ export default function ClassesPage() {
     const [selectedClass, setSelectedClass] = useState<Classe | null>(null);
     const [classStudents, setClassStudents] = useState<EleveDeClasse[]>([]);
     const [loadingStudents, setLoadingStudents] = useState(false);
-
-    // Édition d'une classe existante (nom, code, capacité, niveau).
-    const queryClient = useQueryClient();
-    const [editClass, setEditClass] = useState<Classe | null>(null);
-    const [editForm, setEditForm] = useState({ libelle: '', code: '', capacite_max: 50, niveau_id: 0 });
-    const [editSaving, setEditSaving] = useState(false);
-    const [editError, setEditError] = useState<string | null>(null);
-
-    // Cycles + niveaux pour le sélecteur de niveau (les niveaux appartiennent à
-    // l'école via leur cycle : on les charge, jamais on ne les devine).
-    const { data: cyclesData } = useQuery({
-        queryKey: ['cycles-niveaux', etablissementId],
-        queryFn: async () => {
-            const res = await api.get('/api/parametrage/cycles');
-            return res.data as { cycle_id: number; libelle: string; niveaux: { niveau_id: number; libelle: string }[] }[];
-        },
-        enabled: !!etablissementId,
-    });
-
-    const ouvrirEdition = (c: Classe) => {
-        setEditError(null);
-        setEditForm({ libelle: c.libelle, code: c.code, capacite_max: c.capacite_max, niveau_id: c.niveau_id });
-        setEditClass(c);
-    };
-
-    const enregistrerEdition = async () => {
-        if (!editClass) return;
-        if (!editForm.libelle.trim() || !editForm.code.trim() || !editForm.niveau_id) {
-            setEditError('Le nom, le code et le niveau sont obligatoires.');
-            return;
-        }
-        setEditSaving(true);
-        setEditError(null);
-        try {
-            await api.put(`/api/classes/${editClass.classe_id}`, {
-                etablissement_id: etablissementId,
-                annee_id: anneeId,
-                niveau_id: Number(editForm.niveau_id),
-                code: editForm.code.trim(),
-                libelle: editForm.libelle.trim(),
-                capacite_max: Number(editForm.capacite_max) || 1,
-                statut: editClass.statut || 'ACTIVE',
-            });
-            setEditClass(null);
-            await queryClient.invalidateQueries({ queryKey: ['classes'] });
-            await queryClient.invalidateQueries({ queryKey: ['classes-stats'] });
-        } catch (err: unknown) {
-            const detail = typeof err === 'object' && err !== null && 'response' in err
-                ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-                : undefined;
-            setEditError(detail || "La modification a échoué. Rien n'a été changé.");
-        } finally {
-            setEditSaving(false);
-        }
-    };
 
     // Carousel ref
     const carouselRef = useRef<HTMLDivElement>(null);
@@ -528,7 +473,7 @@ export default function ClassesPage() {
                                     <div className="hover-bar" style={{
                                         position: 'absolute', bottom: 0, left: 0, right: 0,
                                         background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-                                        padding: '8px 12px',
+                                        padding: '10px',
                                         display: 'flex', justifyContent: 'center', gap: '8px',
                                         transform: 'translateY(100%)',
                                         transition: 'transform 0.25s ease'
@@ -536,44 +481,31 @@ export default function ClassesPage() {
                                         <Link href={`/classes/${cls.classe_id}`}
                                             onClick={(e) => e.stopPropagation()}
                                             style={{
-                                                display: 'flex', alignItems: 'center', gap: '4px',
-                                                padding: '5px 12px', borderRadius: '7px',
-                                                background: 'rgba(255,255,255,0.2)', color: 'white',
-                                                fontSize: '11px', fontWeight: 600, textDecoration: 'none',
-                                                backdropFilter: 'blur(4px)', transition: 'background 0.15s'
+                                                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                                padding: '8px 10px', borderRadius: '9px',
+                                                background: 'rgba(255,255,255,0.16)', color: 'white',
+                                                border: '1px solid rgba(255,255,255,0.3)',
+                                                fontSize: '12px', fontWeight: 600, textDecoration: 'none',
+                                                backdropFilter: 'blur(4px)', transition: 'background 0.15s, transform 0.15s'
                                             }}
-                                            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.35)'}
-                                            onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+                                            onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.3)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                                            onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.16)'; e.currentTarget.style.transform = 'translateY(0)'; }}
                                         >
-                                            <Eye size={12} /> Profil
+                                            <Eye size={13} /> Profil
                                         </Link>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); ouvrirEdition(cls); }}
-                                            style={{
-                                                display: 'flex', alignItems: 'center', gap: '4px',
-                                                padding: '5px 12px', borderRadius: '7px', border: 'none',
-                                                background: 'rgba(255,255,255,0.2)', color: 'white',
-                                                fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                                                backdropFilter: 'blur(4px)', transition: 'background 0.15s'
-                                            }}
-                                            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.35)'}
-                                            onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
-                                        >
-                                            <Edit size={12} /> Modifier
-                                        </button>
                                         <Link href={`/classes/configurer/${cls.classe_id}`}
                                             onClick={(e) => e.stopPropagation()}
                                             style={{
-                                                display: 'flex', alignItems: 'center', gap: '4px',
-                                                padding: '5px 12px', borderRadius: '7px',
-                                                background: 'rgba(255,255,255,0.2)', color: 'white',
-                                                fontSize: '11px', fontWeight: 600, textDecoration: 'none',
-                                                backdropFilter: 'blur(4px)', transition: 'background 0.15s'
+                                                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                                padding: '8px 10px', borderRadius: '9px',
+                                                background: 'white', color: '#4f46e5',
+                                                fontSize: '12px', fontWeight: 700, textDecoration: 'none',
+                                                transition: 'background 0.15s, transform 0.15s'
                                             }}
-                                            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.35)'}
-                                            onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+                                            onMouseOver={(e) => { e.currentTarget.style.background = '#f3f0ff'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+                                            onMouseOut={(e) => { e.currentTarget.style.background = 'white'; e.currentTarget.style.transform = 'translateY(0)'; }}
                                         >
-                                            <Settings size={12} /> Configurer
+                                            <Settings size={13} /> Configurer
                                         </Link>
                                     </div>
                                 </motion.div>
@@ -716,91 +648,6 @@ export default function ClassesPage() {
                 )}
             </AnimatePresence>
 
-            {/* ═══ Modifier une classe ═══ */}
-            <AnimatePresence>
-                {editClass && (
-                    <motion.div
-                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                        style={{
-                            position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(4px)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '24px'
-                        }}
-                        onClick={() => !editSaving && setEditClass(null)}
-                    >
-                        <motion.div
-                            initial={{ y: 30, opacity: 0, scale: 0.97 }} animate={{ y: 0, opacity: 1, scale: 1 }} exit={{ y: 20, opacity: 0, scale: 0.97 }}
-                            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-                            style={{ background: 'white', borderRadius: '16px', width: '100%', maxWidth: '480px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', overflow: 'hidden' }}
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <div style={{ padding: '18px 22px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc' }}>
-                                <h2 style={{ fontSize: '16px', fontWeight: 800, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <Edit size={17} /> Modifier la classe
-                                </h2>
-                                <button onClick={() => !editSaving && setEditClass(null)} style={{ width: '30px', height: '30px', borderRadius: '8px', border: '1px solid var(--border-light)', background: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-                                    <X size={16} />
-                                </button>
-                            </div>
-
-                            <div style={{ padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                                {editError && (
-                                    <div style={{ padding: '11px 14px', background: '#fef2f2', color: '#b91c1c', borderRadius: '10px', fontSize: '13px', border: '1px solid #fecaca' }}>
-                                        {editError}
-                                    </div>
-                                )}
-                                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Nom de la classe</span>
-                                    <input value={editForm.libelle} onChange={e => setEditForm(f => ({ ...f, libelle: e.target.value }))}
-                                        style={champStyle} placeholder="Ex : 6ème A" />
-                                </label>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Code</span>
-                                        <input value={editForm.code} onChange={e => setEditForm(f => ({ ...f, code: e.target.value }))}
-                                            style={champStyle} placeholder="Ex : 6A" />
-                                    </label>
-                                    <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Capacité</span>
-                                        <input type="number" min={1} value={editForm.capacite_max} onChange={e => setEditForm(f => ({ ...f, capacite_max: Number(e.target.value) }))}
-                                            style={champStyle} />
-                                    </label>
-                                </div>
-                                <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                                    <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Niveau</span>
-                                    <select value={editForm.niveau_id} onChange={e => setEditForm(f => ({ ...f, niveau_id: Number(e.target.value) }))} style={champStyle}>
-                                        <option value={0}>Choisissez un niveau</option>
-                                        {(cyclesData || []).map(cycle => (
-                                            <optgroup key={cycle.cycle_id} label={cycle.libelle}>
-                                                {(cycle.niveaux || []).map(n => (
-                                                    <option key={n.niveau_id} value={n.niveau_id}>{n.libelle}</option>
-                                                ))}
-                                            </optgroup>
-                                        ))}
-                                    </select>
-                                </label>
-                            </div>
-
-                            <div style={{ padding: '14px 22px', borderTop: '1px solid var(--border-light)', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                                <button onClick={() => setEditClass(null)} disabled={editSaving}
-                                    style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'white', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
-                                    Annuler
-                                </button>
-                                <button onClick={enregistrerEdition} disabled={editSaving}
-                                    style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '10px 20px', borderRadius: '10px', border: 'none', background: 'var(--brand-primary)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: editSaving ? 'not-allowed' : 'pointer', opacity: editSaving ? 0.6 : 1 }}>
-                                    {editSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Enregistrer
-                                </button>
-                            </div>
-                        </motion.div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
         </div>
     );
 }
-
-const champStyle: CSSProperties = {
-    width: '100%', padding: '10px 12px', borderRadius: '10px',
-    border: '1px solid var(--border-light)', fontSize: '13.5px', outline: 'none',
-    color: 'var(--text-primary)', background: 'white', fontFamily: 'inherit',
-};

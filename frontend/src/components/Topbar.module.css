@@ -225,6 +225,11 @@
     align-items: center;
     gap: 18px;
     flex-shrink: 0;
+    /* Ancre le panneau de notifications (position:absolute, right:0) sur le
+       vrai bord droit du header, plutot que sur le petit wrapper de la
+       cloche — sinon le panneau se calcule depuis un point deja decale du
+       menu utilisateur et deborde a gauche sur mobile. */
+    position: relative;
 }
 
 .iconWrapper {
