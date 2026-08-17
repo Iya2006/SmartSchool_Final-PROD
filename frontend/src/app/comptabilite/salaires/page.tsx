@@ -16,7 +16,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, Suspense } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useIsRestoring } from '@tanstack/react-query';
 import { useApp } from '@/context/AppContext';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -143,7 +143,7 @@ function SalairesContent() {
     }, [etablissementId, selectedMonth]);
 
     // ─── Le personnel ────────────────────────────────────────────────────
-    const { data: employesRaw, isLoading: empLoading } = useQuery({
+    const { data: employesRaw, isLoading: empQueryLoading } = useQuery({
         queryKey: ['salaires-employes', etablissementId, selectedMonth],
         queryFn: async () => {
             // Le mois est transmis : sans lui, « payé ce mois » se calculait
@@ -156,6 +156,12 @@ function SalairesContent() {
         },
         staleTime: 1000 * 60 * 5,
     });
+    // Cache React Query persiste en localStorage (offline-first) : au tout
+    // premier rendu client, avant restauration du cache, isLoading tombe a
+    // false sans donnees — mismatch d'hydratation avec le serveur. Meme
+    // correctif que classes/page.tsx et useEleves.ts.
+    const isRestoring = useIsRestoring();
+    const empLoading = empQueryLoading || isRestoring;
     const employes: any[] = useMemo(() => employesRaw || [], [employesRaw]);
 
     // ── DEUX METIERS, DEUX LISTES ────────────────────────────────────────

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useIsRestoring } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import {
@@ -259,7 +259,7 @@ function FraisScolaritePage() {
         setTimeout(() => setMessage(null), 4000);
     };
 
-    const { data: fraisData, isLoading: loading } = useQuery({
+    const { data: fraisData, isLoading: fraisQueryLoading } = useQuery({
         queryKey: ['frais-all', filterAnnee],
         queryFn: async () => {
             const [tfRes, factRes, payRes, statsRes, classRes] = await Promise.all([
@@ -300,6 +300,12 @@ function FraisScolaritePage() {
         staleTime: 1000 * 60 * 3,
         enabled: !!filterAnnee,
     });
+    // Cache React Query persiste en localStorage (offline-first) : au tout
+    // premier rendu client, avant restauration du cache, isLoading tombe a
+    // false sans donnees — mismatch d'hydratation avec le serveur. Meme
+    // correctif que classes/page.tsx et useEleves.ts.
+    const isRestoring = useIsRestoring();
+    const loading = fraisQueryLoading || isRestoring;
 
     const typesFrais: TypeFrais[] = fraisData?.typesFrais || [];
     const factures: Facture[] = fraisData?.factures || [];

@@ -10,6 +10,7 @@ import {
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 
 // SEPT ENTREES, pas douze.
 //
@@ -351,6 +352,12 @@ export default function ComptabiliteLayout({ children }: { children: React.React
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
+                        {/* Compta/finance ne met jamais rien en cache (voir
+                            lib/offlinePolicy.ts, finance_comptabilite) : hors-ligne
+                            ici veut dire "rien ne va charger tant que la connexion
+                            n'est pas revenue" — l'indicateur reste utile pour que
+                            ce soit compris, pas confondu avec une panne. */}
+                        <SyncStatusIndicator />
                         {/* Nom/etablissement : masques sous 768px pour laisser la
                             place au titre de la page — l'avatar seul suffit a
                             confirmer qui est connecte. */}

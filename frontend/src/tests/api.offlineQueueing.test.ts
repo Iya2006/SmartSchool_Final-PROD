@@ -111,3 +111,45 @@ describe('lib/api — mise en file hors-ligne', () => {
         expect(await listPending()).toHaveLength(0);
     });
 });
+
+describe("lib/api — message hors-ligne (page/route jamais chargée en cache)", () => {
+    beforeEach(() => {
+        memoryStore.clear();
+        localStorage.clear();
+    });
+
+    it("une vraie coupure réseau sur une route non queueable reçoit un message clair (pas \"Network Error\")", async () => {
+        const rejected = getRejectedHandler();
+        try {
+            await rejected(networkError({ method: 'get', url: '/api/eleves' }));
+            throw new Error('aurait dû rejeter');
+        } catch (err) {
+            expect((err as Error).message).toMatch(/hors-ligne/i);
+            expect((err as Error).message).not.toBe('net');
+        }
+    });
+
+    it("un vrai refus serveur (403) garde son message d'origine, jamais réécrit en message hors-ligne", async () => {
+        const rejected = getRejectedHandler();
+        const err = Object.assign(new Error('forbidden'), {
+            config: { method: 'get', url: '/api/eleves' },
+            response: { status: 403, data: { detail: 'Refusé' } },
+        });
+        try {
+            await rejected(err);
+            throw new Error('aurait dû rejeter');
+        } catch (caught) {
+            expect((caught as Error).message).toBe('forbidden');
+        }
+    });
+
+    it("ne touche jamais error.response — reste absent pour une vraie coupure réseau (distinction utilisée ailleurs dans l'app)", async () => {
+        const rejected = getRejectedHandler();
+        try {
+            await rejected(networkError({ method: 'get', url: '/api/eleves' }));
+            throw new Error('aurait dû rejeter');
+        } catch (err) {
+            expect((err as any).response).toBeUndefined();
+        }
+    });
+});

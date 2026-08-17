@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useIsRestoring } from '@tanstack/react-query';
 import { useApp } from '@/context/AppContext';
 import { motion } from 'framer-motion';
 import {
@@ -32,7 +32,7 @@ export default function DashboardFinancierPage() {
     // immédiatement même hors-ligne (networkMode: 'offlineFirst'), avec un
     // rafraîchissement en arrière-plan dès que la connexion le permet. Le
     // backend met lui-même en cache cette réponse côté Redis (TTL 60s).
-    const { data, isLoading } = useQuery({
+    const { data, isLoading: queryLoading } = useQuery({
         queryKey: ['finance-dashboard', etablissementId, anneeId, dateDebut, dateFin],
         queryFn: async () => {
             let url = `/api/finance/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`;
@@ -45,6 +45,12 @@ export default function DashboardFinancierPage() {
         // rythme pour qu'un onglet resté ouvert ne reste jamais figé indéfiniment.
         refetchInterval: 60_000,
     });
+    // Cache React Query persiste en localStorage (offline-first) : au tout
+    // premier rendu client, avant restauration du cache, isLoading tombe a
+    // false sans donnees — mismatch d'hydratation avec le serveur. Meme
+    // correctif que classes/page.tsx et useEleves.ts.
+    const isRestoring = useIsRestoring();
+    const isLoading = queryLoading || isRestoring;
 
     if (isLoading && !data) return (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh', flexDirection: 'column', gap: 16 }}>

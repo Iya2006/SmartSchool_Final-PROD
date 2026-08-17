@@ -19,6 +19,7 @@ import ClassementEpreuves from '@/components/ClassementEpreuves';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 
 interface MsgItem {
     message_id: number; expediteur_type: string; expediteur_id: number|null;
@@ -600,6 +601,8 @@ export default function PortailParent() {
                             <Menu size={22} />
                         </button>
                     )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                    <SyncStatusIndicator />
                     <div style={{ position: 'relative' }}>
                         <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'none', border: 'none', cursor: 'pointer', padding: '4px' }}>
                             <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: primaryColor, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>
@@ -623,6 +626,7 @@ export default function PortailParent() {
                                 </motion.div>
                             )}
                         </AnimatePresence>
+                    </div>
                     </div>
                 </div>
 
