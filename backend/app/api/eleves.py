@@ -318,8 +318,14 @@ async def importer_eleves(
     (par code ou libellé) de l'année en cours, et ses frais (scolarité +
     réinscription de sa classe) sont générés. Aucun parent — le directeur les
     ajoute ensuite. `dry_run=true` analyse sans rien écrire (même rapport)."""
+    from collections import Counter
     from app.services.import_tabulaire import FichierIllisible, lire_lignes, valeur, normaliser_entete
-    from app.api.reinscription import _generer_frais_reinscription
+    from app.api.reinscription import _est_frais_inscription
+    from app.core.numerotation import (
+        PREFIXE_FACTURE, _LARGEUR as _LARGEUR_FAC, annee_civile, _plus_haut_numero_existant,
+    )
+    from app.core.matricules import _LARGEUR as _LARGEUR_MAT
+    from app.models.academique import SequenceMatricule
 
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
     if annee_id is None:
@@ -335,15 +341,16 @@ async def importer_eleves(
         raise HTTPException(400, "Le fichier ne contient aucune ligne d'élève.")
 
     # Classes de l'année, retrouvables par code OU libellé (tous cycles mélangés).
-    index_classe = {}
-    for c in db.query(Classe).filter(
+    classes = db.query(Classe).filter(
         Classe.etablissement_id == etablissement_id, Classe.annee_id == annee_id
-    ).all():
+    ).all()
+    index_classe = {}
+    for c in classes:
         index_classe[normaliser_entete(c.code)] = c
         index_classe[normaliser_entete(c.libelle)] = c
 
-    mdp_defaut = hash_password("12345678")
-    crees, ignorees, apercu = 0, [], []
+    # --- On VALIDE toutes les lignes avant d'écrire quoi que ce soit -----------
+    valides, ignorees, apercu = [], [], []
     for i, ligne in enumerate(lignes, start=2):  # ligne 1 = en-tête
         nom = valeur(ligne, "nom", "nom de l eleve").strip()
         prenom = valeur(ligne, "prenom", "prenoms", "prenom de l eleve").strip()
@@ -351,7 +358,6 @@ async def importer_eleves(
         date_naissance = _parse_date_naissance(
             valeur(ligne, "date de naissance", "date naissance", "naissance", "ne le", "nee le")
         )
-
         if not nom or not prenom:
             ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}".strip(), "raison": "nom ou prénom manquant"})
             continue
@@ -362,17 +368,54 @@ async def importer_eleves(
         if date_naissance is None:
             ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": "date de naissance manquante ou invalide"})
             continue
+        valides.append((ligne, nom, prenom, classe, date_naissance))
+        apercu.append({"ligne": i, "eleve": f"{prenom} {nom}", "classe": classe.libelle})
 
-        if dry_run:
-            apercu.append({"ligne": i, "eleve": f"{prenom} {nom}", "classe": classe.libelle})
-            crees += 1
-            continue
+    if dry_run:
+        return {
+            "dry_run": True,
+            "total_lignes": len(lignes),
+            "crees": len(valides),
+            "ignorees": ignorees,
+            "apercu": apercu[:20],
+            "message": f"{len(valides)} élève(s) seraient importés, {len(ignorees)} ligne(s) ignorée(s).",
+        }
 
+    # === ÉCRITURE EN MASSE ====================================================
+    # Tout est calculé EN MÉMOIRE : les compteurs (matricule, facture) sont
+    # amorcés UNE seule fois puis incrémentés localement, et les tarifs sont
+    # préchargés par classe. L'ancienne version relançait, PAR ÉLÈVE, plusieurs
+    # requêtes verrouillées + un re-scan complet de la table des factures :
+    # sur 1000 élèves cela faisait des milliers d'allers-retours et dépassait le
+    # délai du serveur (« Serveur injoignable »). Ici on reste sur une poignée
+    # de requêtes, quel que soit le nombre d'élèves.
+    mdp_defaut = hash_password("12345678")
+
+    # 1) Compteur de matricules élèves — amorcé une fois (cf. matricules.py).
+    seq_mat = db.query(SequenceMatricule).filter(
+        SequenceMatricule.etablissement_id == etablissement_id,
+        SequenceMatricule.type_entite == PREFIXE_ELEVE,
+    ).with_for_update().first()
+    if seq_mat is None:
+        depart_mat = db.query(func.count(Eleve.matricule)).filter(
+            Eleve.etablissement_id == etablissement_id
+        ).scalar() or 0
+        seq_mat = SequenceMatricule(
+            etablissement_id=etablissement_id, type_entite=PREFIXE_ELEVE, dernier_numero=depart_mat
+        )
+        db.add(seq_mat)
+        db.flush()
+    num_mat = seq_mat.dernier_numero
+
+    # 2) Élèves créés en bloc (un seul flush attribue tous les eleve_id).
+    eleves_classe = []
+    for (ligne, nom, prenom, classe, dn) in valides:
+        num_mat += 1
         eleve = Eleve(
             etablissement_id=etablissement_id,
-            matricule=generer_matricule(db, Eleve, PREFIXE_ELEVE, etablissement_id),
+            matricule=f"{PREFIXE_ELEVE}-{etablissement_id}-{num_mat:0{_LARGEUR_MAT}d}",
             nom=nom, prenom=prenom, sexe=_normalise_sexe(valeur(ligne, "sexe")),
-            date_naissance=date_naissance,
+            date_naissance=dn,
             lieu_naissance=valeur(ligne, "lieu de naissance", "lieu naissance").strip() or None,
             telephone=valeur(ligne, "telephone", "tel").strip() or None,
             email=valeur(ligne, "e mail", "email", "mail").strip() or None,
@@ -382,29 +425,94 @@ async def importer_eleves(
             mot_de_passe=mdp_defaut, statut="ACTIF",
         )
         db.add(eleve)
-        db.flush()
+        eleves_classe.append((eleve, classe))
+    seq_mat.dernier_numero = num_mat
+    db.flush()
+
+    # 3) Inscriptions en bloc (réinscription : élève déjà de l'école).
+    inscriptions = []
+    for (eleve, classe) in eleves_classe:
         insc = Inscription(
             eleve_id=eleve.eleve_id, classe_id=classe.classe_id, annee_id=annee_id,
             statut="ACTIVE", type_inscription="REINSCRIPTION",
         )
         db.add(insc)
-        db.flush()
-        classe.effectif_actuel = (classe.effectif_actuel or 0) + 1
-        # Élève déjà de l'école : frais de RÉinscription + scolarité de SA classe.
-        _generer_frais_reinscription(db, insc, classe, etablissement_id, type_inscription="REINSCRIPTION")
-        crees += 1
+        inscriptions.append((insc, classe))
+    db.flush()
 
-    if not dry_run:
-        db.commit()
+    # 4) Effectifs : +1 par élève, une écriture par classe.
+    ajouts = Counter(classe.classe_id for _, classe in inscriptions)
+    for classe in classes:
+        n = ajouts.get(classe.classe_id, 0)
+        if n:
+            classe.effectif_actuel = (classe.effectif_actuel or 0) + n
+
+    # 5) Frais obligatoires (scolarité + réinscription, PAS le frais d'entrée) —
+    #    tarifs préchargés par classe, numéros de facture incrémentés en mémoire.
+    classe_ids = [c.classe_id for c in classes]
+    tarifs_par_classe: dict = {}
+    if classe_ids:
+        for tarif, tf in db.query(TarifClasse, TypeFrais).join(
+            TypeFrais, TarifClasse.type_frais_id == TypeFrais.type_frais_id
+        ).filter(
+            TarifClasse.classe_id.in_(classe_ids),
+            TypeFrais.est_obligatoire == "O",
+            TypeFrais.statut == "ACTIF",
+        ).all():
+            if _est_frais_inscription(tf.categorie):
+                continue  # réinscription : on n'ajoute jamais le frais d'entrée
+            tarifs_par_classe.setdefault(tarif.classe_id, []).append(
+                (float(tarif.montant), tf.type_frais_id)
+            )
+
+    an = annee_civile(db, annee_id)
+    motif = f"{PREFIXE_FACTURE}-{etablissement_id}-{an}-"
+    cle_fac = f"{PREFIXE_FACTURE}{annee_id or 0}"[:20]
+    seq_fac = db.query(SequenceMatricule).filter(
+        SequenceMatricule.etablissement_id == etablissement_id,
+        SequenceMatricule.type_entite == cle_fac,
+    ).with_for_update().first()
+    if seq_fac is None:
+        depart_fac = _plus_haut_numero_existant(db, Facture.numero_facture, motif)
+        seq_fac = SequenceMatricule(
+            etablissement_id=etablissement_id, type_entite=cle_fac, dernier_numero=depart_fac
+        )
+        db.add(seq_fac)
+        db.flush()
+    num_fac = seq_fac.dernier_numero
+
+    factures_montants = []  # (facture, montant) pour créer les échéances après flush
+    for (insc, classe) in inscriptions:
+        for (montant, type_frais_id) in tarifs_par_classe.get(classe.classe_id, []):
+            num_fac += 1
+            facture = Facture(
+                inscription_id=insc.inscription_id, annee_id=annee_id,
+                type_frais_id=type_frais_id,
+                numero_facture=f"{motif}{num_fac:0{_LARGEUR_FAC}d}",
+                montant_total=montant, montant_remise=0, montant_net=montant,
+                montant_paye=0, montant_restant=montant, statut="EN_ATTENTE",
+            )
+            db.add(facture)
+            factures_montants.append((facture, montant))
+    seq_fac.dernier_numero = num_fac
+    if factures_montants:
+        db.flush()
+        for (facture, montant) in factures_montants:
+            db.add(EcheanceFacture(
+                facture_id=facture.facture_id, libelle="Paiement unique",
+                date_limite=date_type.today(), montant_attendu=montant,
+                montant_paye=0, statut="EN_ATTENTE",
+            ))
+
+    db.commit()
 
     return {
-        "dry_run": dry_run,
+        "dry_run": False,
         "total_lignes": len(lignes),
-        "crees": crees,
+        "crees": len(valides),
         "ignorees": ignorees,
         "apercu": apercu[:20],
-        "message": (f"{crees} élève(s) {'seraient importés' if dry_run else 'importés'}, "
-                    f"{len(ignorees)} ligne(s) ignorée(s)."),
+        "message": f"{len(valides)} élève(s) importés, {len(ignorees)} ligne(s) ignorée(s).",
     }
 
 
