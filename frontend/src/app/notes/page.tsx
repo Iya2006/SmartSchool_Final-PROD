@@ -62,7 +62,7 @@ interface EpreuvePeriode {
 }
 
 export default function CentralisationNotesPage() {
-    const { etablissementId } = useApp();
+    const { etablissementId, anneeId } = useApp();
 
     // State
     const [classes, setClasses] = useState<any[]>([]);
@@ -199,13 +199,14 @@ export default function CentralisationNotesPage() {
         try {
             const skip = (evalsPage - 1) * EVALS_PAGE_SIZE;
             const filtres = (statutFiltre ? `&statut=${statutFiltre}` : '')
-                + (rechercheEnvoyee ? `&q=${encodeURIComponent(rechercheEnvoyee)}` : '');
+                + (rechercheEnvoyee ? `&q=${encodeURIComponent(rechercheEnvoyee)}` : '')
+                + (anneeId ? `&annee_id=${anneeId}` : '');
             const res = await api.get(`/api/evaluations/centralisees?skip=${skip}&limit=${EVALS_PAGE_SIZE}${filtres}`);
             setEvalsCentralisees(res.data);
             const totalCount = res.headers?.['x-total-count'];
             setEvalsTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
         } catch (e) { console.error(e); }
-    }, [evalsPage, statutFiltre, rechercheEnvoyee]);
+    }, [evalsPage, statutFiltre, rechercheEnvoyee, anneeId]);
 
     useEffect(() => { rechargerEvals(); }, [rechargerEvals]);
 
