@@ -12,12 +12,13 @@
  * du serveur (sauvegarde planifiée et chiffrée), pas d'un bouton dans un
  * navigateur. L'écran le dit, plutôt que de laisser croire à un oubli.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import {
     AlertTriangle, ArrowLeft, Database, Download, FileSpreadsheet, Info, Loader2, ShieldAlert,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { useApp } from '@/context/AppContext';
 
 interface Jeu {
     cle: string;
@@ -27,6 +28,7 @@ interface Jeu {
 }
 
 export default function ImportExportPage() {
+    const { anneeId } = useApp();
     const [jeux, setJeux] = useState<Jeu[]>([]);
     const [chargement, setChargement] = useState(true);
     const [enCours, setEnCours] = useState<string | null>(null);
@@ -35,7 +37,9 @@ export default function ImportExportPage() {
     const charger = useCallback(async () => {
         setChargement(true);
         try {
-            const res = await api.get('/api/export/catalogue');
+            // Compteurs de l'année affichée : sinon les effectifs de toutes les
+            // années s'additionnaient.
+            const res = await api.get(`/api/export/catalogue?annee_id=${anneeId}`);
             setJeux(Array.isArray(res.data) ? res.data : []);
         } catch (err: unknown) {
             const detail = typeof err === 'object' && err !== null && 'response' in err
@@ -45,7 +49,7 @@ export default function ImportExportPage() {
         } finally {
             setChargement(false);
         }
-    }, []);
+    }, [anneeId]);
 
     useEffect(() => { charger(); }, [charger]);
 
@@ -55,7 +59,7 @@ export default function ImportExportPage() {
         try {
             // `blob` : c'est un fichier, pas du JSON. Sans cela le navigateur
             // tente de l'interpréter et le téléchargement échoue en silence.
-            const res = await api.get(`/api/export/${jeu.cle}`, { responseType: 'blob' });
+            const res = await api.get(`/api/export/${jeu.cle}?annee_id=${anneeId}`, { responseType: 'blob' });
             const nom = (res.headers?.['content-disposition'] || '')
                 .split('filename=')[1]?.replace(/"/g, '')
                 || `${jeu.cle}.csv`;
@@ -72,6 +76,48 @@ export default function ImportExportPage() {
         } finally {
             setEnCours(null);
         }
+    };
+
+    // ── Import des élèves ──
+    const [fichierImport, setFichierImport] = useState<File | null>(null);
+    const [rapport, setRapport] = useState<{ crees: number; total_lignes: number; ignorees: { ligne: number; eleve?: string; raison: string }[] } | null>(null);
+    const [resultatImport, setResultatImport] = useState<{ message: string } | null>(null);
+    const [importEnCours, setImportEnCours] = useState(false);
+    const fichierRef = useRef<HTMLInputElement>(null);
+
+    const telechargerModele = async () => {
+        try {
+            const res = await api.get('/api/eleves/import/modele', { responseType: 'blob' });
+            const url = URL.createObjectURL(new Blob([res.data]));
+            const a = document.createElement('a');
+            a.href = url; a.download = 'modele_import_eleves.csv';
+            document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+        } catch { setErreur('Téléchargement du modèle impossible.'); }
+    };
+
+    const analyser = async (f: File) => {
+        setFichierImport(f); setRapport(null); setResultatImport(null); setErreur(null); setImportEnCours(true);
+        try {
+            const fd = new FormData(); fd.append('fichier', f);
+            const res = await api.post(`/api/eleves/import?dry_run=true&annee_id=${anneeId}`, fd);
+            setRapport(res.data);
+        } catch (e: unknown) {
+            setErreur((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Analyse du fichier impossible.");
+        } finally { setImportEnCours(false); }
+    };
+
+    const confirmerImport = async () => {
+        if (!fichierImport) return;
+        setImportEnCours(true); setErreur(null);
+        try {
+            const fd = new FormData(); fd.append('fichier', fichierImport);
+            const res = await api.post(`/api/eleves/import?annee_id=${anneeId}`, fd);
+            setResultatImport(res.data); setRapport(null); setFichierImport(null);
+            if (fichierRef.current) fichierRef.current.value = '';
+            charger();
+        } catch (e: unknown) {
+            setErreur((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Import impossible.");
+        } finally { setImportEnCours(false); }
     };
 
     return (
@@ -153,6 +199,71 @@ export default function ImportExportPage() {
                     })}
                 </div>
             )}
+
+            {/* ── Import des élèves ── */}
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '14px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '13px' }}>
+                <div>
+                    <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <FileSpreadsheet size={18} style={{ color: '#4d7c0f' }} /> Importer des élèves
+                    </h3>
+                    <p style={{ margin: '5px 0 0', fontSize: '12.5px', color: '#64748b', lineHeight: 1.6 }}>
+                        Pour les élèves <strong>déjà de l&apos;école</strong>. Le matricule est attribué automatiquement, le mot de
+                        passe par défaut est <strong>12345678</strong>, chaque élève est placé dans sa classe (colonne
+                        « Classe ») de l&apos;année en cours et facturé <strong>scolarité + réinscription</strong> selon les tarifs
+                        de sa classe. Aucun parent (à ajouter ensuite).
+                    </p>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                    <button onClick={telechargerModele}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '9px 15px', borderRadius: '10px', border: '1px solid #cbd5e1', background: '#fff', color: '#334155', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer' }}>
+                        <Download size={14} /> Télécharger le modèle
+                    </button>
+                    <input ref={fichierRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: 'none' }}
+                        onChange={e => { const f = e.target.files?.[0]; if (f) analyser(f); }} />
+                    <button onClick={() => fichierRef.current?.click()} disabled={importEnCours}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '9px 15px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg,#4d7c0f,#65a30d)', color: '#fff', fontSize: '12.5px', fontWeight: 700, cursor: importEnCours ? 'wait' : 'pointer' }}>
+                        {importEnCours ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <FileSpreadsheet size={14} />}
+                        Choisir un fichier
+                    </button>
+                </div>
+
+                {rapport && (
+                    <div style={{ padding: '14px', borderRadius: '11px', background: '#f7fee7', border: '1px solid #d9f99d' }}>
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: '#3f6212', marginBottom: '6px' }}>
+                            Aperçu — {rapport.crees} élève(s) à importer sur {rapport.total_lignes} ligne(s)
+                        </div>
+                        {rapport.ignorees.length > 0 && (
+                            <div style={{ marginBottom: '10px' }}>
+                                <div style={{ fontSize: '12px', fontWeight: 700, color: '#b45309', marginBottom: '4px' }}>
+                                    {rapport.ignorees.length} ligne(s) ignorée(s) :
+                                </div>
+                                <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#92400e', maxHeight: '140px', overflowY: 'auto' }}>
+                                    {rapport.ignorees.slice(0, 20).map((ig, k) => (
+                                        <li key={k}>Ligne {ig.ligne}{ig.eleve ? ` — ${ig.eleve}` : ''} : {ig.raison}</li>
+                                    ))}
+                                    {rapport.ignorees.length > 20 && <li>+ {rapport.ignorees.length - 20} autre(s)</li>}
+                                </ul>
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button onClick={() => { setRapport(null); setFichierImport(null); if (fichierRef.current) fichierRef.current.value = ''; }}
+                                style={{ padding: '8px 14px', borderRadius: '9px', border: '1px solid #e2e8f0', background: '#fff', fontSize: '12.5px', fontWeight: 700, color: '#475569', cursor: 'pointer' }}>
+                                Annuler
+                            </button>
+                            <button onClick={confirmerImport} disabled={importEnCours || rapport.crees === 0}
+                                style={{ padding: '8px 16px', borderRadius: '9px', border: 'none', background: rapport.crees === 0 ? '#e2e8f0' : '#059669', color: rapport.crees === 0 ? '#94a3b8' : '#fff', fontSize: '12.5px', fontWeight: 700, cursor: importEnCours || rapport.crees === 0 ? 'not-allowed' : 'pointer' }}>
+                                Importer {rapport.crees} élève(s)
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {resultatImport && (
+                    <div style={{ padding: '12px 14px', borderRadius: '11px', background: '#ecfdf5', border: '1px solid #a7f3d0', fontSize: '13px', color: '#065f46', fontWeight: 700 }}>
+                        ✅ {resultatImport.message}
+                    </div>
+                )}
+            </div>
 
             <div style={{ display: 'flex', gap: '11px', padding: '14px 16px', borderRadius: '13px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
                 <Info size={16} style={{ color: '#64748b', flexShrink: 0, marginTop: 2 }} />

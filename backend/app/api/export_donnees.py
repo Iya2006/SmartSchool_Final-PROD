@@ -31,6 +31,7 @@ from app.models.academique import (
     Bulletin, BulletinLigne, Classe, Eleve, Etablissement, Facture, Inscription,
     Matiere, Trimestre,
 )
+from app.core.annee_courante import resoudre_annee
 
 router = APIRouter(prefix="/api/export", tags=["Export des données"])
 
@@ -98,28 +99,42 @@ def _nom_ecole(db: Session, etablissement_id: int) -> str:
 
 @router.get("/catalogue", dependencies=[Depends(_require_admin)])
 def catalogue(
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Ce qui est exportable, avec le volume réel.
+    """Ce qui est exportable, avec le volume réel POUR L'ANNÉE affichée.
 
     Annoncer « Élèves » sans dire combien laisse l'utilisateur télécharger un
-    fichier vide sans comprendre pourquoi.
+    fichier vide sans comprendre pourquoi. Sans filtre d'année, les compteurs
+    additionnaient toutes les années (l'effectif de l'an dernier se cumulait à
+    celui de la nouvelle année).
     """
-    eleves = db.query(Eleve).filter(Eleve.etablissement_id == etablissement_id).count()
-    classes = db.query(Classe).filter(Classe.etablissement_id == etablissement_id).count()
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+    eleves = (
+        db.query(Inscription.eleve_id)
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            Inscription.annee_id == annee_id,
+            Inscription.statut == "ACTIVE",
+        ).distinct().count()
+    )
+    classes = db.query(Classe).filter(
+        Classe.etablissement_id == etablissement_id, Classe.annee_id == annee_id
+    ).count()
     bulletins = (
         db.query(Bulletin)
         .join(Inscription, Inscription.inscription_id == Bulletin.inscription_id)
         .join(Classe, Classe.classe_id == Inscription.classe_id)
-        .filter(Classe.etablissement_id == etablissement_id)
+        .filter(Classe.etablissement_id == etablissement_id, Inscription.annee_id == annee_id)
         .count()
     )
     factures = (
         db.query(Facture)
         .join(Inscription, Inscription.inscription_id == Facture.inscription_id)
         .join(Classe, Classe.classe_id == Inscription.classe_id)
-        .filter(Classe.etablissement_id == etablissement_id)
+        .filter(Classe.etablissement_id == etablissement_id, Inscription.annee_id == annee_id)
         .count()
     )
     return [
@@ -137,15 +152,18 @@ def catalogue(
 @router.get("/eleves", dependencies=[Depends(_require_admin)])
 def exporter_eleves(
     classe_id: Optional[int] = None,
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Élèves de l'école, avec leur classe."""
+    """Élèves inscrits POUR L'ANNÉE affichée, avec leur classe."""
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     requete = (
         db.query(Eleve, Classe)
-        .outerjoin(Inscription, (Inscription.eleve_id == Eleve.eleve_id)
-                   & (Inscription.statut == "ACTIVE"))
-        .outerjoin(Classe, Classe.classe_id == Inscription.classe_id)
+        .join(Inscription, (Inscription.eleve_id == Eleve.eleve_id)
+              & (Inscription.statut == "ACTIVE")
+              & (Inscription.annee_id == annee_id))
+        .join(Classe, Classe.classe_id == Inscription.classe_id)
         .filter(Eleve.etablissement_id == etablissement_id)
     )
     if classe_id:
@@ -175,11 +193,13 @@ def exporter_eleves(
 
 @router.get("/classes", dependencies=[Depends(_require_admin)])
 def exporter_classes(
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
     classes = db.query(Classe).filter(
-        Classe.etablissement_id == etablissement_id
+        Classe.etablissement_id == etablissement_id, Classe.annee_id == annee_id
     ).order_by(Classe.code).all()
     lignes = [
         [c.code, c.libelle, c.effectif_actuel or 0, c.capacite_max or "", c.statut or ""]

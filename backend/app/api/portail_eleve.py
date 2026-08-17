@@ -143,7 +143,7 @@ def eleve_dashboard(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Sessi
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id,
         Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
 
     classe_code = "?"
     classe_libelle = "?"
@@ -315,7 +315,7 @@ def get_notes_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Sessi
     """Notes groupées par matière."""
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         return {"notes_par_matiere": [], "moyenne_generale": None}
 
@@ -372,7 +372,7 @@ def get_edt_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Session
     """Emploi du temps complet de l'élève via sa classe."""
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         return []
 
@@ -406,7 +406,7 @@ def get_absences_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Se
     """Historique des absences/présences de l'élève."""
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         return {"presences": [], "total_present": 0, "total_absent": 0}
 
@@ -436,7 +436,7 @@ def get_absences_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Se
 def _inscription_active(db: Session, eleve_id: int) -> Inscription:
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         raise HTTPException(404, "Aucune inscription active")
     return inscription
@@ -568,7 +568,7 @@ def get_bulletin_eleve(eleve_id: int, trimestre_id: Optional[int] = None, annuel
     """Bulletin publié de l'élève — de période, ou de fin d'année (`annuel=true`)."""
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         return None
 
@@ -667,7 +667,7 @@ def get_enseignants_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db:
     if not eleve:
         raise HTTPException(404, "Élève non trouvé")
 
-    insc = db.query(Inscription).filter(Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE").first()
+    insc = db.query(Inscription).filter(Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE").order_by(Inscription.annee_id.desc()).first()
     if not insc:
         return []
 
@@ -701,7 +701,7 @@ def get_messages_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Se
     if not eleve:
         raise HTTPException(404, "Élève non trouvé")
 
-    insc = db.query(Inscription).filter(Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE").first()
+    insc = db.query(Inscription).filter(Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE").order_by(Inscription.annee_id.desc()).first()
     filters = [
         (Message.destinataire_type == "ELEVE") & (Message.destinataire_id == eleve_id),
         Message.destinataire_type == "TOUS",
@@ -823,7 +823,7 @@ def get_fournitures_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db:
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id,
         Inscription.statut.in_(["ACTIVE", "INSCRIT"])
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         return []
     
@@ -906,7 +906,7 @@ def get_devoirs_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Ses
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id,
         Inscription.statut.in_(["ACTIVE", "INSCRIT"])
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     
     if not inscription:
         return []
