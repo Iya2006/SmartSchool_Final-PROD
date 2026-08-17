@@ -188,11 +188,25 @@ def delta_eleves(
 
 @router.get("/count")
 def count_eleves(annee_id: Optional[int] = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    # Même périmètre que la liste (list_eleves) : on ne compte que les élèves
+    # réellement présents l'année affichée — sinon « Total Élèves » affichait 4
+    # (toute l'école, diplômés compris) alors que la liste n'en montrait qu'un.
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+    _ins_a = aliased(Inscription)
+    _ins_b = aliased(Inscription)
+    insc_annee = exists().where(and_(
+        _ins_a.eleve_id == Eleve.eleve_id,
+        _ins_a.annee_id == annee_id,
+        _ins_a.statut == "ACTIVE",
+    ))
+    a_une_inscription = exists().where(_ins_b.eleve_id == Eleve.eleve_id)
+    perimetre = or_(insc_annee, not_(a_une_inscription))
+
     total = db.query(func.count(Eleve.eleve_id)).filter(
-        Eleve.etablissement_id == etablissement_id
+        Eleve.etablissement_id == etablissement_id, perimetre
     ).scalar()
     actifs = db.query(func.count(Eleve.eleve_id)).filter(
-        Eleve.etablissement_id == etablissement_id, Eleve.statut == "ACTIF"
+        Eleve.etablissement_id == etablissement_id, Eleve.statut == "ACTIF", perimetre
     ).scalar()
 
     # Nouvelles inscriptions de l'année (type_inscription == "NOUVELLE", donc les
