@@ -41,6 +41,16 @@ def list_eleves(
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — jamais l'annee n°1,
     # qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
+
+    # Élève promu de l'an dernier, PRÉ-PLACÉ dans sa classe cible mais pas encore
+    # réinscrit : on l'affiche dans la nouvelle année (inactif, à activer) avec la
+    # classe où il ira (classe_cible résolue par la clôture). Les diplômés du BAC
+    # et les non-réinscrits n'ont PAS le statut A_REINSCRIRE, donc ils n'entrent
+    # pas ici. La classe cible doit appartenir à l'année affichée.
+    InscCible = aliased(Inscription)   # inscription (année précédente) à réinscrire
+    ClasseCible = aliased(Classe)      # sa classe cible, dans l'année affichée
+    NiveauCible = aliased(Niveau)
+
     query = db.query(
         Eleve.eleve_id,
         Eleve.matricule,
@@ -52,39 +62,43 @@ def list_eleves(
         Eleve.photo_url,
         Eleve.adresse,
         Eleve.groupe_sanguin,
-        Classe.code.label("classe_code"),
-        Niveau.libelle.label("niveau")
+        func.coalesce(Classe.code, ClasseCible.code).label("classe_code"),
+        func.coalesce(Niveau.libelle, NiveauCible.libelle).label("niveau"),
+        Inscription.inscription_id.label("insc_courante_id"),
+        ClasseCible.classe_id.label("classe_cible_id"),
+        InscCible.inscription_id.label("insc_cible_id"),
     ).outerjoin(
-        Inscription, (Eleve.eleve_id == Inscription.eleve_id) & 
-                      (Inscription.statut == "ACTIVE") & 
+        Inscription, (Eleve.eleve_id == Inscription.eleve_id) &
+                      (Inscription.statut == "ACTIVE") &
                       (Inscription.annee_id == annee_id)
     ).outerjoin(
         Classe, Inscription.classe_id == Classe.classe_id
     ).outerjoin(
         Niveau, Classe.niveau_id == Niveau.niveau_id
+    ).outerjoin(
+        InscCible, (Eleve.eleve_id == InscCible.eleve_id) &
+                    (InscCible.statut_reinscription == "A_REINSCRIRE")
+    ).outerjoin(
+        ClasseCible, (InscCible.classe_cible_id == ClasseCible.classe_id) &
+                      (ClasseCible.annee_id == annee_id)
+    ).outerjoin(
+        NiveauCible, ClasseCible.niveau_id == NiveauCible.niveau_id
     ).filter(
         Eleve.etablissement_id == etablissement_id
     )
 
-    # Ne pas traîner les élèves qui ont QUITTÉ l'établissement (diplômés du BAC,
-    # non réinscrits, transférés) dans l'année en cours : après une clôture,
-    # leur inscription vit dans l'ANCIENNE année et ils n'en ont aucune dans la
-    # nouvelle. On garde donc un élève seulement s'il a une inscription active
-    # cette année-là, OU s'il n'a encore AUCUNE inscription (nouvel élève tout
-    # juste créé, pas encore affecté à une classe). Consultable à l'identique sur
-    # une année passée : `annee_id` suit l'année sélectionnée.
-    # Alias distincts : Inscription est déjà jointe ci-dessus (pour la classe),
-    # une sous-requête EXISTS qui la réutilise se ferait auto-corréler et
-    # perdrait sa clause FROM.
-    _ins_a = aliased(Inscription)
+    # On garde un élève s'il est : inscrit actif cette année (réinscrit/nouveau) ;
+    # OU pré-placé vers une classe de cette année (à réinscrire) ; OU encore sans
+    # aucune inscription (élève tout juste créé). Un diplômé/parti (inscription
+    # dans l'ANCIENNE année, aucune cible ici) est exclu. Consultable à
+    # l'identique sur une année passée : `annee_id` suit l'année sélectionnée.
     _ins_b = aliased(Inscription)
-    insc_annee = exists().where(and_(
-        _ins_a.eleve_id == Eleve.eleve_id,
-        _ins_a.annee_id == annee_id,
-        _ins_a.statut == "ACTIVE",
-    ))
     a_une_inscription = exists().where(_ins_b.eleve_id == Eleve.eleve_id)
-    query = query.filter(or_(insc_annee, not_(a_une_inscription)))
+    query = query.filter(or_(
+        Inscription.inscription_id.isnot(None),
+        ClasseCible.classe_id.isnot(None),
+        not_(a_une_inscription),
+    ))
 
     if statut:
         query = query.filter(Eleve.statut == statut)
@@ -95,15 +109,23 @@ def list_eleves(
             (Eleve.matricule.ilike(f"%{search}%"))
         )
     if classe_code:
-        query = query.filter(Classe.code == classe_code)
+        query = query.filter(func.coalesce(Classe.code, ClasseCible.code) == classe_code)
 
     results = query.order_by(Eleve.nom, Eleve.prenom).offset(skip).limit(limit).all()
-    return [EleveListOut(
-        eleve_id=r.eleve_id, matricule=r.matricule, nom=r.nom,
-        prenom=r.prenom, sexe=r.sexe, date_naissance=r.date_naissance,
-        statut=r.statut, classe_code=r.classe_code, niveau=r.niveau,
-        photo_url=r.photo_url, adresse=r.adresse, groupe_sanguin=r.groupe_sanguin
-    ) for r in results]
+    out = []
+    for r in results:
+        # À activer = pré-placé (classe cible dans l'année) et pas encore
+        # (ré)inscrit cette année.
+        a_reinscrire = r.classe_cible_id is not None and r.insc_courante_id is None
+        out.append(EleveListOut(
+            eleve_id=r.eleve_id, matricule=r.matricule, nom=r.nom,
+            prenom=r.prenom, sexe=r.sexe, date_naissance=r.date_naissance,
+            statut=r.statut, classe_code=r.classe_code, niveau=r.niveau,
+            photo_url=r.photo_url, adresse=r.adresse, groupe_sanguin=r.groupe_sanguin,
+            a_reinscrire=a_reinscrire,
+            inscription_a_confirmer=r.insc_cible_id if a_reinscrire else None,
+        ))
+    return out
 
 
 class EleveDeltaOut(BaseModel):

@@ -349,6 +349,13 @@ class EleveListOut(OrmBase):
     photo_url: Optional[str] = None
     adresse: Optional[str] = None
     groupe_sanguin: Optional[str] = None
+    # Élève promu de l'an dernier, pré-placé dans sa classe (admis → niveau
+    # supérieur, redoublant → même classe) mais PAS encore réinscrit cette année :
+    # l'administration doit l'« activer ». `inscription_a_confirmer` est
+    # l'inscription (année précédente) à confirmer pour matérialiser sa
+    # réinscription. Absent/false pour un élève déjà inscrit cette année.
+    a_reinscrire: bool = False
+    inscription_a_confirmer: Optional[int] = None
 
 
 # ============================================================================

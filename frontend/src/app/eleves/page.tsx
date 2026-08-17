@@ -19,6 +19,7 @@ import {
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEleves, type Eleve } from '@/hooks/useEleves';
+import api from '@/lib/api';
 import BadgeCarte from '@/components/BadgeCarte';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
@@ -184,6 +185,24 @@ export default function ElevesPage() {
         if (!window.confirm('Êtes-vous sûr de vouloir supprimer cet élève définitivement ?')) return;
         try { await deleteEleve(id); }
         catch { alert('Erreur lors de la suppression'); }
+    };
+
+    // Activer = confirmer la réinscription d'un élève promu pré-placé : ça crée
+    // son inscription de l'année en cours (dans sa classe cible) et le rend actif.
+    const [activatingId, setActivatingId] = useState<number | null>(null);
+    const handleActiver = async (eleve: Eleve) => {
+        if (!eleve.inscription_a_confirmer) return;
+        if (!window.confirm(`Activer ${eleve.prenom} ${eleve.nom} dans ${eleve.classe_code || 'sa classe'} pour cette année ?`)) return;
+        setActivatingId(eleve.eleve_id);
+        try {
+            await api.post(`/api/reinscription/${eleve.inscription_a_confirmer}/confirmer`);
+            await fetchEleves();
+        } catch (e: unknown) {
+            const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+            alert(detail || "L'activation a échoué. Réessayez.");
+        } finally {
+            setActivatingId(null);
+        }
     };
 
     const kpis = [
@@ -464,7 +483,9 @@ export default function ElevesPage() {
                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                                                     <p style={{ fontWeight: 700, fontSize: '14px' }}>{eleve.prenom} {eleve.nom}</p>
-                                                    <span className={`badge ${eleve.statut === 'ACTIF' ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '10px', flexShrink: 0 }}>{eleve.statut}</span>
+                                                    {eleve.a_reinscrire
+                                                        ? <span className="badge" style={{ fontSize: '10px', flexShrink: 0, background: '#fef3c7', color: '#92400e' }}>À activer</span>
+                                                        : <span className={`badge ${eleve.statut === 'ACTIF' ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '10px', flexShrink: 0 }}>{eleve.statut}</span>}
                                                 </div>
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', margin: '6px 0 10px' }}>
                                                     <code style={{ background: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', fontSize: '12px' }}>{eleve.matricule}</code>
@@ -474,6 +495,11 @@ export default function ElevesPage() {
                                                     </span>
                                                 </div>
                                                 <div style={{ display: 'flex', gap: '6px' }}>
+                                                    {eleve.a_reinscrire && (
+                                                        <button onClick={() => handleActiver(eleve)} disabled={activatingId === eleve.eleve_id} className="btn btn-sm" style={{ padding: '6px 12px', background: '#059669', color: 'white', fontWeight: 700 }} title="Activer (réinscrire pour cette année)">
+                                                            {activatingId === eleve.eleve_id ? <Loader2 size={14} className="animate-spin" /> : 'Activer'}
+                                                        </button>
+                                                    )}
                                                     <button onClick={() => setBadgeEleve(eleve)} className="btn btn-outline btn-sm" style={{ padding: '6px 10px', color: '#10b981', borderColor: '#10b981' }} title="Voir la Carte (Badge)"><UserCheck size={14} /></button>
                                                     <Link href={`/eleves/${eleve.eleve_id}`} className="btn btn-outline btn-sm" style={{ padding: '6px 10px' }} title="Voir"><Eye size={14} /></Link>
                                                     <Link href={`/eleves/modifier/${eleve.eleve_id}`} className="btn btn-outline btn-sm" style={{ padding: '6px 10px' }} title="Modifier"><Edit size={14} /></Link>
@@ -513,12 +539,22 @@ export default function ElevesPage() {
                                                     {eleve.sexe === 'M' ? '♂ Masculin' : '♀ Féminin'}
                                                 </span>
                                             </td>
-                                            <td style={{ fontWeight: 600 }}>{eleve.classe_code || '—'}</td>
+                                            <td style={{ fontWeight: 600 }}>
+                                                {eleve.classe_code || '—'}
+                                                {eleve.a_reinscrire && <span style={{ fontSize: '10px', color: '#b45309', fontWeight: 500, marginLeft: '6px' }}>(pré-placé)</span>}
+                                            </td>
                                             <td>
-                                                <span className={`badge ${eleve.statut === 'ACTIF' ? 'badge-success' : 'badge-danger'}`}>{eleve.statut}</span>
+                                                {eleve.a_reinscrire
+                                                    ? <span className="badge" style={{ background: '#fef3c7', color: '#92400e' }}>À activer</span>
+                                                    : <span className={`badge ${eleve.statut === 'ACTIF' ? 'badge-success' : 'badge-danger'}`}>{eleve.statut}</span>}
                                             </td>
                                             <td>
                                                 <div style={{ display: 'flex', gap: '6px' }}>
+                                                    {eleve.a_reinscrire && (
+                                                        <button onClick={() => handleActiver(eleve)} disabled={activatingId === eleve.eleve_id} className="btn btn-sm" style={{ padding: '4px 10px', background: '#059669', color: 'white', fontWeight: 700 }} title="Activer (réinscrire pour cette année)">
+                                                            {activatingId === eleve.eleve_id ? <Loader2 size={14} className="animate-spin" /> : <>Activer</>}
+                                                        </button>
+                                                    )}
                                                     <button onClick={() => setBadgeEleve(eleve)} className="btn btn-outline btn-sm" style={{ padding: '4px 8px', color: '#10b981', borderColor: '#10b981' }} title="Voir la Carte (Badge)"><UserCheck size={14} /></button>
                                                     <Link href={`/eleves/${eleve.eleve_id}`} className="btn btn-outline btn-sm" style={{ padding: '4px 8px' }} title="Voir"><Eye size={14} /></Link>
                                                     <Link href={`/eleves/modifier/${eleve.eleve_id}`} className="btn btn-outline btn-sm" style={{ padding: '4px 8px' }} title="Modifier"><Edit size={14} /></Link>
