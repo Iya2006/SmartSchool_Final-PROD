@@ -82,7 +82,7 @@ function montant(v: number): string {
 }
 
 export default function DepensesPage() {
-    const { etablissementId } = useApp();
+    const { etablissementId, anneeId: anneeAffichee } = useApp();
     const [depenses, setDepenses] = useState<Depense[]>([]);
     const [stats, setStats] = useState<Stats | null>(null);
     const [chargement, setChargement] = useState(true);
@@ -101,6 +101,9 @@ export default function DepensesPage() {
         setErreur(null);
         try {
             const params = new URLSearchParams({ limit: '200' });
+            // Suit l'année affichée dans l'en-tête : consulter une année passée
+            // montre SES dépenses (lecture seule), sans mélanger les exercices.
+            if (anneeAffichee) params.set('annee_id', String(anneeAffichee));
             if (filtreStatut) params.set('statut', filtreStatut);
             if (filtreMode) params.set('mode_paiement', filtreMode);
             const bornes = bornesPeriode(periode);
@@ -123,7 +126,7 @@ export default function DepensesPage() {
         } finally {
             setChargement(false);
         }
-    }, [filtreStatut, filtreMode, periode]);
+    }, [filtreStatut, filtreMode, periode, anneeAffichee]);
 
     useEffect(() => { charger(); }, [charger]);
     useEffect(() => {

@@ -79,7 +79,7 @@ function FraisScolaritePage() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const tabParam = searchParams.get('tab') || 'types';
-    const { anneeId: anneeCouranteId } = useApp();
+    const { etablissementId, anneeId: anneeCouranteId } = useApp();
     const isMobile = useIsMobile();
 
     // Data loaded via React Query
@@ -264,10 +264,10 @@ function FraisScolaritePage() {
         queryFn: async () => {
             const [tfRes, factRes, payRes, statsRes, classRes] = await Promise.all([
                 api.get('/api/finance/types-frais'),
-                api.get(`/api/finance/factures?etablissement_id=1&annee_id=${filterAnnee}&limit=5000`),
-                api.get(`/api/finance/paiements?etablissement_id=1&annee_id=${filterAnnee}&limit=5000`),
-                api.get(`/api/finance/factures/stats?etablissement_id=1&annee_id=${filterAnnee}`),
-                api.get(`/api/classes?etablissement_id=1&annee_id=${filterAnnee}&limit=100`),
+                api.get(`/api/finance/factures?etablissement_id=${etablissementId}&annee_id=${filterAnnee}&limit=5000`),
+                api.get(`/api/finance/paiements?etablissement_id=${etablissementId}&annee_id=${filterAnnee}&limit=5000`),
+                api.get(`/api/finance/factures/stats?etablissement_id=${etablissementId}&annee_id=${filterAnnee}`),
+                api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${filterAnnee}&limit=100`),
             ]);
 
             // La liste était plafonnée à `limit=200` en dur — silencieusement
@@ -278,14 +278,14 @@ function FraisScolaritePage() {
             let factures = factRes.data as Facture[];
             const factTotal = parseInt(factRes.headers?.['x-total-count'] || '0', 10);
             if (factTotal > factures.length) {
-                const full = await api.get(`/api/finance/factures?etablissement_id=1&annee_id=${filterAnnee}&limit=${factTotal}`);
+                const full = await api.get(`/api/finance/factures?etablissement_id=${etablissementId}&annee_id=${filterAnnee}&limit=${factTotal}`);
                 factures = full.data as Facture[];
             }
 
             let paiements = payRes.data as Paiement[];
             const payTotal = parseInt(payRes.headers?.['x-total-count'] || '0', 10);
             if (payTotal > paiements.length) {
-                const full = await api.get(`/api/finance/paiements?etablissement_id=1&annee_id=${filterAnnee}&limit=${payTotal}`);
+                const full = await api.get(`/api/finance/paiements?etablissement_id=${etablissementId}&annee_id=${filterAnnee}&limit=${payTotal}`);
                 paiements = full.data as Paiement[];
             }
 
