@@ -488,7 +488,13 @@ def get_seuil_passage(db: Session, etablissement_id: int, cycle_key: str) -> flo
         pass
     except Exception:
         pass
-    return SEUIL_PASSAGE_DEFAUT
+    # Défaut = MOITIÉ du barème du cycle, pas une valeur figée. Une école au
+    # primaire note sur 10 : un seuil figé à 10 exigerait un 10/10 pour passer
+    # (tout le monde redouble). La moitié (5/10, ou 10/20) est le seuil naturel.
+    try:
+        return get_bareme_defaut_cycle(db, etablissement_id, cycle_key) / 2.0
+    except Exception:
+        return SEUIL_PASSAGE_DEFAUT
 
 
 # ════════════════════════════════════════════════════════════
