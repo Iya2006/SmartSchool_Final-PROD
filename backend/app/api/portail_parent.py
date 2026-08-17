@@ -192,7 +192,7 @@ def parent_dashboard(parent_id: int, _auth: dict = Depends(_parent_auth), db: Se
         inscription = db.query(Inscription).filter(
             Inscription.eleve_id == eleve.eleve_id,
             Inscription.statut == "ACTIVE"
-        ).first()
+        ).order_by(Inscription.annee_id.desc()).first()
         
         classe_code = "?"
         classe_libelle = "?"
@@ -370,8 +370,8 @@ def get_notes_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_paren
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id,
         Inscription.statut == "ACTIVE"
-    ).first()
-    
+    ).order_by(Inscription.annee_id.desc()).first()
+
     if not inscription:
         return {"notes_par_matiere": [], "moyenne_generale": None}
     
@@ -442,7 +442,7 @@ def get_edt_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_parent_
     
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         return []
     
@@ -481,7 +481,7 @@ def get_bulletin_enfant(parent_id: int, eleve_id: int, trimestre_id: Optional[in
 
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         return None
 
@@ -589,7 +589,7 @@ def _inscription_enfant(db: Session, parent_id: int, eleve_id: int) -> Inscripti
         raise HTTPException(403, "Accès refusé")
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         raise HTTPException(404, "Aucune inscription active pour cet élève")
     return inscription
@@ -730,7 +730,7 @@ def get_absences_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_pa
 
     inscription = db.query(Inscription).filter(
         Inscription.eleve_id == eleve_id, Inscription.statut == "ACTIVE"
-    ).first()
+    ).order_by(Inscription.annee_id.desc()).first()
     if not inscription:
         return {"presences": [], "total_present": 0, "total_absent": 0}
 
