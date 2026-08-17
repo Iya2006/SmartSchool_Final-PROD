@@ -95,6 +95,22 @@ export default function ImportExportPage() {
         } catch { setErreur('Téléchargement du modèle impossible.'); }
     };
 
+    // Message d'erreur lisible : le « detail » d'une 422 FastAPI est une LISTE
+    // d'objets (pas une chaîne) — la montrer telle quelle donnait « [object
+    // Object] ». On distingue aussi « serveur injoignable » (pas de réponse).
+    const messageErreur = (e: unknown, repli: string): string => {
+        const err = e as { response?: { status?: number; data?: { detail?: unknown } } };
+        if (!err?.response) return "Serveur injoignable, ou fichier trop volumineux. Réessayez.";
+        const detail = err.response.data?.detail;
+        if (typeof detail === 'string') return detail;
+        if (Array.isArray(detail)) {
+            const msgs = detail.map((d) => (d as { msg?: string })?.msg).filter(Boolean);
+            return msgs.length ? msgs.join(' ; ') : repli;
+        }
+        if (err.response.status === 404) return "L'import n'est pas encore disponible en ligne (déploiement à faire).";
+        return repli;
+    };
+
     const analyser = async (f: File) => {
         setFichierImport(f); setRapport(null); setResultatImport(null); setErreur(null); setImportEnCours(true);
         try {
@@ -102,7 +118,7 @@ export default function ImportExportPage() {
             const res = await api.post(`/api/eleves/import?dry_run=true&annee_id=${anneeId}`, fd);
             setRapport(res.data);
         } catch (e: unknown) {
-            setErreur((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Analyse du fichier impossible.");
+            setErreur(messageErreur(e, "Analyse du fichier impossible."));
         } finally { setImportEnCours(false); }
     };
 
@@ -116,7 +132,7 @@ export default function ImportExportPage() {
             if (fichierRef.current) fichierRef.current.value = '';
             charger();
         } catch (e: unknown) {
-            setErreur((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Import impossible.");
+            setErreur(messageErreur(e, "Import impossible."));
         } finally { setImportEnCours(false); }
     };
 

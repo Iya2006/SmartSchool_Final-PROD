@@ -59,6 +59,25 @@ from app.api.monitoring import router as monitoring_router
 # Création des tables au démarrage
 Base.metadata.create_all(bind=engine)
 
+# Mise à niveau AUTOMATIQUE du schéma : `create_all` ci-dessus crée les tables
+# manquantes mais JAMAIS les colonnes manquantes d'une table déjà existante
+# (c'est la cause des « column ... does not exist » en production). On complète
+# donc les colonnes absentes des modèles à chaque démarrage — idempotent
+# (ADD COLUMN IF NOT EXISTS), purement additif, aucune donnée supprimée. Ainsi
+# chaque redéploiement synchronise la base tout seul. Encapsulé : une migration
+# qui échoue (ex. connexion en mode pooler transactionnel) ne doit JAMAIS
+# empêcher l'application de démarrer.
+try:
+    from migrations.rattraper_colonnes_manquantes import appliquer_colonnes_manquantes
+    _ajoutees, _ignorees = appliquer_colonnes_manquantes(engine, appliquer=True)
+    if _ajoutees:
+        print(f"[SCHEMA] {len(_ajoutees)} colonne(s) ajoutée(s) automatiquement au démarrage.")
+    if _ignorees:
+        print(f"[SCHEMA] {len(_ignorees)} colonne(s) NOT NULL à renseigner à la main "
+              "(voir migrations/rattraper_colonnes_manquantes.py).")
+except Exception as _e:  # noqa: BLE001 — le démarrage prime sur la migration
+    print(f"[SCHEMA] Mise à niveau auto du schéma ignorée : {_e}")
+
 
 app = FastAPI(
     title="SMARTSCHOOL ERP API",

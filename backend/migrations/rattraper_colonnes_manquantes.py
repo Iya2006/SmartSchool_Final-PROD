@@ -68,16 +68,16 @@ def _defaut_sql(colonne) -> str | None:
     return "'" + str(valeur).replace("'", "''") + "'"
 
 
-def main() -> int:
-    url = os.environ.get("DATABASE_URL")
-    if not url or url.startswith("sqlite"):
-        print("[STOP] Definissez DATABASE_URL sur la base PostgreSQL a mettre a jour.")
-        return 1
+def appliquer_colonnes_manquantes(engine, appliquer: bool = False):
+    """Ajoute à la base les colonnes des modèles absentes des tables existantes.
 
-    appliquer = "--appliquer" in sys.argv
-    engine = sa.create_engine(url)
+    Retourne `(ajoutees, ignorees)`. `create_all()` ne crée que les tables
+    manquantes, jamais les colonnes — cette fonction comble ce trou, de façon
+    idempotente (`ADD COLUMN IF NOT EXISTS`) et purement additive (aucune donnée
+    supprimée). Réutilisée par le CLI (`main()`) ET au démarrage de l'app
+    (main.py) pour synchroniser la base à chaque déploiement.
+    """
     dialecte = engine.dialect
-
     ajoutees, ignorees = [], []
 
     with engine.begin() as conn:
@@ -136,6 +136,19 @@ def main() -> int:
         if not appliquer:
             # Rien n'a ete execute : la transaction se ferme sans effet.
             pass
+
+    return ajoutees, ignorees
+
+
+def main() -> int:
+    url = os.environ.get("DATABASE_URL")
+    if not url or url.startswith("sqlite"):
+        print("[STOP] Definissez DATABASE_URL sur la base PostgreSQL a mettre a jour.")
+        return 1
+
+    appliquer = "--appliquer" in sys.argv
+    engine = sa.create_engine(url)
+    ajoutees, ignorees = appliquer_colonnes_manquantes(engine, appliquer)
 
     print(f"\n--- COLONNES {'AJOUTEES' if appliquer else 'A AJOUTER'} ({len(ajoutees)}) ---")
     for a in ajoutees:
