@@ -177,6 +177,26 @@ def _get_classe_active(db: Session, niveau_id: int, annee_id: int, etablissement
     ).first()
 
 
+def _code_et_libelle_libres(db: Session, etablissement_id: int, annee_id: int,
+                            base_code: str, base_libelle: str) -> tuple:
+    """Un couple (code, libellé) non déjà pris dans l'année cible.
+
+    La création de classe refuse un doublon de code OU de libellé dans une même
+    année (voir create_classe) : on désambiguïse avec un suffixe numérique
+    plutôt que de faire échouer la préparation sur une collision rare.
+    """
+    rows = db.query(Classe.code, Classe.libelle).filter(
+        Classe.etablissement_id == etablissement_id, Classe.annee_id == annee_id,
+    ).all()
+    codes = {c for c, _ in rows}
+    libelles = {l for _, l in rows}
+    code, libelle, i = base_code, base_libelle, 2
+    while code in codes or libelle in libelles:
+        code, libelle = f"{base_code}-{i}", f"{base_libelle} ({i})"
+        i += 1
+    return code, libelle
+
+
 def _cycle_key_pour_classe(db: Session, classe: Classe):
     niveau = db.query(Niveau).filter(Niveau.niveau_id == classe.niveau_id).first()
     cycle = db.query(Cycle).filter(Cycle.cycle_id == niveau.cycle_id).first() if niveau else None
@@ -1155,6 +1175,41 @@ def preparer_classes_annee(annee_cible_id: int, annee_source_id: int, db: Sessio
             statut="ACTIVE",
         ))
         niveaux_existants.add(c.niveau_id)
+        created += 1
+
+    # ── Classes d'accueil des élèves promus ──
+    # Cloner ne recrée que les niveaux DÉJÀ présents. Or un élève admis monte
+    # d'un niveau : il lui faut une classe du niveau SUPÉRIEUR dans l'année
+    # cible, sinon sa classe cible reste « non résolue » et la validation de la
+    # promotion se bloque. Sur une école complète, ce niveau existe déjà (donc
+    # rien à faire) ; sur une école à l'échelle trouée (ex. une 2ᵉ année sans
+    # 3ᵉ année), on crée la classe manquante ici. On ne regarde qu'un niveau
+    # au-dessus : un élève ne saute jamais plus d'une marche par année.
+    # La frontière Collège→Lycée (10ᵉ) renvoie None (choix de série fait à la
+    # réinscription) : pas de création automatique, c'est voulu.
+    for c in classes_source:
+        niveau = db.query(Niveau).filter(Niveau.niveau_id == c.niveau_id).first()
+        if not niveau:
+            continue
+        suivant = _niveau_suivant(db, niveau)
+        if not suivant or suivant.niveau_id in niveaux_existants:
+            continue
+        code, libelle = _code_et_libelle_libres(
+            db, etablissement_id, annee_cible_id, suivant.code, suivant.libelle
+        )
+        db.add(Classe(
+            etablissement_id=etablissement_id,
+            annee_id=annee_cible_id,
+            niveau_id=suivant.niveau_id,
+            salle_id=None,
+            code=code,
+            libelle=libelle,
+            capacite_max=c.capacite_max or 30,
+            effectif_actuel=0,
+            professeur_principal=None,
+            statut="ACTIVE",
+        ))
+        niveaux_existants.add(suivant.niveau_id)
         created += 1
 
     db.commit()
