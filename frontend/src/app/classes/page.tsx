@@ -433,7 +433,7 @@ export default function ClassesPage() {
                 ) : (
                     <div style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
                         gap: '16px',
                         paddingBottom: '24px'
                     }}>
@@ -524,8 +524,8 @@ export default function ClassesPage() {
                                         <Link href={`/classes/${cls.classe_id}`}
                                             onClick={(e) => e.stopPropagation()}
                                             style={{
-                                                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                                                padding: '8px 10px', borderRadius: '9px',
+                                                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px',
+                                                padding: '8px 6px', borderRadius: '9px',
                                                 background: 'rgba(255,255,255,0.16)', color: 'white',
                                                 border: '1px solid rgba(255,255,255,0.3)',
                                                 fontSize: '12px', fontWeight: 600, textDecoration: 'none',
@@ -534,13 +534,14 @@ export default function ClassesPage() {
                                             onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.3)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
                                             onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.16)'; e.currentTarget.style.transform = 'translateY(0)'; }}
                                         >
-                                            <Eye size={13} /> Profil
+                                            <Eye size={13} style={{ flexShrink: 0 }} />
+                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Profil</span>
                                         </Link>
                                         <Link href={`/classes/configurer/${cls.classe_id}`}
                                             onClick={(e) => e.stopPropagation()}
                                             style={{
-                                                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                                                padding: '8px 10px', borderRadius: '9px',
+                                                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px',
+                                                padding: '8px 6px', borderRadius: '9px',
                                                 background: 'white', color: '#4f46e5',
                                                 fontSize: '12px', fontWeight: 700, textDecoration: 'none',
                                                 transition: 'background 0.15s, transform 0.15s'
@@ -548,7 +549,8 @@ export default function ClassesPage() {
                                             onMouseOver={(e) => { e.currentTarget.style.background = '#f3f0ff'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
                                             onMouseOut={(e) => { e.currentTarget.style.background = 'white'; e.currentTarget.style.transform = 'translateY(0)'; }}
                                         >
-                                            <Settings size={13} /> Configurer
+                                            <Settings size={13} style={{ flexShrink: 0 }} />
+                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Configurer</span>
                                         </Link>
                                     </div>
                                 </motion.div>
