@@ -346,6 +346,22 @@ export default function CalendrierPage() {
         }
     };
 
+    const deleteAnnee = async (annee: AnneeScolaire) => {
+        if (annee.est_courante === 'O') {
+            showToast('Impossible de supprimer l’année courante. Activez d’abord une autre année.', 'error');
+            return;
+        }
+        if (!window.confirm(`Supprimer définitivement l’année « ${annee.libelle} » ? (Uniquement si elle est vide — aucun élève, facture ni dépense.)`)) return;
+        try {
+            await api.delete(`/api/parametrage/annees/${annee.annee_id}`);
+            await loadAll();
+            showToast(`Année « ${annee.libelle} » supprimée.`, 'success');
+        } catch (e: unknown) {
+            const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+            showToast(detail || 'Suppression impossible pour le moment.', 'error');
+        }
+    };
+
     const createPeriode = async () => {
         if (!selectedAnneeId) {
             showToast('Sélectionnez d’abord une année scolaire avant d’ajouter une période.', 'error');
@@ -712,6 +728,9 @@ export default function CalendrierPage() {
                                         <div className={styles.itemActions}>
                                             <button className={styles.iconBtn} onClick={() => { setEditingAnneeId(annee.annee_id); setEditAnnee(annee); }}><Pencil size={16} /></button>
                                             <button className={styles.iconBtn} onClick={() => activateAnnee(annee.annee_id)} title="Activer"><Power size={16} /></button>
+                                            {annee.est_courante !== 'O' && (
+                                                <button className={styles.iconBtnDanger} onClick={() => deleteAnnee(annee)} title="Supprimer (si vide)"><Trash2 size={16} /></button>
+                                            )}
                                         </div>
                                     </div>
                                 );

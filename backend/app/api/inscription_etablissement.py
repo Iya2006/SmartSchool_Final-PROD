@@ -28,10 +28,10 @@ d'identifiants : il appelle ce qui existe (`exiger_identifiants_libres`,
 quelque chose, c'est le statut initial de l'école.
 """
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from app.core.auth import ADMIN_TIER_ROLES, require_roles
@@ -57,6 +57,7 @@ STATUT_REFUSE = "REFUSE"
 STATUT_SUSPENDU = "SUSPENDU"
 
 TYPES_ETABLISSEMENT = {"PRIMAIRE", "COLLEGE", "LYCEE", "COMPLEXE", "AUTRE"}
+CYCLES_VALIDES = {"PRM", "CLG", "LYC"}
 
 
 class DemandeInscription(BaseModel):
@@ -65,6 +66,10 @@ class DemandeInscription(BaseModel):
     # ── L'école ──
     nom_etablissement: str
     type_etablissement: str
+    # Cycles retenus quand le type est « Complexe scolaire » : le fondateur coche
+    # ce que son école couvre (primaire+collège, collège+lycée, primaire+lycée,
+    # ou tout). Ignoré pour les types mono-cycle (Primaire/Collège/Lycée).
+    cycles: Optional[List[str]] = None
     ville: Optional[str] = None
     adresse: Optional[str] = None
     telephone_etablissement: Optional[str] = None
@@ -92,6 +97,25 @@ class DemandeInscription(BaseModel):
         if v not in TYPES_ETABLISSEMENT:
             raise ValueError(f"Type d'établissement inconnu. Valeurs acceptées : {sorted(TYPES_ETABLISSEMENT)}")
         return v
+
+    @field_validator("cycles")
+    @classmethod
+    def _cycles_connus(cls, v):
+        if v is None:
+            return v
+        normalises = [c.strip().upper() for c in v if c and c.strip()]
+        inconnus = [c for c in normalises if c not in CYCLES_VALIDES]
+        if inconnus:
+            raise ValueError(f"Cycle inconnu {inconnus}. Valeurs acceptées : {sorted(CYCLES_VALIDES)}")
+        return normalises
+
+    @model_validator(mode="after")
+    def _complexe_exige_un_cycle(self):
+        # Un complexe scolaire sans aucun cycle coché n'aurait aucun niveau :
+        # l'école serait inutilisable dès le premier écran « Nouvelle classe ».
+        if self.type_etablissement == "COMPLEXE" and not self.cycles:
+            raise ValueError("Pour un complexe scolaire, cochez au moins un cycle (Primaire, Collège ou Lycée).")
+        return self
 
     @field_validator("mot_de_passe")
     @classmethod
@@ -194,7 +218,7 @@ def inscrire_etablissement(
         # « créer ses cycles dans Paramètres » — alors qu'aucun écran ne le
         # permet, et que ce référentiel est le même pour toutes les écoles.
         amorcer_referentiel_scolaire(
-            db, etablissement.etablissement_id, data.type_etablissement
+            db, etablissement.etablissement_id, data.type_etablissement, data.cycles
         )
 
         # Le fondateur EST l'administrateur de son école. Pas un SUPER_ADMIN :

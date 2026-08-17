@@ -68,6 +68,13 @@ class TestSeedParType:
         db.commit()
         assert _cycles(db, e.etablissement_id) == {"PRM", "CLG", "LYC"}
 
+    def test_complexe_cycles_explicites_priment(self, db: Session):
+        # Complexe primaire+lycée SANS collège : la liste cochée prime sur le type.
+        e = self._etab(db, "COMPLEXE")
+        amorcer_referentiel_scolaire(db, e.etablissement_id, "COMPLEXE", ["PRM", "LYC"])
+        db.commit()
+        assert _cycles(db, e.etablissement_id) == {"PRM", "LYC"}
+
 
 class TestPrimaireSeuleDiplome:
     def _headers(self, client: TestClient, identifiant: str) -> dict:

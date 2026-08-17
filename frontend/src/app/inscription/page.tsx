@@ -35,6 +35,7 @@ const TYPES = [
 interface Formulaire {
     nom_etablissement: string;
     type_etablissement: string;
+    cycles: string[];
     ville: string;
     adresse: string;
     telephone_etablissement: string;
@@ -48,10 +49,18 @@ interface Formulaire {
 }
 
 const VIDE: Formulaire = {
-    nom_etablissement: '', type_etablissement: '', ville: '', adresse: '',
+    nom_etablissement: '', type_etablissement: '', cycles: [], ville: '', adresse: '',
     telephone_etablissement: '', email_etablissement: '',
     nom: '', prenom: '', email: '', telephone: '', mot_de_passe: '', confirmation: '',
 };
+
+// Cycles proposés pour un « complexe scolaire » — le fondateur coche ce que son
+// école couvre réellement (toutes les combinaisons sont possibles).
+const CYCLES = [
+    { code: 'PRM', libelle: 'Primaire' },
+    { code: 'CLG', libelle: 'Collège' },
+    { code: 'LYC', libelle: 'Lycée' },
+];
 
 export default function InscriptionPage() {
     const [etape, setEtape] = useState(1);
@@ -66,9 +75,20 @@ export default function InscriptionPage() {
         setErreur('');
     };
 
+    const toggleCycle = (code: string) => {
+        setF(prev => ({
+            ...prev,
+            cycles: prev.cycles.includes(code)
+                ? prev.cycles.filter(c => c !== code)
+                : [...prev.cycles, code],
+        }));
+        setErreur('');
+    };
+
     // Validation par étape : l'utilisateur est averti au moment où il saisit,
     // pas après avoir rempli quinze champs.
-    const etape1Ok = f.nom_etablissement.trim().length >= 2 && f.type_etablissement !== '';
+    const etape1Ok = f.nom_etablissement.trim().length >= 2 && f.type_etablissement !== ''
+        && (f.type_etablissement !== 'COMPLEXE' || f.cycles.length > 0);
     const etape2Ok = f.nom.trim().length >= 2 && f.prenom.trim().length >= 2
         && /\S+@\S+\.\S+/.test(f.email) && f.telephone.trim().length >= 6;
     const etape3Ok = f.mot_de_passe.length >= 8 && f.mot_de_passe === f.confirmation;
@@ -82,6 +102,9 @@ export default function InscriptionPage() {
             void confirmation;
             const res = await api.post('/api/inscription-etablissement', {
                 ...charge,
+                // Les cycles ne servent qu'au complexe scolaire ; sinon le type
+                // seul décide (le backend ignore la liste pour les mono-cycles).
+                cycles: charge.type_etablissement === 'COMPLEXE' ? charge.cycles : null,
                 ville: charge.ville || null,
                 adresse: charge.adresse || null,
                 telephone_etablissement: charge.telephone_etablissement || null,
@@ -184,6 +207,34 @@ export default function InscriptionPage() {
                                         {TYPES.map(t => <option key={t.code} value={t.code}>{t.libelle}</option>)}
                                     </select>
                                 </Champ>
+
+                                {f.type_etablissement === 'COMPLEXE' && (
+                                    <Champ label="Cycles de votre complexe" requis>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                                            {CYCLES.map(c => {
+                                                const coche = f.cycles.includes(c.code);
+                                                return (
+                                                    <label key={c.code}
+                                                        style={{
+                                                            display: 'flex', alignItems: 'center', gap: '8px',
+                                                            padding: '10px 14px', borderRadius: '10px', cursor: 'pointer',
+                                                            border: `1.5px solid ${coche ? '#2563eb' : '#e2e8f0'}`,
+                                                            background: coche ? '#eff6ff' : 'white',
+                                                            color: coche ? '#1d4ed8' : '#475569', fontWeight: 600, fontSize: '14px',
+                                                            transition: 'all 0.15s', userSelect: 'none',
+                                                        }}>
+                                                        <input type="checkbox" checked={coche} onChange={() => toggleCycle(c.code)}
+                                                            style={{ width: '16px', height: '16px', accentColor: '#2563eb', cursor: 'pointer' }} />
+                                                        {c.libelle}
+                                                    </label>
+                                                );
+                                            })}
+                                        </div>
+                                        <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                                            Cochez uniquement les cycles que votre école couvre (au moins un).
+                                        </p>
+                                    </Champ>
+                                )}
                                 <Deux>
                                     <Champ label="Ville" icone={<MapPin size={15} />}>
                                         <input style={input} value={f.ville} onChange={set('ville')} placeholder="Conakry" />

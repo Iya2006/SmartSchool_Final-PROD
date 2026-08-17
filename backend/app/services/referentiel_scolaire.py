@@ -96,19 +96,26 @@ def niveaux_manquants(db: Session, etablissement_id: int) -> List[str]:
 
 
 def amorcer_referentiel_scolaire(db: Session, etablissement_id: int,
-                                 type_etablissement: Optional[str] = None) -> dict:
+                                 type_etablissement: Optional[str] = None,
+                                 cycles: Optional[List[str]] = None) -> dict:
     """Crée les cycles et niveaux manquants de CETTE école, selon son type.
 
     Le type (Primaire / Collège / Lycée / Complexe / Autre) restreint les cycles
-    créés : une école primaire ne reçoit que le cycle primaire. `type=None` (ou
-    inconnu) crée tout — utilisé quand on veut juste compléter un référentiel
-    sans supposer de restriction.
+    créés : une école primaire ne reçoit que le cycle primaire. Pour un complexe
+    scolaire, `cycles` porte la liste exacte cochée par le fondateur (ex.
+    primaire+lycée sans collège) et prime sur le type. `type=None` et `cycles=None`
+    créent tout — utilisé pour juste compléter un référentiel sans restriction.
 
     Idempotent : ce qui existe déjà n'est ni recréé ni modifié. Une école qui a
     renommé ou supprimé un niveau garde son choix — on ne complète que ce qui
     manque, on ne réaligne jamais sur le référentiel.
     """
-    autorises = cycles_autorises(type_etablissement) if type_etablissement else CYCLES_PAR_DEFAUT
+    if cycles:
+        autorises = [c for c in cycles if c in {r["code"] for r in CYCLES_REFERENCE}]
+    elif type_etablissement:
+        autorises = cycles_autorises(type_etablissement)
+    else:
+        autorises = CYCLES_PAR_DEFAUT
     cycles_a_creer = [c for c in CYCLES_REFERENCE if c["code"] in autorises]
     niveaux_a_creer = [n for n in NIVEAUX_REFERENCE if n["cycle"] in autorises]
 
