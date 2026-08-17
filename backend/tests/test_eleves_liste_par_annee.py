@@ -87,6 +87,38 @@ def _noms(client, headers, annee_id):
     return {e["nom"] for e in r.json()}
 
 
+def _detail(client, headers, annee_id, nom):
+    r = client.get(f"/api/eleves?annee_id={annee_id}&limit=200", headers=headers)
+    assert r.status_code == 200, r.text
+    for e in r.json():
+        if e["nom"] == nom:
+            return e
+    return None
+
+
+def test_promu_preplace_apparait_a_activer_dans_la_nouvelle_annee(client: TestClient, db: Session):
+    """Un élève promu (admis/redoublant) de l'an dernier, pas encore réinscrit,
+    apparaît dans la nouvelle année : inactif, pré-placé dans sa classe cible,
+    à activer."""
+    e = Ecole(db)
+    promu = e.eleve(db, "Promu")
+    promu.statut = "INACTIF"  # état réel après validation de la promotion
+    # Inscription de l'an dernier, validée et à réinscrire vers la classe de l'an2.
+    insc = Inscription(
+        eleve_id=promu.eleve_id, classe_id=e.classe1.classe_id, annee_id=e.an1.annee_id,
+        statut="ACTIVE", statut_promotion="VALIDE", decision_fin_annee="ADMIS",
+        statut_reinscription="A_REINSCRIRE", classe_cible_id=e.classe2.classe_id,
+    )
+    db.add(insc); db.commit(); db.refresh(insc)
+    headers = _headers(client, e.admin.nom_utilisateur)
+
+    d = _detail(client, headers, e.an2.annee_id, "Promu")
+    assert d is not None, "l'élève promu doit apparaître dans la nouvelle année"
+    assert d["a_reinscrire"] is True
+    assert d["classe_code"] == e.classe2.code          # pré-placé dans la classe cible
+    assert d["inscription_a_confirmer"] == insc.inscription_id
+
+
 def test_diplome_absent_de_la_nouvelle_annee_mais_present_dans_l_ancienne(client: TestClient, db: Session):
     e = Ecole(db)
     diplome = e.eleve(db, "Diplome")

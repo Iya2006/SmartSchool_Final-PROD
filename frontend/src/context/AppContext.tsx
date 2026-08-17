@@ -9,6 +9,8 @@ interface AnneeScolaire {
     annee_id: number;
     libelle: string;
     est_courante?: string;
+    date_debut?: string;
+    date_fin?: string;
 }
 
 interface ThemeConfig {

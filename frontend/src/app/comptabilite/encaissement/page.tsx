@@ -79,7 +79,7 @@ function Badge({ statut }: { statut: string }) {
 function EncaissementContent() {
     const searchParams = useSearchParams();
     const urlEleveId = searchParams.get('eleve_id');
-    const { anneeId: anneeCouranteId } = useApp();
+    const { etablissementId, anneeId: anneeCouranteId } = useApp();
 
     // Steps: 'search' | 'solde' | 'payer' | 'recu'
     const [step, setStep] = useState<'search' | 'solde' | 'payer' | 'recu'>('search');
@@ -149,8 +149,8 @@ function EncaissementContent() {
         queryKey: ['encaissement-solvabilite', filterAnnee],
         queryFn: async () => {
             const [solvRes, classRes] = await Promise.all([
-                api.get(`/api/finance/solvabilite?etablissement_id=1&annee_id=${filterAnnee}`),
-                api.get(`/api/classes?etablissement_id=1&annee_id=${filterAnnee}`),
+                api.get(`/api/finance/solvabilite?etablissement_id=${etablissementId}&annee_id=${filterAnnee}`),
+                api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${filterAnnee}`),
             ]);
             return {
                 allData: (solvRes.data || []) as EleveSearch[],

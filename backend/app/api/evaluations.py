@@ -171,6 +171,7 @@ def list_evaluations(
     classe_id: Optional[int] = None,
     matiere_id: Optional[int] = None,
     trimestre_id: Optional[int] = None,
+    annee_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -185,6 +186,10 @@ def list_evaluations(
         query = query.filter(Evaluation.matiere_id == matiere_id)
     if trimestre_id:
         query = query.filter(Evaluation.trimestre_id == trimestre_id)
+    # Filtre par année (via la classe) : sans lui, la nouvelle année affichait
+    # encore les évaluations/compositions de l'an dernier.
+    if annee_id is not None:
+        query = query.filter(Classe.annee_id == annee_id)
     return query.order_by(Evaluation.date_evaluation.desc()).offset(skip).limit(limit).all()
 
 
@@ -317,6 +322,7 @@ def get_evaluations_centralisees(
     trimestre_id: Optional[int] = None,
     statut: Optional[str] = None,
     q: Optional[str] = None,
+    annee_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -348,6 +354,10 @@ def get_evaluations_centralisees(
         query = query.filter(Evaluation.classe_id == classe_id)
     if trimestre_id:
         query = query.filter(Evaluation.trimestre_id == trimestre_id)
+    # Filtre par année (via la classe) : sans lui, l'écran affichait encore les
+    # compositions de l'an dernier dans la nouvelle année.
+    if annee_id is not None:
+        query = query.filter(Classe.annee_id == annee_id)
 
     # Recherche sur toute la base, pas seulement sur la page affichée : avec une
     # pagination à 50 lignes et près de mille évaluations, un filtre appliqué

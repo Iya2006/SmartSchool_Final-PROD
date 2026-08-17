@@ -33,9 +33,8 @@ const fmt = (n: number | null | undefined) => (n || 0).toLocaleString('fr-GN') +
 const MOIS_FR = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin',
     'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
 
-/** Les douze derniers mois, du plus récent au plus ancien.
- *  La liste était figée sur « Mai / Juin / Juillet 2026 » : en août l'écran
- *  proposait trois mois passés et aucun moyen de préparer le mois en cours. */
+/** Les douze derniers mois, du plus récent au plus ancien. Repli quand les
+ *  dates de l'année scolaire ne sont pas connues. */
 function derniersMois(n = 12) {
     const out: { valeur: string; libelle: string }[] = [];
     const d = new Date();
@@ -46,6 +45,26 @@ function derniersMois(n = 12) {
             libelle: `${MOIS_FR[m]} ${a}`,
         });
         d.setMonth(d.getMonth() - 1);
+    }
+    return out;
+}
+
+/** Les mois de l'année scolaire affichée (de sa rentrée à sa fin), du plus
+ *  récent au plus ancien. Cale la paie sur l'année active au lieu des 12
+ *  derniers mois calendaires, qui débordaient sur l'année précédente — d'où les
+ *  salaires de l'an dernier qui apparaissaient dans la nouvelle année. */
+function moisDeLAnnee(debut?: string, fin?: string) {
+    if (!debut || !fin) return derniersMois(12);
+    const out: { valeur: string; libelle: string }[] = [];
+    const dDebut = new Date(debut + 'T00:00:00');
+    const dFin = new Date(fin + 'T00:00:00');
+    if (isNaN(dDebut.getTime()) || isNaN(dFin.getTime())) return derniersMois(12);
+    const cur = new Date(dFin.getFullYear(), dFin.getMonth(), 1);
+    const borneBasse = new Date(dDebut.getFullYear(), dDebut.getMonth(), 1);
+    while (cur >= borneBasse) {
+        const a = cur.getFullYear(), m = cur.getMonth();
+        out.push({ valeur: `${a}-${String(m + 1).padStart(2, '0')}`, libelle: `${MOIS_FR[m]} ${a}` });
+        cur.setMonth(cur.getMonth() - 1);
     }
     return out;
 }
@@ -67,7 +86,8 @@ function BadgeMode({ mode }: { mode?: string }) {
 }
 
 function SalairesContent() {
-    const { etablissementId, anneeId } = useApp();
+    const { etablissementId, anneeId, annees } = useApp();
+    const anneeSel = annees.find(a => a.annee_id === anneeId);
     const searchParams = useSearchParams();
     const router = useRouter();
     const queryClient = useQueryClient();
@@ -89,10 +109,27 @@ function SalairesContent() {
 
     const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-    const moisDisponibles = useMemo(() => derniersMois(12), []);
+    // Les mois proposés suivent l'ANNÉE SCOLAIRE affichée (pas les 12 derniers
+    // mois calendaires), pour ne pas mélanger la paie d'une année sur l'autre.
+    const moisDisponibles = useMemo(
+        () => moisDeLAnnee(anneeSel?.date_debut, anneeSel?.date_fin),
+        [anneeSel?.date_debut, anneeSel?.date_fin]
+    );
     const [selectedMonth, setSelectedMonth] = useState(() => {
         const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     });
+    // Quand on change d'année (ou au chargement des dates), garder un mois
+    // valide : le mois courant s'il appartient à l'année, sinon le plus récent
+    // de l'année. Sans ça, on restait sur un mois hors de l'année affichée.
+    useEffect(() => {
+        if (moisDisponibles.length === 0) return;
+        if (!moisDisponibles.some(m => m.valeur === selectedMonth)) {
+            const d = new Date();
+            const moisCourant = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            const cible = moisDisponibles.find(m => m.valeur === moisCourant) || moisDisponibles[0];
+            setSelectedMonth(cible.valeur);
+        }
+    }, [moisDisponibles, selectedMonth]);
 
     const [paydayDate, setPaydayDate] = useState('');
     // Combien de jours nous separent du versement. Negatif = la date est

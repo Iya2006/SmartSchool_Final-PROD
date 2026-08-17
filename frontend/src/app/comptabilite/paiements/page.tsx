@@ -130,7 +130,7 @@ function GestionPaiements() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const queryClient = useQueryClient();
-    const { anneeId: anneeCouranteId } = useApp();
+    const { etablissementId, anneeId: anneeCouranteId } = useApp();
     const isMobile = useIsMobile();
     // Année scolaire consultée — par défaut l'année en cours ; le comptable
     // peut basculer sur une année clôturée pour consulter l'historique.
@@ -252,7 +252,7 @@ function GestionPaiements() {
                 api.get(`/api/finance/dashboard?annee_id=${filterAnnee}`),
                 api.get('/api/finance/fournisseurs').catch(() => ({ data: [] })),
                 api.get(`/api/finance/depenses/stats?annee_id=${filterAnnee}`).catch(() => ({ data: null })),
-                api.get(`/api/classes?etablissement_id=1&annee_id=${filterAnnee}`).catch(() => ({ data: [] })),
+                api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${filterAnnee}`).catch(() => ({ data: [] })),
             ]);
             setFactures(facRes.data || []);
             setFournisseurs(fournRes.data || []);

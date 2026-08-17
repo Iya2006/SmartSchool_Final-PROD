@@ -18,7 +18,7 @@ import Pagination from '@/components/Pagination';
 // ═══════════════════════════════════════════════════════════
 
 function BulletinsContent() {
-    const { etablissementId, etablissementNom, etablissementLogo, etablissementCachet, etablissementSignature, etablissementDirecteur } = useApp();
+    const { etablissementId, anneeId, etablissementNom, etablissementLogo, etablissementCachet, etablissementSignature, etablissementDirecteur } = useApp();
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
     const getPhotoUrl = (url: string | null | undefined) => {
         if (!url) return null;
@@ -63,7 +63,7 @@ function BulletinsContent() {
         const loadInit = async () => {
             try {
                 const [clsRes, triRes, paramRes, notationRes] = await Promise.all([
-                    api.get(`/api/classes?etablissement_id=${etablissementId}`),
+                    api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
                     api.get('/api/portail-enseignant/referentiels/trimestres'),
                     api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=DOCUMENTS`).catch(() => ({ data: [] })),
                     api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=NOTATION`).catch(() => ({ data: [] })),
@@ -134,7 +134,7 @@ function BulletinsContent() {
             } catch (e) { console.error(e); }
         };
         loadInit();
-    }, [etablissementId, searchParams]);
+    }, [etablissementId, anneeId, searchParams]);
 
     const loadBulletins = useCallback(async () => {
         if (!selectedClasse) return;

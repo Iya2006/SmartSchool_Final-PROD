@@ -32,6 +32,10 @@ export interface Eleve {
     photo_url?: string | null;
     adresse?: string | null;
     groupe_sanguin?: string | null;
+    // Promu de l'an dernier, pré-placé dans sa classe cible mais pas encore
+    // réinscrit : à activer. `inscription_a_confirmer` = l'inscription à confirmer.
+    a_reinscrire?: boolean;
+    inscription_a_confirmer?: number | null;
 }
 
 export interface ClasseInfo {

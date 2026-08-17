@@ -62,7 +62,7 @@ interface EpreuvePeriode {
 }
 
 export default function CentralisationNotesPage() {
-    const { etablissementId } = useApp();
+    const { etablissementId, anneeId } = useApp();
 
     // State
     const [classes, setClasses] = useState<any[]>([]);
@@ -163,7 +163,7 @@ export default function CentralisationNotesPage() {
         const loadInit = async () => {
             try {
                 const [clsRes, triRes, statsRes, typesRes, moisRes] = await Promise.all([
-                    api.get(`/api/classes?etablissement_id=${etablissementId}`),
+                    api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
                     api.get('/api/portail-enseignant/referentiels/trimestres'),
                     api.get('/api/evaluations/centralisation/stats'),
                     api.get('/api/evaluations/types').catch(() => ({ data: [] })),
@@ -190,7 +190,7 @@ export default function CentralisationNotesPage() {
             } catch (e) { console.error(e); }
         };
         loadInit();
-    }, [etablissementId]);
+    }, [etablissementId, anneeId]);
 
     // Liste des évaluations centralisées — paginée côté serveur (avant : un seul
     // fetch sans limite qui, avec 998 évaluations réelles, faisait timeout la
@@ -199,13 +199,14 @@ export default function CentralisationNotesPage() {
         try {
             const skip = (evalsPage - 1) * EVALS_PAGE_SIZE;
             const filtres = (statutFiltre ? `&statut=${statutFiltre}` : '')
-                + (rechercheEnvoyee ? `&q=${encodeURIComponent(rechercheEnvoyee)}` : '');
+                + (rechercheEnvoyee ? `&q=${encodeURIComponent(rechercheEnvoyee)}` : '')
+                + (anneeId ? `&annee_id=${anneeId}` : '');
             const res = await api.get(`/api/evaluations/centralisees?skip=${skip}&limit=${EVALS_PAGE_SIZE}${filtres}`);
             setEvalsCentralisees(res.data);
             const totalCount = res.headers?.['x-total-count'];
             setEvalsTotal(totalCount !== undefined ? Number(totalCount) : res.data.length);
         } catch (e) { console.error(e); }
-    }, [evalsPage, statutFiltre, rechercheEnvoyee]);
+    }, [evalsPage, statutFiltre, rechercheEnvoyee, anneeId]);
 
     useEffect(() => { rechargerEvals(); }, [rechargerEvals]);
 

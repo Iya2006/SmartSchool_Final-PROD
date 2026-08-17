@@ -9,6 +9,7 @@ import {
     Languages, Compass, PenTool, FileText, Info, Pencil, Save
 } from 'lucide-react';
 import api from '@/lib/api';
+import { useApp } from '@/context/AppContext';
 import styles from './Matieres.module.css';
 
 /* ─── TypeScript Interfaces ─── */
@@ -100,6 +101,7 @@ interface Matiere {
 }
 
 export default function MatieresPage() {
+    const { etablissementId, anneeId } = useApp();
     const [tab, setTab] = useState('manage');
     const [loading, setLoading] = useState(true);
     const [matieres, setMatieres] = useState<Matiere[]>([]);
@@ -188,14 +190,14 @@ export default function MatieresPage() {
             const [matRes, cycRes, classRes] = await Promise.all([
                 api.get('/api/matieres').catch(() => ({ data: [] })),
                 api.get('/api/parametrage/cycles').catch(() => ({ data: [] })),
-                api.get('/api/classes?etablissement_id=1&annee_id=1').catch(() => ({ data: [] })),
+                api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`).catch(() => ({ data: [] })),
             ]);
             setMatieres(matRes.data || []);
             setCycles(cycRes.data || []);
             setClasses(classRes.data || []);
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
-    }, []);
+    }, [etablissementId, anneeId]);
 
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
