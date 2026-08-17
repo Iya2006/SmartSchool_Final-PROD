@@ -72,7 +72,7 @@ export default function SalleDesProfsPage() {
         try {
             const [statsRes, classesRes, ensRes] = await Promise.all([
                 api.get(`/api/enseignants/salle-des-profs/stats?annee_id=${anneeId}`),
-                api.get(`/api/enseignants/salle-des-profs/classes-matieres?etablissement_id=${etablissementId}`),
+                api.get(`/api/enseignants/salle-des-profs/classes-matieres?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
                 api.get(`/api/enseignants?etablissement_id=${etablissementId}&skip=0&limit=200`),
             ]);
             setStats(statsRes.data);

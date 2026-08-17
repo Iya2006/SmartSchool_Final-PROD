@@ -3,7 +3,8 @@ SMARTSCHOOL API — Routes Élèves (CRUD complet)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, exists, and_, or_, not_
+from sqlalchemy.orm import aliased
 from typing import List, Optional
 from app.core.database import get_db
 from app.core.auth import require_etablissement
@@ -64,6 +65,26 @@ def list_eleves(
     ).filter(
         Eleve.etablissement_id == etablissement_id
     )
+
+    # Ne pas traîner les élèves qui ont QUITTÉ l'établissement (diplômés du BAC,
+    # non réinscrits, transférés) dans l'année en cours : après une clôture,
+    # leur inscription vit dans l'ANCIENNE année et ils n'en ont aucune dans la
+    # nouvelle. On garde donc un élève seulement s'il a une inscription active
+    # cette année-là, OU s'il n'a encore AUCUNE inscription (nouvel élève tout
+    # juste créé, pas encore affecté à une classe). Consultable à l'identique sur
+    # une année passée : `annee_id` suit l'année sélectionnée.
+    # Alias distincts : Inscription est déjà jointe ci-dessus (pour la classe),
+    # une sous-requête EXISTS qui la réutilise se ferait auto-corréler et
+    # perdrait sa clause FROM.
+    _ins_a = aliased(Inscription)
+    _ins_b = aliased(Inscription)
+    insc_annee = exists().where(and_(
+        _ins_a.eleve_id == Eleve.eleve_id,
+        _ins_a.annee_id == annee_id,
+        _ins_a.statut == "ACTIVE",
+    ))
+    a_une_inscription = exists().where(_ins_b.eleve_id == Eleve.eleve_id)
+    query = query.filter(or_(insc_annee, not_(a_une_inscription)))
 
     if statut:
         query = query.filter(Eleve.statut == statut)

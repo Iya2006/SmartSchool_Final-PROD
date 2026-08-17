@@ -647,7 +647,11 @@ def get_affectations_globales(annee_id: int = Depends(resolve_annee_id), db: Ses
 
 
 @router.get("/salle-des-profs/classes-matieres")
-def get_classes_avec_matieres(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def get_classes_avec_matieres(
+    annee_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
     """Retourne les classes de CET établissement avec leurs matières
     attribuées — pour le formulaire de la Salle des Profs.
 
@@ -655,13 +659,20 @@ def get_classes_avec_matieres(db: Session = Depends(get_db), etablissement_id: i
     `etablissement_id` … mais ne l'utilisait NULLE PART dans la requête :
     toutes les classes de la plateforme étaient retournées, quelle que soit
     la valeur envoyée (faux sentiment de filtrage).
+
+    Filtre aussi par `annee_id` quand il est fourni : sans lui, les classes de
+    TOUTES les années remontaient ensemble — après une clôture, on voyait donc
+    deux fois « Terminale SE » (l'ancienne et celle de la nouvelle année).
     """
     from app.models.academique import Niveau
 
-    classes = db.query(Classe).filter(
+    query = db.query(Classe).filter(
         Classe.statut == "ACTIVE",
         Classe.etablissement_id == etablissement_id,
-    ).order_by(Classe.libelle).all()
+    )
+    if annee_id is not None:
+        query = query.filter(Classe.annee_id == annee_id)
+    classes = query.order_by(Classe.libelle).all()
 
     result = []
     for cls in classes:
