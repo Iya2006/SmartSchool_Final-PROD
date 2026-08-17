@@ -59,7 +59,9 @@ const SEARCH_ITEMS = [
 const MONITORING_SEARCH_ITEM = { label: 'Monitoring', href: '/monitoring', keywords: ['monitoring', 'infrastructure', 'redis', 'workers', 'file d\'attente'] };
 
 export default function Topbar() {
-    const { anneeLibelle } = useApp();
+    const { anneeLibelle, anneeId, annees, setAnneeId, anneeCouranteId } = useApp();
+    const enConsultation = anneeId !== anneeCouranteId;
+    const anneeSelLibelle = annees.find(a => a.annee_id === anneeId)?.libelle || anneeLibelle;
     const pathname = usePathname();
     const router = useRouter();
     const { sidebarCollapsed, toggleSidebarCollapsed, openMobileSidebar } = useUI();
@@ -197,11 +199,60 @@ export default function Topbar() {
                 </div>
                 )}
 
-                {anneeLibelle && !isMobile && (
-                    <div className={styles.yearBadge}>
-                        <Calendar size={14} />
-                        <span>{anneeLibelle}</span>
+                {annees.length > 0 && !isMobile && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {/* Sélecteur d'année : choisir une année passée fait basculer
+                            TOUT le système en consultation (lecture seule — l'écriture
+                            reste bloquée côté serveur pour une année clôturée). */}
+                        <div
+                            className={styles.yearBadge}
+                            style={enConsultation ? { background: '#fef3c7', borderColor: '#fcd34d', color: '#92400e' } : undefined}
+                            title={enConsultation ? 'Consultation d’une année passée (lecture seule)' : 'Année en cours'}
+                        >
+                            <Calendar size={14} />
+                            <select
+                                value={anneeId}
+                                onChange={(e) => setAnneeId(Number(e.target.value))}
+                                style={{
+                                    border: 'none', background: 'transparent', font: 'inherit',
+                                    color: 'inherit', cursor: 'pointer', outline: 'none', fontWeight: 600,
+                                }}
+                            >
+                                {annees.map(a => (
+                                    <option key={a.annee_id} value={a.annee_id}>
+                                        {a.libelle}{a.est_courante === 'O' ? ' — en cours' : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        {enConsultation && (
+                            <button
+                                onClick={() => setAnneeId(anneeCouranteId)}
+                                title="Revenir à l’année en cours"
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: '5px',
+                                    padding: '5px 10px', borderRadius: '8px', cursor: 'pointer',
+                                    border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e',
+                                    fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap',
+                                }}
+                            >
+                                Lecture seule · Revenir à l’année en cours
+                            </button>
+                        )}
                     </div>
+                )}
+                {anneeLibelle && isMobile && enConsultation && (
+                    <button
+                        onClick={() => setAnneeId(anneeCouranteId)}
+                        title="Revenir à l’année en cours"
+                        style={{
+                            padding: '5px 10px', borderRadius: '8px', cursor: 'pointer',
+                            border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e',
+                            fontSize: '12px', fontWeight: 700,
+                        }}
+                    >
+                        {anneeSelLibelle} · lecture seule ✕
+                    </button>
                 )}
             </div>
 
