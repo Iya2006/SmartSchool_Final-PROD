@@ -1,9 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { useApp } from '@/context/AppContext';
 import { useInstallPrompt } from '@/hooks/useInstallPrompt';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -43,14 +42,7 @@ export default function LoginPage() {
     const [showForgotInfo, setShowForgotInfo] = useState(false);
 
     const { login } = useAuth();
-    const { etablissementNom, etablissementLogo } = useApp();
     const { canInstall, promptInstall } = useInstallPrompt();
-
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
-    const logoSrc = useMemo(
-        () => etablissementLogo ? (etablissementLogo.startsWith('http') ? etablissementLogo : `${API_BASE}${etablissementLogo}`) : null,
-        [API_BASE, etablissementLogo]
-    );
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -106,12 +98,12 @@ export default function LoginPage() {
                     connexion ne porte que la marque SmartSchool, pas la photo
                     d'un établissement particulier. */}
                 <div className={styles.heroBrand}>
+                    {/* Page d'accueil de SmartSchool (l'éditeur) : elle ne porte QUE
+                        la marque SmartSchool, jamais le logo d'une école
+                        particulière (ex. GOTCHA) — celui-ci vit dans l'espace de
+                        l'établissement, pas sur l'écran de connexion général. */}
                     <div className={styles.heroBadge}>
-                        {logoSrc ? (
-                            <img src={logoSrc} alt={etablissementNom ? `Logo ${etablissementNom}` : 'Logo établissement'} />
-                        ) : (
-                            <SmartSchoolMark size={24} color="#ffffff" />
-                        )}
+                        <SmartSchoolMark size={24} color="#ffffff" />
                     </div>
                     <div>
                         <h1 className={styles.heroWordmark}>SMARTSCHOOL</h1>
