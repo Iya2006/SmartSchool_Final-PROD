@@ -48,7 +48,7 @@ export default function PortailEleve() {
 
     // ── Dynamic theme values from admin settings ──
     const couleurPortail = theme.couleurEleve || '#0284c7';
-    const messageBienvenue = theme.msgEleve || "Bienvenue sur ton espace élève SmartSchool ! Prêt pour une nouvelle journée d'apprentissage ?";
+    const messageBienvenue = theme.msgEleve || `Bienvenue sur ton espace élève${etablissementNom ? ` — ${etablissementNom}` : ''} ! Prêt pour une nouvelle journée d'apprentissage ?`;
 
     const [activeTab, setActiveTab] = useState<Tab>('dashboard');
     const [sidebarOpen, setSidebarOpen] = useState(false);

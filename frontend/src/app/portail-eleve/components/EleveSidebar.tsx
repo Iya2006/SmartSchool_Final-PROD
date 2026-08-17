@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import styles from '../portail-eleve.module.css';
 import { EleveInfo, Tab } from '../types';
+import { useApp } from '@/context/AppContext';
 
 interface EleveSidebarProps {
     eleveData: EleveInfo;
@@ -35,6 +36,10 @@ export default function EleveSidebar({
     couleurPortail,
 }: EleveSidebarProps) {
     const initials = ((eleveData?.prenom?.[0] || '') + (eleveData?.nom?.[0] || '')).toUpperCase();
+    // Le portail porte le nom et le logo de L'ÉCOLE (ex. GOTCHA), pas
+    // « SMARTSCHOOL » : c'est l'espace de l'établissement, pas de l'éditeur.
+    const { etablissementNom, etablissementLogo } = useApp();
+    const nomEcole = etablissementNom || 'Mon École';
 
     const navItems = [
         { id: 'dashboard', label: 'Tableau de bord', icon: Home },
@@ -67,9 +72,13 @@ export default function EleveSidebar({
             {/* Logo */}
             <div className={styles.logoContainer}>
                 <div className={styles.logoWrapper}>
-                    <div className={styles.logoBox} style={{ background: 'rgba(255, 255, 255, 0.2)', backdropFilter: 'blur(4px)' }}>S</div>
+                    <div className={styles.logoBox} style={{ background: 'rgba(255, 255, 255, 0.2)', backdropFilter: 'blur(4px)', overflow: 'hidden' }}>
+                        {etablissementLogo
+                            ? <img src={etablissementLogo} alt={nomEcole} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                            : (nomEcole[0] || 'É').toUpperCase()}
+                    </div>
                     <div>
-                        <p className={styles.logoTitle}>SMARTSCHOOL</p>
+                        <p className={styles.logoTitle}>{nomEcole}</p>
                         <p className={styles.logoSubtitle}>Portail Élève</p>
                     </div>
                 </div>
