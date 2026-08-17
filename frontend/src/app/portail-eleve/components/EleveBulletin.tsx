@@ -4,6 +4,7 @@ import React from 'react';
 import { FileText, Loader2, Printer, CheckCircle } from 'lucide-react';
 import styles from '../portail-eleve.module.css';
 import { BulletinData } from '../types';
+import { useApp } from '@/context/AppContext';
 
 interface EleveBulletinProps {
     bulletinData: BulletinData | null;
@@ -26,6 +27,9 @@ export default function EleveBulletin({
     loading,
     couleurPortail,
 }: EleveBulletinProps) {
+    // Le bulletin porte le nom RÉEL de l'école (ex. GOTCHA), jamais « SmartSchool ».
+    const { etablissementNom } = useApp();
+    const nomEcole = etablissementNom || 'Mon École';
     const handlePrint = () => {
         window.print();
     };
@@ -96,7 +100,7 @@ export default function EleveBulletin({
                                     Classe : {bulletinData.classe}
                                 </p>
                                 <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#94a3b8', fontWeight: 500 }}>
-                                    Établissement Scolaire SmartSchool
+                                    {nomEcole}
                                 </p>
                             </div>
                             <div className="no-print" style={{ textAlign: 'right' }}>
