@@ -1,7 +1,8 @@
 """
 SMARTSCHOOL API — Routes Élèves (CRUD complet)
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, exists, and_, or_, not_
 from sqlalchemy.orm import aliased
@@ -249,6 +250,161 @@ def count_eleves(annee_id: Optional[int] = None, db: Session = Depends(get_db), 
     return {
         "total": total, "actifs": actifs, "inactifs": total - actifs,
         "nouvelles_inscriptions": nouvelles_inscriptions,
+    }
+
+
+# ── Import en masse des élèves (Excel/CSV) ──────────────────────────────────
+_COLONNES_IMPORT_ELEVES = [
+    "Nom", "Prénom", "Sexe", "Date de naissance", "Lieu de naissance",
+    "Téléphone", "E-mail", "Adresse", "Groupe sanguin", "Classe",
+]
+
+
+def _parse_date_naissance(brut: str):
+    """Accepte JJ/MM/AAAA, AAAA-MM-JJ, JJ-MM-AAAA, JJ.MM.AAAA."""
+    brut = (brut or "").strip()
+    if not brut:
+        return None
+    for sep in ("/", "-", "."):
+        if sep in brut:
+            parts = brut.split(sep)
+            if len(parts) == 3:
+                try:
+                    a, b, c = (p.strip() for p in parts)
+                    if len(a) == 4:            # AAAA-MM-JJ
+                        return date_type(int(a), int(b), int(c))
+                    return date_type(int(c), int(b), int(a))  # JJ/MM/AAAA
+                except (ValueError, TypeError):
+                    return None
+    return None
+
+
+def _normalise_sexe(brut: str) -> str:
+    v = (brut or "").strip().upper()
+    if v in ("F", "FEMININ", "FÉMININ", "FILLE", "FEMME"):
+        return "F"
+    return "M"
+
+
+@router.get("/import/modele")
+def modele_import_eleves(etablissement_id: int = Depends(require_etablissement)):
+    """Modèle CSV (séparateur `;`, lisible par Excel) à remplir pour l'import."""
+    import csv, io
+    buffer = io.StringIO()
+    buffer.write("﻿")  # BOM : Excel ouvre alors l'UTF-8 sans casser les accents
+    w = csv.writer(buffer, delimiter=";")
+    w.writerow(_COLONNES_IMPORT_ELEVES)
+    w.writerow(["Camara", "Mariam", "F", "12/03/2015", "Conakry",
+                "620000000", "", "Quartier Madina", "O+", "2eme annee"])
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="modele_import_eleves.csv"'},
+    )
+
+
+@router.post("/import")
+async def importer_eleves(
+    fichier: UploadFile = File(...),
+    dry_run: bool = False,
+    annee_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Importe une liste d'élèves DÉJÀ de l'école (Excel/CSV).
+
+    Chaque élève est créé (matricule auto-incrémenté, mot de passe par défaut
+    12345678), inscrit en RÉINSCRIPTION dans la classe de la colonne « Classe »
+    (par code ou libellé) de l'année en cours, et ses frais (scolarité +
+    réinscription de sa classe) sont générés. Aucun parent — le directeur les
+    ajoute ensuite. `dry_run=true` analyse sans rien écrire (même rapport)."""
+    from app.services.import_tabulaire import FichierIllisible, lire_lignes, valeur, normaliser_entete
+    from app.api.reinscription import _generer_frais_reinscription
+
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+    if annee_id is None:
+        raise HTTPException(400, "Aucune année scolaire en cours : impossible d'importer.")
+    _verifier_annee_modifiable(db, annee_id)
+
+    contenu = await fichier.read()
+    try:
+        _, lignes = lire_lignes(fichier.filename or "import.csv", contenu)
+    except FichierIllisible as e:
+        raise HTTPException(400, str(e))
+    if not lignes:
+        raise HTTPException(400, "Le fichier ne contient aucune ligne d'élève.")
+
+    # Classes de l'année, retrouvables par code OU libellé (tous cycles mélangés).
+    index_classe = {}
+    for c in db.query(Classe).filter(
+        Classe.etablissement_id == etablissement_id, Classe.annee_id == annee_id
+    ).all():
+        index_classe[normaliser_entete(c.code)] = c
+        index_classe[normaliser_entete(c.libelle)] = c
+
+    mdp_defaut = hash_password("12345678")
+    crees, ignorees, apercu = 0, [], []
+    for i, ligne in enumerate(lignes, start=2):  # ligne 1 = en-tête
+        nom = valeur(ligne, "nom", "nom de l eleve").strip()
+        prenom = valeur(ligne, "prenom", "prenoms", "prenom de l eleve").strip()
+        classe_txt = valeur(ligne, "classe", "classe cible").strip()
+        date_naissance = _parse_date_naissance(
+            valeur(ligne, "date de naissance", "date naissance", "naissance", "ne le", "nee le")
+        )
+
+        if not nom or not prenom:
+            ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}".strip(), "raison": "nom ou prénom manquant"})
+            continue
+        classe = index_classe.get(normaliser_entete(classe_txt)) if classe_txt else None
+        if not classe:
+            ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": f"classe introuvable : « {classe_txt} »"})
+            continue
+        if date_naissance is None:
+            ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": "date de naissance manquante ou invalide"})
+            continue
+
+        if dry_run:
+            apercu.append({"ligne": i, "eleve": f"{prenom} {nom}", "classe": classe.libelle})
+            crees += 1
+            continue
+
+        eleve = Eleve(
+            etablissement_id=etablissement_id,
+            matricule=generer_matricule(db, Eleve, PREFIXE_ELEVE, etablissement_id),
+            nom=nom, prenom=prenom, sexe=_normalise_sexe(valeur(ligne, "sexe")),
+            date_naissance=date_naissance,
+            lieu_naissance=valeur(ligne, "lieu de naissance", "lieu naissance").strip() or None,
+            telephone=valeur(ligne, "telephone", "tel").strip() or None,
+            email=valeur(ligne, "e mail", "email", "mail").strip() or None,
+            adresse=valeur(ligne, "adresse").strip() or None,
+            quartier=valeur(ligne, "quartier").strip() or None,
+            groupe_sanguin=valeur(ligne, "groupe sanguin", "groupe").strip() or None,
+            mot_de_passe=mdp_defaut, statut="ACTIF",
+        )
+        db.add(eleve)
+        db.flush()
+        insc = Inscription(
+            eleve_id=eleve.eleve_id, classe_id=classe.classe_id, annee_id=annee_id,
+            statut="ACTIVE", type_inscription="REINSCRIPTION",
+        )
+        db.add(insc)
+        db.flush()
+        classe.effectif_actuel = (classe.effectif_actuel or 0) + 1
+        # Élève déjà de l'école : frais de RÉinscription + scolarité de SA classe.
+        _generer_frais_reinscription(db, insc, classe, etablissement_id, type_inscription="REINSCRIPTION")
+        crees += 1
+
+    if not dry_run:
+        db.commit()
+
+    return {
+        "dry_run": dry_run,
+        "total_lignes": len(lignes),
+        "crees": crees,
+        "ignorees": ignorees,
+        "apercu": apercu[:20],
+        "message": (f"{crees} élève(s) {'seraient importés' if dry_run else 'importés'}, "
+                    f"{len(ignorees)} ligne(s) ignorée(s)."),
     }
 
 
