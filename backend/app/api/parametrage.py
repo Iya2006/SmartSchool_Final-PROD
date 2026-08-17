@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
 import os, shutil, uuid
 from datetime import timedelta
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from app.core.database import get_db
@@ -358,6 +359,21 @@ def create_annee(
     # etablissement_id impose par le compte authentifie : il venait du corps de
     # la requete, donc une ecole pouvait creer des annees scolaires chez une
     # autre (Lot 10).
+    # Garde-fou anti-doublon : sans lui, chaque clic sur « Nouvelle année »
+    # (assistant de clôture OU calendrier) recréait une année de même code/
+    # libellé — d'où les multiples « 2026-2027 » constatés, qui rendaient la
+    # bascule d'année ambiguë (laquelle activer ?).
+    existe = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == etablissement_id,
+        or_(AnneeScolaire.code == data.code, AnneeScolaire.libelle == data.libelle),
+    ).first()
+    if existe:
+        raise HTTPException(
+            409,
+            f"Une année scolaire « {existe.libelle} » existe déjà. "
+            "Modifiez-la ou activez-la au lieu d'en créer une nouvelle.",
+        )
+
     payload = data.model_dump()
     payload["etablissement_id"] = etablissement_id
     a = AnneeScolaire(**payload)
@@ -434,6 +450,68 @@ def activer_annee(
     annee.statut = "EN_COURS"
     db.commit()
     return {"message": f"Année {annee.code} activée"}
+
+
+@router.delete("/annees/{id}", dependencies=[Depends(_require_admin)])
+def delete_annee(
+    id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Supprime une année scolaire VIDE — typiquement un doublon créé par erreur.
+
+    Refuse l'année courante (on ne supprime pas l'année de travail) et toute
+    année qui porte de la vraie histoire : élèves inscrits, factures, dépenses.
+    Une telle année reste consultable en lecture seule, jamais supprimée. Une
+    année « vide » (doublon, ou année cible juste préparée avec des classes sans
+    élèves) est nettoyée avec ses trimestres et ses classes d'échafaudage."""
+    from app.models.academique import Inscription, Facture, Depense, Classe
+    from app.api.classes import purger_classe
+    from sqlalchemy.exc import SQLAlchemyError
+
+    annee = _annee_ou_404(db, id, etablissement_id)
+    if annee.est_courante == "O":
+        raise HTTPException(
+            409, "Impossible de supprimer l'année courante. Activez d'abord une autre année."
+        )
+
+    nb_insc = db.query(Inscription).filter(Inscription.annee_id == id).count()
+    nb_fact = db.query(Facture).filter(Facture.annee_id == id).count()
+    nb_dep = db.query(Depense).filter(Depense.annee_id == id).count()
+    blocs = []
+    if nb_insc:
+        blocs.append(f"{nb_insc} inscription(s) d'élève")
+    if nb_fact:
+        blocs.append(f"{nb_fact} facture(s)")
+    if nb_dep:
+        blocs.append(f"{nb_dep} dépense(s)")
+    if blocs:
+        raise HTTPException(
+            409,
+            "Cette année ne peut pas être supprimée : elle contient "
+            + " et ".join(blocs)
+            + ". Elle reste consultable en lecture seule.",
+        )
+
+    classe_ids = [
+        c.classe_id for c in db.query(Classe.classe_id).filter(
+            Classe.annee_id == id, Classe.etablissement_id == etablissement_id
+        ).all()
+    ]
+    libelle = annee.libelle
+    try:
+        for cid in classe_ids:
+            purger_classe(db, cid)
+        db.query(Trimestre).filter(Trimestre.annee_id == id).delete(synchronize_session=False)
+        db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == id).delete(synchronize_session=False)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            409,
+            "Cette année ne peut pas être supprimée : des données y sont encore rattachées.",
+        )
+    return {"message": f"Année « {libelle} » supprimée."}
 
 
 # ============================================================================
