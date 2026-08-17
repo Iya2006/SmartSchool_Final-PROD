@@ -33,7 +33,8 @@ export default function ModifierEnseignant() {
         date_naissance: '',
         lieu_naissance: '',
         adresse: '',
-        numero_cni: ''
+        numero_cni: '',
+        mot_de_passe: ''
     });
 
     useEffect(() => {
@@ -60,7 +61,8 @@ export default function ModifierEnseignant() {
                     date_naissance: e.date_naissance ? String(e.date_naissance).split('T')[0] : '',
                     lieu_naissance: e.lieu_naissance || '',
                     adresse: e.adresse || '',
-                    numero_cni: e.numero_cni || ''
+                    numero_cni: e.numero_cni || '',
+                    mot_de_passe: ''
                 });
             } catch (err) {
                 console.error(err);
@@ -81,7 +83,12 @@ export default function ModifierEnseignant() {
         setLoading(true);
         setError(null);
         try {
-            await api.put(`/api/enseignants/${id}`, formData);
+            // Mot de passe : envoyé seulement s'il est renseigné (vide = inchangé).
+            const payload: Record<string, unknown> = { ...formData };
+            if (!formData.mot_de_passe || !formData.mot_de_passe.trim()) {
+                delete payload.mot_de_passe;
+            }
+            await api.put(`/api/enseignants/${id}`, payload);
             setSuccess(true);
             setTimeout(() => {
                 router.push('/enseignants');
@@ -254,6 +261,11 @@ export default function ModifierEnseignant() {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                 <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Numéro CNI / Passeport</label>
                                 <input type="text" name="numero_cni" value={formData.numero_cni} onChange={handleChange} placeholder="N° Pièce d'identité" style={{ padding: '12px 16px', borderRadius: '8px', border: '1px solid var(--border-focus)', outline: 'none', background: 'var(--bg-body)', fontSize: '14px' }} />
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', gridColumn: '1 / -1' }}>
+                                <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Mot de passe de connexion</label>
+                                <input type="text" name="mot_de_passe" value={formData.mot_de_passe} onChange={handleChange} autoComplete="new-password" placeholder="Laisser vide pour ne pas changer" style={{ padding: '12px 16px', borderRadius: '8px', border: '1px solid var(--border-focus)', outline: 'none', background: 'var(--bg-body)', fontSize: '14px' }} />
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Renseignez-le pour (ré)initialiser l&apos;accès de l&apos;enseignant. Vide = inchangé.</span>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', gridColumn: '1 / -1' }}>
                                 <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Adresse de résidence</label>
