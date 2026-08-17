@@ -29,7 +29,6 @@ const TYPES = [
     { code: 'COLLEGE', libelle: 'Collège' },
     { code: 'LYCEE', libelle: 'Lycée' },
     { code: 'COMPLEXE', libelle: 'Complexe scolaire' },
-    { code: 'UNIVERSITE', libelle: 'Université / Institut' },
     { code: 'AUTRE', libelle: 'Autre' },
 ];
 

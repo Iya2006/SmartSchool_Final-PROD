@@ -56,7 +56,7 @@ STATUT_ACTIF = "ACTIF"
 STATUT_REFUSE = "REFUSE"
 STATUT_SUSPENDU = "SUSPENDU"
 
-TYPES_ETABLISSEMENT = {"PRIMAIRE", "COLLEGE", "LYCEE", "COMPLEXE", "UNIVERSITE", "AUTRE"}
+TYPES_ETABLISSEMENT = {"PRIMAIRE", "COLLEGE", "LYCEE", "COMPLEXE", "AUTRE"}
 
 
 class DemandeInscription(BaseModel):
@@ -193,7 +193,9 @@ def inscrire_etablissement(
         # une matière un cycle. Une école inscrite ici se retrouvait à devoir
         # « créer ses cycles dans Paramètres » — alors qu'aucun écran ne le
         # permet, et que ce référentiel est le même pour toutes les écoles.
-        amorcer_referentiel_scolaire(db, etablissement.etablissement_id)
+        amorcer_referentiel_scolaire(
+            db, etablissement.etablissement_id, data.type_etablissement
+        )
 
         # Le fondateur EST l'administrateur de son école. Pas un SUPER_ADMIN :
         # ce rôle est celui de l'éditeur de la plateforme, et le donner ici

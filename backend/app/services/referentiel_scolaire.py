@@ -19,7 +19,7 @@ Structure officielle guinéenne :
     Collège   : 7e à 10e année, examen BEPC en 10e
     Lycée     : 11e, 12e et Terminale, en séries SE / SM / SS, BAC en Terminale
 """
-from typing import List
+from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,25 @@ CYCLES_REFERENCE = [
     {"code": "CLG", "libelle": "Collège", "ordre": 2, "duree_annees": 4},
     {"code": "LYC", "libelle": "Lycée", "ordre": 3, "duree_annees": 3},
 ]
+
+# Le type d'établissement choisi à l'inscription décide des cycles créés : une
+# école primaire ne doit voir QUE des niveaux primaires, etc. « Complexe » couvre
+# tout. « Autre » (type inconnu / hors programme guinéen) reçoit tout par défaut,
+# pour ne jamais laisser une école sans aucun niveau — elle supprimera ce qu'elle
+# n'utilise pas. Un type non listé retombe sur ce même défaut « tout ».
+CYCLES_PAR_TYPE = {
+    "PRIMAIRE": ["PRM"],
+    "COLLEGE": ["CLG"],
+    "LYCEE": ["LYC"],
+    "COMPLEXE": ["PRM", "CLG", "LYC"],
+    "AUTRE": ["PRM", "CLG", "LYC"],
+}
+CYCLES_PAR_DEFAUT = ["PRM", "CLG", "LYC"]
+
+
+def cycles_autorises(type_etablissement: Optional[str]) -> List[str]:
+    """Codes de cycles à créer pour ce type d'établissement."""
+    return CYCLES_PAR_TYPE.get((type_etablissement or "").upper(), CYCLES_PAR_DEFAUT)
 
 NIVEAUX_REFERENCE = [
     # --- PRIMAIRE ---
@@ -76,17 +95,27 @@ def niveaux_manquants(db: Session, etablissement_id: int) -> List[str]:
     return [n["code"] for n in NIVEAUX_REFERENCE if n["code"] not in presents]
 
 
-def amorcer_referentiel_scolaire(db: Session, etablissement_id: int) -> dict:
-    """Crée les cycles et niveaux manquants de CETTE école.
+def amorcer_referentiel_scolaire(db: Session, etablissement_id: int,
+                                 type_etablissement: Optional[str] = None) -> dict:
+    """Crée les cycles et niveaux manquants de CETTE école, selon son type.
+
+    Le type (Primaire / Collège / Lycée / Complexe / Autre) restreint les cycles
+    créés : une école primaire ne reçoit que le cycle primaire. `type=None` (ou
+    inconnu) crée tout — utilisé quand on veut juste compléter un référentiel
+    sans supposer de restriction.
 
     Idempotent : ce qui existe déjà n'est ni recréé ni modifié. Une école qui a
     renommé ou supprimé un niveau garde son choix — on ne complète que ce qui
     manque, on ne réaligne jamais sur le référentiel.
     """
+    autorises = cycles_autorises(type_etablissement) if type_etablissement else CYCLES_PAR_DEFAUT
+    cycles_a_creer = [c for c in CYCLES_REFERENCE if c["code"] in autorises]
+    niveaux_a_creer = [n for n in NIVEAUX_REFERENCE if n["cycle"] in autorises]
+
     cycles_par_code = {}
     crees_cycles = 0
 
-    for reference in CYCLES_REFERENCE:
+    for reference in cycles_a_creer:
         cycle = db.query(Cycle).filter(
             Cycle.etablissement_id == etablissement_id,
             Cycle.code == reference["code"],
@@ -99,7 +128,7 @@ def amorcer_referentiel_scolaire(db: Session, etablissement_id: int) -> dict:
         cycles_par_code[reference["code"]] = cycle.cycle_id
 
     crees_niveaux = 0
-    for reference in NIVEAUX_REFERENCE:
+    for reference in niveaux_a_creer:
         cycle_id = cycles_par_code[reference["cycle"]]
         existe = db.query(Niveau.niveau_id).filter(
             Niveau.cycle_id == cycle_id, Niveau.code == reference["code"]

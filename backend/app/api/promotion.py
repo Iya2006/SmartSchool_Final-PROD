@@ -204,17 +204,45 @@ def _cycle_key_pour_classe(db: Session, classe: Classe):
     return niveau, cycle, cycle_key
 
 
-def _situation_niveau(niveau: Optional[Niveau], cycle: Optional[Cycle]) -> dict:
+def _cycle_existe(db: Session, code: str, etablissement_id: int) -> bool:
+    """Cette école possède-t-elle ce cycle (PRM/CLG/LYC) ?"""
+    return db.query(Cycle.cycle_id).filter(
+        Cycle.etablissement_id == etablissement_id, Cycle.code == code
+    ).first() is not None
+
+
+def _situation_niveau(db: Session, niveau: Optional[Niveau], cycle: Optional[Cycle],
+                      etablissement_id: int) -> dict:
     """Caractérise un niveau pour la décision de fin d'année.
 
     Factorise un calcul qui vivait en double (aperçu et calcul persisté) et
     ajoute `est_examen` : pour un niveau d'examen national (6e/CEE, 10e/BEPC,
     Terminale/BAC), le passage ne dépend pas de la moyenne interne mais du
     résultat publié par le Ministère (voir ss_resultats_officiels_examen).
+
+    « Terminal » dépend de l'ÉCOLE, pas seulement du niveau : une école qui
+    s'arrête au primaire (pas de collège) voit sa 6e année comme fin de cursus
+    (CEE → DIPLÔMÉ), et une école qui s'arrête au collège (pas de lycée) voit
+    sa 10e année comme fin de cursus (BEPC → DIPLÔMÉ). Sans ça, l'élève admis
+    du dernier niveau n'avait aucune classe cible et bloquait la clôture. La
+    frontière vers le lycée n'existe que si le lycée existe réellement.
     """
+    est_prm_dernier = bool(cycle and niveau and cycle.code == "PRM" and niveau.ordre == 6)
+    est_clg_dernier = bool(cycle and niveau and cycle.code == "CLG" and niveau.ordre == 4)
+    est_lyc_terminal = bool(cycle and niveau and cycle.code == "LYC" and niveau.ordre + 3 > 19)
+
+    a_college = _cycle_existe(db, "CLG", etablissement_id)
+    a_lycee = _cycle_existe(db, "LYC", etablissement_id)
+
+    est_terminal = (
+        est_lyc_terminal
+        or (est_prm_dernier and not a_college)
+        or (est_clg_dernier and not a_lycee)
+    )
     return {
-        "est_frontiere_lycee": bool(cycle and niveau and cycle.code == "CLG" and niveau.ordre == 4),
-        "est_terminal": bool(cycle and niveau and cycle.code == "LYC" and niveau.ordre + 3 > 19),
+        # Frontière Collège→Lycée uniquement si un lycée existe pour accueillir.
+        "est_frontiere_lycee": est_clg_dernier and a_lycee,
+        "est_terminal": est_terminal,
         "est_examen": bool(niveau and niveau.est_examen == "O"),
         "examen_national": niveau.examen_national if niveau else None,
     }
@@ -262,7 +290,7 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
     redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", False)
     seuil = get_seuil_passage(db, classe.etablissement_id, cycle_key)
     niveau_suivant = _niveau_suivant(db, niveau)
-    situation = _situation_niveau(niveau, cycle)
+    situation = _situation_niveau(db, niveau, cycle, classe.etablissement_id)
     est_frontiere_lycee = situation["est_frontiere_lycee"]
     est_terminal = situation["est_terminal"]
     est_examen = situation["est_examen"]
@@ -358,7 +386,7 @@ def _calculer_resultats_classe_core(
     redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", False)
     seuil = get_seuil_passage(db, classe.etablissement_id, cycle_key)
     niveau_suivant = _niveau_suivant(db, niveau) if niveau else None
-    situation = _situation_niveau(niveau, cycle)
+    situation = _situation_niveau(db, niveau, cycle, classe.etablissement_id)
     est_frontiere_lycee = situation["est_frontiere_lycee"]
     est_terminal = situation["est_terminal"]
     est_examen = situation["est_examen"]
@@ -695,7 +723,7 @@ def lister_resultats_officiels(
     """
     classe = _classe_ou_404(db, classe_id, etablissement_id)
     niveau, cycle, _ = _cycle_key_pour_classe(db, classe)
-    situation = _situation_niveau(niveau, cycle)
+    situation = _situation_niveau(db, niveau, cycle, classe.etablissement_id)
 
     inscriptions = db.query(Inscription, Eleve).join(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
@@ -933,7 +961,7 @@ async def importer_resultats_officiels(
 
     classe = _classe_ou_404(db, classe_id, etablissement_id)
     niveau, cycle, _ = _cycle_key_pour_classe(db, classe)
-    situation = _situation_niveau(niveau, cycle)
+    situation = _situation_niveau(db, niveau, cycle, classe.etablissement_id)
     if not situation["est_examen"]:
         raise HTTPException(
             400,
