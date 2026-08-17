@@ -394,19 +394,29 @@ def update_classe(classe_id: int, data: ClasseCreate, db: Session = Depends(get_
 
 @router.delete("/{classe_id}")
 def delete_classe(classe_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Supprime une classe créée par erreur.
+    """Supprime une classe vide (typiquement créée par erreur ou pour un test).
 
-    Cette route n'existait pas : une classe saisie par erreur restait
-    définitivement dans l'établissement (l'API répondait 405). C'est le cas
-    d'usage visé — une coquille corrigée juste après la création.
+    On refuse UNIQUEMENT si la classe porte de la vraie histoire qui serait
+    perdue : des élèves ACTIFS (des inscrits en cours), des NOTES saisies, des
+    FACTURES, ou des écritures/dépenses comptables. Le message dit précisément
+    ce qui bloque, au lieu de laisser PostgreSQL répondre par une violation de
+    clé étrangère illisible.
 
-    Une classe qui a VÉCU n'est jamais supprimée : élèves inscrits, évaluations
-    passées, séances d'emploi du temps. Supprimer emporterait des notes et des
-    présences, ou laisserait des lignes orphelines. On refuse alors, en disant
-    précisément ce qui bloque, plutôt que de laisser PostgreSQL répondre par
-    une violation de clé étrangère illisible.
+    Le reste n'est que de l'échafaudage sans valeur propre — évaluations sans
+    notes, séances d'emploi du temps, affectations d'enseignant, tarifs de la
+    classe, matières rattachées, inscriptions inactives sans note ni facture :
+    tout cela est nettoyé avec la classe, dans le bon ordre (enfants d'abord),
+    en une seule transaction. C'est ce qui débloque la clôture d'année quand
+    des classes vides mais « configurées » (matières, compositions de test)
+    empêchaient le calcul complet.
     """
-    from app.models.academique import Evaluation
+    from app.models.academique import (
+        Evaluation, EvaluationSession, PeriodeEpreuve, Note, Bulletin, BulletinLigne,
+        Seance, CreneauEmploi, Affectation, Disponibilite, SujetExamen, CreneauExamen,
+        Devoir, FournitureScolaire, TarifClasse, Presence, ResultatOfficielExamen,
+        Depense, LigneEcriture, Facture,
+    )
+    from sqlalchemy.exc import SQLAlchemyError
 
     cl = db.query(Classe).filter(
         Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
@@ -414,14 +424,32 @@ def delete_classe(classe_id: int, db: Session = Depends(get_db), etablissement_i
     if not cl:
         raise HTTPException(status_code=404, detail="Classe non trouvée")
 
-    nb_inscriptions = db.query(Inscription).filter(Inscription.classe_id == classe_id).count()
-    nb_evaluations = db.query(Evaluation).filter(Evaluation.classe_id == classe_id).count()
+    inscription_ids = [i.inscription_id for i in db.query(Inscription.inscription_id).filter(
+        Inscription.classe_id == classe_id
+    ).all()]
+
+    # ── Ce qui protège la classe (vraie histoire) ──
+    nb_actifs = db.query(Inscription).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE"
+    ).count()
+    nb_notes = db.query(Note).join(Evaluation, Note.evaluation_id == Evaluation.evaluation_id).filter(
+        Evaluation.classe_id == classe_id
+    ).count()
+    nb_factures = db.query(Facture).filter(Facture.inscription_id.in_(inscription_ids)).count() if inscription_ids else 0
+    nb_depenses = db.query(Depense).filter(Depense.classe_id == classe_id).count()
+    nb_ecritures = db.query(LigneEcriture).filter(LigneEcriture.classe_id == classe_id).count()
 
     blocages = []
-    if nb_inscriptions:
-        blocages.append(f"{nb_inscriptions} inscription(s) d'élève")
-    if nb_evaluations:
-        blocages.append(f"{nb_evaluations} évaluation(s)")
+    if nb_actifs:
+        blocages.append(f"{nb_actifs} inscription(s) d'élève active(s)")
+    if nb_notes:
+        blocages.append(f"{nb_notes} note(s) déjà saisie(s)")
+    if nb_factures:
+        blocages.append(f"{nb_factures} facture(s)")
+    if nb_depenses:
+        blocages.append(f"{nb_depenses} dépense(s) comptable(s)")
+    if nb_ecritures:
+        blocages.append(f"{nb_ecritures} écriture(s) comptable(s)")
     if blocages:
         raise HTTPException(
             status_code=409,
@@ -430,12 +458,59 @@ def delete_classe(classe_id: int, db: Session = Depends(get_db), etablissement_i
                     + ". Archivez-la plutôt (statut INACTIVE) pour conserver son historique."),
         )
 
-    # Les matières rattachées ne sont qu'une association, sans historique :
-    # elles se retirent avec la classe.
-    db.query(ClasseMatiere).filter(ClasseMatiere.classe_id == classe_id).delete()
-    db.delete(cl)
-    db.commit()
-    return {"message": f"Classe « {cl.libelle} » supprimée."}
+    libelle = cl.libelle
+    try:
+        eval_ids = [e.evaluation_id for e in db.query(Evaluation.evaluation_id).filter(
+            Evaluation.classe_id == classe_id
+        ).all()]
+
+        # Enfants des évaluations (notes = 0 ici, garde-fou déjà passé)
+        if eval_ids:
+            db.query(Note).filter(Note.evaluation_id.in_(eval_ids)).delete(synchronize_session=False)
+            db.query(PeriodeEpreuve).filter(PeriodeEpreuve.evaluation_id.in_(eval_ids)).delete(synchronize_session=False)
+        db.query(PeriodeEpreuve).filter(PeriodeEpreuve.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(Evaluation).filter(Evaluation.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(EvaluationSession).filter(EvaluationSession.classe_id == classe_id).delete(synchronize_session=False)
+
+        # Enfants des inscriptions inactives (aucune note ni facture : garde-fou passé)
+        if inscription_ids:
+            bulletin_ids = [b.bulletin_id for b in db.query(Bulletin.bulletin_id).filter(
+                Bulletin.inscription_id.in_(inscription_ids)
+            ).all()]
+            if bulletin_ids:
+                db.query(BulletinLigne).filter(BulletinLigne.bulletin_id.in_(bulletin_ids)).delete(synchronize_session=False)
+            db.query(Bulletin).filter(Bulletin.inscription_id.in_(inscription_ids)).delete(synchronize_session=False)
+            db.query(Presence).filter(Presence.inscription_id.in_(inscription_ids)).delete(synchronize_session=False)
+            db.query(ResultatOfficielExamen).filter(ResultatOfficielExamen.inscription_id.in_(inscription_ids)).delete(synchronize_session=False)
+        db.query(Inscription).filter(Inscription.classe_id == classe_id).delete(synchronize_session=False)
+
+        # Une autre inscription peut viser cette classe comme cible de promotion.
+        db.query(Inscription).filter(Inscription.classe_cible_id == classe_id).update(
+            {Inscription.classe_cible_id: None}, synchronize_session=False
+        )
+
+        # Échafaudage rattaché à la classe (emploi du temps, examens, config)
+        db.query(Seance).filter(Seance.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(CreneauEmploi).filter(CreneauEmploi.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(Affectation).filter(Affectation.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(Disponibilite).filter(Disponibilite.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(SujetExamen).filter(SujetExamen.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(CreneauExamen).filter(CreneauExamen.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(Devoir).filter(Devoir.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(FournitureScolaire).filter(FournitureScolaire.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(TarifClasse).filter(TarifClasse.classe_id == classe_id).delete(synchronize_session=False)
+        db.query(ClasseMatiere).filter(ClasseMatiere.classe_id == classe_id).delete(synchronize_session=False)
+
+        db.delete(cl)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=("Cette classe ne peut pas être supprimée : des données y sont "
+                    "encore rattachées. Archivez-la plutôt (statut INACTIVE)."),
+        )
+    return {"message": f"Classe « {libelle} » supprimée."}
 
 
 @router.get("/{classe_id}/profil")
