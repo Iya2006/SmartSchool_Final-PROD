@@ -19,7 +19,7 @@
  */
 
 import { useCallback } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useIsRestoring } from '@tanstack/react-query';
 import api from '@/lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -66,6 +66,13 @@ export function useNotifications(pollIntervalMs = 30000): UseNotificationsReturn
         refetchOnWindowFocus: true,
     });
 
+    // Cache React Query persiste en localStorage (offline-first) : au tout
+    // premier rendu client, avant restauration du cache, isLoading tombe a
+    // false sans donnees — mismatch d'hydratation avec le serveur. Meme
+    // correctif que classes/page.tsx et useEleves.ts.
+    const isRestoring = useIsRestoring();
+    const loading = messagesQuery.isLoading || isRestoring;
+
     const allMessages = messagesQuery.data ?? [];
     const messages = allMessages.slice(0, 8);
     const unreadCount = allMessages.filter((m) => m.statut === 'ENVOYE' && m.expediteur_type !== 'ADMIN').length;
@@ -95,7 +102,7 @@ export function useNotifications(pollIntervalMs = 30000): UseNotificationsReturn
     return {
         messages,
         unreadCount,
-        loading: messagesQuery.isLoading,
+        loading,
         markAllAsRead,
         refresh,
     };

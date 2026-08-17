@@ -9,7 +9,6 @@ import { useApp } from '@/context/AppContext';
 import Pagination from '@/components/Pagination';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 import MesSeances from './_components/MesSeances';
-import { startAutoSync } from '@/lib/syncEngine';
 import { LIBELLE_JOUR } from '@/lib/horaires';
 import { useJoursOuvres } from '@/hooks/useJoursOuvres';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -106,13 +105,10 @@ export default function PortailEnseignant() {
         }
     }, [user]);
 
-    // Module offline-first (Phase 1) : rejoue la file locale (notes/présences
-    // saisies hors-ligne) dès le montage du portail, et à chaque retour de
-    // connexion/premier plan ensuite — voir lib/syncEngine.ts.
-    useEffect(() => {
-        const stopAutoSync = startAutoSync();
-        return stopAutoSync;
-    }, []);
+    // Le moteur de synchronisation (lib/syncEngine.ts) est désormais démarré
+    // une seule fois, globalement, dans components/AppShell.tsx — plus
+    // besoin de le faire ici (ça aurait ajouté un second jeu d'écouteurs
+    // online/visibilitychange en plus de celui d'AppShell).
 
     const [data, setData] = useState<DashData | null>(null);
     const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'seances'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');

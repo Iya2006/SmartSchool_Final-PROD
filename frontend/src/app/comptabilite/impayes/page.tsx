@@ -13,7 +13,7 @@ import api from '@/lib/api';
 import Link from 'next/link';
 import Pagination from '@/components/Pagination';
 import AnneeFilter from '@/components/AnneeFilter';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useIsRestoring } from '@tanstack/react-query';
 
 /* ───── Types ───── */
 type Impaye = {
@@ -118,7 +118,7 @@ export default function ImpayesPage() {
 
     const queryClient = useQueryClient();
 
-    const { data: pageData, isLoading: loading, refetch: fetchData } = useQuery({
+    const { data: pageData, isLoading: queryLoading, refetch: fetchData } = useQuery({
         queryKey: ['impayes', etablissementId, filterAnnee, page, filterClasse, filterStatut, filterTypeFrais, search],
         queryFn: async () => {
             const skip = (page - 1) * pageSize;
@@ -155,6 +155,12 @@ export default function ImpayesPage() {
             };
         }
     });
+    // Cache React Query persiste en localStorage (offline-first) : au tout
+    // premier rendu client, avant restauration du cache, isLoading tombe a
+    // false sans donnees — mismatch d'hydratation avec le serveur. Meme
+    // correctif que classes/page.tsx et useEleves.ts.
+    const isRestoring = useIsRestoring();
+    const loading = queryLoading || isRestoring;
 
     const impayes = pageData?.impayes || [];
     const total = pageData?.total || 0;

@@ -159,6 +159,21 @@ async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
     }
 }
 
+// Absence RÉSEAU (pas un refus serveur) — même détection que
+// mettreEnFileSiHorsLigne ci-dessus et lib/syncEngine.ts (isNetworkError) :
+// `error.code === 'ERR_NETWORK'` sans `error.response` du tout. Distinct de
+// "route jamais visitée en ligne" (le Service Worker n'a alors rien à
+// resservir depuis son cache — voir src/app/sw.ts, NetworkFirst) : dans les
+// deux cas, l'appelant reçoit ce même rejet réseau, jamais une exception
+// obscure ("Network Error" par défaut d'axios).
+const MESSAGE_HORS_LIGNE =
+    "Vous êtes hors-ligne et cette donnée n'a pas encore été chargée sur cet appareil. " +
+    'Reconnectez-vous pour y accéder.';
+
+function estErreurReseau(error: any): boolean {
+    return error?.code === 'ERR_NETWORK' && !error?.response;
+}
+
 // ── Intercepteur de réponse : gère les erreurs 401 (token expiré) et 403 (accès interdit) ──
 api.interceptors.response.use(
     (response) => response,
@@ -167,6 +182,15 @@ api.interceptors.response.use(
 
         const queued = await mettreEnFileSiHorsLigne(error);
         if (queued) return queued;
+
+        // Ne touche QUE `error.message` (texte humain) — jamais
+        // `error.response`, dont la présence/absence sert ailleurs dans
+        // l'app à distinguer "le serveur a répondu" de "pas de réponse du
+        // tout" (ex: le bloc juste en dessous). En fabriquer un faux
+        // casserait cette distinction pour du code qui ne s'y attend pas.
+        if (estErreurReseau(error)) {
+            error.message = MESSAGE_HORS_LIGNE;
+        }
 
         if (typeof window !== 'undefined' && error.response) {
             const status = error.response.status;

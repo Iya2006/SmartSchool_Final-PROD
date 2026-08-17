@@ -5,6 +5,7 @@ import { ChevronDown, User, LogOut, Menu } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import styles from '../portail-eleve.module.css';
 import { EleveInfo, Tab } from '../types';
+import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 
 interface EleveHeaderProps {
     eleveData: EleveInfo;
@@ -48,7 +49,8 @@ export default function EleveHeader({
             </button>
 
             {/* Profile Dropdown */}
-            <div className={styles.headerRight}>
+            <div className={styles.headerRight} style={{ gap: '14px' }}>
+                <SyncStatusIndicator />
                 <div ref={dropdownRef} style={{ position: 'relative' }}>
                     <button 
                         onClick={() => setShowProfileDropdown(!showProfileDropdown)} 

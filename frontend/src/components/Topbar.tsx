@@ -23,6 +23,7 @@ import { useAuth } from '@/context/AuthContext';
 import { isAdminSystemRole, canAccessPathForRole } from '@/lib/roleAccess';
 import TopbarNotifications from './TopbarNotifications';
 import TopbarUserMenu from './TopbarUserMenu';
+import SyncStatusIndicator from './SyncStatusIndicator';
 import styles from './Topbar.module.css';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
@@ -207,6 +208,12 @@ export default function Topbar() {
 
             {/* ── Section droite : Actions ── */}
             <div className={styles.actions} style={isMobile && mobileSearchOpen ? { display: 'none' } : undefined}>
+                {/* Hors-ligne / synchronisation — même composant que le portail
+                    enseignant (components/SyncStatusIndicator.tsx), pas de
+                    doublon : montré ici pour que tout le module admin ait le
+                    même signal, pas seulement le portail enseignant. */}
+                <SyncStatusIndicator />
+
                 {/* Notifications */}
                 <TopbarNotifications />
 

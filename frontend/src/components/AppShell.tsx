@@ -1,10 +1,12 @@
 'use client';
 
+import { useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { UIProvider, useUI } from '@/context/UIContext';
 import { isAdminSystemRole } from '@/lib/roleAccess';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { startAutoSync } from '@/lib/syncEngine';
 import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
 
@@ -24,6 +26,19 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     const { isAuthenticated, user } = useAuth();
     const { sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar } = useUI();
     const isMobile = useIsMobile();
+
+    // Moteur de synchronisation (lib/syncEngine.ts) démarré une seule fois,
+    // ici, pour toute l'application — plutôt que dans une page précise
+    // (avant : uniquement le portail enseignant, donc la file locale
+    // n'était rejouée que si l'utilisateur se trouvait justement dans ce
+    // portail au retour de connexion). AppShell enveloppe déjà toutes les
+    // routes (admin ET portails, voir le rendu ci-dessous), c'est le seul
+    // point toujours monté pendant toute la session.
+    useEffect(() => {
+        if (!isAuthenticated) return;
+        const stopAutoSync = startAutoSync();
+        return stopAutoSync;
+    }, [isAuthenticated]);
 
     const isFullscreen = FULLSCREEN_PATHS.some(p => pathname.startsWith(p));
 

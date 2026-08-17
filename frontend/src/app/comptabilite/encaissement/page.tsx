@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, useIsRestoring } from '@tanstack/react-query';
 import { useSearchParams } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -145,7 +145,7 @@ function EncaissementContent() {
     };
 
     // ─── Load initial data (React Query — offline cache) ───
-    const { data: initialData, isLoading: initialLoading } = useQuery({
+    const { data: initialData, isLoading: initialQueryLoading } = useQuery({
         queryKey: ['encaissement-solvabilite', filterAnnee],
         queryFn: async () => {
             const [solvRes, classRes] = await Promise.all([
@@ -160,6 +160,12 @@ function EncaissementContent() {
         staleTime: 1000 * 60 * 5,
         enabled: !!filterAnnee,
     });
+    // Cache React Query persiste en localStorage (offline-first) : au tout
+    // premier rendu client, avant restauration du cache, isLoading tombe a
+    // false sans donnees — mismatch d'hydratation avec le serveur. Meme
+    // correctif que classes/page.tsx et useEleves.ts.
+    const isRestoring = useIsRestoring();
+    const initialLoading = initialQueryLoading || isRestoring;
     // Mémoïsés : sans ça, `initialData?.allData || []` recrée un nouveau tableau
     // (référence différente) à CHAQUE rendu tant que la requête est en cours de
     // chargement, ce qui déstabilise les useEffect ci-dessous (dépendance qui
