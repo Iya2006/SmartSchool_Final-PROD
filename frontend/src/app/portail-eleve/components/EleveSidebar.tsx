@@ -40,6 +40,13 @@ export default function EleveSidebar({
     // « SMARTSCHOOL » : c'est l'espace de l'établissement, pas de l'éditeur.
     const { etablissementNom, etablissementLogo } = useApp();
     const nomEcole = etablissementNom || 'Mon École';
+    // `etablissementLogo` est un chemin relatif (ex. /uploads/logo.png) : sans
+    // l'hôte du backend, l'image ne s'affichait pas. Même règle que le login
+    // et le favicon (AppContext).
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
+    const logoSrc = etablissementLogo
+        ? (etablissementLogo.startsWith('http') ? etablissementLogo : `${API_BASE}${etablissementLogo}`)
+        : null;
 
     const navItems = [
         { id: 'dashboard', label: 'Tableau de bord', icon: Home },
@@ -73,8 +80,8 @@ export default function EleveSidebar({
             <div className={styles.logoContainer}>
                 <div className={styles.logoWrapper}>
                     <div className={styles.logoBox} style={{ background: 'rgba(255, 255, 255, 0.2)', backdropFilter: 'blur(4px)', overflow: 'hidden' }}>
-                        {etablissementLogo
-                            ? <img src={etablissementLogo} alt={nomEcole} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                        {logoSrc
+                            ? <img src={logoSrc} alt={nomEcole} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
                             : (nomEcole[0] || 'É').toUpperCase()}
                     </div>
                     <div>
