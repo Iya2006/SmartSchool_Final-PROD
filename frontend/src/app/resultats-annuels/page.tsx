@@ -64,7 +64,7 @@ const PAGE_SIZE = 25;
 const MENTIONS_ORDRE = ['TRÈS BIEN', 'BIEN', 'ASSEZ BIEN', 'PASSABLE', 'INSUFFISANT'];
 
 export default function ResultatsAnnuelsPage() {
-    const { etablissementId } = useApp();
+    const { etablissementId, anneeId } = useApp();
 
     const [classes, setClasses] = useState<any[]>([]);
     const [selectedClasse, setSelectedClasse] = useState<number | null>(null);
@@ -87,10 +87,13 @@ export default function ResultatsAnnuelsPage() {
     const fichierRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        api.get(`/api/classes?etablissement_id=${etablissementId}`)
+        // Filtré par année : sinon le sélecteur de classe mélangeait les années
+        // (ex. la « 3ème année » de l'an prochain apparaissait en consultant une
+        // année passée).
+        api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`)
             .then(r => setClasses(r.data))
             .catch(() => setClasses([]));
-    }, [etablissementId]);
+    }, [etablissementId, anneeId]);
 
     const charger = useCallback(async () => {
         if (!selectedClasse) return;

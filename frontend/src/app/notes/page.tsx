@@ -163,7 +163,7 @@ export default function CentralisationNotesPage() {
         const loadInit = async () => {
             try {
                 const [clsRes, triRes, statsRes, typesRes, moisRes] = await Promise.all([
-                    api.get(`/api/classes?etablissement_id=${etablissementId}`),
+                    api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
                     api.get('/api/portail-enseignant/referentiels/trimestres'),
                     api.get('/api/evaluations/centralisation/stats'),
                     api.get('/api/evaluations/types').catch(() => ({ data: [] })),
@@ -190,7 +190,7 @@ export default function CentralisationNotesPage() {
             } catch (e) { console.error(e); }
         };
         loadInit();
-    }, [etablissementId]);
+    }, [etablissementId, anneeId]);
 
     // Liste des évaluations centralisées — paginée côté serveur (avant : un seul
     // fetch sans limite qui, avec 998 évaluations réelles, faisait timeout la
