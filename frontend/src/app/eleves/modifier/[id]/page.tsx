@@ -37,7 +37,8 @@ export default function ModifierEleve() {
         statut: 'ACTIF',
         classe_id: '',
         adresse: '',
-        groupe_sanguin: ''
+        groupe_sanguin: '',
+        mot_de_passe: ''
     });
 
     useEffect(() => {
@@ -62,7 +63,8 @@ export default function ModifierEleve() {
                     statut: e.statut || 'ACTIF',
                     classe_id: e.classe_id || '',
                     adresse: e.adresse || '',
-                    groupe_sanguin: e.groupe_sanguin || ''
+                    groupe_sanguin: e.groupe_sanguin || '',
+                    mot_de_passe: ''
                 });
             } catch (err) {
                 console.error(err);
@@ -88,6 +90,11 @@ export default function ModifierEleve() {
                 payload.classe_id = parseInt(payload.classe_id);
             } else {
                 delete payload.classe_id;
+            }
+            // Mot de passe : envoyé seulement s'il est renseigné — un champ vide
+            // ne doit PAS effacer le mot de passe existant de l'élève.
+            if (!payload.mot_de_passe || !payload.mot_de_passe.trim()) {
+                delete payload.mot_de_passe;
             }
 
             await api.put(`/api/eleves/${id}`, payload);
@@ -296,6 +303,22 @@ export default function ModifierEleve() {
                                     <option value="O+">O+</option>
                                     <option value="O-">O-</option>
                                 </select>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Mot de passe du portail élève</label>
+                                <input
+                                    type="text"
+                                    name="mot_de_passe"
+                                    value={formData.mot_de_passe}
+                                    onChange={handleChange}
+                                    placeholder="Laisser vide pour ne pas changer"
+                                    autoComplete="new-password"
+                                    style={{ padding: '12px 14px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '14px', background: 'var(--bg-surface)' }}
+                                />
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                    Renseignez-le pour (ré)initialiser l&apos;accès de l&apos;élève. Vide = inchangé.
+                                </span>
                             </div>
 
                         </div>

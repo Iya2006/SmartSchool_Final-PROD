@@ -257,7 +257,7 @@ export default function NouveauEleve() {
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                 <span style={{ fontSize: '13px', color: '#475569', fontWeight: 600 }}>Mot de passe</span>
                                 <code style={{ background: '#fff', border: '1px solid #bae6fd', padding: '5px 12px', borderRadius: '8px', fontSize: '15px', fontWeight: 800, color: '#0f172a', letterSpacing: '0.5px' }}>
-                                    {formData.eleve_mot_de_passe.trim() || 'smartschool'}
+                                    {formData.eleve_mot_de_passe.trim() || '(non défini — à définir dans Modifier)'}
                                 </code>
                             </div>
                         </div>
@@ -434,12 +434,13 @@ export default function NouveauEleve() {
                                 généré automatiquement à la création et affiché à la fin. Vous n&apos;avez qu&apos;à définir le mot de passe ci-dessous.
                             </p>
                         </div>
-                        <div style={{ padding: '14px 18px', borderRadius: '12px', background: '#fef3c7', border: '1px solid #fde68a', marginBottom: '18px' }}>
-                            <p style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: 0, fontSize: '13px', color: '#92400e', fontWeight: 600 }}>
-                                <AlertTriangle size={14} /> Mot de passe par défaut : <code style={{ background: '#fff', padding: '2px 8px', borderRadius: '6px', fontFamily: 'monospace', fontSize: '14px', border: '1px solid #fed7aa' }}>smartschool</code>
+                        <div style={{ padding: '14px 18px', borderRadius: '12px', background: '#eff6ff', border: '1px solid #bfdbfe', marginBottom: '18px' }}>
+                            <p style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: 0, fontSize: '13px', color: '#1e40af', fontWeight: 600 }}>
+                                <AlertTriangle size={14} /> Ce mot de passe donne accès au portail de l&apos;élève.
                             </p>
-                            <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#78350f' }}>
-                                Si vous ne saisissez rien, le mot de passe sera <strong>smartschool</strong>. Vous pouvez personnaliser ci-dessous.
+                            <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#1e3a8a' }}>
+                                Il n&apos;y a <strong>aucun mot de passe par défaut</strong>. Si vous le laissez vide, l&apos;élève n&apos;aura pas
+                                accès au portail tant qu&apos;un mot de passe ne sera pas défini (vous pourrez le faire plus tard via <strong>Modifier</strong>).
                             </p>
                         </div>
                         <div style={{ position: 'relative', maxWidth: '420px' }}>
@@ -448,7 +449,7 @@ export default function NouveauEleve() {
                                 name="eleve_mot_de_passe"
                                 value={formData.eleve_mot_de_passe}
                                 onChange={handleChange}
-                                placeholder="Laisser vide = mot de passe par défaut (smartschool)"
+                                placeholder="Mot de passe du portail élève (facultatif)"
                                 style={{ ...FIELD, paddingRight: '48px', borderColor: '#3b82f6' }}
                             />
                             <button type="button" onClick={() => setShowPassword(!showPassword)}
