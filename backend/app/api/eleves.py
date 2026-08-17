@@ -349,6 +349,16 @@ async def importer_eleves(
         index_classe[normaliser_entete(c.code)] = c
         index_classe[normaliser_entete(c.libelle)] = c
 
+    # Identités DÉJÀ présentes dans l'école (nom + prénom + date de naissance,
+    # comparés sans casse ni accents). Sert à rendre l'import IDEMPOTENT : le
+    # relancer — ou une école qui, croyant l'import coupé, le rejoue — ne
+    # recrée pas les mêmes élèves. C'est ce qui provoquait les doublons.
+    existants = set()
+    for (n, p, d) in db.query(Eleve.nom, Eleve.prenom, Eleve.date_naissance).filter(
+        Eleve.etablissement_id == etablissement_id
+    ).all():
+        existants.add((normaliser_entete(n or ""), normaliser_entete(p or ""), d))
+
     # --- On VALIDE toutes les lignes avant d'écrire quoi que ce soit -----------
     valides, ignorees, apercu = [], [], []
     for i, ligne in enumerate(lignes, start=2):  # ligne 1 = en-tête
@@ -368,6 +378,12 @@ async def importer_eleves(
         if date_naissance is None:
             ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": "date de naissance manquante ou invalide"})
             continue
+        # Doublon : même élève déjà en base, OU répété plus haut dans le fichier.
+        identite = (normaliser_entete(nom), normaliser_entete(prenom), date_naissance)
+        if identite in existants:
+            ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": "déjà présent (doublon évité)"})
+            continue
+        existants.add(identite)
         valides.append((ligne, nom, prenom, classe, date_naissance))
         apercu.append({"ligne": i, "eleve": f"{prenom} {nom}", "classe": classe.libelle})
 
@@ -451,6 +467,7 @@ async def importer_eleves(
     #    tarifs préchargés par classe, numéros de facture incrémentés en mémoire.
     classe_ids = [c.classe_id for c in classes]
     tarifs_par_classe: dict = {}
+    vus_tarif = set()  # (classe_id, type_frais_id) : jamais deux fois le même frais
     if classe_ids:
         for tarif, tf in db.query(TarifClasse, TypeFrais).join(
             TypeFrais, TarifClasse.type_frais_id == TypeFrais.type_frais_id
@@ -461,6 +478,10 @@ async def importer_eleves(
         ).all():
             if _est_frais_inscription(tf.categorie):
                 continue  # réinscription : on n'ajoute jamais le frais d'entrée
+            marque = (tarif.classe_id, tf.type_frais_id)
+            if marque in vus_tarif:
+                continue  # grille en double : une seule facture par type de frais
+            vus_tarif.add(marque)
             tarifs_par_classe.setdefault(tarif.classe_id, []).append(
                 (float(tarif.montant), tf.type_frais_id)
             )

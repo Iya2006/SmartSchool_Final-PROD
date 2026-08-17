@@ -139,6 +139,36 @@ def test_import_en_masse_genere_les_frais_avec_numeros_uniques(client: TestClien
     assert len(set(matricules)) == len(matricules)  # matricules uniques
 
 
+def test_import_deux_fois_ne_cree_pas_de_doublon(client: TestClient, db: Session):
+    """Relancer le MÊME import ne recrée pas les élèves : le 2e passage les
+    signale « déjà présent » et n'écrit rien de plus (import idempotent)."""
+    etab, annee, classe, admin = _ecole(db)
+    headers = _headers(client, admin.nom_utilisateur)
+    csv = (
+        "Nom;Prénom;Sexe;Date de naissance;Classe\n"
+        "Camara;Mariam;F;12/03/2015;2eme annee\n"
+        "Bah;Ousmane;M;01/01/2014;2eme annee\n"
+    )
+    files = {"fichier": ("e.csv", csv.encode("utf-8"), "text/csv")}
+
+    r1 = client.post("/api/eleves/import", files=files, headers=headers)
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["crees"] == 2
+
+    # Deuxième import identique : rien de créé, les 2 lignes ignorées.
+    r2 = client.post(
+        "/api/eleves/import",
+        files={"fichier": ("e.csv", csv.encode("utf-8"), "text/csv")},
+        headers=headers,
+    )
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["crees"] == 0
+    assert len(r2.json()["ignorees"]) == 2
+
+    total = db.query(Eleve).filter(Eleve.etablissement_id == etab.etablissement_id).count()
+    assert total == 2  # toujours 2, pas 4
+
+
 def test_import_dry_run_n_ecrit_rien(client: TestClient, db: Session):
     etab, annee, classe, admin = _ecole(db)
     headers = _headers(client, admin.nom_utilisateur)
