@@ -195,8 +195,13 @@ export default function ElevesPage() {
         if (!window.confirm(`Activer ${eleve.prenom} ${eleve.nom} dans ${eleve.classe_code || 'sa classe'} pour cette année ?`)) return;
         setActivatingId(eleve.eleve_id);
         try {
-            await api.post(`/api/reinscription/${eleve.inscription_a_confirmer}/confirmer`);
+            const res = await api.post(`/api/reinscription/${eleve.inscription_a_confirmer}/confirmer`);
             await fetchEleves();
+            // Garde-fou : si aucun frais n'a été généré, la classe n'a pas de
+            // tarifs configurés — l'élève est actif mais rien ne sera à payer.
+            if (res.data?.factures_generees === 0) {
+                alert(`${eleve.prenom} ${eleve.nom} est activé(e), mais AUCUN frais n'a été généré : la classe « ${eleve.classe_code || ''} » n'a pas de tarifs configurés. Configurez ses frais (Comptabilité → Frais), sinon rien ne sera facturé.`);
+            }
         } catch (e: unknown) {
             const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
             alert(detail || "L'activation a échoué. Réessayez.");

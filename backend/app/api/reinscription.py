@@ -312,8 +312,13 @@ def confirmer_reinscription(inscription_id: int, db: Session = Depends(get_db), 
     eleve.statut = "ACTIF"
     insc.statut_reinscription = "REINSCRIT"
 
+    # RÉINSCRIPTION, pas NOUVELLE : l'élève était déjà dans l'école, il paie le
+    # frais de RÉinscription, jamais celui d'inscription (réservé aux nouveaux
+    # élèves créés via l'inscription). Sans ce type, la génération retombait sur
+    # « NOUVELLE » et facturait l'inscription à un réinscrit.
     nb_factures = _generer_frais_reinscription(
-        db, nouvelle_inscription, classe_cible, etablissement_id
+        db, nouvelle_inscription, classe_cible, etablissement_id,
+        type_inscription="REINSCRIPTION",
     )
 
     db.commit()

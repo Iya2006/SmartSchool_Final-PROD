@@ -287,7 +287,7 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
     if not niveau:
         raise HTTPException(404, "Niveau introuvable pour cette classe")
 
-    redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", False)
+    redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", True)
     seuil = get_seuil_passage(db, classe.etablissement_id, cycle_key)
     niveau_suivant = _niveau_suivant(db, niveau)
     situation = _situation_niveau(db, niveau, cycle, classe.etablissement_id)
@@ -383,7 +383,7 @@ def _calculer_resultats_classe_core(
     classe_cible_id), matérialisée plus tard par la réinscription V2.
     """
     niveau, cycle, cycle_key = _cycle_key_pour_classe(db, classe)
-    redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", False)
+    redoublement_actif = _get_notation_param(db, classe.etablissement_id, f"notation.redoublement_actif.{cycle_key}", True)
     seuil = get_seuil_passage(db, classe.etablissement_id, cycle_key)
     niveau_suivant = _niveau_suivant(db, niveau) if niveau else None
     situation = _situation_niveau(db, niveau, cycle, classe.etablissement_id)
