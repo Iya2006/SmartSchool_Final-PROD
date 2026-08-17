@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 interface AnneeScolaire {
     annee_id: number;
     libelle: string;
+    est_courante?: string;
 }
 
 interface ThemeConfig {
@@ -62,6 +63,9 @@ interface AppContextType {
     setEtablissementDirecteur: (name: string | null) => void;
     anneeId: number;
     anneeLibelle: string;
+    // Année réellement « en cours » (est_courante='O'). Quand anneeId en diffère,
+    // l'utilisateur consulte une année passée en lecture seule.
+    anneeCouranteId: number;
     setEtablissementId: (id: number) => void;
     setAnneeId: (id: number) => void;
     annees: AnneeScolaire[];
@@ -192,6 +196,7 @@ const AppContext = createContext<AppContextType>({
     setEtablissementDirecteur: () => {},
     anneeId: 1,
     anneeLibelle: '',
+    anneeCouranteId: 1,
     setEtablissementId: () => {},
     setAnneeId: () => {},
     annees: [],
@@ -228,6 +233,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const [etablissementDirecteur, setEtablissementDirecteur] = useState<string | null>(null);
     const [anneeId, setAnneeId] = useState<number>(1);
     const [anneeLibelle, setAnneeLibelle] = useState<string>('');
+    const [anneeCouranteId, setAnneeCouranteId] = useState<number>(1);
     const [annees, setAnnees] = useState<AnneeScolaire[]>([]);
     const [loading, setLoading] = useState(true);
     const [theme, setTheme] = useState<ThemeConfig>(DEFAULT_THEME);
@@ -390,6 +396,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     if (active) {
                         setAnneeId(active.annee_id);
                         setAnneeLibelle(active.libelle);
+                        setAnneeCouranteId(active.annee_id);
                     }
                 }
             })
@@ -466,6 +473,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setEtablissementId, setAnneeId,
             annees, loading,
             refreshEtablissement: fetchEtablissement,
+            anneeCouranteId,
             refreshAnnee: fetchAnnee,
 
             theme,
