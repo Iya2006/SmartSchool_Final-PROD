@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
 import { useRouter } from 'next/navigation';
+import { chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Phone, User, GraduationCap, Wallet, CreditCard, TrendingUp, ChevronRight,
@@ -10,7 +11,7 @@ import {
     Shield, Loader2, Lock, Home, ArrowLeft, LogOut, ChevronDown, Send, Inbox,
     PieChart, Activity, TrendingDown, Mail, MailOpen, Settings, Key,
     Camera, Upload, ImageIcon, ChevronLeft, ShoppingBag, Download, CheckCircle2, XCircle, PenLine, AlertTriangle, Target,
-    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil, Hourglass, Menu
+    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil, Hourglass, Menu, Utensils
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
@@ -91,6 +92,17 @@ export default function PortailParent() {
     const [detailModal, setDetailModal] = useState<Enfant | null>(null);
     const [edtSlots, setEdtSlots] = useState<EdtSlot[]>([]);
     const [edtLoading, setEdtLoading] = useState(false);
+    // Emploi du temps IDENTIQUE pour tout le monde : on suit les horaires
+    // configurés de l'école (mêmes créneaux, mêmes pauses) au lieu d'une grille
+    // figée qui sautait 13h — un cours de 13h ne s'affichait alors pas.
+    const [horaires, setHoraires] = useState<Horaires>(HORAIRES_DEFAUT);
+    useEffect(() => { chargerHoraires().then(setHoraires).catch(() => {}); }, []);
+    const lignesHoraires = useMemo(() => {
+        const debuts = new Map<string, string>();
+        creneauxDeLaJournee(horaires).forEach(h => debuts.set(h.debut, h.fin));
+        edtSlots.forEach(s => { if (s.heure_debut) debuts.set(s.heure_debut.slice(0, 5), (s.heure_fin || '').slice(0, 5)); });
+        return Array.from(debuts.entries()).map(([debut, fin]) => ({ debut, fin })).sort((a, b) => a.debut.localeCompare(b.debut));
+    }, [edtSlots, horaires]);
     const [bulletinData, setBulletinData] = useState<any>(null);
     const [bulletinLoading, setBulletinLoading] = useState(false);
     // La période part vide : on ne devine pas le découpage de l'année. Le
@@ -1185,22 +1197,24 @@ export default function PortailParent() {
                                                             </tr>
                                                         </thead>
                                                         <tbody>
-                                                            {HEURES.map((h, hi) => {
-                                                                const endH = `${String(parseInt(h.split(':')[0]) + 1).padStart(2, '0')}:00`;
-                                                                if (h === '12:00') return (
-                                                                    <tr key={h}>
-                                                                        <td colSpan={6} style={{ padding: '8px', textAlign: 'center', fontSize: '11px', color: '#94a3b8', fontWeight: 700, background: '#fafafa', letterSpacing: '2px' }}>
-                                                                            — PAUSE DÉJEUNER —
-                                                                        </td>
-                                                                    </tr>
-                                                                );
+                                                            {lignesHoraires.map(({ debut: h, fin: endH }) => {
+                                                                const pauses = horaires.pauses?.length ? horaires.pauses : [{ debut: horaires.pauseDebut, fin: horaires.pauseFin }];
+                                                                const pauseAvant = pauses.find(p => p.fin === h);
                                                                 return (
-                                                                    <tr key={h} style={{ borderBottom: '1px solid #f8fafc' }}>
+                                                                    <Fragment key={h}>
+                                                                    {pauseAvant && (
+                                                                        <tr key={`pause-${pauseAvant.debut}`}>
+                                                                            <td colSpan={JOURS.length + 1} style={{ padding: '8px', textAlign: 'center', fontSize: '11px', color: '#92400e', fontWeight: 700, background: '#fef3c7' }}>
+                                                                                <Utensils size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> {pauseAvant.debut} — {pauseAvant.fin} • Pause
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                    <tr style={{ borderBottom: '1px solid #f8fafc' }}>
                                                                         <td style={{ padding: '8px', fontSize: '11px', color: '#94a3b8', textAlign: 'center', fontWeight: 600, verticalAlign: 'top' }}>
                                                                             {h}<br /><span style={{ fontSize: '10px' }}>{endH}</span>
                                                                         </td>
                                                                         {JOURS.map(j => {
-                                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut === h);
+                                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut.slice(0, 5) === h);
                                                                             if (!slot) return <td key={j} style={{ padding: '4px' }} />;
                                                                             const colors = SLOT_COLORS[slot.matiere] || SLOT_COLORS['default'];
                                                                             return (
@@ -1217,6 +1231,7 @@ export default function PortailParent() {
                                                                             );
                                                                         })}
                                                                     </tr>
+                                                                    </Fragment>
                                                                 );
                                                             })}
                                                         </tbody>

@@ -1,9 +1,10 @@
 'use client';
 
-import React from 'react';
-import { Calendar, Clock, Loader2, MapPin, User } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Calendar, Clock, Loader2, MapPin, User, Utensils } from 'lucide-react';
 import styles from '../portail-eleve.module.css';
 import { CreneauEDT, JOURS_ORDER, JOURS_LABEL, SUBJECT_COLORS } from '../types';
+import { chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
 
 interface EleveEmploiProps {
     edtData: CreneauEDT[];
@@ -12,6 +13,17 @@ interface EleveEmploiProps {
 }
 
 export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveEmploiProps) {
+    // Mêmes horaires configurés que l'admin, l'enseignant et le parent : tout
+    // le monde voit exactement la même grille (mêmes créneaux, mêmes pauses).
+    const [horaires, setHoraires] = useState<Horaires>(HORAIRES_DEFAUT);
+    useEffect(() => { chargerHoraires().then(setHoraires).catch(() => {}); }, []);
+    const lignes = useMemo(() => {
+        const debuts = new Map<string, string>();
+        creneauxDeLaJournee(horaires).forEach(h => debuts.set(h.debut, h.fin));
+        edtData.forEach(c => { if (c.heure_debut) debuts.set(c.heure_debut.slice(0, 5), (c.heure_fin || '').slice(0, 5)); });
+        return Array.from(debuts.entries()).map(([debut, fin]) => ({ debut, fin })).sort((a, b) => a.debut.localeCompare(b.debut));
+    }, [edtData, horaires]);
+
     if (loading) {
         return (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}>
@@ -30,8 +42,7 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
         );
     }
 
-    // Get unique start hours sorted
-    const heures = Array.from(new Set(edtData.map(c => c.heure_debut))).sort();
+    const pauses = horaires.pauses?.length ? horaires.pauses : [{ debut: horaires.pauseDebut, fin: horaires.pauseFin }];
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -67,13 +78,23 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
                         </tr>
                     </thead>
                     <tbody>
-                        {heures.map(h => (
-                            <tr key={h}>
+                        {lignes.map(({ debut: h, fin: endH }) => {
+                          const pauseAvant = pauses.find(p => p.fin === h);
+                          return (
+                            <React.Fragment key={h}>
+                            {pauseAvant && (
+                                <tr>
+                                    <td colSpan={JOURS_ORDER.length + 1} style={{ padding: '8px', textAlign: 'center', fontSize: '11px', color: '#92400e', fontWeight: 700, background: '#fef3c7', borderRadius: '10px' }}>
+                                        <Utensils size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> {pauseAvant.debut} — {pauseAvant.fin} • Pause
+                                    </td>
+                                </tr>
+                            )}
+                            <tr>
                                 {/* Time Cell */}
-                                <td style={{ 
-                                    textAlign: 'center', 
-                                    fontSize: '12px', 
-                                    fontWeight: 750, 
+                                <td style={{
+                                    textAlign: 'center',
+                                    fontSize: '12px',
+                                    fontWeight: 750,
                                     color: '#475569',
                                     background: '#f8fafc',
                                     borderRadius: '10px',
@@ -82,10 +103,10 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
                                     boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.01)'
                                 }}>
                                     <Clock size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} />
-                                    <span style={{ verticalAlign: 'middle' }}>{h}</span>
+                                    <span style={{ verticalAlign: 'middle' }}>{h}<br /><span style={{ fontSize: '10px', opacity: 0.7 }}>{endH}</span></span>
                                 </td>
                                 {JOURS_ORDER.map(jour => {
-                                    const slot = edtData.find(c => c.jour === jour && c.heure_debut === h);
+                                    const slot = edtData.find(c => c.jour === jour && c.heure_debut.slice(0, 5) === h);
                                     const ci = slot ? edtData.indexOf(slot) % SUBJECT_COLORS.length : 0;
                                     const c = SUBJECT_COLORS[ci];
 
@@ -155,7 +176,9 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
                                     );
                                 })}
                             </tr>
-                        ))}
+                            </React.Fragment>
+                          );
+                        })}
                     </tbody>
                 </table>
             </div>
