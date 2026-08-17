@@ -18,6 +18,7 @@ import {
     AlertTriangle, ArrowLeft, Database, Download, FileSpreadsheet, Info, Loader2, ShieldAlert,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { useApp } from '@/context/AppContext';
 
 interface Jeu {
     cle: string;
@@ -27,6 +28,7 @@ interface Jeu {
 }
 
 export default function ImportExportPage() {
+    const { anneeId } = useApp();
     const [jeux, setJeux] = useState<Jeu[]>([]);
     const [chargement, setChargement] = useState(true);
     const [enCours, setEnCours] = useState<string | null>(null);
@@ -35,7 +37,9 @@ export default function ImportExportPage() {
     const charger = useCallback(async () => {
         setChargement(true);
         try {
-            const res = await api.get('/api/export/catalogue');
+            // Compteurs de l'année affichée : sinon les effectifs de toutes les
+            // années s'additionnaient.
+            const res = await api.get(`/api/export/catalogue?annee_id=${anneeId}`);
             setJeux(Array.isArray(res.data) ? res.data : []);
         } catch (err: unknown) {
             const detail = typeof err === 'object' && err !== null && 'response' in err
@@ -45,7 +49,7 @@ export default function ImportExportPage() {
         } finally {
             setChargement(false);
         }
-    }, []);
+    }, [anneeId]);
 
     useEffect(() => { charger(); }, [charger]);
 
@@ -55,7 +59,7 @@ export default function ImportExportPage() {
         try {
             // `blob` : c'est un fichier, pas du JSON. Sans cela le navigateur
             // tente de l'interpréter et le téléchargement échoue en silence.
-            const res = await api.get(`/api/export/${jeu.cle}`, { responseType: 'blob' });
+            const res = await api.get(`/api/export/${jeu.cle}?annee_id=${anneeId}`, { responseType: 'blob' });
             const nom = (res.headers?.['content-disposition'] || '')
                 .split('filename=')[1]?.replace(/"/g, '')
                 || `${jeu.cle}.csv`;
