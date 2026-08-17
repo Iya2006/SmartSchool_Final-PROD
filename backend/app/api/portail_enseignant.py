@@ -11,7 +11,7 @@ from app.core.database import get_db
 from app.core.security import verify_password, hash_password
 from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import (
-    Enseignant, Affectation, CreneauEmploi, Classe, Matiere, Niveau,
+    Enseignant, Affectation, CreneauEmploi, Classe, Matiere, Niveau, Cycle,
     Note, Evaluation, Inscription, Eleve, Presence, Trimestre, TypeEvaluation,
     AnneeScolaire, RessourcePedagogique, ClasseMatiere, ParametreEtablissement
 )
@@ -160,17 +160,37 @@ def get_types_evaluation(
 # HISTORIQUE DES ÉVALUATIONS
 # ================================================================
 @router.get("/{enseignant_id}/evaluations")
-def get_evaluations(enseignant_id: int, _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db)):
-    """Historique des évaluations créées par cet enseignant."""
-    evals = db.query(Evaluation).filter(
-        Evaluation.enseignant_id == enseignant_id
-    ).order_by(desc(Evaluation.date_evaluation)).limit(50).all()
+def get_evaluations(
+    enseignant_id: int,
+    classe_id: Optional[int] = None,
+    matiere_id: Optional[int] = None,
+    _auth: dict = Depends(_enseignant_auth),
+    db: Session = Depends(get_db),
+):
+    """Évaluations de cet enseignant — celles que l'administration a créées et
+    lui a rattachées (une par matière lors d'une composition).
+
+    Filtrable par classe et matière : c'est ce que l'écran de saisie utilise
+    pour proposer à l'enseignant la liste des évaluations à remplir pour la
+    classe/matière qu'il a ouverte, plutôt que de lui en faire créer une.
+    """
+    query = db.query(Evaluation).filter(Evaluation.enseignant_id == enseignant_id)
+    if classe_id:
+        query = query.filter(Evaluation.classe_id == classe_id)
+    if matiere_id:
+        query = query.filter(Evaluation.matiere_id == matiere_id)
+    evals = query.order_by(desc(Evaluation.date_evaluation)).limit(50).all()
     result = []
     for ev in evals:
         mat = db.query(Matiere).filter(Matiere.matiere_id == ev.matiere_id).first()
         cls = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
         tri = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+        type_ev = db.query(TypeEvaluation).filter(TypeEvaluation.type_eval_id == ev.type_eval_id).first()
         nb_notes = db.query(func.count(Note.note_id)).filter(Note.evaluation_id == ev.evaluation_id).scalar() or 0
+        nb_saisies = db.query(func.count(Note.note_id)).filter(
+            Note.evaluation_id == ev.evaluation_id,
+            or_(Note.valeur.isnot(None), Note.est_absent == "O"),
+        ).scalar() or 0
         moy = db.query(func.avg(Note.valeur)).filter(
             Note.evaluation_id == ev.evaluation_id, Note.est_absent == "N"
         ).scalar()
@@ -178,12 +198,17 @@ def get_evaluations(enseignant_id: int, _auth: dict = Depends(_enseignant_auth),
             "evaluation_id": ev.evaluation_id,
             "libelle": ev.libelle,
             "date_evaluation": str(ev.date_evaluation) if ev.date_evaluation else None,
+            "classe_id": ev.classe_id,
+            "matiere_id": ev.matiere_id,
+            "trimestre_id": ev.trimestre_id,
+            "type_libelle": type_ev.libelle if type_ev else None,
             "matiere": mat.libelle if mat else "?",
             "classe": cls.libelle if cls else "?",
             "trimestre": tri.libelle if tri else "?",
             "note_sur": float(ev.note_sur or 20),
             "coefficient": float(ev.coefficient or 1),
             "nb_notes": nb_notes,
+            "nb_saisies": nb_saisies,
             "moyenne": round(float(moy), 2) if moy else None,
             "statut": ev.statut,
         })
@@ -362,9 +387,11 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
         Matiere.libelle.label("matiere"),
         Matiere.coefficient_defaut.label("coefficient"),
         Niveau.libelle.label("niveau"),
+        Cycle.code.label("cycle_code"),
     ).join(Classe, Affectation.classe_id == Classe.classe_id
     ).join(Matiere, Affectation.matiere_id == Matiere.matiere_id
     ).join(Niveau, Classe.niveau_id == Niveau.niveau_id
+    ).join(Cycle, Niveau.cycle_id == Cycle.cycle_id
     ).filter(
         Affectation.enseignant_id == enseignant_id,
         Affectation.statut == "ACTIVE"
@@ -400,6 +427,7 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
             "classe_code": a.classe_code,
             "classe": a.classe_libelle,
             "niveau": a.niveau,
+            "cycle_code": a.cycle_code,
             "matiere_id": a.matiere_id,
             "matiere": a.matiere,
             "coefficient": float(a.coefficient or 1),
@@ -727,6 +755,78 @@ def saisir_notes(enseignant_id: int, data: SaisieNotesRequest, _auth: dict = Dep
     return {
         "message": f"Évaluation '{data.libelle}' créée avec {count} notes",
         "evaluation_id": evaluation.evaluation_id,
+        "nb_notes": count,
+    }
+
+
+class RemplirNotesRequest(BaseModel):
+    notes: list[NoteItem]
+
+
+@router.post("/{enseignant_id}/evaluations/{evaluation_id}/saisir")
+def remplir_evaluation(
+    enseignant_id: int, evaluation_id: int,
+    data: RemplirNotesRequest, _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db),
+):
+    """Remplir une évaluation DÉJÀ CRÉÉE par l'administration.
+
+    L'enseignant ne crée rien : l'administration crée l'évaluation/composition,
+    l'enseignant saisit seulement les notes de celle qui lui est rattachée. Le
+    barème vient de l'évaluation (configuré en amont), l'enseignant ne le touche
+    pas. Upsert par (évaluation, élève) : on peut revenir corriger.
+    """
+    ev = db.query(Evaluation).filter(
+        Evaluation.evaluation_id == evaluation_id,
+        Evaluation.enseignant_id == enseignant_id,
+    ).first()
+    if not ev:
+        raise HTTPException(404, "Évaluation non trouvée ou non autorisée")
+    if ev.statut == "CENTRALISEE":
+        raise HTTPException(400, "Cette évaluation a déjà été centralisée. Contactez l'administrateur.")
+
+    classe = db.query(Classe).filter(Classe.classe_id == ev.classe_id).first()
+    if classe:
+        verifier_annee_modifiable(db, classe.annee_id)
+    if ev.trimestre_id:
+        trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == ev.trimestre_id).first()
+        if trimestre and trimestre.statut == "CLOTURE":
+            raise HTTPException(400, f"{trimestre.libelle} est clôturé — impossible de saisir des notes pour cette période.")
+
+    note_sur = float(ev.note_sur or 20)
+    # Toutes les notes validées AVANT d'en écrire une seule.
+    valeurs = []
+    for n in data.notes:
+        try:
+            valeurs.append(None if n.est_absent else valider_note(n.valeur, note_sur))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    count = 0
+    for n, valeur in zip(data.notes, valeurs):
+        note = db.query(Note).filter(
+            Note.evaluation_id == evaluation_id,
+            Note.inscription_id == n.inscription_id,
+        ).first()
+        if note:
+            note.valeur = valeur
+            note.est_absent = "O" if n.est_absent else "N"
+        else:
+            db.add(Note(
+                evaluation_id=evaluation_id,
+                inscription_id=n.inscription_id,
+                valeur=valeur,
+                est_absent="O" if n.est_absent else "N",
+            ))
+        count += 1
+
+    # Une évaluation planifiée passe « publiée » dès qu'elle est remplie.
+    if ev.statut == "PLANIFIEE":
+        ev.statut = "PUBLIEE"
+
+    db.commit()
+    return {
+        "message": f"{count} note(s) enregistrée(s) pour « {ev.libelle} »",
+        "evaluation_id": evaluation_id,
         "nb_notes": count,
     }
 

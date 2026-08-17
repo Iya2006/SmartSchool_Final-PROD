@@ -813,11 +813,20 @@ def resultats_intermediaires(
 
     _classe_ou_404(db, classe_id, etablissement_id)
 
+    # Le classement de SUIVI se calcule dès que les notes sont saisies, sans
+    # attendre la centralisation officielle : une évaluation « Publiée » (notes
+    # remplies par l'enseignant) doit déjà donner une moyenne et un rang. Le
+    # calcul officiel des bulletins, lui, ne retient toujours que les épreuves
+    # centralisées — c'est une autre route (calculer-moyennes, persist=True).
     return calculer_resultats_periode(
         db, classe_id, trimestre_id,
         evaluation_ids=_ids(evaluation_ids),
         session_ids=_ids(session_ids),
         persist=False,
+        # Le suivi doit refléter TOUTE épreuve qui a des notes, y compris une
+        # évaluation encore « Planifiée » remplie côté administration : le
+        # classement ne dépend pas du statut, seulement de l'existence des notes.
+        statuts_inclus=["PLANIFIEE", "PUBLIEE", "CENTRALISEE", "CALCULE"],
     )
 
 
@@ -2025,6 +2034,13 @@ def admin_update_notes_batch(evaluation_id: int, data: AdminBatchNotesUpdate, db
             note.est_absent = "O" if item.est_absent else "N"
             note.observation = item.observation
             updated += 1
+
+    # Une évaluation qui reçoit des notes n'est plus « planifiée » : on la passe
+    # « publiée », exactement comme lorsque l'enseignant la remplit. Sans ça,
+    # une composition remplie côté administration restait PLANIFIEE et
+    # n'apparaissait pas comme telle.
+    if updated and ev.statut == "PLANIFIEE":
+        ev.statut = "PUBLIEE"
 
     db.commit()
     return {"message": f"{updated} notes mises à jour", "nb_modifiees": updated}

@@ -273,7 +273,9 @@ export default function ProfilEleve() {
                             {[
                                 { href: '/notes', icone: <BookOpen size={16} />, titre: 'Notes et evaluations', detail: 'Saisie et consultation des notes par classe' },
                                 { href: '/bulletins', icone: <FileText size={16} />, titre: 'Bulletins', detail: 'Bulletins de la classe, par trimestre' },
-                                { href: '/emploi-du-temps', icone: <Calendar size={16} />, titre: 'Emploi du temps', detail: 'Semaine type de la classe' },
+                                // On emmène directement sur l'emploi du temps de SA classe
+                                // (paramètre ?classe=), au lieu de la première classe de l'école.
+                                { href: eleve?.classe_id ? `/emploi-du-temps?classe=${eleve.classe_id}` : '/emploi-du-temps', icone: <Calendar size={16} />, titre: 'Emploi du temps', detail: 'Semaine type de la classe' },
                             ].map(l => (
                                 <Link key={l.href} href={l.href} style={{
                                     display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px',

@@ -19,7 +19,7 @@ import {
     AlertTriangle, ArrowLeft, Check, Clock, Coffee, Loader2, Plus, Save, Timer, Trash2,
 } from 'lucide-react';
 import api from '@/lib/api';
-import { HORAIRES_DEFAUT, formatPauses, parsePauses, type Horaires, type Pause } from '@/lib/horaires';
+import { HORAIRES_DEFAUT, formatPauses, invaliderCacheHoraires, parsePauses, type Horaires, type Pause } from '@/lib/horaires';
 
 const CATEGORIE = 'EMPLOI_DU_TEMPS';
 
@@ -107,6 +107,11 @@ export default function HorairesPage() {
                 { categorie: CATEGORIE, cle: 'horaires.seuil_absence', valeur: String(valeurs.seuilAbsence), type_valeur: 'NUMBER' },
                 { categorie: CATEGORIE, cle: 'horaires.jours_ouvres', valeur: valeurs.joursOuvres.join(','), type_valeur: 'STRING' },
             ]);
+            // Le cache des horaires doit être vidé, sinon l'emploi du temps
+            // continue d'afficher les anciennes pauses tant que l'onglet reste
+            // ouvert — exactement ce qui donnait « une seule pause 12h-13h »
+            // alors que deux pauses venaient d'être enregistrées.
+            invaliderCacheHoraires();
             setMessage('Horaires enregistrés. Ils s’appliquent immédiatement à l’emploi du temps et au pointage.');
         } catch (err: unknown) {
             const detail = typeof err === 'object' && err !== null && 'response' in err

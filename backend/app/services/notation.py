@@ -991,8 +991,12 @@ def calculer_resultats_periode(
     etablissement_id = classe.etablissement_id
     cycle_key = get_cycle_key(classe_id, db)
     echelle = get_bareme_defaut_cycle(db, etablissement_id, cycle_key)
+    # Une épreuve compte dès que ses notes sont saisies (« Publiée »), sans
+    # attendre une centralisation manuelle : c'est la règle attendue par les
+    # écoles — on saisit, le bulletin et le classement se calculent. La
+    # centralisation reste possible mais n'est plus un préalable au calcul.
     if statuts_inclus is None:
-        statuts_inclus = ["CENTRALISEE"]
+        statuts_inclus = ["PUBLIEE", "CENTRALISEE", "CALCULE"]
 
     cms = db.query(ClasseMatiere).filter(
         ClasseMatiere.classe_id == classe_id,

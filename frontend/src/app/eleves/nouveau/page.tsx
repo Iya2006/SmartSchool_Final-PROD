@@ -4,7 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock } from 'lucide-react';
+import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock, Info } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
@@ -28,6 +28,16 @@ interface TypeFrais {
 const FIELD = { padding: '12px 16px', borderRadius: '10px', border: '1px solid var(--border-focus)', outline: 'none', background: 'var(--bg-body)', fontSize: '14px', fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' as const, transition: 'border-color 0.2s' };
 const LABEL = { fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' };
 
+/** Détection des frais d'entrée, quelle que soit la casse/accent saisis. */
+const estFraisReinscription = (cat?: string) => {
+    const c = (cat || '').toLowerCase();
+    return c.includes('réinscr') || c.includes('reinscr');
+};
+const estFraisInscription = (cat?: string) => {
+    const c = (cat || '').toLowerCase();
+    return c.includes('inscription') && !estFraisReinscription(cat);
+};
+
 export default function NouveauEleve() {
     const router = useRouter();
     const { etablissementId, anneeId } = useApp();
@@ -44,6 +54,9 @@ export default function NouveauEleve() {
         nom: '', prenom: '', date_naissance: '', sexe: 'M',
         lieu_naissance: '', telephone: '', email: '', statut: 'ACTIF',
         classe_id: '',
+        // NOUVELLE = nouvel élève de l'école (paie l'inscription) ;
+        // REINSCRIPTION = élève qui continue (paie la réinscription).
+        type_inscription: 'NOUVELLE',
         adresse: '', groupe_sanguin: '',
         // Portail élève
         eleve_mot_de_passe: '',
@@ -147,6 +160,7 @@ export default function NouveauEleve() {
                 annee_id: anneeId,
                 classe_id: formData.classe_id ? parseInt(formData.classe_id) : null,
                 eleve_mot_de_passe: formData.eleve_mot_de_passe.trim() || null,
+                type_inscription: formData.type_inscription,
             };
 
             // Ajouter les données parent si le téléphone est rempli
@@ -290,6 +304,34 @@ export default function NouveauEleve() {
 
             <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
+                {/* ═══ TYPE D'INSCRIPTION ═══ */}
+                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="card" style={{ padding: '18px 22px' }}>
+                    <h2 style={{ fontSize: '15px', fontWeight: 800, margin: '0 0 4px', color: 'var(--text-primary)' }}>Type d&apos;inscription</h2>
+                    <p style={{ fontSize: '12.5px', color: 'var(--text-secondary)', margin: '0 0 14px' }}>
+                        Un <strong>nouvel élève</strong> de l&apos;école paie le frais d&apos;<strong>inscription</strong> ; un élève qui <strong>continue</strong> paie la <strong>réinscription</strong>. La scolarité s&apos;applique dans les deux cas.
+                    </p>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                        {([
+                            { val: 'NOUVELLE', titre: 'Nouvel élève', sous: 'Inscription (nouveau dans l’école)' },
+                            { val: 'REINSCRIPTION', titre: 'Réinscription', sous: 'Élève qui continue dans l’école' },
+                        ] as const).map(opt => {
+                            const actif = formData.type_inscription === opt.val;
+                            return (
+                                <button key={opt.val} type="button"
+                                    onClick={() => setFormData(f => ({ ...f, type_inscription: opt.val }))}
+                                    style={{
+                                        textAlign: 'left', padding: '14px 16px', borderRadius: '12px', cursor: 'pointer',
+                                        border: `2px solid ${actif ? '#6366f1' : 'var(--border-light)'}`,
+                                        background: actif ? '#eef2ff' : 'white',
+                                    }}>
+                                    <p style={{ margin: 0, fontSize: '14px', fontWeight: 800, color: actif ? '#4338ca' : 'var(--text-primary)' }}>{opt.titre}</p>
+                                    <p style={{ margin: '3px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>{opt.sous}</p>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </motion.div>
+
                 {/* ═══ SECTION 1: INFORMATIONS ÉLÈVE ═══ */}
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="card" style={{ overflow: 'visible' }}>
                     <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-light)', display: 'flex', alignItems: 'center', gap: '12px', background: 'linear-gradient(135deg, #f8fafc, #f1f5f9)', borderRadius: '12px 12px 0 0' }}>
@@ -380,6 +422,18 @@ export default function NouveauEleve() {
                         </div>
                     </div>
                     <div style={{ padding: '24px 28px' }}>
+                        {/* L'identifiant n'a pas de champ à remplir : c'est le matricule,
+                            généré automatiquement. On le dit ici pour lever la question
+                            « où est le champ identifiant ? ». */}
+                        <div style={{ padding: '14px 18px', borderRadius: '12px', background: '#eff6ff', border: '1px solid #bfdbfe', marginBottom: '14px' }}>
+                            <p style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: 0, fontSize: '13px', color: '#1e40af', fontWeight: 600 }}>
+                                <Info size={14} /> Identifiant de connexion = le <strong>matricule</strong>
+                            </p>
+                            <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#1e3a8a' }}>
+                                Pas de champ à remplir : le matricule (ex&nbsp;: <code style={{ background: '#fff', padding: '1px 6px', borderRadius: '5px', fontFamily: 'monospace' }}>ELV-10-00001</code>) est
+                                généré automatiquement à la création et affiché à la fin. Vous n&apos;avez qu&apos;à définir le mot de passe ci-dessous.
+                            </p>
+                        </div>
                         <div style={{ padding: '14px 18px', borderRadius: '12px', background: '#fef3c7', border: '1px solid #fde68a', marginBottom: '18px' }}>
                             <p style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: 0, fontSize: '13px', color: '#92400e', fontWeight: 600 }}>
                                 <AlertTriangle size={14} /> Mot de passe par défaut : <code style={{ background: '#fff', padding: '2px 8px', borderRadius: '6px', fontFamily: 'monospace', fontSize: '14px', border: '1px solid #fed7aa' }}>smartschool</code>
@@ -569,7 +623,14 @@ export default function NouveauEleve() {
                             </div>
                         )}
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
-                            {typesFrais.map(tf => {
+                            {typesFrais
+                                // On n'affiche que le frais d'entrée correspondant au type
+                                // choisi : inscription pour un nouvel élève, réinscription
+                                // pour un élève qui continue — jamais les deux.
+                                .filter(tf => formData.type_inscription === 'REINSCRIPTION'
+                                    ? !estFraisInscription(tf.categorie)
+                                    : !estFraisReinscription(tf.categorie))
+                                .map(tf => {
                                 const state = fraisFacturation[tf.type_frais_id];
                                 if (!state) return null;
                                 const isObligatoire = tf.est_obligatoire === 'O';

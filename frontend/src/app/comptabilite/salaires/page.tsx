@@ -112,6 +112,7 @@ function SalairesContent() {
 
     // Bulletins (la liste, et le détail imprimable)
     const [bulletinEmpFiltre, setBulletinEmpFiltre] = useState('');
+    const [bulletinMoisFiltre, setBulletinMoisFiltre] = useState('');
     const [selectedBulletin, setSelectedBulletin] = useState<number | null>(null);
     const [bulletinDetails, setBulletinDetails] = useState<any>(null);
     const [bulletinLoading, setBulletinLoading] = useState(false);
@@ -247,9 +248,20 @@ function SalairesContent() {
                 });
             });
         });
-        const filtres = bulletinEmpFiltre ? out.filter(b => b.employe_id === bulletinEmpFiltre) : out;
+        let filtres = bulletinEmpFiltre ? out.filter(b => b.employe_id === bulletinEmpFiltre) : out;
+        if (bulletinMoisFiltre) filtres = filtres.filter(b => b.mois_concerne === bulletinMoisFiltre);
         return filtres.sort((a, b) => String(b.mois_concerne || '').localeCompare(String(a.mois_concerne || '')));
-    }, [employes, bulletinEmpFiltre]);
+    }, [employes, bulletinEmpFiltre, bulletinMoisFiltre]);
+
+    // Les mois réellement présents dans l'historique, pour filtrer « qui a été
+    // payé en tel mois ».
+    const moisPayes = useMemo(() => {
+        const s = new Set<string>();
+        employes.forEach((emp: any) => (emp.historique || []).forEach((b: any) => {
+            if (b.mois_concerne) s.add(b.mois_concerne);
+        }));
+        return Array.from(s).sort((a, b) => b.localeCompare(a));
+    }, [employes]);
 
     // ─── Détail d'un enseignant : ses heures, au tarif réel ───────────────
     // L'écran retrouvait l'enseignant par une recherche sur son NOM, puis
@@ -973,6 +985,11 @@ function SalairesContent() {
                             style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, background: '#fff', minWidth: 220 }}>
                             <option value="">Tout le personnel</option>
                             {employes.map(e => <option key={e.employe_id} value={e.employe_id}>{e.prenom} {e.nom}</option>)}
+                        </select>
+                        <select value={bulletinMoisFiltre} onChange={e => setBulletinMoisFiltre(e.target.value)}
+                            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, background: '#fff', minWidth: 150 }}>
+                            <option value="">Tous les mois</option>
+                            {moisPayes.map(m => <option key={m} value={m}>{m}</option>)}
                         </select>
                         <span style={{ marginLeft: 'auto', fontSize: 13, color: '#64748b' }}>
                             {bulletins.length} versement(s) —{' '}

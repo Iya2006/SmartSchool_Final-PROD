@@ -315,6 +315,10 @@ function FraisScolaritePage() {
 
     const loadAll = useCallback(async () => {
         await queryClient.invalidateQueries({ queryKey: ['frais-all'] });
+        // La grille des tarifs par classe liste TOUS les types de frais : sans
+        // cette invalidation, un type qu'on vient de créer n'y apparaissait pas
+        // tant qu'on ne rechargeait pas la page.
+        await queryClient.invalidateQueries({ queryKey: ['grille-tarifs'] });
     }, [queryClient]);
 
     /* ─── Grille des tarifs : le coût de l'année, classe par classe ──────────

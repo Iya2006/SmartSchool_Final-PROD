@@ -102,7 +102,9 @@ export default function LoginPage() {
         <div className={styles.page}>
             <section className={styles.hero}>
                 <div className={styles.heroBackdrop} />
-                <img src="/brand/trillionx-watermark.png" alt="" aria-hidden="true" className={styles.heroWatermark} />
+                {/* Retiré : filigrane d'une école de démo (TrillionX). L'écran de
+                    connexion ne porte que la marque SmartSchool, pas la photo
+                    d'un établissement particulier. */}
                 <div className={styles.heroBrand}>
                     <div className={styles.heroBadge}>
                         {logoSrc ? (

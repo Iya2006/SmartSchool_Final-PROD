@@ -355,6 +355,10 @@ class InscriptionCompleteData(BaseModel):
     annee_id: Optional[int] = None
     classe_id: Optional[int] = None
     eleve_mot_de_passe: Optional[str] = None  # MDP portail élève (optionnel, défaut: smartschool)
+    # NOUVELLE = élève nouveau dans l'école (paie l'inscription) ;
+    # REINSCRIPTION = élève qui continue (paie la réinscription). Détermine
+    # quel frais d'entrée est facturé en plus de la scolarité.
+    type_inscription: str = "NOUVELLE"
     # Parent
     parent: Optional[ParentData] = None
     # Facturation
@@ -425,11 +429,15 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
         # 2. Créer l'inscription si classe_id fourni
         inscription = None
         if data.classe_id:
+            type_insc = (data.type_inscription or "NOUVELLE").upper()
+            if type_insc not in ("NOUVELLE", "REINSCRIPTION"):
+                type_insc = "NOUVELLE"
             inscription = Inscription(
                 eleve_id=eleve.eleve_id,
                 classe_id=data.classe_id,
                 annee_id=annee_id,
                 statut="ACTIVE",
+                type_inscription=type_insc,
             )
             db.add(inscription)
             # Update effectif
@@ -552,21 +560,31 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
             ).first()
             if classe_cible is not None:
                 factures_generees = _generer_frais_reinscription(
-                    db, inscription, classe_cible, etablissement_id
+                    db, inscription, classe_cible, etablissement_id,
+                    type_inscription=type_insc,
                 )
         elif inscription and data.frais_scolaires:
             # Le type de frais appartient a une ecole depuis la migration
             # 2026_08_compta_01. Sans ce controle, un client pouvait envoyer
             # l'identifiant du type de frais d'un autre etablissement : la
             # facture emise portait alors le libelle d'une ecole etrangere.
-            types_de_l_ecole = {
-                t[0] for t in db.query(TypeFrais.type_frais_id).filter(
+            from app.api.reinscription import _est_frais_inscription, _est_frais_reinscription
+            types_ecole = {
+                t.type_frais_id: t.categorie for t in db.query(TypeFrais).filter(
                     TypeFrais.etablissement_id == etablissement_id
                 ).all()
             }
+            est_reinscription = type_insc == "REINSCRIPTION"
             for frais in data.frais_scolaires:
-                if frais.type_frais_id not in types_de_l_ecole:
+                if frais.type_frais_id not in types_ecole:
                     raise HTTPException(404, "Type de frais non trouvé")
+                # Garde-fou : on n'accepte jamais le frais d'entrée qui ne
+                # correspond pas au type d'inscription, même si l'écran l'envoie.
+                categorie_frais = types_ecole.get(frais.type_frais_id)
+                if est_reinscription and _est_frais_inscription(categorie_frais):
+                    continue
+                if not est_reinscription and _est_frais_reinscription(categorie_frais):
+                    continue
                 tarif = db.query(TarifClasse).filter(
                     TarifClasse.classe_id == data.classe_id, TarifClasse.type_frais_id == frais.type_frais_id
                 ).first()
