@@ -31,6 +31,17 @@ api.interceptors.request.use(
                 config.headers.Authorization = `Bearer ${token}`;
             }
         }
+
+        // Upload de fichier (FormData) : retirer le Content-Type JSON par défaut
+        // pour laisser le navigateur poser `multipart/form-data; boundary=...`.
+        // Sans ça, le corps multipart n'était pas analysé et l'API répondait
+        // « fichier : Field required » (import CSV des élèves, photos, etc.).
+        if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+            if (config.headers) {
+                delete (config.headers as Record<string, unknown>)['Content-Type'];
+                delete (config.headers as Record<string, unknown>)['content-type'];
+            }
+        }
         return config;
     },
     (error) => Promise.reject(error)
