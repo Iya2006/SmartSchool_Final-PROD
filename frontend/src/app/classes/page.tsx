@@ -2,9 +2,9 @@
 
 import { useApp } from '@/context/AppContext';
 import { useState, useEffect, useRef } from 'react';
-import { useQuery, useIsRestoring } from '@tanstack/react-query';
+import { useQuery, useIsRestoring, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Users, X, Eye, Edit, ChevronRight, ChevronLeft, Loader2, BookOpen, UserCheck, Plus, Settings, Search, ArrowLeft } from 'lucide-react';
+import { Users, X, Eye, Edit, ChevronRight, ChevronLeft, Loader2, BookOpen, UserCheck, Plus, Settings, Search, ArrowLeft, Trash2, AlertTriangle } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -50,6 +50,32 @@ export default function ClassesPage() {
     const [selectedClass, setSelectedClass] = useState<Classe | null>(null);
     const [classStudents, setClassStudents] = useState<EleveDeClasse[]>([]);
     const [loadingStudents, setLoadingStudents] = useState(false);
+
+    // Suppression d'une classe : le backend n'autorise que les classes vides
+    // (0 élève, 0 évaluation) et refuse le reste avec un message précis — on
+    // s'appuie dessus plutôt que de dupliquer la règle ici.
+    const queryClient = useQueryClient();
+    const [classToDelete, setClassToDelete] = useState<Classe | null>(null);
+    const [deleting, setDeleting] = useState(false);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
+
+    const handleDelete = async () => {
+        if (!classToDelete) return;
+        setDeleting(true);
+        setDeleteError(null);
+        try {
+            await api.delete(`/api/classes/${classToDelete.classe_id}`);
+            setClassToDelete(null);
+            // Rafraîchir la liste ET les compteurs globaux (effectif/occupation).
+            queryClient.invalidateQueries({ queryKey: ['classes'] });
+            queryClient.invalidateQueries({ queryKey: ['classes-stats'] });
+        } catch (err: unknown) {
+            const e = err as { response?: { data?: { detail?: string } } };
+            setDeleteError(e?.response?.data?.detail || "La suppression a échoué. Réessayez.");
+        } finally {
+            setDeleting(false);
+        }
+    };
 
     // Carousel ref
     const carouselRef = useRef<HTMLDivElement>(null);
@@ -451,6 +477,23 @@ export default function ClassesPage() {
                                         if (bar) bar.style.transform = 'translateY(100%)';
                                     }}
                                 >
+                                    {/* Supprimer — coin haut-droit, discret. Le backend
+                                        refuse une classe non vide avec un message clair. */}
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setDeleteError(null); setClassToDelete(cls); }}
+                                        title="Supprimer cette classe"
+                                        style={{
+                                            position: 'absolute', top: '8px', right: '8px', zIndex: 2,
+                                            width: '28px', height: '28px', borderRadius: '8px',
+                                            border: '1px solid #fecaca', background: '#fff',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            cursor: 'pointer', color: '#dc2626', transition: 'all 0.15s',
+                                        }}
+                                        onMouseOver={(e) => { e.currentTarget.style.background = '#fee2e2'; }}
+                                        onMouseOut={(e) => { e.currentTarget.style.background = '#fff'; }}
+                                    >
+                                        <Trash2 size={14} />
+                                    </button>
                                     <div style={{
                                         width: '48px', height: '48px', borderRadius: '50%',
                                         background: pTheme.bg, color: pTheme.text,
@@ -518,6 +561,69 @@ export default function ClassesPage() {
             {!loading && classes.length > 0 && (
                 <Pagination page={currentPage} pageSize={pageSize} total={total} onPageChange={setCurrentPage} />
             )}
+
+            {/* ═══ Confirmation de suppression ═══ */}
+            <AnimatePresence>
+                {classToDelete && (
+                    <motion.div
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{
+                            position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.45)',
+                            backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center',
+                            justifyContent: 'center', zIndex: 1100, padding: '24px',
+                        }}
+                        onClick={() => !deleting && setClassToDelete(null)}
+                    >
+                        <motion.div
+                            initial={{ y: 30, opacity: 0, scale: 0.96 }}
+                            animate={{ y: 0, opacity: 1, scale: 1 }}
+                            exit={{ y: 20, opacity: 0, scale: 0.96 }}
+                            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ background: 'white', borderRadius: '16px', width: '100%', maxWidth: '440px', padding: '24px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}
+                        >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px' }}>
+                                <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: '#fee2e2', color: '#dc2626', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                    <AlertTriangle size={22} />
+                                </div>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Supprimer la classe</h3>
+                                    <p style={{ margin: '2px 0 0', fontSize: '13px', color: 'var(--text-muted)' }}>{classToDelete.libelle}</p>
+                                </div>
+                            </div>
+
+                            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6, margin: '0 0 16px' }}>
+                                Cette action est définitive. Une classe qui a des élèves inscrits ou des
+                                évaluations ne peut pas être supprimée — utilisez-la ou archivez-la à la place.
+                            </p>
+
+                            {deleteError && (
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: '10px', padding: '10px 12px', fontSize: '12.5px', fontWeight: 600, marginBottom: '14px' }}>
+                                    <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: '1px' }} />
+                                    <span>{deleteError}</span>
+                                </div>
+                            )}
+
+                            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                                <button
+                                    onClick={() => setClassToDelete(null)}
+                                    disabled={deleting}
+                                    style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'white', color: 'var(--text-secondary)', fontWeight: 700, fontSize: '13px', cursor: deleting ? 'not-allowed' : 'pointer' }}
+                                >
+                                    Annuler
+                                </button>
+                                <button
+                                    onClick={handleDelete}
+                                    disabled={deleting}
+                                    style={{ padding: '10px 18px', borderRadius: '10px', border: 'none', background: '#dc2626', color: 'white', fontWeight: 700, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', cursor: deleting ? 'not-allowed' : 'pointer', opacity: deleting ? 0.7 : 1 }}
+                                >
+                                    {deleting ? <><Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> Suppression…</> : <><Trash2 size={15} /> Supprimer</>}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* ═══ Student List Modal ═══ */}
             <AnimatePresence>
