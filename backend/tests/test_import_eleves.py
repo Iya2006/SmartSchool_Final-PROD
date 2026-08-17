@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password, verify_password
 from app.models.academique import (
-    AnneeScolaire, Classe, Cycle, Eleve, Etablissement, Inscription, Niveau, Utilisateur,
+    AnneeScolaire, Classe, Cycle, Eleve, Etablissement, Facture, Inscription,
+    Niveau, TarifClasse, TypeFrais, Utilisateur,
 )
 
 _C = 0
@@ -88,6 +89,54 @@ def test_import_cree_les_eleves_et_ignore_les_classes_inconnues(client: TestClie
     insc = db.query(Inscription).filter(Inscription.eleve_id == eleve.eleve_id).first()
     assert insc is not None and insc.classe_id == classe.classe_id and insc.annee_id == annee.annee_id
     assert insc.type_inscription == "REINSCRIPTION"
+
+
+def test_import_en_masse_genere_les_frais_avec_numeros_uniques(client: TestClient, db: Session):
+    """Import en masse : chaque élève reçoit sa facture de scolarité, avec des
+    numéros de facture tous distincts (le chemin rapide numérote en mémoire),
+    et l'effectif de la classe est incrémenté du bon nombre."""
+    etab, annee, classe, admin = _ecole(db)
+    headers = _headers(client, admin.nom_utilisateur)
+
+    # Frais de scolarité OBLIGATOIRE + tarif de la classe.
+    tf = TypeFrais(
+        etablissement_id=etab.etablissement_id, code="SCO", libelle="Scolarité",
+        categorie="Scolarité", montant_defaut=100000, est_obligatoire="O",
+        frequence="ANNUEL", statut="ACTIF",
+    )
+    db.add(tf); db.commit(); db.refresh(tf)
+    db.add(TarifClasse(type_frais_id=tf.type_frais_id, classe_id=classe.classe_id, montant=100000))
+    db.commit()
+
+    effectif_avant = classe.effectif_actuel or 0
+    lignes = "".join(
+        f"Eleve{n};Prenom{n};M;0{n}/01/2014;;;;;;2eme annee\n" for n in range(1, 6)
+    )
+    csv = "Nom;Prénom;Sexe;Date de naissance;Lieu de naissance;Téléphone;E-mail;Adresse;Groupe sanguin;Classe\n" + lignes
+    r = client.post(
+        "/api/eleves/import",
+        files={"fichier": ("eleves.csv", csv.encode("utf-8"), "text/csv")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["crees"] == 5
+
+    inscriptions = db.query(Inscription).filter(Inscription.classe_id == classe.classe_id).all()
+    assert len(inscriptions) == 5
+    factures = db.query(Facture).filter(
+        Facture.inscription_id.in_([i.inscription_id for i in inscriptions])
+    ).all()
+    assert len(factures) == 5  # une scolarité par élève
+    numeros = [f.numero_facture for f in factures]
+    assert len(set(numeros)) == 5  # tous distincts
+
+    db.refresh(classe)
+    assert (classe.effectif_actuel or 0) == effectif_avant + 5
+
+    matricules = [e.matricule for e in db.query(Eleve).filter(
+        Eleve.etablissement_id == etab.etablissement_id
+    ).all()]
+    assert len(set(matricules)) == len(matricules)  # matricules uniques
 
 
 def test_import_dry_run_n_ecrit_rien(client: TestClient, db: Session):
