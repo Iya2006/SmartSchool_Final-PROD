@@ -305,6 +305,13 @@ def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db)
     update_data = data.model_dump(exclude_unset=True)
     classe_id = update_data.pop("classe_id", None)
 
+    # Mot de passe du portail élève : on le hash s'il est fourni et non vide,
+    # sinon on n'y touche pas (jamais stocké ni écrasé en clair). Corrige le
+    # champ qui, sinon, aurait remplacé le hash par le texte brut saisi.
+    mot_de_passe = update_data.pop("mot_de_passe", None)
+    if mot_de_passe and mot_de_passe.strip():
+        eleve.mot_de_passe = hash_password(mot_de_passe.strip())
+
     # La classe cible doit appartenir au même établissement — sans cette
     # vérification, un élève pouvait être déplacé dans la classe d'une autre
     # école (et son effectif incrémenté au passage).

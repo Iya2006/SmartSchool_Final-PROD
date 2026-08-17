@@ -328,6 +328,9 @@ class EleveUpdate(BaseModel):
     groupe_sanguin: Optional[str] = None
     statut: Optional[str] = None
     classe_id: Optional[int] = None
+    # Mot de passe du portail élève : renseigné = on le (ré)initialise ; vide/
+    # absent = inchangé. Jamais renvoyé en lecture.
+    mot_de_passe: Optional[str] = None
 
 class EleveOut(OrmBase, EleveBase):
     eleve_id: int
