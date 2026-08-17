@@ -3733,6 +3733,14 @@ def list_employes_salaires(
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
+    # Borne basse de l'historique de paie : le debut de l'annee scolaire
+    # affichee. Sans elle, la nouvelle annee montrait encore les salaires vers
+    # l'annee precedente (les 12 derniers paiements, toutes annees confondues) —
+    # « je vois toujours les salaires de l'ancienne annee ». On ne remonte donc
+    # pas avant la rentree de l'annee courante.
+    _annee_obj = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_id).first()
+    _debut_annee = _annee_obj.date_debut if _annee_obj else None
+
     enseignants = (
         db.query(Enseignant)
         .filter(
@@ -3768,18 +3776,15 @@ def list_employes_salaires(
         _r = _salaires.get(ens.enseignant_id) or {
             "base": 0.0, "mode": "MENSUEL", "total_heures": 0.0, "lignes": []
         }
-        depenses = (
-            db.query(Depense)
-            .filter(
-                Depense.etablissement_id == etablissement_id,
-                Depense.categorie == "SALAIRES",
-                Depense.fournisseur == f"ENS_{ens.enseignant_id}",
-                Depense.statut == "VALIDE"
-            )
-            .order_by(Depense.date_depense.desc())
-            .limit(12)
-            .all()
+        _q_ens = db.query(Depense).filter(
+            Depense.etablissement_id == etablissement_id,
+            Depense.categorie == "SALAIRES",
+            Depense.fournisseur == f"ENS_{ens.enseignant_id}",
+            Depense.statut == "VALIDE",
         )
+        if _debut_annee is not None:
+            _q_ens = _q_ens.filter(Depense.date_depense >= _debut_annee)
+        depenses = _q_ens.order_by(Depense.date_depense.desc()).limit(12).all()
 
         historique = []
         for dep in depenses:
@@ -3829,18 +3834,15 @@ def list_employes_salaires(
 
     # --- Traitement du Personnel ---
     for p in personnel:
-        depenses = (
-            db.query(Depense)
-            .filter(
-                Depense.etablissement_id == etablissement_id,
-                Depense.categorie == "SALAIRES",
-                Depense.fournisseur == f"PERS_{p.utilisateur_id}",
-                Depense.statut == "VALIDE"
-            )
-            .order_by(Depense.date_depense.desc())
-            .limit(12)
-            .all()
+        _q_pers = db.query(Depense).filter(
+            Depense.etablissement_id == etablissement_id,
+            Depense.categorie == "SALAIRES",
+            Depense.fournisseur == f"PERS_{p.utilisateur_id}",
+            Depense.statut == "VALIDE",
         )
+        if _debut_annee is not None:
+            _q_pers = _q_pers.filter(Depense.date_depense >= _debut_annee)
+        depenses = _q_pers.order_by(Depense.date_depense.desc()).limit(12).all()
 
         historique = []
         for dep in depenses:

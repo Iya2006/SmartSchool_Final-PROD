@@ -67,7 +67,7 @@ function BadgeMode({ mode }: { mode?: string }) {
 }
 
 function SalairesContent() {
-    const { etablissementId } = useApp();
+    const { etablissementId, anneeId } = useApp();
     const searchParams = useSearchParams();
     const router = useRouter();
     const queryClient = useQueryClient();
@@ -144,12 +144,14 @@ function SalairesContent() {
 
     // ─── Le personnel ────────────────────────────────────────────────────
     const { data: employesRaw, isLoading: empLoading } = useQuery({
-        queryKey: ['salaires-employes', etablissementId, selectedMonth],
+        queryKey: ['salaires-employes', etablissementId, anneeId, selectedMonth],
         queryFn: async () => {
             // Le mois est transmis : sans lui, « payé ce mois » se calculait
             // sur le mois en cours et non sur celui que le comptable regarde.
+            // `annee_id` borne l'historique à l'année scolaire affichée (plus de
+            // salaires de l'an dernier qui traînent dans la nouvelle année).
             const res = await api.get(
-                `/api/finance/salaires/employes?etablissement_id=${etablissementId}&mois=${selectedMonth}`);
+                `/api/finance/salaires/employes?etablissement_id=${etablissementId}&annee_id=${anneeId}&mois=${selectedMonth}`);
             return (res.data || []).map((emp: any) => ({
                 ...emp, employe_id: emp.id, poste: emp.role_label,
             }));
