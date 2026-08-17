@@ -54,6 +54,26 @@ def _annee_ou_404(db: Session, annee_id: int, etablissement_id: int, libelle: st
     return a
 
 
+def _annee_suivante_id(db: Session, etablissement_id: int, annee_source_id: int) -> Optional[int]:
+    """L'année scolaire qui suit immédiatement `annee_source_id` dans cette école.
+
+    Sert à re-décider une classe d'examen dès la saisie du résultat officiel :
+    on a besoin de l'année cible pour résoudre la classe de redoublement. On la
+    déduit de la source (la plus proche année dont la rentrée est postérieure),
+    sans dépendre d'un paramètre passé par l'écran appelant — la saisie du
+    résultat vient parfois de la page « Résultats de fin d'année », qui ne
+    connaît pas l'année cible.
+    """
+    src = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_source_id).first()
+    if not src:
+        return None
+    nxt = db.query(AnneeScolaire).filter(
+        AnneeScolaire.etablissement_id == etablissement_id,
+        AnneeScolaire.date_debut > src.date_debut,
+    ).order_by(AnneeScolaire.date_debut.asc()).first()
+    return nxt.annee_id if nxt else None
+
+
 def _inscription_ou_404(db: Session, inscription_id: int, etablissement_id: int) -> Inscription:
     """Inscription est OWNERSHIP via sa Classe."""
     insc = (
@@ -755,11 +775,50 @@ def saisir_resultats_officiels(
             ))
         enregistres += 1
 
+    # Écrire les résultats dans la transaction AVANT de recalculer : le calcul
+    # relit les résultats officiels par requête (_resultats_officiels_bulk), et
+    # la session ne fait pas d'autoflush — sans ce flush, il recalculerait sur
+    # l'état d'avant la saisie et laisserait la décision « en attente ».
+    db.flush()
+
+    # ── Appliquer immédiatement la décision de passage ──
+    # Enregistrer un résultat officiel ne suffisait pas : la décision restait
+    # « en attente du résultat officiel » et la validation de la classe restait
+    # bloquée tant qu'on ne relançait pas manuellement le calcul. Ici, pour
+    # chaque classe DÉJÀ calculée (statut_promotion posé et non VALIDE), on
+    # rejoue le calcul de la classe — même fonction que /calculer-resultats,
+    # donc aucune divergence de logique — pour que DIPLÔMÉ / REDOUBLANT
+    # s'applique tout de suite à partir du résultat qu'on vient de saisir.
+    # Une classe déjà VALIDÉE (définitive) n'est jamais retouchée : le core
+    # l'exclut, et on ne la sélectionne même pas.
+    classes_a_recalculer: Dict[int, int] = {}
+    for insc in inscriptions.values():
+        if insc.statut_promotion and insc.statut_promotion != "VALIDE":
+            classes_a_recalculer.setdefault(insc.classe_id, insc.annee_id)
+
+    recalculees = 0
+    for cid, annee_source_id in classes_a_recalculer.items():
+        classe = db.query(Classe).filter(Classe.classe_id == cid).first()
+        if not classe:
+            continue
+        annee_cible_id = _annee_suivante_id(db, classe.etablissement_id, annee_source_id)
+        if not annee_cible_id:
+            continue
+        _calculer_resultats_classe_core(db, classe, annee_cible_id, {})
+        recalculees += 1
+
     db.commit()
+
+    if recalculees:
+        rappel = ("Décisions de passage appliquées automatiquement "
+                  f"({recalculees} classe(s) recalculée(s)) — vous pouvez valider la promotion.")
+    else:
+        rappel = "Relancez le calcul des résultats de la classe pour appliquer ces décisions."
     return {
         "message": f"{enregistres} résultat(s) officiel(s) enregistré(s)",
         "enregistres": enregistres,
-        "rappel": "Relancez le calcul des résultats de la classe pour appliquer ces décisions.",
+        "classes_recalculees": recalculees,
+        "rappel": rappel,
     }
 
 
