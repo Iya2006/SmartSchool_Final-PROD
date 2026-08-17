@@ -89,9 +89,31 @@ def verifier_annee_modifiable(db: Session, annee_id: Optional[int]) -> None:
     if annee_id is None:
         return
     annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_id).first()
-    if annee and annee.statut in ANNEE_VERROUILLEE:
+    if not annee:
+        return
+    if annee.statut in ANNEE_VERROUILLEE:
         etat = "archivée" if annee.statut == "ARCHIVEE" else "clôturée"
         raise HTTPException(
             status_code=403,
             detail=f"{annee.libelle} est {etat} (lecture seule) — aucune modification n'est possible.",
         )
+    # Seule l'année EN COURS accepte des écritures. Une année passée reste
+    # consultable mais en LECTURE SEULE — même si son statut est resté
+    # « EN_COURS » (activer une nouvelle année ne clôture pas formellement
+    # l'ancienne). Sans ça, on pouvait encore encaisser/dépenser sur une année
+    # précédente en la consultant. Une année future PLANIFIÉE reste modifiable
+    # (préparation), et l'année courante n'est jamais bloquée ici.
+    if annee.est_courante != "O" and annee.statut == "EN_COURS":
+        # On ne bloque que si une AUTRE année est bien l'année en cours de cette
+        # école : ainsi une base où aucune année n'est encore marquée courante
+        # (mise en place initiale) n'est pas verrouillée par excès de prudence.
+        existe_courante = db.query(AnneeScolaire.annee_id).filter(
+            AnneeScolaire.etablissement_id == annee.etablissement_id,
+            AnneeScolaire.est_courante == "O",
+        ).first()
+        if existe_courante:
+            raise HTTPException(
+                status_code=403,
+                detail=f"{annee.libelle} n'est plus l'année en cours (lecture seule) — "
+                       "aucune modification n'est possible.",
+            )
