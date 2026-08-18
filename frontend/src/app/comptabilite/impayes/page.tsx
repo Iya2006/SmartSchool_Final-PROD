@@ -13,7 +13,7 @@ import api from '@/lib/api';
 import Link from 'next/link';
 import Pagination from '@/components/Pagination';
 import AnneeFilter from '@/components/AnneeFilter';
-import { useQuery, useMutation, useQueryClient, useIsRestoring } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, useIsRestoring, keepPreviousData } from '@tanstack/react-query';
 
 /* ───── Types ───── */
 type Impaye = {
@@ -84,6 +84,15 @@ export default function ImpayesPage() {
     const [filterAnnee, setFilterAnnee] = useState<number>(anneeId);
     useEffect(() => { setFilterAnnee(anneeId); }, [anneeId]);
     const [search, setSearch] = useState('');
+    // Recherche « débouncée » : on n'interroge le serveur qu'APRÈS 350  ms sans
+    // frappe, au lieu de relancer une requête à chaque lettre (ce qui faisait
+    // « clignoter » la page). L'utilisateur tape tranquillement, la liste se met
+    // à jour une fois qu'il s'arrête.
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
+        return () => clearTimeout(t);
+    }, [search]);
     const [filterClasse, setFilterClasse] = useState('');
     const [filterStatut, setFilterStatut] = useState('');
     const [filterTypeFrais, setFilterTypeFrais] = useState('');
@@ -119,7 +128,7 @@ export default function ImpayesPage() {
     const queryClient = useQueryClient();
 
     const { data: pageData, isLoading: queryLoading, refetch: fetchData } = useQuery({
-        queryKey: ['impayes', etablissementId, filterAnnee, page, filterClasse, filterStatut, filterTypeFrais, search],
+        queryKey: ['impayes', etablissementId, filterAnnee, page, filterClasse, filterStatut, filterTypeFrais, debouncedSearch],
         queryFn: async () => {
             const skip = (page - 1) * pageSize;
             const params = new URLSearchParams({
@@ -135,7 +144,7 @@ export default function ImpayesPage() {
             if (filterClasse) { params.set('classe_id', filterClasse); statsParams.set('classe_id', filterClasse); }
             if (filterStatut) { params.set('statut', filterStatut); statsParams.set('statut', filterStatut); }
             if (filterTypeFrais) { params.set('type_frais_id', filterTypeFrais); statsParams.set('type_frais_id', filterTypeFrais); }
-            if (search) params.set('search', search);
+            if (debouncedSearch) params.set('search', debouncedSearch);
 
             const [impRes, statsRes, classRes, tfRes] = await Promise.all([
                 api.get(`/api/finance/impayes?${params}`),
@@ -153,7 +162,11 @@ export default function ImpayesPage() {
                 classes: classRes.data || [],
                 typesFrais: tfRes.data || []
             };
-        }
+        },
+        // Pendant qu'une nouvelle recherche/page charge, on GARDE l'ancienne
+        // liste à l'écran au lieu de la vider vers un spinner plein écran : la
+        // page ne « clignote » plus, elle se met à jour en douceur.
+        placeholderData: keepPreviousData,
     });
     // Cache React Query persiste en localStorage (offline-first) : au tout
     // premier rendu client, avant restauration du cache, isLoading tombe a
@@ -169,7 +182,7 @@ export default function ImpayesPage() {
     const typesFrais = pageData?.typesFrais || [];
 
     // Réinitialiser la pagination quand un filtre change, pour éviter une page vide
-    useEffect(() => { setPage(1); }, [filterClasse, filterStatut, filterTypeFrais, search]);
+    useEffect(() => { setPage(1); }, [filterClasse, filterStatut, filterTypeFrais, debouncedSearch]);
 
     // La recherche est désormais envoyée au backend (voir queryKey ci-dessus) :
     // `impayes` ne contient déjà que les lignes de la page courante correspondant

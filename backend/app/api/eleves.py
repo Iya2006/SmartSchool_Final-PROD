@@ -63,11 +63,15 @@ def list_eleves(
         Eleve.photo_url,
         Eleve.adresse,
         Eleve.groupe_sanguin,
-        func.coalesce(Classe.code, ClasseCible.code).label("classe_code"),
-        func.coalesce(Niveau.libelle, NiveauCible.libelle).label("niveau"),
-        Inscription.inscription_id.label("insc_courante_id"),
-        ClasseCible.classe_id.label("classe_cible_id"),
-        InscCible.inscription_id.label("insc_cible_id"),
+        # Colonnes issues des jointures : AGRÉGÉES pour tenir le regroupement
+        # « une ligne par élève » (voir group_by plus bas). Sans ça, un élève
+        # ayant plus d'une inscription rattachée à l'année (ex. active + cible,
+        # ou données en double) apparaissait DEUX FOIS avec le même matricule.
+        func.max(func.coalesce(Classe.code, ClasseCible.code)).label("classe_code"),
+        func.max(func.coalesce(Niveau.libelle, NiveauCible.libelle)).label("niveau"),
+        func.max(Inscription.inscription_id).label("insc_courante_id"),
+        func.max(ClasseCible.classe_id).label("classe_cible_id"),
+        func.max(InscCible.inscription_id).label("insc_cible_id"),
     ).outerjoin(
         Inscription, (Eleve.eleve_id == Inscription.eleve_id) &
                       (Inscription.statut == "ACTIVE") &
@@ -111,6 +115,11 @@ def list_eleves(
         )
     if classe_code:
         query = query.filter(func.coalesce(Classe.code, ClasseCible.code) == classe_code)
+
+    # UNE ligne par élève : les jointures ci-dessus peuvent en produire
+    # plusieurs pour un même élève (inscription active + pré-placement à
+    # réinscrire), ce qui l'affichait en double avec le même matricule.
+    query = query.group_by(Eleve.eleve_id)
 
     results = query.order_by(Eleve.nom, Eleve.prenom).offset(skip).limit(limit).all()
     out = []
@@ -349,6 +358,16 @@ async def importer_eleves(
         index_classe[normaliser_entete(c.code)] = c
         index_classe[normaliser_entete(c.libelle)] = c
 
+    # Identités DÉJÀ présentes dans l'école (nom + prénom + date de naissance,
+    # comparés sans casse ni accents). Sert à rendre l'import IDEMPOTENT : le
+    # relancer — ou une école qui, croyant l'import coupé, le rejoue — ne
+    # recrée pas les mêmes élèves. C'est ce qui provoquait les doublons.
+    existants = set()
+    for (n, p, d) in db.query(Eleve.nom, Eleve.prenom, Eleve.date_naissance).filter(
+        Eleve.etablissement_id == etablissement_id
+    ).all():
+        existants.add((normaliser_entete(n or ""), normaliser_entete(p or ""), d))
+
     # --- On VALIDE toutes les lignes avant d'écrire quoi que ce soit -----------
     valides, ignorees, apercu = [], [], []
     for i, ligne in enumerate(lignes, start=2):  # ligne 1 = en-tête
@@ -368,6 +387,12 @@ async def importer_eleves(
         if date_naissance is None:
             ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": "date de naissance manquante ou invalide"})
             continue
+        # Doublon : même élève déjà en base, OU répété plus haut dans le fichier.
+        identite = (normaliser_entete(nom), normaliser_entete(prenom), date_naissance)
+        if identite in existants:
+            ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": "déjà présent (doublon évité)"})
+            continue
+        existants.add(identite)
         valides.append((ligne, nom, prenom, classe, date_naissance))
         apercu.append({"ligne": i, "eleve": f"{prenom} {nom}", "classe": classe.libelle})
 
@@ -451,6 +476,7 @@ async def importer_eleves(
     #    tarifs préchargés par classe, numéros de facture incrémentés en mémoire.
     classe_ids = [c.classe_id for c in classes]
     tarifs_par_classe: dict = {}
+    vus_tarif = set()  # (classe_id, type_frais_id) : jamais deux fois le même frais
     if classe_ids:
         for tarif, tf in db.query(TarifClasse, TypeFrais).join(
             TypeFrais, TarifClasse.type_frais_id == TypeFrais.type_frais_id
@@ -461,6 +487,10 @@ async def importer_eleves(
         ).all():
             if _est_frais_inscription(tf.categorie):
                 continue  # réinscription : on n'ajoute jamais le frais d'entrée
+            marque = (tarif.classe_id, tf.type_frais_id)
+            if marque in vus_tarif:
+                continue  # grille en double : une seule facture par type de frais
+            vus_tarif.add(marque)
             tarifs_par_classe.setdefault(tarif.classe_id, []).append(
                 (float(tarif.montant), tf.type_frais_id)
             )
