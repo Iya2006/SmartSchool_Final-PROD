@@ -63,11 +63,15 @@ def list_eleves(
         Eleve.photo_url,
         Eleve.adresse,
         Eleve.groupe_sanguin,
-        func.coalesce(Classe.code, ClasseCible.code).label("classe_code"),
-        func.coalesce(Niveau.libelle, NiveauCible.libelle).label("niveau"),
-        Inscription.inscription_id.label("insc_courante_id"),
-        ClasseCible.classe_id.label("classe_cible_id"),
-        InscCible.inscription_id.label("insc_cible_id"),
+        # Colonnes issues des jointures : AGRÉGÉES pour tenir le regroupement
+        # « une ligne par élève » (voir group_by plus bas). Sans ça, un élève
+        # ayant plus d'une inscription rattachée à l'année (ex. active + cible,
+        # ou données en double) apparaissait DEUX FOIS avec le même matricule.
+        func.max(func.coalesce(Classe.code, ClasseCible.code)).label("classe_code"),
+        func.max(func.coalesce(Niveau.libelle, NiveauCible.libelle)).label("niveau"),
+        func.max(Inscription.inscription_id).label("insc_courante_id"),
+        func.max(ClasseCible.classe_id).label("classe_cible_id"),
+        func.max(InscCible.inscription_id).label("insc_cible_id"),
     ).outerjoin(
         Inscription, (Eleve.eleve_id == Inscription.eleve_id) &
                       (Inscription.statut == "ACTIVE") &
@@ -111,6 +115,11 @@ def list_eleves(
         )
     if classe_code:
         query = query.filter(func.coalesce(Classe.code, ClasseCible.code) == classe_code)
+
+    # UNE ligne par élève : les jointures ci-dessus peuvent en produire
+    # plusieurs pour un même élève (inscription active + pré-placement à
+    # réinscrire), ce qui l'affichait en double avec le même matricule.
+    query = query.group_by(Eleve.eleve_id)
 
     results = query.order_by(Eleve.nom, Eleve.prenom).offset(skip).limit(limit).all()
     out = []
