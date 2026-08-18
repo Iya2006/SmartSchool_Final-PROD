@@ -1223,6 +1223,7 @@ def generer_factures_classe(
 def list_paiements(
     response: Response,
     annee_id: Optional[int] = None,
+    search: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -1241,6 +1242,16 @@ def list_paiements(
     )
     if annee_id is not None:
         query = query.filter(Inscription.annee_id == annee_id)
+    # Recherche SERVEUR : sans elle, la page ne filtrait que les paiements
+    # deja charges (une page), donc chercher un eleve absent de la page
+    # courante ne renvoyait rien. On cherche par nom/prenom d'eleve, numero
+    # de recu et numero de facture.
+    if search:
+        like = f"%{search.strip()}%"
+        query = query.filter(
+            Eleve.nom.ilike(like) | Eleve.prenom.ilike(like) |
+            Paiement.numero_recu.ilike(like) | Facture.numero_facture.ilike(like)
+        )
 
     total = query.count()
     response.headers["X-Total-Count"] = str(total)
