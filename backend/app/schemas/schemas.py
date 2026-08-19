@@ -301,7 +301,8 @@ class EleveBase(BaseModel):
     etablissement_id: int
     nom: str = Field(..., max_length=100)
     prenom: str = Field(..., max_length=150)
-    date_naissance: date
+    # Optionnelle : à l'import en masse, seuls classe + nom + prénom sont exigés.
+    date_naissance: Optional[date] = None
     sexe: str = Field(..., max_length=1)
     lieu_naissance: Optional[str] = None
     nationalite: Optional[str] = "Guinéenne"
@@ -345,7 +346,9 @@ class EleveListOut(OrmBase):
     nom: str
     prenom: str
     sexe: str
-    date_naissance: date
+    # Optionnelle : sinon un élève importé sans date faisait échouer TOUTE la
+    # liste (500 → « Impossible de charger les élèves »).
+    date_naissance: Optional[date] = None
     statut: str
     classe_code: Optional[str] = None
     niveau: Optional[str] = None
