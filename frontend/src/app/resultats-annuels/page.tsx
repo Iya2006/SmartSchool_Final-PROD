@@ -74,6 +74,10 @@ export default function ResultatsAnnuelsPage() {
     const [officiels, setOfficiels] = useState<LigneOfficielle[]>([]);
     const [bulletinParEleve, setBulletinParEleve] = useState<Record<number, number>>({});
     const [classeExamen, setClasseExamen] = useState(false);
+    // Maternelle : jugée admis/non SANS moyenne (pas de notes). Même écran de
+    // saisie que les classes d'examen, mais l'appréciation compte plus que tout.
+    const [evaluationSimple, setEvaluationSimple] = useState(false);
+    const [attestationPossible, setAttestationPossible] = useState(false);
     const [examenNational, setExamenNational] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [calcul, setCalcul] = useState(false);
@@ -112,6 +116,8 @@ export default function ResultatsAnnuelsPage() {
             setPeriodes(annuel.data?.periodes || []);
             setSynthese(annuel.data?.synthese || null);
             setClasseExamen(!!(off.data?.classe_examen ?? annuel.data?.classe_examen));
+            setEvaluationSimple(!!off.data?.evaluation_simple);
+            setAttestationPossible(!!off.data?.attestation_possible);
             setExamenNational(off.data?.examen_national || annuel.data?.examen_national || null);
             setOfficiels(off.data?.eleves || []);
             setBulletinParEleve(Object.fromEntries(
@@ -205,6 +211,15 @@ export default function ResultatsAnnuelsPage() {
     const definirResultat = (inscriptionId: number, resultat: string) =>
         setOfficiels(prev => prev.map(o =>
             o.inscription_id === inscriptionId ? { ...o, resultat } : o));
+
+    // Appréciation libre (essentielle en maternelle : c'est tout ce que reçoit
+    // l'enfant à la place d'une note).
+    const definirObservation = (inscriptionId: number, observation: string) =>
+        setOfficiels(prev => prev.map(o =>
+            o.inscription_id === inscriptionId ? { ...o, observation } : o));
+
+    // Écran de saisie admis/non : classes d'examen OU maternelle (sans moyenne).
+    const modeSaisie = classeExamen || evaluationSimple;
 
     const enregistrerOfficiels = async () => {
         const resultats = officiels.filter(o => o.resultat)
@@ -377,15 +392,19 @@ export default function ResultatsAnnuelsPage() {
                         </div>
                     )}
 
-                    {/* ═══ EXAMEN NATIONAL — bloc autonome ═══ */}
-                    {classeExamen && (
+                    {/* ═══ RÉSULTAT ADMIS/NON — examen national OU maternelle ═══ */}
+                    {modeSaisie && (
                         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                             style={{ background: 'white', borderRadius: '16px', border: '1.5px solid #fcd34d', overflow: 'hidden', marginBottom: '22px' }}>
                             <div style={{ padding: '14px 18px', background: '#fffbeb', borderBottom: '1px solid #fde68a' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                                     <div style={{ fontSize: '14px', fontWeight: 800, color: '#92400e', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <GraduationCap size={18} /> Examen national{examenNational ? ` — ${examenNational}` : ''}
+                                        <GraduationCap size={18} />
+                                        {evaluationSimple
+                                            ? 'Résultats de fin d’année — Maternelle (admis / non admis)'
+                                            : `Examen national${examenNational ? ` — ${examenNational}` : ''}`}
                                     </div>
+                                    {!evaluationSimple && (
                                     <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                         <input ref={fichierRef} type="file" accept=".csv,.xlsx,.xlsm,.txt" style={{ display: 'none' }}
                                             onChange={e => e.target.files?.[0] && analyserFichier(e.target.files[0])} />
@@ -398,11 +417,12 @@ export default function ResultatsAnnuelsPage() {
                                             <Upload size={14} /> {importEnCours ? 'Lecture…' : 'Importer les résultats'}
                                         </button>
                                     </div>
+                                    )}
                                 </div>
                                 <div style={{ fontSize: '12.5px', color: '#a16207', marginTop: '7px' }}>
-                                    Le passage dépend uniquement de ce résultat — la moyenne annuelle reste un
-                                    indicateur pédagogique. Fichier accepté : CSV ou Excel, colonnes
-                                    <strong> MATRICULE</strong> et <strong>RESULTAT</strong>.
+                                    {evaluationSimple
+                                        ? 'Pas de notes en maternelle : l’enseignant met Admis ou Non admis et une appréciation. Un admis passe à la section (ou l’année) suivante.'
+                                        : 'Le passage dépend uniquement de ce résultat — la moyenne annuelle reste un indicateur pédagogique. Fichier accepté : CSV ou Excel, colonnes MATRICULE et RESULTAT.'}
                                     {sansResultat > 0 && (
                                         <> <strong>{sansResultat} élève{sansResultat > 1 ? 's' : ''}</strong> sans résultat —
                                             la validation de la classe restera bloquée.</>
@@ -428,8 +448,10 @@ export default function ResultatsAnnuelsPage() {
                                                 <tr style={{ background: '#f8fafc' }}>
                                                     <th style={th}>MATRICULE</th>
                                                     <th style={th}>ÉLÈVE</th>
-                                                    <th style={{ ...th, textAlign: 'center' }}>MOY. ANNUELLE</th>
-                                                    <th style={{ ...th, textAlign: 'center', color: '#92400e' }}>RÉSULTAT OFFICIEL</th>
+                                                    {!evaluationSimple && <th style={{ ...th, textAlign: 'center' }}>MOY. ANNUELLE</th>}
+                                                    <th style={{ ...th, textAlign: 'center', color: '#92400e' }}>{evaluationSimple ? 'ADMIS / NON ADMIS' : 'RÉSULTAT OFFICIEL'}</th>
+                                                    <th style={th}>APPRÉCIATION</th>
+                                                    {attestationPossible && <th style={{ ...th, textAlign: 'center' }}>ATTESTATION</th>}
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -437,9 +459,11 @@ export default function ResultatsAnnuelsPage() {
                                                     <tr key={o.inscription_id} style={{ borderTop: '1px solid #f1f5f9' }}>
                                                         <td style={{ padding: '9px 12px', color: '#94a3b8', fontSize: '12px' }}>{o.matricule || '—'}</td>
                                                         <td style={{ padding: '9px 12px', color: '#0f172a', fontWeight: 600 }}>{o.nom} {o.prenom}</td>
-                                                        <td style={{ padding: '9px 12px', textAlign: 'center', color: '#64748b' }}>
-                                                            {o.moyenne_annuelle != null ? o.moyenne_annuelle.toFixed(2) : '—'}
-                                                        </td>
+                                                        {!evaluationSimple && (
+                                                            <td style={{ padding: '9px 12px', textAlign: 'center', color: '#64748b' }}>
+                                                                {o.moyenne_annuelle != null ? o.moyenne_annuelle.toFixed(2) : '—'}
+                                                            </td>
+                                                        )}
                                                         <td style={{ padding: '9px 12px', textAlign: 'center' }}>
                                                             <select value={o.resultat || ''}
                                                                 onChange={e => definirResultat(o.inscription_id, e.target.value)}
@@ -454,6 +478,24 @@ export default function ResultatsAnnuelsPage() {
                                                                 <option value="NON_ADMIS">Non admis</option>
                                                             </select>
                                                         </td>
+                                                        <td style={{ padding: '9px 12px' }}>
+                                                            <input value={o.observation || ''}
+                                                                onChange={e => definirObservation(o.inscription_id, e.target.value)}
+                                                                placeholder={evaluationSimple ? 'Appréciation de l’enfant…' : 'Observation (facultatif)'}
+                                                                style={{ width: '100%', minWidth: '180px', padding: '6px 10px', borderRadius: '8px', fontSize: '12.5px', border: '1px solid #e2e8f0', background: 'white' }} />
+                                                        </td>
+                                                        {attestationPossible && (
+                                                            <td style={{ padding: '9px 12px', textAlign: 'center' }}>
+                                                                {o.resultat === 'ADMIS' ? (
+                                                                    <button onClick={() => ouvrirFichier(
+                                                                        `/api/promotion/attestation-maternelle/${o.inscription_id}`,
+                                                                        'application/pdf', `attestation_${o.nom}_${o.prenom}.pdf`)}
+                                                                        style={btn('#7c3aed')}>
+                                                                        <Download size={13} /> Attestation
+                                                                    </button>
+                                                                ) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                                                            </td>
+                                                        )}
                                                     </tr>
                                                 ))}
                                             </tbody>

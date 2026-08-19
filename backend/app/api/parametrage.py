@@ -651,6 +651,27 @@ def list_cycles(
     return result
 
 
+@router.post("/cycles/activer-maternelle", dependencies=[Depends(_require_admin)])
+def activer_maternelle(
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Ajoute le cycle Maternelle (+ Petite/Moyenne/Grande section) à CETTE école.
+
+    Idempotent : ne recrée pas ce qui existe déjà. Utile pour une école (complexe)
+    créée AVANT l'ajout de la maternelle — les nouveaux complexes reçoivent la
+    maternelle directement à l'inscription. Les 3 sections apparaissent ensuite
+    dans le menu Niveau à la création de classe, et l'import y place les élèves
+    (en réinscription, comme tout cycle) sans mot de passe pour la maternelle.
+    """
+    from app.services.referentiel_scolaire import amorcer_referentiel_scolaire
+    res = amorcer_referentiel_scolaire(db, etablissement_id, None, cycles=["MAT"])
+    db.commit()
+    if res["cycles"] == 0 and res["niveaux"] == 0:
+        return {"message": "La maternelle est déjà activée pour cette école.", **res}
+    return {"message": "Maternelle activée : Petite, Moyenne et Grande section créées.", **res}
+
+
 # ============================================================================
 # MATIÈRES
 # ============================================================================

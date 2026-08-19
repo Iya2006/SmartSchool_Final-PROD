@@ -254,11 +254,18 @@ def _situation_niveau(db: Session, niveau: Optional[Niveau], cycle: Optional[Cyc
         or (est_prm_dernier and not a_college)
         or (est_clg_dernier and not a_lycee)
     )
+    est_examen = bool(niveau and niveau.est_examen == "O")
+    # Maternelle : jugée admis/non SANS moyenne, décidée par l'enseignant.
+    evaluation_simple = bool(niveau and niveau.evaluation_simple == "O")
     return {
         # Frontière Collège→Lycée uniquement si un lycée existe pour accueillir.
         "est_frontiere_lycee": est_clg_dernier and a_lycee,
         "est_terminal": est_terminal,
-        "est_examen": bool(niveau and niveau.est_examen == "O"),
+        "est_examen": est_examen,
+        "evaluation_simple": evaluation_simple,
+        # Passage décidé par un résultat admis/non saisi (examen national OU
+        # maternelle), pas par la moyenne interne. Même brique dans les deux cas.
+        "decision_par_resultat": est_examen or evaluation_simple,
         "examen_national": niveau.examen_national if niveau else None,
     }
 
@@ -309,6 +316,7 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
     est_frontiere_lycee = situation["est_frontiere_lycee"]
     est_terminal = situation["est_terminal"]
     est_examen = situation["est_examen"]
+    decision_par_resultat = situation["decision_par_resultat"]
 
     inscriptions = db.query(Inscription, Eleve).join(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
@@ -322,7 +330,7 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
     )
     resultats_officiels = _resultats_officiels_bulk(
         db, [insc.inscription_id for insc, _ in inscriptions]
-    ) if est_examen else {}
+    ) if decision_par_resultat else {}
 
     eleves = []
     for insc, eleve in inscriptions:
@@ -335,9 +343,10 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
         else:
             r = resultats_calc.get(insc.inscription_id, {})
             moyenne, total_points, rang = r.get("moyenne"), r.get("total_points"), None
-            if est_examen:
-                # Classe d'examen : seul le résultat du Ministère décide. La
-                # moyenne interne reste affichée comme indicateur pédagogique.
+            if decision_par_resultat:
+                # Décision par résultat admis/non (examen national OU maternelle) :
+                # ni la moyenne ni le seuil n'interviennent. Pour la maternelle,
+                # est_terminal=False → un admis passe à la section/année suivante.
                 decision = _decision_classe_examen(officiel, est_terminal)
             elif est_terminal:
                 decision = "DIPLOME"
@@ -404,7 +413,7 @@ def _calculer_resultats_classe_core(
     situation = _situation_niveau(db, niveau, cycle, classe.etablissement_id)
     est_frontiere_lycee = situation["est_frontiere_lycee"]
     est_terminal = situation["est_terminal"]
-    est_examen = situation["est_examen"]
+    decision_par_resultat = situation["decision_par_resultat"]
 
     def classe_active_cached(niveau_id: int) -> Optional[Classe]:
         key = (niveau_id, annee_cible_id)
@@ -431,7 +440,7 @@ def _calculer_resultats_classe_core(
 
     resultats_officiels = _resultats_officiels_bulk(
         db, [insc.inscription_id for insc, _ in inscriptions]
-    ) if est_examen else {}
+    ) if decision_par_resultat else {}
 
     resume = {
         "proposes": 0, "en_attente_filiere": 0, "exclus": 0, "diplomes": 0,
@@ -442,9 +451,10 @@ def _calculer_resultats_classe_core(
         r = resultats_calc.get(insc.inscription_id, {})
         moyenne, total_points = r.get("moyenne"), r.get("total_points")
 
-        if est_examen:
-            # Classe d'examen : la décision vient du Ministère, jamais du seuil
-            # interne. La moyenne reste enregistrée comme indicateur.
+        if decision_par_resultat:
+            # Décision par résultat admis/non (examen national OU maternelle) :
+            # jamais le seuil interne. La moyenne reste enregistrée comme
+            # indicateur. Maternelle : est_terminal=False → admis = passe.
             decision = _decision_classe_examen(
                 resultats_officiels.get(insc.inscription_id), est_terminal
             )
@@ -740,6 +750,15 @@ def lister_resultats_officiels(
     niveau, cycle, _ = _cycle_key_pour_classe(db, classe)
     situation = _situation_niveau(db, niveau, cycle, classe.etablissement_id)
 
+    # Attestation de fin de cycle : uniquement la DERNIÈRE section de maternelle
+    # (Grande Section = aucune section au-dessus dans le cycle).
+    attestation_possible = False
+    if situation["evaluation_simple"] and niveau:
+        section_au_dessus = db.query(Niveau.niveau_id).filter(
+            Niveau.cycle_id == niveau.cycle_id, Niveau.ordre > niveau.ordre
+        ).first()
+        attestation_possible = section_au_dessus is None
+
     inscriptions = db.query(Inscription, Eleve).join(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
     ).filter(
@@ -751,6 +770,8 @@ def lister_resultats_officiels(
     return {
         "classe": {"classe_id": classe.classe_id, "libelle": classe.libelle},
         "classe_examen": situation["est_examen"],
+        "evaluation_simple": situation["evaluation_simple"],
+        "attestation_possible": attestation_possible,
         "examen_national": situation["examen_national"],
         "eleves": [
             {
@@ -1257,3 +1278,190 @@ def preparer_classes_annee(annee_cible_id: int, annee_source_id: int, db: Sessio
 
     db.commit()
     return {"message": f"{created} classe(s) créée(s) pour {annee_cible.libelle}", "created": created}
+
+
+# ════════════════════════════════════════════════════════════
+# ATTESTATION DE FIN DE CYCLE — MATERNELLE (Grande Section)
+# ════════════════════════════════════════════════════════════
+
+@router.get("/attestation-maternelle/{inscription_id}")
+def attestation_maternelle(
+    inscription_id: int,
+    directeur: Optional[str] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Attestation premium de fin de cycle maternelle (Grande Section, admis).
+
+    Délivrée à un enfant de Grande Section déclaré ADMIS par son enseignant :
+    elle atteste la fin du cycle et le passage en 1ère année. `directeur`
+    permet de préciser le nom du directeur du cycle (sinon celui de l'école).
+    """
+    import io
+    import os
+    from datetime import date as _date
+    from fastapi.responses import StreamingResponse
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.utils import ImageReader
+    from app.models.academique import Etablissement
+
+    ligne = (
+        db.query(Inscription, Eleve, Classe, Niveau, Cycle, AnneeScolaire)
+        .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .join(Niveau, Classe.niveau_id == Niveau.niveau_id)
+        .join(Cycle, Niveau.cycle_id == Cycle.cycle_id)
+        .join(AnneeScolaire, Inscription.annee_id == AnneeScolaire.annee_id)
+        .filter(
+            Inscription.inscription_id == inscription_id,
+            Classe.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not ligne:
+        raise HTTPException(404, "Inscription introuvable.")
+    insc, eleve, classe, niveau, cycle, annee = ligne
+
+    if niveau.evaluation_simple != "O" or cycle.code != "MAT":
+        raise HTTPException(400, "L'attestation ne concerne que la maternelle.")
+    # Grande Section = dernière section (aucune section au-dessus dans le cycle).
+    section_au_dessus = db.query(Niveau.niveau_id).filter(
+        Niveau.cycle_id == cycle.cycle_id, Niveau.ordre > niveau.ordre
+    ).first()
+    if section_au_dessus:
+        raise HTTPException(400, "L'attestation de fin de cycle ne se délivre qu'en Grande Section.")
+
+    officiel = db.query(ResultatOfficielExamen).filter(
+        ResultatOfficielExamen.inscription_id == inscription_id
+    ).first()
+    if not officiel or officiel.resultat != "ADMIS":
+        raise HTTPException(400, "L'attestation n'est délivrée qu'aux enfants ADMIS (résultat non saisi ou non admis).")
+
+    etab = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == etablissement_id
+    ).first()
+    nom_directeur = (directeur or "").strip() or (etab.directeur if etab and etab.directeur else "La Direction")
+    ville = (etab.ville if etab and etab.ville else "") or ""
+
+    # ── Rendu premium ──────────────────────────────────────────────
+    buffer = io.BytesIO()
+    largeur, hauteur = A4
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+
+    OR_FONCE = HexColor("#8a6d1a")   # or profond
+    OR_CLAIR = HexColor("#c9a227")
+    NAVY = HexColor("#0f2942")
+    GRIS = HexColor("#475569")
+
+    # Double filet décoratif
+    pdf.setStrokeColor(OR_CLAIR); pdf.setLineWidth(3)
+    pdf.rect(1.1 * cm, 1.1 * cm, largeur - 2.2 * cm, hauteur - 2.2 * cm)
+    pdf.setStrokeColor(NAVY); pdf.setLineWidth(0.8)
+    pdf.rect(1.4 * cm, 1.4 * cm, largeur - 2.8 * cm, hauteur - 2.8 * cm)
+
+    backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def _chemin_image(url):
+        if not url:
+            return None
+        p = os.path.join(backend_root, url.lstrip("/").replace("/", os.sep))
+        return p if os.path.exists(p) else None
+
+    y = hauteur - 2.6 * cm
+    logo = _chemin_image(etab.logo_url if etab else None)
+    if logo:
+        try:
+            pdf.drawImage(ImageReader(logo), largeur / 2 - 1.1 * cm, y - 1.2 * cm,
+                          width=2.2 * cm, height=2.2 * cm, mask="auto", preserveAspectRatio=True)
+            y -= 2.6 * cm
+        except Exception:
+            pass
+
+    pdf.setFillColor(NAVY)
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawCentredString(largeur / 2, y, (etab.nom if etab else "SmartSchool").upper())
+    y -= 0.7 * cm
+    if ville:
+        pdf.setFont("Helvetica", 10.5); pdf.setFillColor(GRIS)
+        pdf.drawCentredString(largeur / 2, y, ville)
+        y -= 0.5 * cm
+
+    y -= 0.9 * cm
+    pdf.setFillColor(OR_FONCE)
+    pdf.setFont("Helvetica-Bold", 26)
+    pdf.drawCentredString(largeur / 2, y, "ATTESTATION")
+    y -= 0.95 * cm
+    pdf.setFont("Helvetica-Bold", 14); pdf.setFillColor(NAVY)
+    pdf.drawCentredString(largeur / 2, y, "DE FIN DE CYCLE — MATERNELLE")
+    y -= 0.5 * cm
+    pdf.setStrokeColor(OR_CLAIR); pdf.setLineWidth(1.2)
+    pdf.line(largeur / 2 - 3.5 * cm, y, largeur / 2 + 3.5 * cm, y)
+
+    # Corps
+    y -= 1.6 * cm
+    pdf.setFillColor(HexColor("#1e293b"))
+    prenom_nom = f"{eleve.prenom} {eleve.nom}".strip()
+    dob = eleve.date_naissance.strftime("%d/%m/%Y") if eleve.date_naissance else "—"
+    lieu = eleve.lieu_naissance or "—"
+
+    def _para(lignes, taille=12.5, interligne=0.72):
+        nonlocal y
+        pdf.setFont("Helvetica", taille)
+        for txt in lignes:
+            pdf.drawCentredString(largeur / 2, y, txt)
+            y -= interligne * cm
+
+    _para([
+        f"Je soussigné(e), {nom_directeur}, Directeur/Directrice du cycle,",
+        "atteste que l'enfant :",
+    ])
+    y -= 0.3 * cm
+    pdf.setFont("Helvetica-Bold", 17); pdf.setFillColor(OR_FONCE)
+    pdf.drawCentredString(largeur / 2, y, prenom_nom.upper())
+    y -= 0.9 * cm
+    pdf.setFillColor(HexColor("#1e293b"))
+    _para([
+        f"né(e) le {dob} à {lieu},",
+        f"a suivi et achevé avec succès la Grande Section de la Maternelle",
+        f"durant l'année scolaire {annee.libelle}.",
+    ])
+    y -= 0.4 * cm
+    pdf.setFont("Helvetica-Bold", 13); pdf.setFillColor(NAVY)
+    pdf.drawCentredString(largeur / 2, y, "L'enfant est admis(e) à passer en Première Année du Primaire.")
+    y -= 1.0 * cm
+    if officiel.observation:
+        pdf.setFont("Helvetica-Oblique", 11); pdf.setFillColor(GRIS)
+        pdf.drawCentredString(largeur / 2, y, f"Appréciation : {officiel.observation[:120]}")
+        y -= 0.8 * cm
+
+    # Date + signature
+    y_sign = 4.4 * cm
+    pdf.setFont("Helvetica", 11); pdf.setFillColor(GRIS)
+    date_txt = _date.today().strftime("%d/%m/%Y")
+    lieu_date = f"Fait à {ville}, le {date_txt}" if ville else f"Fait le {date_txt}"
+    pdf.drawRightString(largeur - 2.2 * cm, y_sign + 1.4 * cm, lieu_date)
+
+    pdf.setFont("Helvetica-Bold", 11.5); pdf.setFillColor(NAVY)
+    pdf.drawRightString(largeur - 2.2 * cm, y_sign, "Le Directeur du cycle")
+    pdf.setFont("Helvetica", 11); pdf.setFillColor(HexColor("#1e293b"))
+    pdf.drawRightString(largeur - 2.2 * cm, y_sign - 0.55 * cm, nom_directeur)
+
+    cachet = _chemin_image(etab.cachet_url if etab else None)
+    if cachet:
+        try:
+            pdf.drawImage(ImageReader(cachet), largeur - 6.0 * cm, y_sign - 0.4 * cm,
+                          width=3 * cm, height=3 * cm, mask="auto", preserveAspectRatio=True)
+        except Exception:
+            pass
+
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+    nom_fichier = f"attestation_maternelle_{prenom_nom.replace(' ', '_')}.pdf"
+    return StreamingResponse(
+        buffer, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nom_fichier}"'},
+    )

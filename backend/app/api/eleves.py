@@ -353,6 +353,15 @@ async def importer_eleves(
     classes = db.query(Classe).filter(
         Classe.etablissement_id == etablissement_id, Classe.annee_id == annee_id
     ).all()
+    # Classes de MATERNELLE (niveau « sans moyenne ») : leurs élèves n'ont pas
+    # de mot de passe tant qu'ils ne sont pas en 1ère année.
+    classe_ids = [c.classe_id for c in classes]
+    classes_maternelle = set()
+    if classe_ids:
+        for (cid,) in db.query(Classe.classe_id).join(
+            Niveau, Classe.niveau_id == Niveau.niveau_id
+        ).filter(Classe.classe_id.in_(classe_ids), Niveau.evaluation_simple == "O").all():
+            classes_maternelle.add(cid)
     index_classe = {}
     for c in classes:
         index_classe[normaliser_entete(c.code)] = c
@@ -447,7 +456,9 @@ async def importer_eleves(
             adresse=valeur(ligne, "adresse").strip() or None,
             quartier=valeur(ligne, "quartier").strip() or None,
             groupe_sanguin=valeur(ligne, "groupe sanguin", "groupe").strip() or None,
-            mot_de_passe=mdp_defaut, statut="ACTIF",
+            # Pas de mot de passe pour les enfants de maternelle (pas de portail).
+            mot_de_passe=None if classe.classe_id in classes_maternelle else mdp_defaut,
+            statut="ACTIF",
         )
         db.add(eleve)
         eleves_classe.append((eleve, classe))
