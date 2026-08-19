@@ -189,6 +189,12 @@ class Niveau(Base):
     ordre = Column(Integer, nullable=False)
     est_examen = Column(String(1), default="N")
     examen_national = Column(String(30))
+    # « O » = niveau jugé SANS moyenne : le passage dépend d'une décision simple
+    # admis/non (+ appréciation) saisie par l'enseignant, pas d'un calcul de
+    # notes. Cas de la MATERNELLE (Petite/Moyenne/Grande section). Réutilise la
+    # même brique que les classes d'examen (ResultatOfficielExamen), sans être
+    # un examen national. NULL/N ailleurs (comportement inchangé).
+    evaluation_simple = Column(String(1), nullable=False, default="N")
 
     cycle = relationship("Cycle", back_populates="niveaux")
 

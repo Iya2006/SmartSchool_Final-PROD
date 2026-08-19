@@ -60,7 +60,8 @@ class TestSeedParType:
         e = self._etab(db, "COMPLEXE")
         amorcer_referentiel_scolaire(db, e.etablissement_id, "COMPLEXE")
         db.commit()
-        assert _cycles(db, e.etablissement_id) == {"PRM", "CLG", "LYC"}
+        # Un complexe couvre désormais AUSSI la maternelle (MAT).
+        assert _cycles(db, e.etablissement_id) == {"MAT", "PRM", "CLG", "LYC"}
 
     def test_autre_seede_tout(self, db: Session):
         e = self._etab(db, "AUTRE")

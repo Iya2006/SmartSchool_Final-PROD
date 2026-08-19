@@ -138,6 +138,21 @@ def _niveau_suivant(db: Session, niveau: Niveau) -> Optional[Niveau]:
     if not cycle:
         return None
 
+    if cycle.code == "MAT":
+        # Petite → Moyenne → Grande section (ordre 1→2→3), puis Grande Section
+        # mène à la 1ère Année du primaire de la MÊME école. Sans primaire
+        # (école maternelle seule, non prévue ici), pas de niveau suivant.
+        if niveau.ordre < 3:
+            return db.query(Niveau).filter(
+                Niveau.cycle_id == niveau.cycle_id, Niveau.ordre == niveau.ordre + 1
+            ).first()
+        primaire = db.query(Cycle).filter(
+            Cycle.code == "PRM", Cycle.etablissement_id == cycle.etablissement_id
+        ).first()
+        if not primaire:
+            return None
+        return db.query(Niveau).filter(Niveau.cycle_id == primaire.cycle_id, Niveau.ordre == 1).first()
+
     if cycle.code == "PRM":
         if niveau.ordre < 6:
             return db.query(Niveau).filter(
