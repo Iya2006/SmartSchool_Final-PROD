@@ -517,7 +517,7 @@ export default function SalleDesProfsPage() {
 
             {/* ═══════ MODAL: AFFECTER UN ENSEIGNANT ═══════ */}
             <AnimatePresence>
-                {showModal && modalClasse && (modalMatiere || modalTouteClasse) && (
+                {showModal && modalClasse && (modalMatiere || modalTouteClasse || modalMaternelle) && (
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                         style={{
                             position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)',
