@@ -284,6 +284,13 @@ export default function DashboardFinancierPage() {
                         <span style={{ fontSize: 12, color: '#64748b' }}>inscrits</span>
                     </div>
                 </div>
+                <div style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0' }}>
+                    <p style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Autres entrées</p>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+                        <span style={{ fontSize: 24, fontWeight: 800, color: '#10b981' }}>{(kpis.autres_entrees || 0).toLocaleString('fr-GN')}</span>
+                        <span style={{ fontSize: 12, color: '#64748b' }}>GNF (livres, équipements…)</span>
+                    </div>
+                </div>
             </div>
 
             <style>{`.animate-spin { animation: spin 1s linear infinite; } @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>

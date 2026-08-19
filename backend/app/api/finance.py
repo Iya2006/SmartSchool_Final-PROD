@@ -28,7 +28,8 @@ from app.schemas.schemas import (
     FactureCreate, FactureOut,
     EcheanceFactureOut,
     PaiementCreate, PaiementOut,
-    DepenseCreate, DepenseOut
+    DepenseCreate, DepenseOut,
+    VenteLibreCreate,
 )
 # Pont automatique vers la Comptabilité Générale (SYSCOHADA) : chaque
 # facture/paiement/dépense/salaire réel génère une écriture équilibrée,
@@ -281,6 +282,8 @@ def create_type_frais(
         montant_defaut=data.montant_defaut,
         est_obligatoire=data.est_obligatoire,
         frequence=data.frequence,
+        # Un tarif libre n'est jamais obligatoire (il ne se facture pas d'office).
+        prix_libre="O" if (data.prix_libre or "N").upper() == "O" else "N",
         statut="ACTIF"
     )
     db.add(tf)
@@ -360,6 +363,7 @@ def update_type_frais(
     tf.montant_defaut = data.montant_defaut
     tf.est_obligatoire = data.est_obligatoire
     tf.frequence = data.frequence
+    tf.prix_libre = "O" if (data.prix_libre or "N").upper() == "O" else "N"
     db.commit()
     db.refresh(tf)
     return tf
@@ -1223,6 +1227,7 @@ def generer_factures_classe(
 def list_paiements(
     response: Response,
     annee_id: Optional[int] = None,
+    search: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
@@ -1241,6 +1246,16 @@ def list_paiements(
     )
     if annee_id is not None:
         query = query.filter(Inscription.annee_id == annee_id)
+    # Recherche SERVEUR : sans elle, la page ne filtrait que les paiements
+    # deja charges (une page), donc chercher un eleve absent de la page
+    # courante ne renvoyait rien. On cherche par nom/prenom d'eleve, numero
+    # de recu et numero de facture.
+    if search:
+        like = f"%{search.strip()}%"
+        query = query.filter(
+            Eleve.nom.ilike(like) | Eleve.prenom.ilike(like) |
+            Paiement.numero_recu.ilike(like) | Facture.numero_facture.ilike(like)
+        )
 
     total = query.count()
     response.headers["X-Total-Count"] = str(total)
@@ -1413,6 +1428,74 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         "facture_statut": facture.statut,
         "message": f"Paiement enregistré. Reçu N° {numero_recu}"
     }
+
+
+@router.post("/vente-libre", status_code=201)
+def creer_vente_libre(
+    data: VenteLibreCreate,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Vend un tarif LIBRE à un élève (livre, équipement…) et l'encaisse tout de suite.
+
+    Le prix est saisi sur le moment (tarif non fixe). On crée une facture de ce
+    montant PUIS on l'encaisse via `create_paiement` : ainsi l'argent entre dans
+    la caisse, la comptabilité générale et les rapports par le même chemin que
+    tout autre encaissement — rien à réconcilier à part. Ces ventes restent
+    identifiables (leur type de frais est `prix_libre='O'`) pour le total
+    « autres entrées » du tableau de bord.
+    """
+    annee_id = resoudre_annee(db, etablissement_id, data.annee_id)
+    if annee_id is None:
+        raise HTTPException(400, "Aucune année scolaire en cours.")
+    _verifier_annee_modifiable(db, annee_id)
+
+    if data.montant is None or float(data.montant) <= 0:
+        raise HTTPException(400, "Le montant doit être supérieur à 0.")
+
+    # Type de frais : appartient à l'école ET marqué « tarif libre ».
+    tf = _type_frais_ou_404(db, data.type_frais_id, etablissement_id)
+    if (tf.prix_libre or "N").upper() != "O":
+        raise HTTPException(400, f"« {tf.libelle} » n'est pas un tarif libre.")
+
+    # Inscription active de l'élève CETTE année, dans CETTE école.
+    insc = (
+        db.query(Inscription)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(
+            Inscription.eleve_id == data.eleve_id,
+            Inscription.annee_id == annee_id,
+            Inscription.statut == "ACTIVE",
+            Classe.etablissement_id == etablissement_id,
+        )
+        .first()
+    )
+    if not insc:
+        raise HTTPException(404, "Élève non inscrit (actif) cette année dans cette école.")
+
+    montant = float(data.montant)
+    numero_facture = generer_numero_facture(db, etablissement_id, annee_id)
+    facture = Facture(
+        inscription_id=insc.inscription_id, annee_id=annee_id,
+        type_frais_id=tf.type_frais_id, numero_facture=numero_facture,
+        montant_total=montant, montant_remise=0, montant_net=montant,
+        montant_paye=0, montant_restant=montant, statut="EN_ATTENTE",
+    )
+    db.add(facture)
+    db.flush()  # visible pour create_paiement dans la même session
+
+    # Encaissement immédiat, montant plein, par la logique déjà éprouvée.
+    resultat = create_paiement(
+        PaiementCreate(
+            facture_id=facture.facture_id, montant=montant,
+            mode_paiement=data.mode_paiement, reference_externe=data.reference_externe,
+        ),
+        db, etablissement_id,
+    )
+    resultat["type_frais"] = tf.libelle
+    resultat["numero_facture"] = numero_facture
+    resultat["message"] = f"Vente enregistrée ({tf.libelle}). Reçu N° {resultat.get('numero_recu')}"
+    return resultat
 
 
 # ============================================================================
@@ -2190,6 +2273,23 @@ def dashboard_financier(
         .with_entities(Inscription.eleve_id).distinct().count()
     )
 
+    # === « Autres entrées » : ventes de tarifs LIBRES (livres, équipements…) ===
+    # Encaissements dont le type de frais est marqué prix_libre='O' — comptés à
+    # part de la scolarité pour donner au fondateur le chiffre de cette caisse.
+    autres_entrees = float(
+        db.query(func.coalesce(func.sum(Paiement.montant), 0))
+        .join(Facture, Paiement.facture_id == Facture.facture_id)
+        .join(TypeFrais, Facture.type_frais_id == TypeFrais.type_frais_id)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(
+            Classe.etablissement_id == etablissement_id,
+            Inscription.annee_id == annee_id,
+            Paiement.statut == "VALIDE",
+            TypeFrais.prix_libre == "O",
+        ).scalar()
+    )
+
     resultat = {
         "kpis": {
             "total_facture": total_facture,
@@ -2213,6 +2313,7 @@ def dashboard_financier(
             "depenses_personnalise": depenses_personnalise,
             "solde_caisse": solde_caisse,
             "nb_eleves_impayes": nb_eleves_impayes,
+            "autres_entrees": autres_entrees,
         },
         "evolution_mensuelle": evolution,
         "repartition_classes": [

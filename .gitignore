@@ -91,3 +91,6 @@ desktop.ini
 
 # Dumps de base pris avant une migration : des donnees d ecole, pas du code.
 backups/
+
+# Fichiers de test d’import (donnees personnelles) — jamais versionnes
+eleves*.csv

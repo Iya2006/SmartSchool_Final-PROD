@@ -20,6 +20,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 type TypeFrais = {
     type_frais_id: number; code: string; libelle: string;
     categorie: string; montant_defaut: number; est_obligatoire: string; frequence: string; statut: string;
+    prix_libre?: string;
 };
 type Echeance = {
     echeance_id: number; libelle: string; date_limite: string;
@@ -120,6 +121,8 @@ function FraisScolaritePage() {
     const [tfMontantDefaut, setTfMontantDefaut] = useState('');
     const [tfObligatoire, setTfObligatoire] = useState('O');
     const [tfFrequence, setTfFrequence] = useState('ANNUEL');
+    // Tarif LIBRE : optionnel + prix saisi à la vente (livre, équipement…).
+    const [tfPrixLibre, setTfPrixLibre] = useState(false);
 
     // Form States - Facture
     // Une classe cochée = une entrée { montant } — chaque classe peut avoir un
@@ -410,6 +413,7 @@ function FraisScolaritePage() {
         setEditingTypeFrais(null);
         setTfCode(''); setTfLibelle(''); setTfCategorie('Scolarité');
         setTfMontantDefaut(''); setTfObligatoire('O'); setTfFrequence('ANNUEL');
+        setTfPrixLibre(false);
         setShowTypeFraisModal(true);
     };
 
@@ -418,13 +422,15 @@ function FraisScolaritePage() {
         setTfCode(tf.code); setTfLibelle(tf.libelle); setTfCategorie(tf.categorie);
         setTfMontantDefaut(tf.montant_defaut?.toString() || '0');
         setTfObligatoire(tf.est_obligatoire); setTfFrequence(tf.frequence);
+        setTfPrixLibre((tf.prix_libre || 'N') === 'O');
         setShowTypeFraisModal(true);
     };
 
     const submitTypeFrais = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            const payload = { code: tfCode, libelle: tfLibelle, categorie: tfCategorie, montant_defaut: parseFloat(tfMontantDefaut) || 0, est_obligatoire: tfObligatoire, frequence: tfFrequence };
+            // Un tarif libre est forcément facultatif (jamais facturé d'office).
+            const payload = { code: tfCode, libelle: tfLibelle, categorie: tfCategorie, montant_defaut: parseFloat(tfMontantDefaut) || 0, est_obligatoire: tfPrixLibre ? 'N' : tfObligatoire, frequence: tfFrequence, prix_libre: tfPrixLibre ? 'O' : 'N' };
             if (editingTypeFrais) {
                 await api.put(`/api/finance/types-frais/${editingTypeFrais.type_frais_id}`, payload);
                 showMsg('Type de frais mis à jour', 'success');
@@ -1322,6 +1328,24 @@ function FraisScolaritePage() {
                                     <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>
                                         Facturé automatiquement à tous les élèves. Décochez pour un frais
                                         optionnel — cantine, transport — facturé au cas par cas.
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '11px 13px', background: tfPrixLibre ? '#f0fdf4' : '#f8fafc', border: `1px solid ${tfPrixLibre ? '#bbf7d0' : '#e2e8f0'}`, borderRadius: '10px' }}>
+                                <input
+                                    type="checkbox" id="tf-prix-libre"
+                                    checked={tfPrixLibre}
+                                    onChange={e => setTfPrixLibre(e.target.checked)}
+                                    style={{ marginTop: 2, cursor: 'pointer' }}
+                                />
+                                <label htmlFor="tf-prix-libre" style={{ cursor: 'pointer', fontSize: '13px', color: '#334155', lineHeight: 1.5 }}>
+                                    <strong>Tarif libre (prix non fixe)</strong>
+                                    <span style={{ display: 'block', fontSize: '12px', color: '#64748b' }}>
+                                        Un livre, un équipement, une sortie… Jamais facturé d&apos;office :
+                                        vous le vendez à un élève au prix saisi sur le moment, depuis
+                                        <strong> Comptabilité › Autres entrées</strong>. L&apos;argent entre
+                                        directement en caisse.
                                     </span>
                                 </label>
                             </div>

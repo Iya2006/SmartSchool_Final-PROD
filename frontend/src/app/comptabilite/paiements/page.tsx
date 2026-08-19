@@ -145,6 +145,15 @@ function GestionPaiements() {
     const [fournisseurs, setFournisseurs] = useState<Fournisseur[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
+    // Recherche envoyée au SERVEUR (débouncée) : la liste des paiements est
+    // paginée côté serveur, donc chercher un élève absent de la page affichée
+    // ne renvoyait rien tant que le filtrage restait local. On temporise la
+    // frappe (350 ms) pour ne pas relancer une requête à chaque lettre.
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(searchTerm.trim()), 350);
+        return () => clearTimeout(t);
+    }, [searchTerm]);
 
     // ── Modes de paiement configurés (Paramètres > Finance & Comptabilité) ──
     // Source unique de vérité pour tous les sélecteurs de mode de paiement de
@@ -223,14 +232,15 @@ function GestionPaiements() {
     const loadPaiements = useCallback(async (page: number) => {
         try {
             const skip = (page - 1) * pageSize;
-            const res = await api.get(`/api/finance/paiements?skip=${skip}&limit=${pageSize}&annee_id=${filterAnnee}`);
+            const q = debouncedSearch ? `&search=${encodeURIComponent(debouncedSearch)}` : '';
+            const res = await api.get(`/api/finance/paiements?skip=${skip}&limit=${pageSize}&annee_id=${filterAnnee}${q}`);
             setPaiements(res.data || []);
             const totalCount = res.headers?.['x-total-count'];
             setTotalPaiements(totalCount !== undefined ? Number(totalCount) : (res.data || []).length);
         } catch (err) {
             console.error('Erreur chargement paiements:', err);
         }
-    }, [filterAnnee]);
+    }, [filterAnnee, debouncedSearch]);
 
     const loadDepensesList = useCallback(async (page: number) => {
         try {
@@ -287,7 +297,7 @@ function GestionPaiements() {
     useEffect(() => { loadDepensesList(pageDepenses); }, [pageDepenses, loadDepensesList]);
 
     // Reinitialiser la pagination quand un filtre change, pour eviter une page vide
-    useEffect(() => { setPagePaiements(1); }, [searchTerm]);
+    useEffect(() => { setPagePaiements(1); }, [debouncedSearch]);
     useEffect(() => { setPageDepenses(1); }, [decaisFilterCat, decaisDateDebut, decaisDateFin]);
 
     /* ═══ AUTO-DISMISS TOAST après 4 secondes ═══ */
