@@ -704,6 +704,8 @@ class VenteLibreCreate(BaseModel):
     eleve_id: int
     type_frais_id: int
     montant: float
+    # Ce qui est réellement acheté (« 3 cahiers + 1 règle ») — pour la traçabilité.
+    designation: Optional[str] = None
     mode_paiement: str = "ESPECES"
     reference_externe: Optional[str] = None
     annee_id: Optional[int] = None

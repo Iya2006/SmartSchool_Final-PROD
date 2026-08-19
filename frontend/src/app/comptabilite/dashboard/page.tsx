@@ -7,7 +7,7 @@ import { motion } from 'framer-motion';
 import {
     TrendingUp, TrendingDown, Coins, ArrowUpRight, ArrowDownRight,
     Loader2, ChevronRight, Calendar, CreditCard, Banknote, HelpCircle,
-    Layers, RefreshCw
+    Layers, RefreshCw, PlusCircle
 } from 'lucide-react';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -73,12 +73,12 @@ export default function DashboardFinancierPage() {
     const displaySolde = displayRevenu - (period === 'ANNEE' ? depValide : displayDepense);
 
     const mainKpis = [
-        { 
-            label: 'Total Encaissé', 
-            value: fmt(displayRevenu), 
-            sub: 'Frais de scolarité reçus',
-            icon: ArrowUpRight, 
-            color: '#10b981', 
+        {
+            label: 'Total Encaissé',
+            value: fmt(displayRevenu),
+            sub: (kpis.autres_entrees ?? 0) > 0 ? 'Scolarité + autres entrées' : 'Frais de scolarité reçus',
+            icon: ArrowUpRight,
+            color: '#10b981',
             bg: '#e6fcf5',
             badge: null,
         },
@@ -95,9 +95,18 @@ export default function DashboardFinancierPage() {
             label: 'Solde Disponible', 
             value: fmt(displaySolde), 
             sub: 'Après déduction des dépenses validées',
-            icon: Coins, 
-            color: '#3b82f6', 
+            icon: Coins,
+            color: '#3b82f6',
             bg: '#eff6ff',
+            badge: null,
+        },
+        {
+            label: 'Autres entrées',
+            value: fmt(kpis.autres_entrees ?? 0),
+            sub: 'Ventes libres (livres, équipements…)',
+            icon: PlusCircle,
+            color: '#0d9488',
+            bg: '#f0fdfa',
             badge: null,
         },
     ];
@@ -282,13 +291,6 @@ export default function DashboardFinancierPage() {
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
                         <span style={{ fontSize: 24, fontWeight: 800, color: '#3b82f6' }}>{kpis.nb_eleves || 0}</span>
                         <span style={{ fontSize: 12, color: '#64748b' }}>inscrits</span>
-                    </div>
-                </div>
-                <div style={{ background: '#fff', borderRadius: 12, padding: '16px 20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', border: '1px solid #e2e8f0' }}>
-                    <p style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>Autres entrées</p>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-                        <span style={{ fontSize: 24, fontWeight: 800, color: '#10b981' }}>{(kpis.autres_entrees || 0).toLocaleString('fr-GN')}</span>
-                        <span style={{ fontSize: 12, color: '#64748b' }}>GNF (livres, équipements…)</span>
                     </div>
                 </div>
             </div>

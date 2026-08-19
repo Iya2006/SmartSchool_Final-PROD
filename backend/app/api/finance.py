@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from datetime import date as date_type
 from app.core.annee_courante import resoudre_annee
 from app.core.numerotation import generer_numero_facture, generer_numero_recu
+from app.core.recherche import normaliser_terme, sans_accent, filtre_nom_prenom_matricule
 from app.core.modes_paiement import exiger_mode_paiement
 from app.core.database import get_db
 from app.core.auth import require_etablissement
@@ -1251,10 +1252,11 @@ def list_paiements(
     # courante ne renvoyait rien. On cherche par nom/prenom d'eleve, numero
     # de recu et numero de facture.
     if search:
-        like = f"%{search.strip()}%"
+        # Nom/prénom insensibles aux accents ; + numéro de reçu et de facture.
+        like = f"%{normaliser_terme(search)}%"
         query = query.filter(
-            Eleve.nom.ilike(like) | Eleve.prenom.ilike(like) |
-            Paiement.numero_recu.ilike(like) | Facture.numero_facture.ilike(like)
+            sans_accent(Eleve.nom).like(like) | sans_accent(Eleve.prenom).like(like) |
+            func.lower(Paiement.numero_recu).like(like) | func.lower(Facture.numero_facture).like(like)
         )
 
     total = query.count()
@@ -1278,6 +1280,7 @@ def list_paiements(
             "facture_id": p.facture_id,
             "echeance_id": p.echeance_id,
             "numero_facture": f.numero_facture,
+            "description": f.description,  # ce qui a été acheté (ventes de tarif libre)
             "eleve_nom": e.nom,
             "eleve_prenom": e.prenom
         }
@@ -1474,12 +1477,14 @@ def creer_vente_libre(
         raise HTTPException(404, "Élève non inscrit (actif) cette année dans cette école.")
 
     montant = float(data.montant)
+    designation = (data.designation or "").strip() or None
     numero_facture = generer_numero_facture(db, etablissement_id, annee_id)
     facture = Facture(
         inscription_id=insc.inscription_id, annee_id=annee_id,
         type_frais_id=tf.type_frais_id, numero_facture=numero_facture,
         montant_total=montant, montant_remise=0, montant_net=montant,
         montant_paye=0, montant_restant=montant, statut="EN_ATTENTE",
+        description=designation,
     )
     db.add(facture)
     db.flush()  # visible pour create_paiement dans la même session
@@ -1493,8 +1498,10 @@ def creer_vente_libre(
         db, etablissement_id,
     )
     resultat["type_frais"] = tf.libelle
+    resultat["designation"] = designation
     resultat["numero_facture"] = numero_facture
-    resultat["message"] = f"Vente enregistrée ({tf.libelle}). Reçu N° {resultat.get('numero_recu')}"
+    libelle_vente = designation or tf.libelle
+    resultat["message"] = f"Vente enregistrée ({libelle_vente}). Reçu N° {resultat.get('numero_recu')}"
     return resultat
 
 
@@ -1712,9 +1719,9 @@ def list_impayes(
     if type_frais_id:
         query = query.filter(Facture.type_frais_id == type_frais_id)
     if search:
-        like = f"%{search.strip()}%"
+        # Insensible aux accents : « traore » trouve « Traoré ».
         query = query.filter(
-            (Eleve.nom.ilike(like)) | (Eleve.prenom.ilike(like)) | (Eleve.matricule.ilike(like))
+            filtre_nom_prenom_matricule(search, Eleve.nom, Eleve.prenom, Eleve.matricule)
         )
 
     total = query.count()

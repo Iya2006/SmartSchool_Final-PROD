@@ -223,11 +223,13 @@ function EncaissementContent() {
             filtered = filtered.filter(d => String(d.classe_id) === filterClasse);
         }
         if (searchQuery.trim()) {
-            const q = searchQuery.toLowerCase();
+            // Insensible aux accents : « traore » trouve « Traoré ».
+            const sansAccent = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            const q = sansAccent(searchQuery);
             filtered = filtered.filter(d =>
-                `${d.eleve_prenom} ${d.eleve_nom}`.toLowerCase().includes(q) ||
-                d.eleve_matricule.toLowerCase().includes(q) ||
-                d.classe_nom.toLowerCase().includes(q)
+                sansAccent(`${d.eleve_prenom} ${d.eleve_nom}`).includes(q) ||
+                sansAccent(d.eleve_matricule).includes(q) ||
+                sansAccent(d.classe_nom).includes(q)
             );
         }
         setSearchResults(filtered);

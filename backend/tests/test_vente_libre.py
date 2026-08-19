@@ -51,7 +51,7 @@ def _ecole_avec_eleve(db: Session):
     )
     db.add(classe); db.commit(); db.refresh(classe)
     eleve = Eleve(
-        etablissement_id=etab.etablissement_id, matricule=f"ELV-{uid}", nom="Bah", prenom="Aïcha",
+        etablissement_id=etab.etablissement_id, matricule=f"ELV-VL{uid}", nom="Bah", prenom="Aïcha",
         sexe="F", date_naissance=date(2015, 5, 5), mot_de_passe=hash_password("x"), statut="ACTIF",
     )
     db.add(eleve); db.commit(); db.refresh(eleve)
