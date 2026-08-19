@@ -716,6 +716,21 @@ def get_classes_avec_matieres(
                     "enseignant": ens_info,
                 })
 
+        # Maternelle : pas de matières — on affecte juste le prof (professeur
+        # principal). On renvoie le flag et le titulaire actuel pour l'écran.
+        evaluation_simple = bool(niveau and niveau.evaluation_simple == "O")
+        titulaire = None
+        if cls.professeur_principal:
+            pp = db.query(Enseignant).filter(
+                Enseignant.enseignant_id == cls.professeur_principal
+            ).first()
+            if pp:
+                titulaire = {
+                    "enseignant_id": pp.enseignant_id,
+                    "nom_complet": f"{pp.prenom} {pp.nom}",
+                    "matricule": pp.matricule,
+                }
+
         result.append({
             "classe_id": cls.classe_id,
             "code": cls.code,
@@ -723,6 +738,8 @@ def get_classes_avec_matieres(
             "cycle": cycle.libelle if cycle else "—",
             "cycle_code": cycle.code if cycle else "—",
             "niveau": niveau.libelle if niveau else "—",
+            "evaluation_simple": evaluation_simple,
+            "professeur_principal": titulaire,
             "nb_matieres": len(matieres_list),
             "nb_affectes": sum(1 for m in matieres_list if m["enseignant"]),
             "matieres": matieres_list,
