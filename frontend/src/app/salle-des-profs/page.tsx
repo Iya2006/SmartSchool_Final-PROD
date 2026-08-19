@@ -28,6 +28,8 @@ interface ClasseAvecMatieres {
     cycle: string; cycle_code: string; niveau: string;
     nb_matieres: number; nb_affectes: number;
     matieres: MatiereClasse[];
+    evaluation_simple?: boolean;   // maternelle : pas de matières, juste un prof
+    professeur_principal?: { enseignant_id: number; nom_complet: string; matricule: string } | null;
 }
 interface Stats {
     total_enseignants: number; enseignants_affectes: number; enseignants_non_affectes: number;
@@ -39,6 +41,7 @@ interface EnseignantItem {
 }
 
 const CYCLE_COLORS: Record<string, { bg: string; border: string; text: string; badge: string; gradient: string }> = {
+    'MAT': { bg: '#f0fdfa', border: '#14b8a6', text: '#0f766e', badge: 'Maternelle', gradient: 'linear-gradient(135deg, #14b8a6, #0d9488)' },
     'PRM': { bg: '#fef3c7', border: '#f59e0b', text: '#92400e', badge: 'Primaire', gradient: 'linear-gradient(135deg, #f59e0b, #d97706)' },
     'CLG': { bg: '#dbeafe', border: '#3b82f6', text: '#1e40af', badge: 'Collège', gradient: 'linear-gradient(135deg, #3b82f6, #2563eb)' },
     'LYC': { bg: '#ede9fe', border: '#8b5cf6', text: '#5b21b6', badge: 'Lycée', gradient: 'linear-gradient(135deg, #8b5cf6, #7c3aed)' },
@@ -62,6 +65,9 @@ export default function SalleDesProfsPage() {
     // matières) plutôt qu'à une seule. Au collège/lycée, chaque matière a son
     // propre enseignant, donc ce mode reste faux.
     const [modalTouteClasse, setModalTouteClasse] = useState(false);
+    // Maternelle : on affecte le PROF DE LA CLASSE (professeur principal), sans
+    // matières — la maternelle n'en a pas.
+    const [modalMaternelle, setModalMaternelle] = useState(false);
     const [selectedEnseignantId, setSelectedEnseignantId] = useState(0);
     const [saving, setSaving] = useState(false);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -100,6 +106,7 @@ export default function SalleDesProfsPage() {
         setModalClasse(classe);
         setModalMatiere(matiere);
         setModalTouteClasse(false);
+        setModalMaternelle(false);
         setSelectedEnseignantId(0);
         setSearchEns('');
         setShowModal(true);
@@ -109,17 +116,35 @@ export default function SalleDesProfsPage() {
         setModalClasse(classe);
         setModalMatiere(null);
         setModalTouteClasse(true);
+        setModalMaternelle(false);
         setSelectedEnseignantId(0);
+        setSearchEns('');
+        setShowModal(true);
+    };
+
+    const openMaternelleModal = (classe: ClasseAvecMatieres) => {
+        setModalClasse(classe);
+        setModalMatiere(null);
+        setModalTouteClasse(false);
+        setModalMaternelle(true);
+        setSelectedEnseignantId(classe.professeur_principal?.enseignant_id || 0);
         setSearchEns('');
         setShowModal(true);
     };
 
     const handleAssign = async () => {
         if (!modalClasse || !selectedEnseignantId) return;
-        if (!modalTouteClasse && !modalMatiere) return;
+        if (!modalTouteClasse && !modalMaternelle && !modalMatiere) return;
         setSaving(true);
         try {
-            if (modalTouteClasse) {
+            if (modalMaternelle) {
+                // Maternelle : pas de matières — on désigne juste le prof de la
+                // classe (professeur principal), via la configuration de classe.
+                await api.put(`/api/classes/${modalClasse.classe_id}/configurer`, {
+                    professeur_principal_id: selectedEnseignantId,
+                });
+                setSuccessMsg('Enseignant de la classe désigné.');
+            } else if (modalTouteClasse) {
                 // Primaire : l'instituteur prend toutes les matières de la classe.
                 const res = await api.post(`/api/enseignants/${selectedEnseignantId}/affecter-classe`, {
                     classe_id: modalClasse.classe_id,
@@ -167,7 +192,7 @@ export default function SalleDesProfsPage() {
         if (!groupedByCycle[key]) groupedByCycle[key] = [];
         groupedByCycle[key].push(c);
     });
-    const cycleOrder = ['PRM', 'CLG', 'LYC'];
+    const cycleOrder = ['MAT', 'PRM', 'CLG', 'LYC'];
 
     const filteredEnseignants = enseignants.filter(e =>
         `${e.prenom} ${e.nom} ${e.matricule} ${e.specialite || ''}`.toLowerCase().includes(searchEns.toLowerCase())
@@ -255,7 +280,7 @@ export default function SalleDesProfsPage() {
                         style={{ width: '100%', padding: '10px 12px 10px 36px', borderRadius: '10px', border: '1.5px solid var(--border-light)', fontSize: '13px', outline: 'none', fontFamily: 'Inter, sans-serif' }} />
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                    {[{ code: '', label: 'Tous' }, { code: 'PRM', label: 'Primaire' }, { code: 'CLG', label: 'Collège' }, { code: 'LYC', label: 'Lycée' }].map(f => (
+                    {[{ code: '', label: 'Tous' }, { code: 'MAT', label: 'Maternelle' }, { code: 'PRM', label: 'Primaire' }, { code: 'CLG', label: 'Collège' }, { code: 'LYC', label: 'Lycée' }].map(f => (
                         <button key={f.code} onClick={() => setFilterCycle(f.code)}
                             style={{
                                 padding: '7px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
@@ -345,6 +370,29 @@ export default function SalleDesProfsPage() {
                                                     exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }}
                                                     style={{ overflow: 'hidden', borderTop: '1px solid var(--border-light)' }}
                                                 >
+                                                    {cls.evaluation_simple ? (
+                                                        /* MATERNELLE : pas de matières — on désigne juste le prof de la classe. */
+                                                        <div style={{
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                                            gap: '12px', flexWrap: 'wrap', padding: '16px 20px', background: '#f0fdfa',
+                                                        }}>
+                                                            <div style={{ fontSize: '13px', color: '#0f766e' }}>
+                                                                <strong>Maternelle</strong> — pas de matières : désignez simplement l’enseignant de la classe.
+                                                                <div style={{ marginTop: '4px', fontSize: '12.5px', color: '#134e4a' }}>
+                                                                    Enseignant de la classe : <strong>{cls.professeur_principal ? cls.professeur_principal.nom_complet : 'aucun'}</strong>
+                                                                </div>
+                                                            </div>
+                                                            <button onClick={() => openMaternelleModal(cls)}
+                                                                style={{
+                                                                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                                                                    padding: '8px 14px', borderRadius: '9px', fontSize: '12.5px', fontWeight: 700,
+                                                                    border: 'none', cursor: 'pointer', color: 'white',
+                                                                    background: 'linear-gradient(135deg,#0d9488,#14b8a6)',
+                                                                }}>
+                                                                <UserCheck size={14} /> {cls.professeur_principal ? 'Changer le prof' : 'Affecter le prof de la classe'}
+                                                            </button>
+                                                        </div>
+                                                    ) : (<>
                                                     {/* Au PRIMAIRE, l'instituteur assure toutes les matières :
                                                         un seul geste l'affecte à la classe entière. Au collège
                                                         et au lycée, chaque matière se pourvoit séparément. */}
@@ -448,6 +496,7 @@ export default function SalleDesProfsPage() {
                                                             </tbody>
                                                         </table>
                                                     </div>
+                                                    </>)}
                                                 </motion.div>
                                             )}
                                         </AnimatePresence>
@@ -483,12 +532,14 @@ export default function SalleDesProfsPage() {
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
                                         <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
-                                            {modalTouteClasse ? 'Affecter un instituteur à la classe' : 'Affecter un Enseignant'}
+                                            {modalMaternelle ? 'Désigner le prof de la classe' : modalTouteClasse ? 'Affecter un instituteur à la classe' : 'Affecter un Enseignant'}
                                         </h3>
                                         <p style={{ margin: '4px 0 0', fontSize: '12px', opacity: 0.85 }}>
-                                            {modalTouteClasse
-                                                ? `Toutes les matières → ${modalClasse.libelle}`
-                                                : `${modalMatiere!.libelle} → ${modalClasse.libelle}`}
+                                            {modalMaternelle
+                                                ? `Prof de la classe → ${modalClasse.libelle}`
+                                                : modalTouteClasse
+                                                    ? `Toutes les matières → ${modalClasse.libelle}`
+                                                    : `${modalMatiere!.libelle} → ${modalClasse.libelle}`}
                                         </p>
                                     </div>
                                     <button onClick={() => setShowModal(false)}
@@ -502,7 +553,12 @@ export default function SalleDesProfsPage() {
                             <div style={{ padding: '20px 24px' }}>
                                 {/* Info Box */}
                                 <div style={{ background: '#f5f3ff', borderRadius: '10px', padding: '12px 14px', fontSize: '12px', color: '#5b21b6', marginBottom: '16px', lineHeight: 1.6 }}>
-                                    {modalTouteClasse ? (
+                                    {modalMaternelle ? (
+                                        <>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><School size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Classe de maternelle :</span> <strong>{modalClasse.libelle}</strong>
+                                            <br/>Cet enseignant devient le prof de la classe (pas de matières en maternelle).
+                                        </>
+                                    ) : modalTouteClasse ? (
                                         <>
                                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><BookOpen size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /></span> L’instituteur sera affecté aux <strong>{modalClasse.nb_matieres} matière{modalClasse.nb_matieres > 1 ? 's' : ''}</strong> de la classe.
                                             <br/><span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}><School size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} /> Classe :</span> <strong>{modalClasse.libelle}</strong> ({modalClasse.cycle})
