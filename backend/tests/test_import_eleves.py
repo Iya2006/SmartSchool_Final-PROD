@@ -169,6 +169,28 @@ def test_import_deux_fois_ne_cree_pas_de_doublon(client: TestClient, db: Session
     assert total == 2  # toujours 2, pas 4
 
 
+def test_import_sans_date_de_naissance(client: TestClient, db: Session):
+    """Seuls classe + nom + prénom sont exigés : un élève sans date est importé
+    (date_naissance vide), à compléter plus tard."""
+    etab, annee, classe, admin = _ecole(db)
+    headers = _headers(client, admin.nom_utilisateur)
+    csv = (
+        "Nom;Prénom;Classe\n"
+        "Keita;Sekou;2eme annee\n"
+    )
+    r = client.post(
+        "/api/eleves/import",
+        files={"fichier": ("e.csv", csv.encode("utf-8"), "text/csv")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["crees"] == 1
+    e = db.query(Eleve).filter(
+        Eleve.etablissement_id == etab.etablissement_id, Eleve.nom == "Keita"
+    ).first()
+    assert e is not None and e.date_naissance is None
+
+
 def test_import_dry_run_n_ecrit_rien(client: TestClient, db: Session):
     etab, annee, classe, admin = _ecole(db)
     headers = _headers(client, admin.nom_utilisateur)

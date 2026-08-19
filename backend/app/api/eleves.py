@@ -393,9 +393,8 @@ async def importer_eleves(
         if not classe:
             ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": f"classe introuvable : « {classe_txt} »"})
             continue
-        if date_naissance is None:
-            ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": "date de naissance manquante ou invalide"})
-            continue
+        # La date de naissance est FACULTATIVE : seuls classe + nom + prénom sont
+        # exigés. Une date absente/illisible est laissée vide (à compléter plus tard).
         # Doublon : même élève déjà en base, OU répété plus haut dans le fichier.
         identite = (normaliser_entete(nom), normaliser_entete(prenom), date_naissance)
         if identite in existants:

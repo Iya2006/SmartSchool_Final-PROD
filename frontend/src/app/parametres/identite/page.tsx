@@ -20,6 +20,10 @@ export default function IdentiteEtablissementPage() {
     const [hasChanges, setHasChanges] = useState(false);
 
     const [codeCopie, setCodeCopie] = useState(false);
+    // Cycles réellement présents dans l'école (pour ajouter la maternelle après coup).
+    const [cycles, setCycles] = useState<{ code: string; libelle: string; niveaux: unknown[] }[]>([]);
+    const [ajoutMaternelle, setAjoutMaternelle] = useState(false);
+    const [msgCycle, setMsgCycle] = useState<string | null>(null);
     const [formData, setFormData] = useState({
         nom: '', code: '', type_etablissement: '', 
         adresse: '', ville: '', region: '', prefecture: '',
@@ -63,6 +67,7 @@ export default function IdentiteEtablissementPage() {
                     setHasChanges(false);
                 })
                 .finally(() => setLoading(false));
+            chargerCycles();
         }
     }, [etablissementId]);
 
@@ -85,6 +90,25 @@ export default function IdentiteEtablissementPage() {
             alert("Erreur lors de la sauvegarde.");
         } finally {
             setSaving(false);
+        }
+    };
+
+    const chargerCycles = () => {
+        api.get('/api/parametrage/cycles')
+            .then(res => setCycles(res.data || []))
+            .catch(() => setCycles([]));
+    };
+
+    const activerMaternelle = async () => {
+        setAjoutMaternelle(true); setMsgCycle(null);
+        try {
+            const res = await api.post('/api/parametrage/cycles/activer-maternelle');
+            setMsgCycle(res.data?.message || 'Maternelle activée.');
+            chargerCycles();
+        } catch {
+            setMsgCycle("Impossible d'activer la maternelle.");
+        } finally {
+            setAjoutMaternelle(false);
         }
     };
 
@@ -257,6 +281,38 @@ export default function IdentiteEtablissementPage() {
                             </select>
                         </div>
                     </div>
+                </section>
+
+                {/* Section: Cycles de l'établissement */}
+                <section className={styles.formSection}>
+                    <div className={styles.sectionHeader}>
+                        <Building size={20} className={styles.sectionIcon} />
+                        <h3>Cycles de l&apos;établissement</h3>
+                    </div>
+                    <p style={{ fontSize: '13px', color: '#64748b', margin: '0 0 12px' }}>
+                        Les niveaux proposés à la création des classes viennent de ces cycles.
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' }}>
+                        {cycles.length === 0 ? (
+                            <span style={{ fontSize: '13px', color: '#94a3b8' }}>Aucun cycle configuré.</span>
+                        ) : cycles.map(c => (
+                            <span key={c.code} style={{ padding: '5px 12px', borderRadius: '999px', background: '#eef2ff', color: '#4338ca', fontSize: '12.5px', fontWeight: 600 }}>
+                                {c.libelle} · {c.niveaux?.length || 0} niveaux
+                            </span>
+                        ))}
+                    </div>
+                    {!cycles.some(c => c.code === 'MAT') && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', padding: '14px 16px', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '12px' }}>
+                            <div style={{ fontSize: '13px', color: '#0f766e', flex: 1, minWidth: '220px' }}>
+                                <strong>Ajouter la Maternelle</strong> — crée les 3 sections (Petite, Moyenne, Grande). Elles apparaîtront ensuite à la création de classe et dans la Salle des Profs.
+                            </div>
+                            <button type="button" onClick={activerMaternelle} disabled={ajoutMaternelle}
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '9px 16px', borderRadius: '9px', border: 'none', cursor: 'pointer', color: 'white', fontWeight: 700, fontSize: '13px', background: 'linear-gradient(135deg,#0d9488,#14b8a6)' }}>
+                                {ajoutMaternelle ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />} Ajouter la Maternelle
+                            </button>
+                        </div>
+                    )}
+                    {msgCycle && <p style={{ fontSize: '12.5px', color: '#0f766e', marginTop: '8px', fontWeight: 600 }}>{msgCycle}</p>}
                 </section>
 
                 {/* Section 2: Contact et Localisation */}
