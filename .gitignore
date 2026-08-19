@@ -94,3 +94,8 @@ backups/
 
 # Fichiers de test d’import (donnees personnelles) — jamais versionnes
 eleves*.csv
+
+# Fichiers de donnees reelles importes (PII eleves) — jamais versionner
+*.csv
+*.xlsx
+!backend/**/*.csv
