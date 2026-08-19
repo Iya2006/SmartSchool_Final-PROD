@@ -13,6 +13,7 @@ aucune règle métier — l'appelant décide de ce que valent les colonnes.
 """
 import csv
 import io
+import re
 from typing import Dict, List, Tuple
 
 _ACCENTS = "àáâãäåçèéêëìíîïñòóôõöùúûüýÿ"
@@ -46,6 +47,24 @@ def normaliser_entete(texte: str) -> str:
     brut = str(texte or "").lower().translate(_TABLE_ACCENTS)
     propre = "".join(c if (c.isalnum() or c.isspace()) else " " for c in brut)
     return " ".join(propre.split())
+
+
+# Suffixes ordinaux français collés à un nombre (1er, 1ère, 2ème, 8e, 2nde…).
+# Après neutralisation des accents ils s'écrivent « ere, eme, er, e, nde, nd… ».
+# Ordonnés du plus long au plus court pour que « ere » l'emporte sur « e ».
+_ORDINAL = re.compile(r"(\d+)(?:ere|eme|iere|ieme|nde|er|nd|es|e)(?=\s|$)")
+
+
+def normaliser_classe(texte: str) -> str:
+    """Comme `normaliser_entete`, mais insensible aux ORDINAUX collés aux nombres.
+
+    « 1ère Année », « 1 ANNEE », « 1ere annee » désignent la même classe ; de
+    même « 8ème Année » et « 8E ANNEE ». On réduit le nombre+suffixe au seul
+    nombre : « 1ere annee » -> « 1 annee », « 8e annee » -> « 8 annee ». Sans ça,
+    un fichier écrit « 1 ANNEE » ne retrouvait pas la classe « 1ère Année ».
+    """
+    base = normaliser_entete(texte)
+    return " ".join(_ORDINAL.sub(r"\1 ", base).split())
 
 
 def _decoder(contenu: bytes) -> str:

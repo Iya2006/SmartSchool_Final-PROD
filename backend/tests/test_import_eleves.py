@@ -191,6 +191,32 @@ def test_import_sans_date_de_naissance(client: TestClient, db: Session):
     assert e is not None and e.date_naissance is None
 
 
+def test_import_classe_tolere_les_ordinaux(client: TestClient, db: Session):
+    """« 1 ANNEE » dans le fichier retrouve la classe « 1ère Année » de l'école
+    (ordinaux 1er/1ère/2ème/8e… tolérés, en plus des accents/casse)."""
+    etab, annee, _classe2, admin = _ecole(db)
+    # Une classe nommée avec l'ordinal accentué.
+    uid = _uid()
+    niveau = db.query(Niveau).first()
+    c1 = Classe(
+        etablissement_id=etab.etablissement_id, annee_id=annee.annee_id, niveau_id=niveau.niveau_id,
+        code=f"C1-{uid}", libelle="1ère Année", statut="ACTIVE",
+    )
+    db.add(c1); db.commit(); db.refresh(c1)
+    headers = _headers(client, admin.nom_utilisateur)
+
+    csv = "Nom;Prénom;Classe\nSoumah;Abdoulaye;1 ANNEE\n"
+    r = client.post(
+        "/api/eleves/import",
+        files={"fichier": ("e.csv", csv.encode("utf-8"), "text/csv")},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["crees"] == 1
+    insc = db.query(Inscription).filter(Inscription.classe_id == c1.classe_id).first()
+    assert insc is not None  # bien placé dans « 1ère Année »
+
+
 def test_import_dry_run_n_ecrit_rien(client: TestClient, db: Session):
     etab, annee, classe, admin = _ecole(db)
     headers = _headers(client, admin.nom_utilisateur)

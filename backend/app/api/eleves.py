@@ -362,10 +362,13 @@ async def importer_eleves(
             Niveau, Classe.niveau_id == Niveau.niveau_id
         ).filter(Classe.classe_id.in_(classe_ids), Niveau.evaluation_simple == "O").all():
             classes_maternelle.add(cid)
+    # normaliser_classe : tolère les ordinaux (« 1 ANNEE » = « 1ère Année »,
+    # « 8E ANNEE » = « 8ème Année ») en plus des accents/casse.
+    from app.services.import_tabulaire import normaliser_classe
     index_classe = {}
     for c in classes:
-        index_classe[normaliser_entete(c.code)] = c
-        index_classe[normaliser_entete(c.libelle)] = c
+        index_classe[normaliser_classe(c.code)] = c
+        index_classe[normaliser_classe(c.libelle)] = c
 
     # Identités DÉJÀ présentes dans l'école (nom + prénom + date de naissance,
     # comparés sans casse ni accents). Sert à rendre l'import IDEMPOTENT : le
@@ -389,7 +392,7 @@ async def importer_eleves(
         if not nom or not prenom:
             ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}".strip(), "raison": "nom ou prénom manquant"})
             continue
-        classe = index_classe.get(normaliser_entete(classe_txt)) if classe_txt else None
+        classe = index_classe.get(normaliser_classe(classe_txt)) if classe_txt else None
         if not classe:
             ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": f"classe introuvable : « {classe_txt} »"})
             continue
