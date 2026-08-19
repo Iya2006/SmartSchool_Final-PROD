@@ -9,6 +9,7 @@ import { useApp } from '@/context/AppContext';
 import Pagination from '@/components/Pagination';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
 import MesSeances from './_components/MesSeances';
+import SaisieMaternelle from './_components/SaisieMaternelle';
 import { LIBELLE_JOUR, chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
 import { useJoursOuvres } from '@/hooks/useJoursOuvres';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -49,9 +50,11 @@ interface EnseignantInfo {
     date_naissance: string | null; lieu_naissance: string | null;
     adresse: string | null; nom_urgence: string | null; telephone_urgence: string | null;
 }
+interface MaternelleClasse { classe_id: number; classe: string; niveau?: string; effectif?: number; }
 interface DashData {
     enseignant: EnseignantInfo;
     affectations: AffectationData[];
+    classes_maternelle?: MaternelleClasse[];
     stats: { nb_classes: number; nb_matieres: number; total_heures: number; total_eleves: number; nb_creneaux: number; };
 }
 interface EdtSlot {
@@ -111,7 +114,7 @@ export default function PortailEnseignant() {
     // online/visibilitychange en plus de celui d'AppShell).
 
     const [data, setData] = useState<DashData | null>(null);
-    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'appel'|'seances'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview'|'emploi'|'classes'|'notes'|'maternelle'|'appel'|'seances'|'dashboard'|'messages'|'parametres'|'devoirs'|'documents'|'liens'|'paiements'|'carte'|'evenements'|'activites'>('overview');
     // Tiroir mobile — meme motif que portail-parent/portail-eleve (aucun
     // traitement responsive n'existait ici avant ce correctif).
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -936,6 +939,7 @@ export default function PortailEnseignant() {
                         { key: 'emploi' as const, label: 'Emploi du Temps', icon: Calendar },
                         { key: 'classes' as const, label: 'Mes Classes', icon: Users },
                         { key: 'notes' as const, label: 'Saisie Notes', icon: FileText },
+                        { key: 'maternelle' as const, label: 'Maternelle', icon: GraduationCap },
                         { key: 'seances' as const, label: 'Mes Séances', icon: Clock },
                         { key: 'appel' as const, label: 'Appel (classe)', icon: ClipboardList },
                         { key: 'messages' as const, label: 'Messages', icon: MailIcon },
@@ -945,7 +949,10 @@ export default function PortailEnseignant() {
                         { key: 'evenements' as const, label: 'Événements', icon: Calendar },
                         { key: 'activites' as const, label: 'Activités', icon: Activity },
                         { key: 'paiements' as const, label: 'Mes Paiements', icon: Banknote }
-                    ] as const).map(item => {
+                    ] as const)
+                    // L'onglet Maternelle n'apparaît que pour un titulaire de maternelle.
+                    .filter(item => item.key !== 'maternelle' || (data?.classes_maternelle?.length ?? 0) > 0)
+                    .map(item => {
                         const isActive = activeTab === item.key;
                         const badge = item.key === 'messages' ? messages.filter(m => m.statut === 'ENVOYE' && m.expediteur_type === 'ADMIN').length : 0;
                         return (
@@ -2105,6 +2112,20 @@ export default function PortailEnseignant() {
                                 </div>
                             )}
 
+                        </motion.div>
+                    )}
+
+                    {/* ──── MATERNELLE TAB ──── */}
+                    {activeTab === 'maternelle' && (
+                        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                            style={{ background: 'var(--bg-card, #fff)', borderRadius: 16, padding: '18px 20px', border: '1px solid var(--border, #e2e8f0)' }}>
+                            {(data?.classes_maternelle && data.classes_maternelle.length > 0 && enseignantIdRef.current) ? (
+                                <SaisieMaternelle enseignantId={enseignantIdRef.current} classes={data.classes_maternelle} />
+                            ) : (
+                                <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
+                                    Vous n&apos;êtes titulaire d&apos;aucune classe de maternelle.
+                                </div>
+                            )}
                         </motion.div>
                     )}
 

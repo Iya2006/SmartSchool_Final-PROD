@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.models.academique import (
-    AnneeScolaire, Classe, Cycle, Eleve, Etablissement, Inscription, Niveau,
-    ResultatOfficielExamen, Utilisateur,
+    AnneeScolaire, Classe, Cycle, Eleve, Enseignant, Etablissement, Inscription,
+    Niveau, ResultatOfficielExamen, Utilisateur,
 )
 from app.services.referentiel_scolaire import amorcer_referentiel_scolaire
 from app.api.promotion import _calculer_resultats_classe_core
@@ -142,3 +142,53 @@ def test_attestation_seulement_pour_un_admis_de_grande_section(client: TestClien
     # Pas de résultat / non admis → refus.
     r = client.get(f"/api/promotion/attestation-maternelle/{insc_ko.inscription_id}", headers=headers)
     assert r.status_code == 400
+
+
+def test_enseignant_titulaire_saisit_admis_non_dans_son_portail(client: TestClient, db: Session):
+    etab, annee, annee_cible, classe_gs, classe_1a, admin = _mise_en_place(db)
+
+    # L'enseignant, titulaire de la Grande Section (professeur principal).
+    uid = _uid()
+    ens = Enseignant(
+        nom="Sylla", prenom=f"Awa{uid}", matricule=f"ENS-MAT-{uid}", sexe="F",
+        telephone=f"66650{uid:04d}", email=f"ens.mat.{uid}@smartschool.gn",
+        mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
+        etablissement_id=etab.etablissement_id,
+    )
+    db.add(ens); db.commit(); db.refresh(ens)
+    classe_gs.professeur_principal = ens.enseignant_id
+    db.commit()
+
+    e_ok, insc_ok = _eleve_inscrit(db, etab.etablissement_id, classe_gs, annee.annee_id, "Bah", "Kadiatou")
+    headers = _headers(client, ens.matricule)
+
+    base = f"/api/portail-enseignant/{ens.enseignant_id}/classe/{classe_gs.classe_id}/maternelle"
+    r = client.get(base, headers=headers)
+    assert r.status_code == 200, r.text
+    assert len(r.json()["eleves"]) == 1
+
+    r = client.post(base, headers=headers, json={
+        "resultats": [{"inscription_id": insc_ok.inscription_id, "resultat": "ADMIS", "observation": "Épanouie."}],
+    })
+    assert r.status_code == 200, r.text
+
+    off = db.query(ResultatOfficielExamen).filter(
+        ResultatOfficielExamen.inscription_id == insc_ok.inscription_id
+    ).first()
+    assert off is not None and off.resultat == "ADMIS" and off.observation == "Épanouie."
+
+
+def test_enseignant_non_titulaire_refuse(client: TestClient, db: Session):
+    etab, annee, annee_cible, classe_gs, classe_1a, admin = _mise_en_place(db)
+    uid = _uid()
+    autre = Enseignant(
+        nom="Diallo", prenom=f"Sekou{uid}", matricule=f"ENS-X-{uid}", sexe="M",
+        telephone=f"66660{uid:04d}", email=f"ens.x.{uid}@smartschool.gn",
+        mot_de_passe=hash_password("motdepasse123"), statut="ACTIF",
+        etablissement_id=etab.etablissement_id,
+    )
+    db.add(autre); db.commit(); db.refresh(autre)
+    # Il n'est ni professeur principal ni affecté à la classe.
+    headers = _headers(client, autre.matricule)
+    r = client.get(f"/api/portail-enseignant/{autre.enseignant_id}/classe/{classe_gs.classe_id}/maternelle", headers=headers)
+    assert r.status_code == 403
