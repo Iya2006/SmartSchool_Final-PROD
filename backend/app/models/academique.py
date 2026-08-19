@@ -293,7 +293,9 @@ class Eleve(Base):
     matricule = Column(String(30), unique=True, nullable=False, index=True)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
-    date_naissance = Column(Date, nullable=False)
+    # Optionnelle : à l'import en masse, seuls classe + nom + prénom sont exigés ;
+    # la date de naissance (et le reste) peut être complétée plus tard.
+    date_naissance = Column(Date, nullable=True)
     lieu_naissance = Column(String(150))
     sexe = Column(String(1), nullable=False)
     nationalite = Column(String(50), default="Guinéenne")

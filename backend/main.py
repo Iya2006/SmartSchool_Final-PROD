@@ -78,6 +78,20 @@ try:
 except Exception as _e:  # noqa: BLE001 — le démarrage prime sur la migration
     print(f"[SCHEMA] Mise à niveau auto du schéma ignorée : {_e}")
 
+# Colonnes rendues OPTIONNELLES après coup (le modèle passe nullable=True mais la
+# base garde son ancienne contrainte NOT NULL). `create_all` ne touche jamais une
+# colonne existante : on lève donc explicitement la contrainte, de façon
+# idempotente. Cas : ss_eleves.date_naissance — à l'import en masse, seuls
+# classe + nom + prénom sont exigés, la date est complétée plus tard.
+try:
+    import sqlalchemy as _sa
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as _conn:
+            _conn.execute(_sa.text("ALTER TABLE ss_eleves ALTER COLUMN date_naissance DROP NOT NULL"))
+        print("[SCHEMA] ss_eleves.date_naissance : contrainte NOT NULL levée (optionnelle).")
+except Exception as _e:  # noqa: BLE001
+    print(f"[SCHEMA] Assouplissement date_naissance ignoré : {_e}")
+
 
 app = FastAPI(
     title="SMARTSCHOOL ERP API",
