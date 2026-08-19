@@ -57,6 +57,7 @@ const VIDE: Formulaire = {
 // Cycles proposés pour un « complexe scolaire » — le fondateur coche ce que son
 // école couvre réellement (toutes les combinaisons sont possibles).
 const CYCLES = [
+    { code: 'MAT', libelle: 'Maternelle' },
     { code: 'PRM', libelle: 'Primaire' },
     { code: 'CLG', libelle: 'Collège' },
     { code: 'LYC', libelle: 'Lycée' },

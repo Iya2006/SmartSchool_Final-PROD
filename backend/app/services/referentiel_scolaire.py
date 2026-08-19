@@ -26,6 +26,9 @@ from sqlalchemy.orm import Session
 from app.models.academique import Cycle, Niveau
 
 CYCLES_REFERENCE = [
+    # Maternelle : ordre 0 pour passer AVANT le primaire dans tout affichage
+    # trié par cycle. Jugée sans moyenne (admis/non), voir NIVEAUX_REFERENCE.
+    {"code": "MAT", "libelle": "Maternelle", "ordre": 0, "duree_annees": 3},
     {"code": "PRM", "libelle": "Primaire", "ordre": 1, "duree_annees": 6},
     {"code": "CLG", "libelle": "Collège", "ordre": 2, "duree_annees": 4},
     {"code": "LYC", "libelle": "Lycée", "ordre": 3, "duree_annees": 3},
@@ -40,7 +43,10 @@ CYCLES_PAR_TYPE = {
     "PRIMAIRE": ["PRM"],
     "COLLEGE": ["CLG"],
     "LYCEE": ["LYC"],
-    "COMPLEXE": ["PRM", "CLG", "LYC"],
+    # La maternelle ne se crée QUE dans un complexe (choix explicite du
+    # fondateur) : elle n'est donc pas dans le défaut « tout », pour ne pas
+    # imposer 3 sections à une école qui n'en veut pas.
+    "COMPLEXE": ["MAT", "PRM", "CLG", "LYC"],
     "AUTRE": ["PRM", "CLG", "LYC"],
 }
 CYCLES_PAR_DEFAUT = ["PRM", "CLG", "LYC"]
@@ -51,6 +57,12 @@ def cycles_autorises(type_etablissement: Optional[str]) -> List[str]:
     return CYCLES_PAR_TYPE.get((type_etablissement or "").upper(), CYCLES_PAR_DEFAUT)
 
 NIVEAUX_REFERENCE = [
+    # --- MATERNELLE (jugée sans moyenne : admis/non + appréciation) ---
+    # Grande Section (ordre 3) mène à la 1ère Année du primaire (voir
+    # promotion.py::_niveau_suivant, branche MAT).
+    {"cycle": "MAT", "code": "PS", "libelle": "Petite Section", "ordre": 1, "est_examen": "N", "examen": None, "evaluation_simple": "O"},
+    {"cycle": "MAT", "code": "MS", "libelle": "Moyenne Section", "ordre": 2, "est_examen": "N", "examen": None, "evaluation_simple": "O"},
+    {"cycle": "MAT", "code": "GS", "libelle": "Grande Section", "ordre": 3, "est_examen": "N", "examen": None, "evaluation_simple": "O"},
     # --- PRIMAIRE ---
     {"cycle": "PRM", "code": "1A", "libelle": "1ère Année", "ordre": 1, "est_examen": "N", "examen": None},
     {"cycle": "PRM", "code": "2A", "libelle": "2ème Année", "ordre": 2, "est_examen": "N", "examen": None},
@@ -149,6 +161,7 @@ def amorcer_referentiel_scolaire(db: Session, etablissement_id: int,
             ordre=reference["ordre"],
             est_examen=reference["est_examen"],
             examen_national=reference["examen"],
+            evaluation_simple=reference.get("evaluation_simple", "N"),
         ))
         crees_niveaux += 1
 

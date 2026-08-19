@@ -87,6 +87,10 @@ def test_impayes_recherche_ignore_les_accents(client: TestClient, db: Session):
     # Avec accent, et par prénom accentué aussi.
     assert _trouve("Traoré") == 1
     assert _trouve("aicha") == 1
+    # NOM COMPLET « prénom nom » et « nom prénom » (sans accent) : le cas réel
+    # « Fatou Diaby » qui ne trouvait rien car les colonnes sont séparées.
+    assert _trouve("aicha traore") == 1
+    assert _trouve("traore aicha") == 1
     # Matricule reste bien cherché.
     assert _trouve(eleve.matricule) == 1
     # Un nom absent ne remonte rien.

@@ -44,14 +44,25 @@ def sans_accent(colonne):
     return expr
 
 
-def filtre_nom_prenom_matricule(terme: str, col_nom, col_prenom, col_matricule):
-    """Condition OR insensible aux accents/casse sur nom, prénom et matricule.
+def nom_complet(col_prenom, col_nom):
+    """Expression SQL « prénom nom » (concat portable PG + SQLite via ||)."""
+    from sqlalchemy import func
+    return func.coalesce(col_prenom, "").concat(" ").concat(func.coalesce(col_nom, ""))
 
-    Retourne une expression SQLAlchemy prête à passer à `.filter(...)`.
+
+def filtre_nom_prenom_matricule(terme: str, col_nom, col_prenom, col_matricule):
+    """Condition OR insensible aux accents/casse sur nom, prénom, matricule ET
+    le NOM COMPLET.
+
+    Cherche aussi « prénom nom » et « nom prénom » concaténés : sans ça, taper
+    « Fatou Diaby » ne trouvait rien (nom=« Diaby », prénom=« Fatou » séparés,
+    aucune colonne ne contenant le nom complet). Prêt pour `.filter(...)`.
     """
     like = f"%{normaliser_terme(terme)}%"
     return (
         sans_accent(col_nom).like(like)
         | sans_accent(col_prenom).like(like)
         | sans_accent(col_matricule).like(like)
+        | sans_accent(nom_complet(col_prenom, col_nom)).like(like)
+        | sans_accent(nom_complet(col_nom, col_prenom)).like(like)
     )
