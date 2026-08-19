@@ -217,6 +217,27 @@ def test_import_classe_tolere_les_ordinaux(client: TestClient, db: Session):
     assert insc is not None  # bien placé dans « 1ère Année »
 
 
+def test_import_homonymes_meme_classe_tous_importes_puis_reimport_sans_doublon(client: TestClient, db: Session):
+    """Deux enfants de la MÊME classe, même nom, sans date : les DEUX sont
+    importés (vrais homonymes). Un ré-import du même fichier n'en recrée aucun."""
+    etab, annee, classe, admin = _ecole(db)
+    headers = _headers(client, admin.nom_utilisateur)
+    csv = "Nom;Prénom;Classe\nCamara;Mohamed;2eme annee\nCamara;Mohamed;2eme annee\n"
+    files = {"fichier": ("e.csv", csv.encode("utf-8"), "text/csv")}
+
+    r1 = client.post("/api/eleves/import", files=files, headers=headers)
+    assert r1.status_code == 200, r1.text
+    assert r1.json()["crees"] == 2  # les deux homonymes passent
+
+    r2 = client.post(
+        "/api/eleves/import",
+        files={"fichier": ("e.csv", csv.encode("utf-8"), "text/csv")},
+        headers=headers,
+    )
+    assert r2.json()["crees"] == 0  # ré-import : rien de plus
+    assert db.query(Eleve).filter(Eleve.etablissement_id == etab.etablissement_id).count() == 2
+
+
 def test_import_dry_run_n_ecrit_rien(client: TestClient, db: Session):
     etab, annee, classe, admin = _ecole(db)
     headers = _headers(client, admin.nom_utilisateur)

@@ -370,15 +370,32 @@ async def importer_eleves(
         index_classe[normaliser_classe(c.code)] = c
         index_classe[normaliser_classe(c.libelle)] = c
 
-    # Identités DÉJÀ présentes dans l'école (nom + prénom + date de naissance,
-    # comparés sans casse ni accents). Sert à rendre l'import IDEMPOTENT : le
-    # relancer — ou une école qui, croyant l'import coupé, le rejoue — ne
-    # recrée pas les mêmes élèves. C'est ce qui provoquait les doublons.
-    existants = set()
-    for (n, p, d) in db.query(Eleve.nom, Eleve.prenom, Eleve.date_naissance).filter(
-        Eleve.etablissement_id == etablissement_id
-    ).all():
-        existants.add((normaliser_entete(n or ""), normaliser_entete(p or ""), d))
+    # Anti-doublon / idempotence du ré-import, par COMPTAGE. Clé d'identité :
+    #   - avec une DATE de naissance : nom + prénom + date ;
+    #   - SANS date : nom + prénom + CLASSE.
+    # On compte combien d'élèves de chaque clé existent DÉJÀ en base, et combien
+    # le fichier en contient. On n'importe que le SURPLUS. Ainsi :
+    #   • deux homonymes réels de la même classe (ex. « Mohamed Camara » ×2 en
+    #     3ᵉ année) sont TOUS LES DEUX importés (le fichier en a 2, la base 0) ;
+    #   • un ré-import du même fichier n'en recrée aucun (base 2, fichier 2).
+    # Aucune fausse date inventée : la vraie info se complète après.
+    from collections import Counter as _Counter
+
+    def _cle_identite(nom, prenom, date, classe_id):
+        base = (normaliser_entete(nom or ""), normaliser_entete(prenom or ""))
+        return base + ((date,) if date is not None else ("cls", classe_id))
+
+    deja_en_base = _Counter()
+    for (n, p, d, cid) in db.query(
+        Eleve.nom, Eleve.prenom, Eleve.date_naissance, Inscription.classe_id
+    ).outerjoin(
+        Inscription,
+        (Inscription.eleve_id == Eleve.eleve_id)
+        & (Inscription.annee_id == annee_id)
+        & (Inscription.statut == "ACTIVE"),
+    ).filter(Eleve.etablissement_id == etablissement_id).all():
+        deja_en_base[_cle_identite(n, p, d, cid)] += 1
+    vus_fichier = _Counter()
 
     # --- On VALIDE toutes les lignes avant d'écrire quoi que ce soit -----------
     valides, ignorees, apercu = [], [], []
@@ -398,12 +415,13 @@ async def importer_eleves(
             continue
         # La date de naissance est FACULTATIVE : seuls classe + nom + prénom sont
         # exigés. Une date absente/illisible est laissée vide (à compléter plus tard).
-        # Doublon : même élève déjà en base, OU répété plus haut dans le fichier.
-        identite = (normaliser_entete(nom), normaliser_entete(prenom), date_naissance)
-        if identite in existants:
+        # On n'ignore que le SURPLUS déjà présent en base (ré-import) : les
+        # homonymes réels de la même classe passent tous.
+        cle = _cle_identite(nom, prenom, date_naissance, classe.classe_id)
+        vus_fichier[cle] += 1
+        if vus_fichier[cle] <= deja_en_base.get(cle, 0):
             ignorees.append({"ligne": i, "eleve": f"{prenom} {nom}", "raison": "déjà présent (doublon évité)"})
             continue
-        existants.add(identite)
         valides.append((ligne, nom, prenom, classe, date_naissance))
         apercu.append({"ligne": i, "eleve": f"{prenom} {nom}", "classe": classe.libelle})
 
