@@ -442,6 +442,24 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
         CreneauEmploi.statut == "ACTIVE"
     ).scalar() or 0
 
+    # Classes de MATERNELLE dont il est titulaire (lien par professeur principal,
+    # pas d'affectation matière). Comptées dans les stats pour ne pas afficher
+    # « 0 classe » à un enseignant qui gère bien une classe de maternelle.
+    classes_maternelle = [
+        {
+            "classe_id": c.classe_id, "classe": c.libelle,
+            "classe_code": c.code, "niveau": n.libelle,
+            "effectif": c.effectif_actuel or 0,
+        }
+        for c, n in db.query(Classe, Niveau).join(
+            Niveau, Classe.niveau_id == Niveau.niveau_id
+        ).filter(
+            Classe.professeur_principal == enseignant_id,
+            Niveau.evaluation_simple == "O",
+        ).order_by(Classe.libelle).all()
+    ]
+    total_eleves_mat = sum(m["effectif"] for m in classes_maternelle)
+
     return {
         "enseignant": {
             "enseignant_id": ens.enseignant_id,
@@ -467,24 +485,12 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
         # Classes de MATERNELLE dont l'enseignant est titulaire : pas d'affectation
         # matière en maternelle (aucune note), le lien se fait par professeur
         # principal. Le portail affiche pour elles la saisie Admis/Non.
-        "classes_maternelle": [
-            {
-                "classe_id": c.classe_id, "classe": c.libelle,
-                "classe_code": c.code, "niveau": n.libelle,
-                "effectif": c.effectif_actuel or 0,
-            }
-            for c, n in db.query(Classe, Niveau).join(
-                Niveau, Classe.niveau_id == Niveau.niveau_id
-            ).filter(
-                Classe.professeur_principal == enseignant_id,
-                Niveau.evaluation_simple == "O",
-            ).order_by(Classe.libelle).all()
-        ],
+        "classes_maternelle": classes_maternelle,
         "stats": {
-            "nb_classes": len(classes_set),
+            "nb_classes": len(classes_set) + len(classes_maternelle),
             "nb_matieres": len(set(a.matiere_id for a in affectations)),
             "total_heures": total_heures,
-            "total_eleves": total_eleves,
+            "total_eleves": total_eleves + total_eleves_mat,
             "nb_creneaux": nb_creneaux,
         }
     }
