@@ -5,7 +5,7 @@ Dashboard: emploi du temps, classes, eleves, notes, absences
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.core.security import verify_password, hash_password
@@ -464,6 +464,22 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
             "telephone_urgence": getattr(ens, 'telephone_urgence', None),
         },
         "affectations": classes_data,
+        # Classes de MATERNELLE dont l'enseignant est titulaire : pas d'affectation
+        # matière en maternelle (aucune note), le lien se fait par professeur
+        # principal. Le portail affiche pour elles la saisie Admis/Non.
+        "classes_maternelle": [
+            {
+                "classe_id": c.classe_id, "classe": c.libelle,
+                "classe_code": c.code, "niveau": n.libelle,
+                "effectif": c.effectif_actuel or 0,
+            }
+            for c, n in db.query(Classe, Niveau).join(
+                Niveau, Classe.niveau_id == Niveau.niveau_id
+            ).filter(
+                Classe.professeur_principal == enseignant_id,
+                Niveau.evaluation_simple == "O",
+            ).order_by(Classe.libelle).all()
+        ],
         "stats": {
             "nb_classes": len(classes_set),
             "nb_matieres": len(set(a.matiere_id for a in affectations)),
@@ -1400,3 +1416,144 @@ def bulletins_instituteur(
         ],
     }
 
+
+
+# ================================================================
+# MATERNELLE — saisie Admis/Non + appréciation, par l'enseignant
+# ================================================================
+
+def _classe_maternelle_du_prof(db: Session, enseignant_id: int, classe_id: int):
+    """La classe de maternelle dont cet enseignant est le titulaire, sinon 403/404.
+
+    La maternelle n'a pas de matières/notes : le guard « instituteur du primaire »
+    (_classe_pilotee_par) ne s'applique pas. Le titulaire est ici le professeur
+    principal de la classe (ou, à défaut, un enseignant affecté à la classe).
+    """
+    classe = db.query(Classe).filter(Classe.classe_id == classe_id).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    if not ens or ens.etablissement_id != classe.etablissement_id:
+        raise HTTPException(404, "Classe non trouvée")
+    niveau = db.query(Niveau).filter(Niveau.niveau_id == classe.niveau_id).first()
+    if not niveau or niveau.evaluation_simple != "O":
+        raise HTTPException(403, "Cet écran est réservé aux classes de maternelle.")
+    est_titulaire = classe.professeur_principal == enseignant_id or db.query(
+        Affectation.affectation_id
+    ).filter(
+        Affectation.classe_id == classe_id,
+        Affectation.enseignant_id == enseignant_id,
+        Affectation.statut == "ACTIVE",
+    ).first() is not None
+    if not est_titulaire:
+        raise HTTPException(403, "Vous n'êtes pas l'enseignant de cette classe.")
+    return classe, niveau
+
+
+@router.get("/{enseignant_id}/classe/{classe_id}/maternelle")
+def maternelle_lister(
+    enseignant_id: int, classe_id: int,
+    _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db),
+):
+    """Liste les enfants d'une classe de maternelle avec leur Admis/Non + appréciation."""
+    from app.models.academique import ResultatOfficielExamen
+    classe, niveau = _classe_maternelle_du_prof(db, enseignant_id, classe_id)
+    section_au_dessus = db.query(Niveau.niveau_id).filter(
+        Niveau.cycle_id == niveau.cycle_id, Niveau.ordre > niveau.ordre
+    ).first()
+    inscriptions = db.query(Inscription, Eleve).join(
+        Eleve, Inscription.eleve_id == Eleve.eleve_id
+    ).filter(
+        Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
+    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ids = [i.inscription_id for i, _ in inscriptions]
+    officiels = {}
+    if ids:
+        officiels = {
+            r.inscription_id: r
+            for r in db.query(ResultatOfficielExamen).filter(
+                ResultatOfficielExamen.inscription_id.in_(ids)
+            ).all()
+        }
+    return {
+        "classe": {"classe_id": classe.classe_id, "libelle": classe.libelle},
+        "section": niveau.libelle,
+        # Attestation de fin de cycle : seulement la dernière section (Grande Section).
+        "attestation_possible": section_au_dessus is None,
+        "eleves": [
+            {
+                "inscription_id": i.inscription_id,
+                "eleve_id": e.eleve_id,
+                "nom": e.nom, "prenom": e.prenom, "matricule": e.matricule,
+                "resultat": officiels[i.inscription_id].resultat if i.inscription_id in officiels else None,
+                "observation": officiels[i.inscription_id].observation if i.inscription_id in officiels else None,
+            }
+            for i, e in inscriptions
+        ],
+    }
+
+
+class _MaternelleItem(BaseModel):
+    inscription_id: int
+    resultat: str            # ADMIS | NON_ADMIS
+    observation: Optional[str] = None
+
+
+class _MaternelleSaisie(BaseModel):
+    resultats: List[_MaternelleItem]
+
+
+@router.post("/{enseignant_id}/classe/{classe_id}/maternelle")
+def maternelle_saisir(
+    enseignant_id: int, classe_id: int, data: _MaternelleSaisie,
+    _auth: dict = Depends(_enseignant_auth), db: Session = Depends(get_db),
+):
+    """Enregistre Admis/Non + appréciation pour les enfants de la classe.
+
+    Rejouable (met à jour un résultat déjà saisi). Chaque inscription doit
+    appartenir à CETTE classe — pas moyen de saisir pour une autre.
+    """
+    from app.models.academique import ResultatOfficielExamen
+    classe, niveau = _classe_maternelle_du_prof(db, enseignant_id, classe_id)
+    verifier_annee_modifiable(db, classe.annee_id)
+
+    valides = ("ADMIS", "NON_ADMIS")
+    invalides = [r.resultat for r in data.resultats if r.resultat not in valides]
+    if invalides:
+        raise HTTPException(400, f"Résultat invalide {sorted(set(invalides))} — attendus : {list(valides)}")
+    if not data.resultats:
+        return {"message": "Aucun résultat à enregistrer.", "enregistres": 0}
+
+    ids_classe = {
+        i for (i,) in db.query(Inscription.inscription_id).filter(
+            Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE"
+        ).all()
+    }
+    hors = [r.inscription_id for r in data.resultats if r.inscription_id not in ids_classe]
+    if hors:
+        raise HTTPException(404, f"Inscriptions hors de cette classe : {sorted(hors)}")
+
+    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
+    saisi_par = f"{ens.prenom} {ens.nom}".strip() if ens else None
+    existants = {
+        r.inscription_id: r
+        for r in db.query(ResultatOfficielExamen).filter(
+            ResultatOfficielExamen.inscription_id.in_([r.inscription_id for r in data.resultats])
+        ).all()
+    }
+    n = 0
+    for item in data.resultats:
+        obs = (item.observation or "").strip() or None
+        existant = existants.get(item.inscription_id)
+        if existant:
+            existant.resultat = item.resultat
+            existant.observation = obs
+            existant.saisi_par = saisi_par
+        else:
+            db.add(ResultatOfficielExamen(
+                inscription_id=item.inscription_id, examen_national=None,
+                resultat=item.resultat, observation=obs, saisi_par=saisi_par,
+            ))
+        n += 1
+    db.commit()
+    return {"message": f"{n} résultat(s) enregistré(s).", "enregistres": n}
