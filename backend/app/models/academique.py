@@ -794,6 +794,12 @@ class TypeFrais(Base):
     est_obligatoire = Column(String(1), default="O")
     frequence = Column(String(20), default="ANNUEL")
     statut = Column(String(20), default="ACTIF")
+    # Tarif LIBRE (optionnel, à prix non fixe) : un livre, un équipement, une
+    # sortie… « O » = jamais facturé d'office ni rattaché à une classe ; il se
+    # vend au coup par coup à un élève, au prix saisi sur le moment, et entre
+    # directement en caisse (voir POST /api/finance/vente-libre). Séparé des
+    # frais de scolarité dans les rapports (total « autres entrées »).
+    prix_libre = Column(String(1), nullable=False, default="N")
 
 
 class TarifClasse(Base):

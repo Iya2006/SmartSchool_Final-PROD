@@ -628,6 +628,8 @@ class TypeFraisBase(BaseModel):
     montant_defaut: float = 0
     est_obligatoire: str = "O"
     frequence: str = "ANNUEL"
+    # « O » = tarif libre (optionnel, prix saisi à la vente, cf. vente-libre).
+    prix_libre: str = "N"
 
 class TypeFraisCreate(TypeFraisBase): pass
 class TypeFraisOut(OrmBase, TypeFraisBase):
@@ -692,6 +694,19 @@ class PaiementBase(BaseModel):
     date_paiement: Optional[date] = None
 
 class PaiementCreate(PaiementBase): pass
+
+class VenteLibreCreate(BaseModel):
+    """Vente ponctuelle d'un tarif LIBRE à un élève (livre, équipement…).
+
+    Le montant est saisi sur le moment (prix non fixe) ; l'argent entre
+    directement en caisse. Voir POST /api/finance/vente-libre.
+    """
+    eleve_id: int
+    type_frais_id: int
+    montant: float
+    mode_paiement: str = "ESPECES"
+    reference_externe: Optional[str] = None
+    annee_id: Optional[int] = None
 class PaiementOut(OrmBase):
     paiement_id: int
     facture_id: int
