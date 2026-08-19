@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from 'html5-qrcode';
-import { ScanLine, CheckCircle, AlertTriangle, Clock, LogOut, ArrowRightCircle, Users, GraduationCap, RefreshCw } from 'lucide-react';
+import { ScanLine, CheckCircle, AlertTriangle, Clock, LogOut, ArrowRightCircle, Users, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -40,7 +40,6 @@ export default function ScanPage() {
     const [isProcessing, setIsProcessing] = useState(false);
     const [stats, setStats] = useState<DailyStats>({ total_enregistrements: 0, presences: 0, total_arrivees: 0, total_departs: 0 });
     const scannerRef = useRef<Html5QrcodeScanner | null>(null);
-    const [activeTab, setActiveTab] = useState("personnel");
 
     // Fetch today's stats
     const fetchTodayStats = async () => {
@@ -137,36 +136,10 @@ export default function ScanPage() {
                 audio.play().catch(() => {});
             }
         } catch (error: any) {
-            // Fallback: If not an agent, check if it's an Élève!
-            try {
-                const eleveRes = await api.post('/api/pointage-eleves/scan', {
-                    qr_data: decodedText,
-                    action_type: actionType
-                });
-                
-                if (eleveRes.data) {
-                    setScanResult({
-                        success: eleveRes.data.success,
-                        message: eleveRes.data.message + " (Pointeuse Élève)",
-                        action: eleveRes.data.action,
-                        agent: {
-                            nom: eleveRes.data.eleve.nom,
-                            matricule: eleveRes.data.eleve.matricule,
-                            role: `Élève (${eleveRes.data.eleve.classe || 'N/A'})`,
-                            photo: eleveRes.data.eleve.photo
-                        },
-                        heure: eleveRes.data.heure
-                    });
-                    fetchTodayStats();
-                    return;
-                }
-            } catch (eleveError) {
-                // Ignore fallback
-            }
-
+            // Pointage RÉSERVÉ AUX ENSEIGNANTS/agents : plus de repli élève.
             setScanResult({
                 success: false,
-                message: error.response?.data?.detail || error.response?.data?.message || "Code QR inconnu ou non attribué.",
+                message: error.response?.data?.detail || error.response?.data?.message || "Badge inconnu ou non attribué à un enseignant.",
                 action: "ERREUR",
                 agent: { nom: "Inconnu", role: "-", matricule: decodedText, photo: "" },
                 heure: new Date().toLocaleTimeString('fr-FR')
@@ -226,32 +199,9 @@ export default function ScanPage() {
                 </div>
             </div>
 
-            {/* Tabs */}
-            <div style={{ display: 'flex', gap: '10px', marginBottom: '24px', borderBottom: '2px solid #e2e8f0' }}>
-                <button 
-                    onClick={() => router.push('/dashboard/presences/scan')}
-                    style={{ 
-                        padding: '12px 24px', background: 'transparent', border: 'none', 
-                        borderBottom: activeTab === 'personnel' ? '3px solid #3b82f6' : '3px solid transparent',
-                        color: activeTab === 'personnel' ? '#3b82f6' : '#64748b',
-                        fontWeight: activeTab === 'personnel' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', marginBottom: '-2px'
-                    }}
-                >
-                    <Users size={18} /> Personnel (Pointeuse)
-                </button>
-                <button 
-                    onClick={() => router.push('/dashboard/presences/scan-eleves')}
-                    style={{ 
-                        padding: '12px 24px', background: 'transparent', border: 'none', 
-                        borderBottom: activeTab === 'eleves' ? '3px solid #3b82f6' : '3px solid transparent',
-                        color: activeTab === 'eleves' ? '#3b82f6' : '#64748b',
-                        fontWeight: activeTab === 'eleves' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', marginBottom: '-2px'
-                    }}
-                >
-                    <GraduationCap size={18} /> Élèves
-                </button>
+            {/* Pointage réservé au PERSONNEL (enseignants/agents). */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0', color: '#3b82f6', fontWeight: 700, fontSize: '15px' }}>
+                <Users size={18} /> Pointage du personnel
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.2fr 1fr', gap: '30px' }}>

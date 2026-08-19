@@ -2744,26 +2744,9 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
             pdf.setFillColorRGB(0.5, 0.5, 0.5)
             pdf.drawCentredString(2.4 * cm, y - 0.5 * cm, "LOGO")
 
-    # QR code de vérification d'authenticité (coin supérieur droit) — encode
-    # l'identifiant du bulletin + le matricule, vérifiable manuellement par un
-    # administrateur contre la base (pas de service web dédié pour l'instant).
-    try:
-        from reportlab.graphics.barcode.qr import QrCodeWidget
-        from reportlab.graphics.shapes import Drawing
-        from reportlab.graphics import renderPDF
-        qr_payload = f"SMARTSCHOOL|BULLETIN={bulletin_id}|MATRICULE={eleve.matricule}|TRIMESTRE={bulletin.trimestre_id}"
-        qr_widget = QrCodeWidget(qr_payload)
-        qr_size = 1.8 * cm
-        b = qr_widget.getBounds()
-        qr_w, qr_h = b[2] - b[0], b[3] - b[1]
-        d = Drawing(qr_size, qr_size, transform=[qr_size / qr_w, 0, 0, qr_size / qr_h, 0, 0])
-        d.add(qr_widget)
-        renderPDF.draw(d, pdf, largeur - 1.5 * cm - qr_size, y - 1.5 * cm)
-        pdf.setFont("Helvetica", 5.5)
-        pdf.setFillColorRGB(0.5, 0.5, 0.5)
-        pdf.drawCentredString(largeur - 1.5 * cm - qr_size / 2, y - 1.65 * cm, "Vérification")
-    except Exception:
-        pass
+    # (QR de vérification retiré : il encodait un texte brut « SMARTSCHOOL|…|
+    # TRIMESTRE=None » sans service de vérification derrière. Le bulletin
+    # s'identifie par son en-tête établissement + numéro, pas par un QR.)
 
     pdf.setFont(tmpl["police_titre"], tmpl["taille_titre"])
     pdf.setFillColorRGB(*cp)

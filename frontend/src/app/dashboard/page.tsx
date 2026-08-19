@@ -202,7 +202,7 @@ function getHealthStatus(data: DashboardData) {
 }
 
 export default function DashboardPage() {
-  const { etablissementId, anneeId } = useApp();
+  const { etablissementId, anneeId, anneeLibelle } = useApp();
   const isMobile = useIsMobile();
   const [showImpayesModal, setShowImpayesModal] = useState<ImpayeModalState>(false);
   const [impayesSearch, setImpayesSearch] = useState('');
@@ -470,7 +470,7 @@ export default function DashboardPage() {
               </div>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '9px 14px', borderRadius: 14, background: 'rgba(255,255,255,0.12)' }}>
                 <CalendarDays size={16} />
-                <span style={{ fontWeight: 700 }}>Année pilotée : {anneeId}</span>
+                <span style={{ fontWeight: 700 }}>Année pilotée : {anneeLibelle || 'Aucune année scolaire active'}</span>
               </div>
             </div>
 

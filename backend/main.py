@@ -43,6 +43,7 @@ from app.api.fournitures import router as fournitures_router
 from app.api.comptabilite import router as comptabilite_router
 from app.api.personnel import router as personnel_router
 from app.api.presence_agent import router as presence_agent_router
+from app.api.cartes import router as cartes_router
 from app.api.securite import router as securite_router
 from app.api.evenements import router as evenements_router
 from app.api.activites import router as activites_router
@@ -341,6 +342,7 @@ async def enregistrer_incident(request: Request, exc: Exception):
     )
 
 app.include_router(dashboard_router, dependencies=[Depends(get_current_user)])
+app.include_router(cartes_router, dependencies=[Depends(get_current_user)])
 app.include_router(eleves_router, dependencies=[Depends(get_current_user), Depends(_MOD_ELEVES)])
 app.include_router(enseignants_router, dependencies=[Depends(get_current_user), Depends(_MOD_ENSEIGNANTS)])
 app.include_router(classes_router, dependencies=[Depends(get_current_user)])
