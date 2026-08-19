@@ -50,14 +50,31 @@ export default function NouvelleClasse() {
     // Ils sont enregistrés comme tarifs de la classe juste après sa création.
     const [prix, setPrix] = useState({ scolarite: '', inscription: '', reinscription: '' });
 
-    useEffect(() => {
+    const [activationMat, setActivationMat] = useState(false);
+
+    const chargerCycles = () => {
+        setChargementNiveaux(true);
         api.get<CycleAvecNiveaux[]>('/api/parametrage/cycles')
             .then((res) => setCycles(res.data || []))
             .catch(() => setCycles([]))
             .finally(() => setChargementNiveaux(false));
-    }, [etablissementId]);
+    };
+    useEffect(() => { chargerCycles(); }, [etablissementId]);
 
     const niveauxDisponibles = cycles.some((c) => (c.niveaux || []).length > 0);
+    const maternellePresente = cycles.some((c) => c.code === 'MAT');
+
+    const activerMaternelle = async () => {
+        setActivationMat(true); setError(null);
+        try {
+            await api.post('/api/parametrage/cycles/activer-maternelle');
+            chargerCycles();  // les 3 sections apparaissent dans le menu Niveau
+        } catch {
+            setError("Impossible d'activer la maternelle.");
+        } finally {
+            setActivationMat(false);
+        }
+    };
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -258,6 +275,15 @@ export default function NouvelleClasse() {
                                     </optgroup>
                                 ))}
                             </select>
+                            {!chargementNiveaux && !maternellePresente && (
+                                <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                    <span>Vous ouvrez une maternelle ? Les 3 sections n&apos;apparaissent pas ici.</span>
+                                    <button type="button" onClick={activerMaternelle} disabled={activationMat}
+                                        style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid #a7f3d0', background: '#ecfdf5', color: '#059669', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                        {activationMat ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} Activer la maternelle
+                                    </button>
+                                </div>
+                            )}
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
