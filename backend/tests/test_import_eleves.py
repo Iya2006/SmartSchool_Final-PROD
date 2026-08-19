@@ -190,6 +190,12 @@ def test_import_sans_date_de_naissance(client: TestClient, db: Session):
     ).first()
     assert e is not None and e.date_naissance is None
 
+    # La liste des élèves DOIT se charger malgré la date vide (sinon 500 :
+    # « Impossible de charger les élèves »).
+    liste = client.get("/api/eleves", headers=headers)
+    assert liste.status_code == 200, liste.text
+    assert any(x["nom"] == "Keita" for x in liste.json())
+
 
 def test_import_classe_tolere_les_ordinaux(client: TestClient, db: Session):
     """« 1 ANNEE » dans le fichier retrouve la classe « 1ère Année » de l'école
