@@ -836,6 +836,9 @@ class Facture(Base):
     montant_paye = Column(Numeric(12, 2), default=0, nullable=False)
     montant_restant = Column(Numeric(12, 2), default=0, nullable=False)
     statut = Column(String(20), default="EN_ATTENTE", nullable=False)
+    # Désignation libre — sert aux ventes de tarifs libres (« 3 cahiers + 1 règle »)
+    # pour savoir ce qui a réellement été acheté. NULL pour les factures normales.
+    description = Column(String(255), nullable=True)
 
     echeances = relationship("EcheanceFacture", backref="facture", cascade="all, delete-orphan")
 

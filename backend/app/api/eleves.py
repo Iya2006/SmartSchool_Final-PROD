@@ -108,10 +108,10 @@ def list_eleves(
     if statut:
         query = query.filter(Eleve.statut == statut)
     if search:
+        # Insensible aux accents : « traore » trouve « Traoré ».
+        from app.core.recherche import filtre_nom_prenom_matricule
         query = query.filter(
-            (Eleve.nom.ilike(f"%{search}%")) |
-            (Eleve.prenom.ilike(f"%{search}%")) |
-            (Eleve.matricule.ilike(f"%{search}%"))
+            filtre_nom_prenom_matricule(search, Eleve.nom, Eleve.prenom, Eleve.matricule)
         )
     if classe_code:
         query = query.filter(func.coalesce(Classe.code, ClasseCible.code) == classe_code)

@@ -44,6 +44,7 @@ export default function AutresEntreesPage() {
     // Modale de vente
     const [selected, setSelected] = useState<EleveRow | null>(null);
     const [venteType, setVenteType] = useState('');
+    const [venteDesignation, setVenteDesignation] = useState('');
     const [venteMontant, setVenteMontant] = useState('');
     const [venteMode, setVenteMode] = useState('ESPECES');
     const [venteRef, setVenteRef] = useState('');
@@ -76,20 +77,22 @@ export default function AutresEntreesPage() {
     useEffect(() => { charger(); }, [charger]);
     useEffect(() => { fetchModesPaiement().then(m => { if (m?.length) { setModes(m); setVenteMode(m[0]); } }); }, []);
 
+    // Insensible aux accents : « traore » trouve « Traoré ».
+    const sansAccent = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const filtered = useMemo(() => {
-        const q = search.trim().toLowerCase();
+        const q = sansAccent(search.trim());
         if (!q) return eleves;
         return eleves.filter(e =>
-            `${e.eleve_prenom} ${e.eleve_nom}`.toLowerCase().includes(q) ||
-            (e.eleve_matricule || '').toLowerCase().includes(q) ||
-            (e.classe_nom || '').toLowerCase().includes(q)
+            sansAccent(`${e.eleve_prenom} ${e.eleve_nom}`).includes(q) ||
+            sansAccent(e.eleve_matricule).includes(q) ||
+            sansAccent(e.classe_nom).includes(q)
         );
     }, [eleves, search]);
 
     const ouvrirVente = (e: EleveRow) => {
         setSelected(e);
         setVenteType(typesLibre.length === 1 ? String(typesLibre[0].type_frais_id) : '');
-        setVenteMontant(''); setVenteRef('');
+        setVenteDesignation(''); setVenteMontant(''); setVenteRef('');
         setVenteMode(modes[0] || 'ESPECES');
     };
 
@@ -104,6 +107,7 @@ export default function AutresEntreesPage() {
                 eleve_id: selected.eleve_id,
                 type_frais_id: Number(venteType),
                 montant,
+                designation: venteDesignation.trim() || undefined,
                 mode_paiement: venteMode,
                 reference_externe: venteRef || undefined,
                 annee_id: filterAnnee,
@@ -232,6 +236,13 @@ export default function AutresEntreesPage() {
                                 <option value="">— Choisir —</option>
                                 {typesLibre.map(t => <option key={t.type_frais_id} value={t.type_frais_id}>{t.libelle}</option>)}
                             </select>
+                        </label>
+
+                        <label style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>
+                            Ce qui est acheté
+                            <input value={venteDesignation} onChange={e => setVenteDesignation(e.target.value)}
+                                placeholder="Ex. 3 cahiers + 1 règle, uniforme, sortie…"
+                                style={{ width: '100%', marginTop: 5, padding: '10px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 14, boxSizing: 'border-box' }} />
                         </label>
 
                         <label style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>
