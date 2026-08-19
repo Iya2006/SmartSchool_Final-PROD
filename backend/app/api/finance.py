@@ -1252,10 +1252,10 @@ def list_paiements(
     # courante ne renvoyait rien. On cherche par nom/prenom d'eleve, numero
     # de recu et numero de facture.
     if search:
-        # Nom/prénom insensibles aux accents ; + numéro de reçu et de facture.
+        # Nom complet insensible aux accents ; + numéro de reçu et de facture.
         like = f"%{normaliser_terme(search)}%"
         query = query.filter(
-            sans_accent(Eleve.nom).like(like) | sans_accent(Eleve.prenom).like(like) |
+            filtre_nom_prenom_matricule(search, Eleve.nom, Eleve.prenom, Eleve.matricule) |
             func.lower(Paiement.numero_recu).like(like) | func.lower(Facture.numero_facture).like(like)
         )
 
