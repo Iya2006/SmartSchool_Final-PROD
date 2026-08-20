@@ -2744,9 +2744,61 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
             pdf.setFillColorRGB(0.5, 0.5, 0.5)
             pdf.drawCentredString(2.4 * cm, y - 0.5 * cm, "LOGO")
 
-    # (QR de vérification retiré : il encodait un texte brut « SMARTSCHOOL|…|
-    # TRIMESTRE=None » sans service de vérification derrière. Le bulletin
-    # s'identifie par son en-tête établissement + numéro, pas par un QR.)
+    # QR du bulletin — encode un TEXTE LISIBLE (scanné par un téléphone, il
+    # affiche directement l'essentiel) : nom de l'ÉCOLE (plus « SMARTSCHOOL »),
+    # n° du bulletin, élève, classe, PÉRIODE RÉELLE (« 1er Trimestre »,
+    # « 1er Semestre » selon le calendrier de l'école, ou « Bulletin annuel »),
+    # moyenne, rang et statut Admis/Échoué. Toutes les valeurs viennent de la
+    # base, jamais un ID brut ni « None ».
+    try:
+        from reportlab.graphics.barcode.qr import QrCodeWidget
+        from reportlab.graphics.shapes import Drawing
+        from reportlab.graphics import renderPDF
+
+        if (bulletin.type_bulletin or "").upper() == "ANNUEL" or trimestre is None:
+            _periode_lbl = "Bulletin annuel"
+        else:
+            _periode_lbl = trimestre.libelle or "Période"
+
+        _echelle = float(echelle_lettres or 20)
+        _moy = bulletin.moyenne_generale
+        if _moy is not None:
+            _moy_val = float(_moy)
+            _statut = "ADMIS" if _moy_val >= _echelle / 2.0 else "ÉCHOUÉ"
+            _moy_txt = f"{_moy_val:.2f} / {int(_echelle)}"
+        else:
+            _statut, _moy_txt = "—", "—"
+        if bulletin.rang and bulletin.effectif_classe:
+            _rang_txt = f"{bulletin.rang} / {bulletin.effectif_classe}"
+        elif bulletin.rang:
+            _rang_txt = str(bulletin.rang)
+        else:
+            _rang_txt = "—"
+
+        qr_payload = "\n".join([
+            nom_ecole,
+            "BULLETIN",
+            f"N° : {bulletin.bulletin_id}",
+            f"Élève : {eleve.prenom} {eleve.nom}",
+            f"Matricule : {eleve.matricule}",
+            f"Classe : {classe.libelle}",
+            f"Période : {_periode_lbl}",
+            f"Moyenne : {_moy_txt}",
+            f"Rang : {_rang_txt}",
+            f"Statut : {_statut}",
+        ])
+        qr_widget = QrCodeWidget(qr_payload)
+        qr_size = 1.8 * cm
+        b = qr_widget.getBounds()
+        qr_w, qr_h = b[2] - b[0], b[3] - b[1]
+        d = Drawing(qr_size, qr_size, transform=[qr_size / qr_w, 0, 0, qr_size / qr_h, 0, 0])
+        d.add(qr_widget)
+        renderPDF.draw(d, pdf, largeur - 1.5 * cm - qr_size, y - 1.5 * cm)
+        pdf.setFont("Helvetica", 5.5)
+        pdf.setFillColorRGB(0.5, 0.5, 0.5)
+        pdf.drawCentredString(largeur - 1.5 * cm - qr_size / 2, y - 1.65 * cm, "Vérification")
+    except Exception:
+        pass
 
     pdf.setFont(tmpl["police_titre"], tmpl["taille_titre"])
     pdf.setFillColorRGB(*cp)
