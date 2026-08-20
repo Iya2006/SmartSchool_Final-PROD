@@ -446,20 +446,23 @@ async def importer_eleves(
     mdp_defaut = hash_password("12345678")
 
     # 1) Compteur de matricules élèves — amorcé une fois (cf. matricules.py).
+    #    On part du PLUS GRAND numéro réel (jamais un COUNT, qui régresse après
+    #    suppression et réattribue un matricule existant). Code de l'école dans
+    #    le matricule (ELV-{CODE}-{NNNNN}), comme la création unitaire.
+    from app.core.matricules import _depart_max, code_ecole_matricule
+    code_ecole = code_ecole_matricule(db, etablissement_id)
     seq_mat = db.query(SequenceMatricule).filter(
         SequenceMatricule.etablissement_id == etablissement_id,
         SequenceMatricule.type_entite == PREFIXE_ELEVE,
     ).with_for_update().first()
     if seq_mat is None:
-        depart_mat = db.query(func.count(Eleve.matricule)).filter(
-            Eleve.etablissement_id == etablissement_id
-        ).scalar() or 0
         seq_mat = SequenceMatricule(
-            etablissement_id=etablissement_id, type_entite=PREFIXE_ELEVE, dernier_numero=depart_mat
+            etablissement_id=etablissement_id, type_entite=PREFIXE_ELEVE,
+            dernier_numero=_depart_max(db, Eleve, etablissement_id),
         )
         db.add(seq_mat)
         db.flush()
-    num_mat = seq_mat.dernier_numero
+    num_mat = max(seq_mat.dernier_numero, _depart_max(db, Eleve, etablissement_id))
 
     # 2) Élèves créés en bloc (un seul flush attribue tous les eleve_id).
     eleves_classe = []
@@ -467,7 +470,7 @@ async def importer_eleves(
         num_mat += 1
         eleve = Eleve(
             etablissement_id=etablissement_id,
-            matricule=f"{PREFIXE_ELEVE}-{etablissement_id}-{num_mat:0{_LARGEUR_MAT}d}",
+            matricule=f"{PREFIXE_ELEVE}-{code_ecole}-{num_mat:0{_LARGEUR_MAT}d}",
             nom=nom, prenom=prenom, sexe=_normalise_sexe(valeur(ligne, "sexe")),
             date_naissance=dn,
             lieu_naissance=valeur(ligne, "lieu de naissance", "lieu naissance").strip() or None,

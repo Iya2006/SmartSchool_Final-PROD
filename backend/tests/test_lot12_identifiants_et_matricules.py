@@ -105,9 +105,12 @@ class TestMatriculeParEtablissement:
         _creer_eleve(client, h_b, "B1")
         m_a2 = _creer_eleve(client, h_a, "A2")["matricule"]
 
-        assert m_a1 == f"{PREFIXE_ELEVE}-{a.etab.etablissement_id}-00001"
-        # Contigu chez A malgré la création intercalée de B.
-        assert m_a2 == f"{PREFIXE_ELEVE}-{a.etab.etablissement_id}-00002"
+        # Le matricule est `ELV-{CODE_ÉCOLE}-{NNNNN}` : on vérifie le suffixe et
+        # que les deux matricules de A partagent le même préfixe d'école — donc
+        # une numérotation CONTIGUË chez A malgré la création intercalée de B.
+        assert m_a1.startswith(f"{PREFIXE_ELEVE}-") and m_a1.endswith("-00001")
+        assert m_a2.endswith("-00002")
+        assert m_a1.rsplit("-", 1)[0] == m_a2.rsplit("-", 1)[0]
 
     def test_deux_ecoles_demarrent_toutes_les_deux_a_1(self, client: TestClient, db: Session):
         a, b = Ecole(db, "NA"), Ecole(db, "NB")
@@ -362,3 +365,18 @@ class TestParentPasDePriseDeControle:
 
         db.refresh(parent)
         assert verify_password("nouveauMotDePasse", parent.mot_de_passe)
+
+
+def test_matricule_reste_court_pour_une_ecole_a_code_long(db: Session):
+    """Une école au code très long ne déborde pas de la colonne matricule
+    (String(30)) : le code est nettoyé (alphanumérique) et tronqué à 12."""
+    etab = Etablissement(
+        code="GROUPE-SCOLAIRE-EXCELLENCE-DE-CONAKRY-2026",
+        nom="Groupe Scolaire Excellence de Conakry", type_etablissement="COMPLEXE",
+    )
+    db.add(etab); db.commit(); db.refresh(etab)
+
+    m = generer_matricule(db, Eleve, PREFIXE_ELEVE, etab.etablissement_id)
+    assert len(m) <= 30
+    assert m.endswith("-00001")
+    assert m.startswith("ELV-GROUPESCOLAI-")  # code nettoyé + tronqué à 12
