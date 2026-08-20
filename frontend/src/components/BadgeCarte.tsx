@@ -50,6 +50,19 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: B
     const [fetchedClasses, setFetchedClasses] = useState<string>('');
     const [fetchedMatieres, setFetchedMatieres] = useState<string>('');
     const [isLoadingAffectations, setIsLoadingAffectations] = useState(false);
+    // Contenu LISIBLE du QR (nom, matricule, classe, école, parent…), calculé
+    // par le backend depuis les vraies données. À défaut (chargement/erreur),
+    // le QR retombe sur le matricule seul — jamais vide.
+    const [qrTexte, setQrTexte] = useState<string>('');
+
+    useEffect(() => {
+        if (!agent.matricule) return;
+        let annule = false;
+        api.get(`/api/cartes/contenu-qr/${encodeURIComponent(agent.matricule)}`)
+            .then(res => { if (!annule && res.data?.texte) setQrTexte(res.data.texte); })
+            .catch(() => { /* fallback matricule */ });
+        return () => { annule = true; };
+    }, [agent.matricule]);
 
     const isEnseignant = 
         agent.role === 'ENSEIGNANT' || 
@@ -330,7 +343,7 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: B
                         {showQrCode && (
                             <div style={{ background: 'white', padding: '5px', borderRadius: '8px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                                 <QRCodeSVG 
-                                    value={agent.matricule} 
+                                    value={qrTexte || agent.matricule} 
                                     size={isCrowded ? 65 : 80}
                                     bgColor={"#ffffff"}
                                     fgColor={"#0f172a"}
@@ -662,7 +675,7 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: B
                          }}>
                              <div style={{ background: 'white', padding: '4px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
                                  <QRCodeSVG 
-                                     value={agent.matricule} 
+                                     value={qrTexte || agent.matricule} 
                                      size={format === 'compact' ? (isCrowded ? 50 : 65) : (isCrowded ? 65 : 85)}
                                      bgColor={"#ffffff"}
                                      fgColor={"#0f172a"}

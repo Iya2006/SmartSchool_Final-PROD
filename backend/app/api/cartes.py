@@ -1,30 +1,21 @@
 """
-SMARTSCHOOL API — Vérification d'une carte scolaire au SCAN.
+SMARTSCHOOL — Contenu du QR d'une carte scolaire.
 
-Le QR d'une carte (élève ou enseignant) encode le MATRICULE. Scanner la carte
-ne doit plus se limiter à afficher ce matricule : cet endpoint le résout en une
-FICHE d'identité lisible, en respectant deux garde-fous non négociables :
+Le QR d'une carte (élève / enseignant) n'encode plus le seul matricule : il porte
+un TEXTE lisible, de sorte qu'un simple lecteur de QR (téléphone) affiche
+directement l'identité et les infos utiles. Ce texte est calculé ICI, à partir
+des données réelles de l'établissement — jamais un ID brut ni une valeur codée
+en dur, et jamais les données d'une autre école (isolation via
+`require_etablissement`, tiré du JWT).
 
-1. Isolation multi-école (Lot 9) : le matricule est résolu UNIQUEMENT dans
-   l'établissement de l'utilisateur connecté (`require_etablissement`, tiré du
-   JWT — jamais du frontend). Scanner la carte d'une autre école → 404, même si
-   le matricule est devinable. La ressource ne « fuit » jamais.
-
-2. Données sensibles (Partie 5) : l'identité, la classe et l'établissement sont
-   toujours renvoyés ; le CONTACT (téléphone/adresse du parent ou de
-   l'enseignant) n'est renvoyé qu'aux rôles autorisés à le voir. Sinon il est
-   masqué (`contact_masque=true`), la carte reste identifiable sans exposer les
-   coordonnées personnelles à n'importe quel porteur de scanner.
-
-Toutes les valeurs proviennent de la base (Etablissement.nom, AnneeScolaire.
-libelle, Classe.libelle, Affectation…) — jamais d'un ID brut ni d'un libellé
-codé en dur.
+Ce n'est PAS un écran/module de scan : c'est uniquement le CONTENU du QR, que le
+composant carte (frontend) récupère au moment d'imprimer/afficher la carte.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.auth import get_current_user, require_etablissement, ADMIN_TIER_ROLES
+from app.core.auth import require_etablissement
 from app.models.academique import (
     Eleve, Enseignant, Inscription, Classe, AnneeScolaire, Etablissement,
     EleveParent, Parent, Affectation, Matiere, Niveau,
@@ -32,25 +23,13 @@ from app.models.academique import (
 
 router = APIRouter(prefix="/api/cartes", tags=["Cartes scolaires (QR)"])
 
-# Rôles autorisés à voir les COORDONNÉES (téléphone/adresse) sur une fiche
-# scannée : la direction et le secrétariat/surveillance qui gèrent réellement
-# les personnes. Les autres voient l'identité et la classe, pas le contact.
-ROLES_VOIR_CONTACT = ADMIN_TIER_ROLES | {
-    "DIRECTEUR", "DIRECTRICE", "SECRETAIRE", "CENSEUR",
-    "SURVEILLANT", "SURVEILLANT_GENERAL", "COMPTABLE",
-}
 
-
-def _peut_voir_contact(current_user: dict) -> bool:
-    return (current_user.get("role") or "").upper() in ROLES_VOIR_CONTACT
-
-
-def _fiche_eleve(db: Session, eleve: Eleve, etablissement_id: int, voir_contact: bool) -> dict:
+def _texte_eleve(db: Session, eleve: Eleve, etablissement_id: int) -> str:
     etab = db.query(Etablissement.nom).filter(
         Etablissement.etablissement_id == etablissement_id
     ).first()
+    ecole = etab[0] if etab else "École"
 
-    # Classe + année ACTUELLES : inscription active la plus récente de l'élève.
     ligne = (
         db.query(Classe.libelle, AnneeScolaire.libelle)
         .select_from(Inscription)
@@ -60,69 +39,55 @@ def _fiche_eleve(db: Session, eleve: Eleve, etablissement_id: int, voir_contact:
         .order_by(AnneeScolaire.annee_id.desc())
         .first()
     )
-    classe_libelle = ligne[0] if ligne else None
-    annee_libelle = ligne[1] if ligne else None
+    classe = ligne[0] if ligne else "—"
+    annee = ligne[1] if ligne else "—"
 
-    parent = None
-    if voir_contact:
-        lien = (
-            db.query(Parent)
-            .join(EleveParent, EleveParent.parent_id == Parent.parent_id)
-            .filter(EleveParent.eleve_id == eleve.eleve_id)
-            .order_by(EleveParent.est_contact_principal.desc())
-            .first()
-        )
-        if lien:
-            parent = {
-                "nom": f"{lien.prenom or ''} {lien.nom or ''}".strip() or None,
-                "telephone": lien.telephone_1 or lien.telephone_2 or None,
-                "adresse": lien.adresse or lien.quartier or None,
-            }
+    parent = (
+        db.query(Parent)
+        .join(EleveParent, EleveParent.parent_id == Parent.parent_id)
+        .filter(EleveParent.eleve_id == eleve.eleve_id)
+        .order_by(EleveParent.est_contact_principal.desc())
+        .first()
+    )
 
-    return {
-        "type": "ELEVE",
-        "identite": {
-            "nom": eleve.nom,
-            "prenom": eleve.prenom,
-            "matricule": eleve.matricule,
-        },
-        "scolarite": {
-            "classe": classe_libelle,
-            "annee_scolaire": annee_libelle,
-            "etablissement": etab[0] if etab else None,
-        },
-        "parent": parent,
-        "contact_masque": not voir_contact,
-    }
+    lignes = [
+        f"ÉLÈVE — {ecole}",
+        f"{eleve.prenom} {eleve.nom}",
+        f"Matricule : {eleve.matricule}",
+        f"Classe : {classe} ({annee})",
+    ]
+    if parent:
+        lignes.append(f"Parent : {(parent.prenom or '')} {(parent.nom or '')}".rstrip())
+        tel = parent.telephone_1 or parent.telephone_2
+        if tel:
+            lignes.append(f"Tél parent : {tel}")
+        adr = parent.adresse or parent.quartier
+        if adr:
+            lignes.append(f"Adresse : {adr}")
+    return "\n".join(lignes)
 
 
-def _fiche_enseignant(db: Session, ens: Enseignant, etablissement_id: int, voir_contact: bool) -> dict:
+def _texte_enseignant(db: Session, ens: Enseignant, etablissement_id: int) -> str:
     etab = db.query(Etablissement.nom).filter(
         Etablissement.etablissement_id == etablissement_id
     ).first()
+    ecole = etab[0] if etab else "École"
 
-    # Classes + matières RÉELLES via les affectations actives (jamais codées en dur).
-    lignes = (
+    lignes_aff = (
         db.query(Classe.libelle, Matiere.libelle)
         .select_from(Affectation)
         .join(Classe, Affectation.classe_id == Classe.classe_id)
         .outerjoin(Matiere, Affectation.matiere_id == Matiere.matiere_id)
-        .filter(
-            Affectation.enseignant_id == ens.enseignant_id,
-            Affectation.statut == "ACTIVE",
-        )
+        .filter(Affectation.enseignant_id == ens.enseignant_id, Affectation.statut == "ACTIVE")
         .all()
     )
     classes, matieres = [], []
-    for classe_lib, matiere_lib in lignes:
-        if classe_lib and classe_lib not in classes:
-            classes.append(classe_lib)
-        if matiere_lib and matiere_lib not in matieres:
-            matieres.append(matiere_lib)
-
-    # Classes de MATERNELLE dont il est titulaire (lien par professeur principal,
-    # sans affectation matière) — sinon un instituteur de maternelle apparaîtrait
-    # sans aucune classe.
+    for c_lib, m_lib in lignes_aff:
+        if c_lib and c_lib not in classes:
+            classes.append(c_lib)
+        if m_lib and m_lib not in matieres:
+            matieres.append(m_lib)
+    # Classes de maternelle (titulaire par professeur principal, sans matière).
     for (lib,) in db.query(Classe.libelle).join(
         Niveau, Classe.niveau_id == Niveau.niveau_id
     ).filter(
@@ -132,53 +97,46 @@ def _fiche_enseignant(db: Session, ens: Enseignant, etablissement_id: int, voir_
         if lib and lib not in classes:
             classes.append(lib)
 
-    return {
-        "type": "ENSEIGNANT",
-        "identite": {
-            "nom": ens.nom,
-            "prenom": ens.prenom,
-            "matricule": ens.matricule,
-        },
-        "contact": (
-            {"telephone": ens.telephone or None, "adresse": ens.adresse or None}
-            if voir_contact else None
-        ),
-        "etablissement": etab[0] if etab else None,
-        "classes": sorted(classes),
-        "matieres": sorted(matieres),
-        "contact_masque": not voir_contact,
-    }
+    lignes = [
+        f"ENSEIGNANT — {ecole}",
+        f"{ens.prenom} {ens.nom}",
+        f"Matricule : {ens.matricule}",
+    ]
+    if ens.telephone:
+        lignes.append(f"Tél : {ens.telephone}")
+    if ens.adresse:
+        lignes.append(f"Adresse : {ens.adresse}")
+    if classes:
+        lignes.append(f"Classes : {', '.join(sorted(classes))}")
+    if matieres:
+        lignes.append(f"Matières : {', '.join(sorted(matieres))}")
+    return "\n".join(lignes)
 
 
-@router.get("/verifier/{matricule}")
-def verifier_carte(
+@router.get("/contenu-qr/{matricule}")
+def contenu_qr(
     matricule: str,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Résout le matricule scané en fiche d'identité, DANS l'école appelante.
+    """Texte lisible à encoder dans le QR de la carte (élève ou enseignant).
 
-    Renvoie une fiche ÉLÈVE ou ENSEIGNANT selon le matricule. 404 si le matricule
-    n'appartient à personne DE CETTE ÉCOLE (isolation multi-école).
+    Résolu DANS l'établissement appelant uniquement (404 sinon).
     """
     matricule = (matricule or "").strip()
     if not matricule:
-        raise HTTPException(404, "Carte illisible.")
-
-    voir_contact = _peut_voir_contact(current_user)
+        raise HTTPException(404, "Matricule manquant.")
 
     eleve = db.query(Eleve).filter(
         Eleve.matricule == matricule, Eleve.etablissement_id == etablissement_id
     ).first()
     if eleve:
-        return _fiche_eleve(db, eleve, etablissement_id, voir_contact)
+        return {"type": "ELEVE", "texte": _texte_eleve(db, eleve, etablissement_id)}
 
     ens = db.query(Enseignant).filter(
         Enseignant.matricule == matricule, Enseignant.etablissement_id == etablissement_id
     ).first()
     if ens:
-        return _fiche_enseignant(db, ens, etablissement_id, voir_contact)
+        return {"type": "ENSEIGNANT", "texte": _texte_enseignant(db, ens, etablissement_id)}
 
-    # Ni élève ni enseignant de cette école : 404 (ne révèle pas une carte d'ailleurs).
     raise HTTPException(404, "Carte inconnue dans cet établissement.")
