@@ -2851,17 +2851,22 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
     # ── INFOS ÉLÈVE (+ photo si disponible) ──
     y -= 0.7 * cm
     photo_dessinee = False
+    photo_bottom = None
     if getattr(eleve, "photo_url", None):
         photo_path = os.path.join(backend_root, eleve.photo_url.lstrip("/").replace("/", os.sep))
         if os.path.isfile(photo_path):
             try:
+                # Cadrée dans le coin haut-droit du bloc élève : son haut affleure
+                # la ligne « Élève : … » et elle descend en regard de Matricule/Année.
+                photo_bottom = y - 1.85 * cm
                 pdf.drawImage(
-                    ImageReader(photo_path), largeur - 1.5 * cm - 2 * cm, y - 1.4 * cm,
-                    width=2 * cm, height=2.5 * cm, preserveAspectRatio=True, mask='auto', anchor='c'
+                    ImageReader(photo_path), largeur - 1.5 * cm - 2 * cm, photo_bottom,
+                    width=2 * cm, height=2.4 * cm, preserveAspectRatio=True, mask='auto', anchor='c'
                 )
                 photo_dessinee = True
             except Exception:
                 photo_dessinee = False
+                photo_bottom = None
 
     pdf.setFont(tmpl["police_corps"], 9)
     pdf.setFillColorRGB(0, 0, 0)
@@ -2875,8 +2880,10 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
         y -= 0.4 * cm
         pdf.drawString(1.8 * cm, y, f"Taux de présence : {taux_presence}%")
 
-    if photo_dessinee:
-        y -= 0.5 * cm  # la photo dépasse sous le texte, garder de la marge avant le tableau
+    if photo_dessinee and photo_bottom is not None:
+        # Le tableau démarre TOUJOURS sous la photo, quel que soit le nombre de
+        # lignes d'infos (avec ou sans taux de présence) — plus de chevauchement.
+        y = min(y - 0.3 * cm, photo_bottom - 0.2 * cm)
 
     # ── TABLEAU DES NOTES ──
     y -= 0.8 * cm
@@ -3143,34 +3150,38 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
         pdf.setFont(tmpl["police_titre"], 8)
         pdf.setFillColorRGB(*cp)
         pdf.drawString(1.8 * cm, y, "Performances par matière (vs moyenne de classe)")
-        y -= 0.35 * cm
-        chart_h = min(0.38 * cm * len(lignes), y - 4.2 * cm)
-        chart_top = y
-        bar_row_h = chart_h / len(lignes) if lignes else 0.3 * cm
+        y -= 0.5 * cm  # respiration sous le titre
+        n_lignes = len(lignes)
         chart_label_w = 3.2 * cm
         chart_bar_max_w = tab_w - chart_label_w - 1.2 * cm
+        bar_h = 0.14 * cm
+        # Hauteur de ligne UNIFORME et aérée, bornée pour laisser la place à la
+        # note + aux signatures en bas (donc jamais de débordement/chevauchement).
+        row_h = max(0.30 * cm, min(0.44 * cm, (y - 4.4 * cm) / max(n_lignes, 1)))
         for ligne, matiere in lignes:
             moy_e = float(ligne.moyenne_matiere) if ligne.moyenne_matiere is not None else 0
             moy_c = float(ligne.moyenne_classe) if ligne.moyenne_classe is not None else 0
-            by = y - bar_row_h + 0.08 * cm
+            # Barre CENTRÉE verticalement dans sa ligne, libellé aligné dessus.
+            bar_y = (y - row_h) + (row_h - bar_h) / 2
             lbl = (matiere.libelle if matiere else "?")[:18]
             pdf.setFont(tmpl["police_corps"], 6)
             pdf.setFillColorRGB(0.2, 0.2, 0.2)
-            pdf.drawString(marge_gauche, by + 0.05 * cm, lbl)
+            pdf.drawString(marge_gauche, bar_y + bar_h / 2 - 0.055 * cm, lbl)
             bar_x0 = marge_gauche + chart_label_w
             bar_w_e = chart_bar_max_w * min(moy_e, echelle_lettres) / echelle_lettres
             bar_w_c = chart_bar_max_w * min(moy_c, echelle_lettres) / echelle_lettres
             pdf.setFillColorRGB(0.85, 0.85, 0.9)
-            pdf.rect(bar_x0, by - 0.02 * cm, chart_bar_max_w, 0.14 * cm, fill=1, stroke=0)
+            pdf.rect(bar_x0, bar_y, chart_bar_max_w, bar_h, fill=1, stroke=0)
             pdf.setFillColorRGB(*cp)
-            pdf.rect(bar_x0, by - 0.02 * cm, bar_w_e, 0.14 * cm, fill=1, stroke=0)
+            pdf.rect(bar_x0, bar_y, bar_w_e, bar_h, fill=1, stroke=0)
             pdf.setStrokeColorRGB(0.9, 0.3, 0.3)
             pdf.setLineWidth(1)
-            pdf.line(bar_x0 + bar_w_c, by - 0.05 * cm, bar_x0 + bar_w_c, by + 0.17 * cm)
-            y -= bar_row_h
+            pdf.line(bar_x0 + bar_w_c, bar_y - 0.035 * cm, bar_x0 + bar_w_c, bar_y + bar_h + 0.035 * cm)
+            y -= row_h
+        y -= 0.22 * cm  # écart clair AVANT la légende (fini le chevauchement)
         pdf.setFont(tmpl["police_corps"], 5.5)
         pdf.setFillColorRGB(0.5, 0.5, 0.5)
-        pdf.drawString(marge_gauche + chart_label_w, y - 0.05 * cm, "▬ Barre = moyenne élève   |   Trait rouge = moyenne de classe")
+        pdf.drawString(marge_gauche + chart_label_w, y, "▬ Barre = moyenne élève   |   Trait rouge = moyenne de classe")
         y -= 0.35 * cm
 
     # ── NOTE EXPLICATIVE DU CALCUL ──
