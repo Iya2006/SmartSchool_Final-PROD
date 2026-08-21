@@ -241,7 +241,9 @@ export default function Topbar() {
                                     fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap',
                                 }}
                             >
-                                Lecture seule · Revenir à l’année en cours
+                                {/* Libellé compact : le badge d'année jaune indique déjà la
+                                    lecture seule ; le texte long chevauchait la cloche. */}
+                                ↩ Année en cours
                             </button>
                         )}
                     </div>

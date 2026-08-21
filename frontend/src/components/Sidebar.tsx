@@ -25,6 +25,16 @@ export default function Sidebar() {
     const { user, logout } = useAuth();
     const { sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar } = useUI();
     const [unreadCount, setUnreadCount] = useState(0);
+    // Statut « en ligne » affiché dans la carte profil du menu latéral.
+    const [online, setOnline] = useState(true);
+    useEffect(() => {
+        setOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
+        const on = () => setOnline(true);
+        const off = () => setOnline(false);
+        window.addEventListener('online', on);
+        window.addEventListener('offline', off);
+        return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+    }, []);
 
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
     const getPhotoUrl = (url: string | null | undefined) => {
@@ -296,14 +306,27 @@ export default function Sidebar() {
             <div className={styles.sidebarUserCard}>
                 {/* Avatar + Infos — cliquables vers /profil */}
                 <Link href="/profil" style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, textDecoration: 'none' }}>
-                    {/* Avatar */}
-                    <div className={styles.userCardAvatar}>
+                    {/* Avatar + pastille de statut en ligne */}
+                    <div className={styles.userCardAvatar} style={{ position: 'relative' }}>
                         {initials}
+                        <span
+                            title={online ? 'En ligne' : 'Hors ligne'}
+                            style={{
+                                position: 'absolute', bottom: '-2px', right: '-2px',
+                                width: '11px', height: '11px', borderRadius: '50%',
+                                background: online ? '#22c55e' : '#94a3b8',
+                                border: '2px solid var(--bg-elevated, #ffffff)',
+                            }}
+                        />
                     </div>
-                    {/* Infos nom + rôle */}
+                    {/* Infos nom + rôle + statut en ligne */}
                     <div className={styles.userCardInfo}>
                         <p className={styles.userCardName}>{displayName}</p>
                         <p className={styles.userCardRole}>{displayRole}</p>
+                        <p style={{ margin: '2px 0 0', fontSize: '11px', fontWeight: 700, color: online ? '#059669' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: online ? '#22c55e' : '#94a3b8', display: 'inline-block' }} />
+                            {online ? 'En ligne' : 'Hors ligne'}
+                        </p>
                     </div>
                 </Link>
                 {/* Actions rapides */}
