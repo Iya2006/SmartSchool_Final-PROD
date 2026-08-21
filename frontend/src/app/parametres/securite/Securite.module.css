@@ -352,6 +352,24 @@ input:checked + .slider:before {
   align-items: center;
   gap: 20px;
   z-index: 100;
+  max-width: calc(100vw - 24px);
+  box-sizing: border-box;
+}
+
+/* Mobile : largeur AUTO entre 12px de marge, contenu qui s'enroule — la barre
+   reste toujours dans l'écran. */
+@media (max-width: 768px) {
+  .stickyBar {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    max-width: none;
+    border-radius: 18px;
+    bottom: 12px;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: flex-end;
+  }
 }
 
 .stickyDot {
