@@ -580,6 +580,67 @@ async def importer_eleves(
     }
 
 
+@router.get("/parents-existants")
+def parents_existants(
+    search: Optional[str] = None,
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Parents DÉJÀ enregistrés dans CET établissement — alimente la liste
+    déroulante « Parent existant » du formulaire d'inscription.
+
+    Objectif : rattacher un nouvel élève à un parent existant (2e enfant d'une
+    même famille) au lieu de recréer un compte. Retourne l'identité + les
+    contacts (pour l'aperçu « œil ») et le nombre d'enfants déjà rattachés dans
+    cette école. Toujours borné à l'établissement appelant — jamais les parents
+    d'une autre école. Anti-N+1 : le compte d'enfants est agrégé en une requête.
+
+    NB : déclaré AVANT `GET /{eleve_id}` — sinon Starlette tenterait de lire
+    « parents-existants » comme un eleve_id entier (422)."""
+    q = db.query(Parent).filter(
+        Parent.etablissement_id == etablissement_id,
+        Parent.statut == "ACTIF",
+    )
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        q = q.filter(or_(
+            Parent.nom.ilike(like),
+            Parent.prenom.ilike(like),
+            Parent.telephone_1.ilike(like),
+            Parent.telephone_2.ilike(like),
+        ))
+    parents = q.order_by(Parent.nom, Parent.prenom).limit(min(limit, 100)).all()
+    if not parents:
+        return []
+
+    parent_ids = [p.parent_id for p in parents]
+    comptes = dict(
+        db.query(EleveParent.parent_id, func.count(EleveParent.eleve_parent_id))
+        .join(Eleve, Eleve.eleve_id == EleveParent.eleve_id)
+        .filter(
+            EleveParent.parent_id.in_(parent_ids),
+            Eleve.etablissement_id == etablissement_id,
+        )
+        .group_by(EleveParent.parent_id)
+        .all()
+    )
+    return [{
+        "parent_id": p.parent_id,
+        "nom": p.nom,
+        "prenom": p.prenom,
+        "sexe": p.sexe,
+        "telephone_1": p.telephone_1,
+        "telephone_2": p.telephone_2,
+        "email": p.email,
+        "profession": p.profession,
+        "adresse": p.adresse,
+        "quartier": p.quartier,
+        "has_password": bool(p.mot_de_passe),
+        "nb_enfants": int(comptes.get(p.parent_id, 0)),
+    } for p in parents]
+
+
 @router.get("/{eleve_id}", response_model=EleveOut)
 def get_eleve(eleve_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     eleve = db.query(Eleve).filter(
@@ -713,10 +774,16 @@ def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db)
 # INSCRIPTION COMPLÈTE : Élève + Parent en une seule opération
 # ================================================================
 class ParentData(BaseModel):
-    nom: str
-    prenom: str
+    # `parent_id` renseigné = SÉLECTION EXPLICITE d'un parent DÉJÀ enregistré
+    # (liste déroulante « Parent existant » du formulaire) : on rattache ce
+    # parent-là au nouvel élève, sans recréer de compte. Les autres champs sont
+    # alors seulement indicatifs (pré-remplis, non réécrits sur la fiche parent).
+    # `parent_id` absent = création / réutilisation par téléphone, comme avant.
+    parent_id: Optional[int] = None
+    nom: Optional[str] = None
+    prenom: Optional[str] = None
     sexe: Optional[str] = None
-    telephone_1: str
+    telephone_1: Optional[str] = None
     telephone_2: Optional[str] = None
     email: Optional[str] = None
     profession: Optional[str] = None
@@ -839,62 +906,77 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
 
         # 3. Traiter le parent si fourni
         parent_info = None
-        if data.parent and data.parent.telephone_1:
-            # Un parent a UNE FICHE PAR ÉCOLE (migration 2026_08_multi_01).
-            # La recherche est donc bornée à l'établissement appelant :
-            #
-            #   - même école, numéro déjà connu  -> c'est un frère ou une sœur,
-            #     on réutilise la fiche et on la met à jour ;
-            #   - autre école                    -> invisible ici, cette école
-            #     crée sa propre fiche.
-            #
-            # Ce filtre remplace un montage plus fragile : la fiche d'une autre
-            # école était réutilisée telle quelle, et il avait fallu un contrôle
-            # séparé pour empêcher qu'un administrateur ne réécrive le mot de
-            # passe d'un parent d'ailleurs — donc ne prenne son compte. Ici le
-            # cas ne peut plus se présenter : cette fiche n'est jamais chargée.
-            existing_parent = db.query(Parent).filter(
-                Parent.telephone_1 == data.parent.telephone_1,
-                Parent.etablissement_id == etablissement_id,
-            ).first()
+        _parent_fourni = data.parent and (
+            data.parent.parent_id
+            or (data.parent.telephone_1 and data.parent.telephone_1.strip())
+        )
+        if _parent_fourni:
+            parent = None
+            parent_cree = False
 
-            if existing_parent:
-                parent = existing_parent
-                # Mettre à jour le mot de passe si fourni
-                if data.parent.mot_de_passe:
+            if data.parent.parent_id:
+                # ── PARENT EXISTANT SÉLECTIONNÉ EXPLICITEMENT ──────────────────
+                # Le formulaire a proposé la liste des parents déjà enregistrés ;
+                # l'utilisateur en a choisi un (mode « Parent existant »). On le
+                # rattache tel quel — c'est CE qui évite de recréer un compte
+                # pour un même parent (2e enfant de la même famille). Borné à
+                # l'établissement appelant : jamais un parent d'une autre école.
+                parent = db.query(Parent).filter(
+                    Parent.parent_id == data.parent.parent_id,
+                    Parent.etablissement_id == etablissement_id,
+                ).first()
+                if not parent:
+                    raise HTTPException(404, "Parent sélectionné introuvable pour cet établissement")
+                # On ne réécrit PAS la fiche d'un parent existant depuis
+                # l'inscription d'un enfant (ses autres enfants dépendent de ces
+                # infos). Seule exception : lui donner un mot de passe s'il n'en
+                # avait aucun (compte pas encore ouvert).
+                if data.parent.mot_de_passe and not parent.mot_de_passe:
                     parent.mot_de_passe = hash_password(data.parent.mot_de_passe)
-                # Mettre à jour les infos si elles étaient vides
-                if data.parent.email and not parent.email:
-                    parent.email = data.parent.email
-                if data.parent.profession and not parent.profession:
-                    parent.profession = data.parent.profession
             else:
-                # Aucun parent ne porte ce téléphone : on en crée un. Son
-                # e-mail sert lui aussi à se connecter, il doit donc être libre
-                # (le téléphone, lui, vient d'être vérifié juste au-dessus).
-                exiger_identifiants_libres(
-                    db, [data.parent.email], etablissement_id=etablissement_id
-                )
-                parent = Parent(
-                    # Le parent appartient a l'ecole de l'appelant. Une meme
-                    # personne ayant des enfants ailleurs a une fiche par ecole.
-                    etablissement_id=etablissement_id,
-                    nom=data.parent.nom,
-                    prenom=data.parent.prenom,
-                    sexe=data.parent.sexe,
-                    telephone_1=data.parent.telephone_1,
-                    telephone_2=data.parent.telephone_2,
-                    email=data.parent.email,
-                    profession=data.parent.profession,
-                    adresse=data.parent.adresse,
-                    quartier=data.parent.quartier,
-                    mot_de_passe=hash_password(data.parent.mot_de_passe) if data.parent.mot_de_passe else None,
-                    statut="ACTIF",
-                )
-                db.add(parent)
-                db.flush()
+                # ── PAS DE SÉLECTION : réutilisation par téléphone, sinon création ──
+                # Un parent a UNE FICHE PAR ÉCOLE (migration 2026_08_multi_01).
+                # La recherche est bornée à l'établissement appelant :
+                #   - même école, numéro déjà connu -> frère/sœur, on réutilise ;
+                #   - autre école                   -> invisible, cette école crée sa fiche.
+                existing_parent = db.query(Parent).filter(
+                    Parent.telephone_1 == data.parent.telephone_1,
+                    Parent.etablissement_id == etablissement_id,
+                ).first()
 
-            # 4. Créer le lien Elève-Parent
+                if existing_parent:
+                    parent = existing_parent
+                    if data.parent.mot_de_passe:
+                        parent.mot_de_passe = hash_password(data.parent.mot_de_passe)
+                    if data.parent.email and not parent.email:
+                        parent.email = data.parent.email
+                    if data.parent.profession and not parent.profession:
+                        parent.profession = data.parent.profession
+                else:
+                    # Aucun parent ne porte ce téléphone : on en crée un. Son
+                    # e-mail sert lui aussi à se connecter, il doit donc être libre.
+                    exiger_identifiants_libres(
+                        db, [data.parent.email], etablissement_id=etablissement_id
+                    )
+                    parent = Parent(
+                        etablissement_id=etablissement_id,
+                        nom=data.parent.nom,
+                        prenom=data.parent.prenom,
+                        sexe=data.parent.sexe,
+                        telephone_1=data.parent.telephone_1,
+                        telephone_2=data.parent.telephone_2,
+                        email=data.parent.email,
+                        profession=data.parent.profession,
+                        adresse=data.parent.adresse,
+                        quartier=data.parent.quartier,
+                        mot_de_passe=hash_password(data.parent.mot_de_passe) if data.parent.mot_de_passe else None,
+                        statut="ACTIF",
+                    )
+                    db.add(parent)
+                    db.flush()
+                    parent_cree = True
+
+            # 4. Créer le lien Elève-Parent (idempotent)
             existing_link = db.query(EleveParent).filter(
                 EleveParent.eleve_id == eleve.eleve_id,
                 EleveParent.parent_id == parent.parent_id
@@ -909,17 +991,12 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
                 )
                 db.add(link)
 
-            # La fiche renvoyée relève forcément de l'établissement appelant :
-            # la recherche y est bornée, une fiche d'ailleurs n'est jamais
-            # chargée. Le détour qui masquait l'identité d'un parent d'une autre
-            # école n'a plus d'objet — il protégeait d'une fuite désormais
-            # impossible par construction.
             parent_info = {
                 "parent_id": parent.parent_id,
                 "nom": parent.nom,
                 "prenom": parent.prenom,
-                "telephone": data.parent.telephone_1,
-                "is_new": not bool(existing_parent),
+                "telephone": parent.telephone_1,
+                "is_new": parent_cree,
             }
 
         # 5. Créer les factures initiales (si applicables) — le montant envoyé
