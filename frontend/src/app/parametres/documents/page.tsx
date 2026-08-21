@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import SettingsLayout from '@/components/SettingsLayout';
 import api from '@/lib/api';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import styles from './Documents.module.css';
 
 // ─── Constantes ─────────────────────────────────────────────────────────────
@@ -129,6 +130,7 @@ const ToggleItem = ({ label, desc, checked, onChange, icon: Icon }: any) => (
 
 // ─── Page Principale ────────────────────────────────────────────────────────
 export default function DocumentsPage() {
+    const isMobile = useIsMobile();
     const [activeTab, setActiveTab] = useState<TabId>('modeles');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -631,9 +633,12 @@ export default function DocumentsPage() {
                 {hasChanges && (
                     <motion.div
                         className={styles.stickyBar}
-                        initial={{ y: 100, opacity: 0, x: '-50%' }}
-                        animate={{ y: 0, opacity: 1, x: '-50%' }}
-                        exit={{ y: 100, opacity: 0, x: '-50%' }}
+                        /* Sur mobile la barre est positionnée par left/right (CSS) :
+                           le centrage translateX(-50%) de framer la décalait alors
+                           hors de l'écran à gauche. On neutralise donc x en mobile. */
+                        initial={{ y: 100, opacity: 0, x: isMobile ? 0 : '-50%' }}
+                        animate={{ y: 0, opacity: 1, x: isMobile ? 0 : '-50%' }}
+                        exit={{ y: 100, opacity: 0, x: isMobile ? 0 : '-50%' }}
                     >
                         <div className={styles.stickyContent}>
                             <div className={styles.stickyLeft}>
