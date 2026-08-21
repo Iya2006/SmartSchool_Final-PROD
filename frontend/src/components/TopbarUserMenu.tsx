@@ -18,6 +18,17 @@ export default function TopbarUserMenu() {
     const router = useRouter();
     const [dropdownOpen, setDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    // Statut « en ligne » porté par une pastille sur l'avatar (remplace le badge
+    // « En ligne — à jour » du header, qui masquait l'année en cours).
+    const [online, setOnline] = useState(true);
+    useEffect(() => {
+        setOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
+        const on = () => setOnline(true);
+        const off = () => setOnline(false);
+        window.addEventListener('online', on);
+        window.addEventListener('offline', off);
+        return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+    }, []);
 
     // Fermer au clic extérieur
     useEffect(() => {
@@ -54,8 +65,9 @@ export default function TopbarUserMenu() {
                 onMouseLeave={e => e.currentTarget.style.background = 'none'}
                 title={displayName}
             >
-                {/* Avatar initiales uniquement */}
+                {/* Avatar initiales + pastille de statut en ligne */}
                 <div style={{
+                    position: 'relative',
                     width: '36px', height: '36px', borderRadius: '10px',
                     background: 'linear-gradient(135deg, var(--brand-primary), var(--brand-secondary))',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -64,6 +76,15 @@ export default function TopbarUserMenu() {
                     flexShrink: 0,
                 }}>
                     {initials}
+                    <span
+                        title={online ? 'En ligne' : 'Hors ligne'}
+                        style={{
+                            position: 'absolute', bottom: '-2px', right: '-2px',
+                            width: '11px', height: '11px', borderRadius: '50%',
+                            background: online ? '#22c55e' : '#94a3b8',
+                            border: '2px solid var(--bg-elevated, #ffffff)',
+                        }}
+                    />
                 </div>
                 <ChevronDown size={13} color="var(--text-muted)" style={{
                     transition: 'transform 0.2s ease',
@@ -90,6 +111,11 @@ export default function TopbarUserMenu() {
                         </p>
                         <p style={{ margin: '2px 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
                             {user?.email || user?.telephone || ''}
+                        </p>
+                        {/* Statut en ligne écrit directement dans le menu. */}
+                        <p style={{ margin: '6px 0 0', fontSize: '12px', fontWeight: 700, color: online ? '#059669' : '#64748b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: online ? '#22c55e' : '#94a3b8', display: 'inline-block' }} />
+                            {online ? 'En ligne' : 'Hors ligne'}
                         </p>
                     </div>
 

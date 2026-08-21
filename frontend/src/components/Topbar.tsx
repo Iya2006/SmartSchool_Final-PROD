@@ -220,7 +220,11 @@ export default function Topbar() {
                                 }}
                             >
                                 {annees.map(a => (
-                                    <option key={a.annee_id} value={a.annee_id}>
+                                    // Couleur EXPLICITE : le select hérite du texte blanc (badge
+                                    // vert), donc sans ça les options s'affichaient blanc sur blanc
+                                    // dans le menu déroulant (invisibles sauf au survol).
+                                    <option key={a.annee_id} value={a.annee_id}
+                                        style={{ color: '#0f172a', background: '#ffffff' }}>
                                         {a.libelle}{a.est_courante === 'O' ? ' — en cours' : ''}
                                     </option>
                                 ))}
