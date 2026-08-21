@@ -4048,6 +4048,85 @@ def payer_salaire_employe(data: dict, db: Session = Depends(get_db), etablisseme
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/salaires/historique")
+def historique_salaires(
+    mois: Optional[str] = None,        # "2026-06" (mois CONCERNÉ par le salaire)
+    search: Optional[str] = None,      # nom de l'employé (insensible aux accents)
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Historique des salaires versés (enseignants + personnel) de CETTE école.
+
+    Source : les dépenses de catégorie SALAIRES (porteuses de `etablissement_id`
+    → isolation directe), enrichies du bulletin de paie lié (mois, mode, statut).
+    Filtrable par mois concerné et cherchable par nom. Aucune valeur en dur :
+    montants, mois et noms viennent de la base.
+    """
+    depenses = db.query(Depense).filter(
+        Depense.etablissement_id == etablissement_id,
+        Depense.categorie == "SALAIRES",
+    ).order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).all()
+
+    # Préchargements en lot (jamais une requête par ligne).
+    ref_ids = [int(d.reference) for d in depenses if d.reference and str(d.reference).isdigit()]
+    bulletins = {}
+    if ref_ids:
+        for b in db.query(BulletinPaie).filter(BulletinPaie.bulletin_id.in_(ref_ids)).all():
+            bulletins[b.bulletin_id] = b
+
+    ens_ids, pers_ids = set(), set()
+    for d in depenses:
+        f = d.fournisseur or ""
+        if f.startswith("ENS_") and f[4:].isdigit():
+            ens_ids.add(int(f[4:]))
+        elif f.startswith("PERS_") and f[5:].isdigit():
+            pers_ids.add(int(f[5:]))
+    noms = {}
+    if ens_ids:
+        for e in db.query(Enseignant).filter(
+            Enseignant.enseignant_id.in_(ens_ids), Enseignant.etablissement_id == etablissement_id
+        ).all():
+            noms[f"ENS_{e.enseignant_id}"] = (f"{e.prenom} {e.nom}".strip(), "Enseignant")
+    if pers_ids:
+        for u in db.query(Utilisateur).filter(
+            Utilisateur.utilisateur_id.in_(pers_ids), Utilisateur.etablissement_id == etablissement_id
+        ).all():
+            noms[f"PERS_{u.utilisateur_id}"] = (f"{u.prenom} {u.nom}".strip(), (u.role or "Personnel").title())
+
+    lignes = []
+    for d in depenses:
+        b = bulletins.get(int(d.reference)) if (d.reference and str(d.reference).isdigit()) else None
+        nom, type_emp = noms.get(d.fournisseur or "", (None, None))
+        if not nom:  # employé supprimé : on retombe sur le libellé « Salaire {nom} — {mois} »
+            brut = (d.libelle or "").replace("Salaire ", "")
+            nom = brut.split("—")[0].strip() or "—"
+        mois_c = b.mois_concerne if b else (
+            d.libelle.rsplit("—", 1)[-1].strip() if d.libelle and "—" in d.libelle else None
+        )
+        lignes.append({
+            "depense_id": d.depense_id,
+            "employe": nom,
+            "type": type_emp or "—",
+            "mois": mois_c,
+            "montant": float(d.montant or 0),
+            "date_paiement": str(d.date_depense) if d.date_depense else None,
+            "mode_paiement": (b.mode_paiement if b else None) or d.mode_paiement,
+            "statut": (b.statut if b else None) or d.statut,
+        })
+
+    if mois:
+        lignes = [l for l in lignes if l["mois"] == mois]
+    if search:
+        s = normaliser_terme(search)
+        lignes = [l for l in lignes if s in normaliser_terme(l["employe"] or "")]
+
+    return {
+        "total": sum(l["montant"] for l in lignes),
+        "nombre": len(lignes),
+        "paiements": lignes,
+    }
+
+
 JOURS_OUVRABLES_MOIS = 26  # convention pour le taux journalier de retenue/absence
 
 
