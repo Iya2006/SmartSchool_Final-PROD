@@ -4,7 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock, Info } from 'lucide-react';
+import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock, Info, X, Search, UserCheck } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
@@ -49,6 +49,18 @@ export default function NouveauEleve() {
     const [initialLoading, setInitialLoading] = useState(true);
     const [showPassword, setShowPassword] = useState(false);
     const [resultData, setResultData] = useState<any>(null);
+
+    // ── Parent existant vs nouveau parent ──────────────────────────────────
+    // Pour éviter de recréer un compte parent quand un même parent a déjà un
+    // enfant dans l'école (2e enfant de la famille). En mode « existant », on
+    // choisit un parent déjà enregistré et le nouvel élève lui est rattaché.
+    const [parentMode, setParentMode] = useState<'nouveau' | 'existant'>('nouveau');
+    const [existingParents, setExistingParents] = useState<any[]>([]);
+    const [parentSearch, setParentSearch] = useState('');
+    const [parentsLoading, setParentsLoading] = useState(false);
+    const [selectedParentId, setSelectedParentId] = useState<number | null>(null);
+    const [selectedParent, setSelectedParent] = useState<any>(null);
+    const [previewParent, setPreviewParent] = useState<any>(null); // aperçu « œil »
 
     const [formData, setFormData] = useState({
         nom: '', prenom: '', date_naissance: '', sexe: 'M',
@@ -103,6 +115,48 @@ export default function NouveauEleve() {
         };
         fetchData();
     }, []);
+
+    // Charger les parents déjà enregistrés (mode « Parent existant »), avec un
+    // petit délai anti-rebond sur la recherche pour ne pas requêter à chaque
+    // frappe.
+    useEffect(() => {
+        if (parentMode !== 'existant') return;
+        let annule = false;
+        setParentsLoading(true);
+        const t = setTimeout(() => {
+            const q = parentSearch.trim() ? `?search=${encodeURIComponent(parentSearch.trim())}` : '';
+            api.get(`/api/eleves/parents-existants${q}`)
+                .then(res => { if (!annule) setExistingParents(res.data || []); })
+                .catch(() => { if (!annule) setExistingParents([]); })
+                .finally(() => { if (!annule) setParentsLoading(false); });
+        }, 250);
+        return () => { annule = true; clearTimeout(t); };
+    }, [parentMode, parentSearch]);
+
+    // Sélectionner un parent existant : remplir automatiquement la fiche et
+    // retenir son id pour que le nouvel élève lui soit directement rattaché.
+    const choisirParent = (p: any) => {
+        setSelectedParentId(p.parent_id);
+        setSelectedParent(p);
+        setPreviewParent(null);
+        setFormData(prev => ({
+            ...prev,
+            parent_nom: p.nom || '',
+            parent_prenom: p.prenom || '',
+            parent_sexe: p.sexe || 'M',
+            parent_telephone: p.telephone_1 || '',
+            parent_telephone_2: p.telephone_2 || '',
+            parent_email: p.email || '',
+            parent_profession: p.profession || '',
+            parent_adresse: p.adresse || '',
+            parent_quartier: p.quartier || '',
+        }));
+    };
+
+    const deselectionnerParent = () => {
+        setSelectedParentId(null);
+        setSelectedParent(null);
+    };
 
     // Choisir une classe, c'est connaître sa scolarité. Tant qu'aucune classe
     // n'est choisie, on n'affiche aucun montant : on ne sait pas encore.
@@ -163,8 +217,19 @@ export default function NouveauEleve() {
                 type_inscription: formData.type_inscription,
             };
 
-            // Ajouter les données parent si le téléphone est rempli
-            if (formData.parent_telephone.trim()) {
+            // Parent : soit on rattache un parent EXISTANT (choisi dans la
+            // liste), soit on en crée un nouveau à partir des champs saisis.
+            if (parentMode === 'existant') {
+                if (!selectedParentId) {
+                    setError("Veuillez sélectionner un parent existant, ou passer en « Nouveau parent ».");
+                    setLoading(false);
+                    return;
+                }
+                payload.parent = {
+                    parent_id: selectedParentId,
+                    lien_parente: formData.parent_lien,
+                };
+            } else if (formData.parent_telephone.trim()) {
                 payload.parent = {
                     nom: formData.parent_nom || formData.nom,
                     prenom: formData.parent_prenom,
@@ -476,6 +541,98 @@ export default function NouveauEleve() {
                     </div>
 
                     <div style={{ padding: '28px' }}>
+                        {/* Choix du mode : rattacher un parent EXISTANT (évite les
+                            doublons de comptes) ou en créer un NOUVEAU. */}
+                        <div style={{ display: 'flex', gap: '10px', marginBottom: '22px', flexWrap: 'wrap' }}>
+                            <button type="button" onClick={() => setParentMode('existant')}
+                                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+                                    border: parentMode === 'existant' ? '2px solid #059669' : '1px solid var(--border-light)',
+                                    background: parentMode === 'existant' ? '#ecfdf5' : 'white',
+                                    color: parentMode === 'existant' ? '#065f46' : '#475569' }}>
+                                <UserCheck size={16} /> Parent existant
+                            </button>
+                            <button type="button" onClick={() => { setParentMode('nouveau'); deselectionnerParent(); }}
+                                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '10px', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+                                    border: parentMode === 'nouveau' ? '2px solid #059669' : '1px solid var(--border-light)',
+                                    background: parentMode === 'nouveau' ? '#ecfdf5' : 'white',
+                                    color: parentMode === 'nouveau' ? '#065f46' : '#475569' }}>
+                                <UserPlus size={16} /> Nouveau parent
+                            </button>
+                        </div>
+
+                        {parentMode === 'existant' ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <label style={LABEL}>Rechercher un parent déjà enregistré</label>
+                                <div style={{ position: 'relative' }}>
+                                    <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                                    <input value={parentSearch} onChange={e => setParentSearch(e.target.value)} placeholder="Nom, prénom ou téléphone…" style={{ ...FIELD, paddingLeft: '38px' }} />
+                                </div>
+                            </div>
+
+                            {!selectedParentId && (
+                                <div style={{ border: '1px solid var(--border-light)', borderRadius: '12px', maxHeight: '300px', overflowY: 'auto' }}>
+                                    {parentsLoading ? (
+                                        <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}><Loader2 size={16} className="animate-spin" /> Chargement…</div>
+                                    ) : existingParents.length === 0 ? (
+                                        <div style={{ padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: '13px' }}>Aucun parent trouvé. Passez en « Nouveau parent » pour en créer un.</div>
+                                    ) : existingParents.map(p => (
+                                        <div key={p.parent_id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 14px', borderBottom: '1px solid var(--border-light)' }}>
+                                            <div style={{ width: '38px', height: '38px', borderRadius: '50%', background: '#ecfdf5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, flexShrink: 0, fontSize: '13px' }}>
+                                                {((p.prenom?.[0] || '') + (p.nom?.[0] || '')).toUpperCase()}
+                                            </div>
+                                            <div style={{ flex: 1, minWidth: 0 }}>
+                                                <p style={{ margin: 0, fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{p.prenom} {p.nom}</p>
+                                                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>{p.telephone_1 || '—'} • {p.nb_enfants} enfant{p.nb_enfants > 1 ? 's' : ''} dans l&apos;école</p>
+                                            </div>
+                                            <button type="button" title="Voir les informations du parent" aria-label="Voir les informations du parent" onClick={() => setPreviewParent(p)}
+                                                style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '8px', cursor: 'pointer', color: '#475569', display: 'flex', flexShrink: 0 }}>
+                                                <Eye size={16} />
+                                            </button>
+                                            <button type="button" onClick={() => choisirParent(p)}
+                                                style={{ background: '#059669', border: 'none', borderRadius: '8px', padding: '8px 14px', cursor: 'pointer', color: 'white', fontWeight: 700, fontSize: '13px', flexShrink: 0 }}>
+                                                Choisir
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {selectedParent && (
+                                <div style={{ border: '1px solid #a7f3d0', background: '#ecfdf5', borderRadius: '14px', padding: '18px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                            <CheckCircle2 size={18} color="#059669" />
+                                            <p style={{ margin: 0, fontWeight: 800, color: '#065f46', fontSize: '15px' }}>Parent rattaché : {selectedParent.prenom} {selectedParent.nom}</p>
+                                        </div>
+                                        <button type="button" onClick={deselectionnerParent} style={{ background: 'white', border: '1px solid #d1fae5', borderRadius: '8px', padding: '6px 14px', cursor: 'pointer', fontSize: '12px', fontWeight: 700, color: '#065f46' }}>Changer de parent</button>
+                                    </div>
+                                    <div className="form-grid-2">
+                                        <div><p style={{ margin: 0, fontSize: '11px', color: '#047857', fontWeight: 700, textTransform: 'uppercase' }}>Téléphone</p><p style={{ margin: '2px 0 0', fontSize: '14px', color: '#065f46' }}>{selectedParent.telephone_1 || '—'}</p></div>
+                                        <div><p style={{ margin: 0, fontSize: '11px', color: '#047857', fontWeight: 700, textTransform: 'uppercase' }}>Email</p><p style={{ margin: '2px 0 0', fontSize: '14px', color: '#065f46' }}>{selectedParent.email || '—'}</p></div>
+                                        <div><p style={{ margin: 0, fontSize: '11px', color: '#047857', fontWeight: 700, textTransform: 'uppercase' }}>Profession</p><p style={{ margin: '2px 0 0', fontSize: '14px', color: '#065f46' }}>{selectedParent.profession || '—'}</p></div>
+                                        <div><p style={{ margin: 0, fontSize: '11px', color: '#047857', fontWeight: 700, textTransform: 'uppercase' }}>Quartier</p><p style={{ margin: '2px 0 0', fontSize: '14px', color: '#065f46' }}>{selectedParent.quartier || '—'}</p></div>
+                                    </div>
+                                    <div style={{ marginTop: '16px', maxWidth: '340px' }}>
+                                        <label style={LABEL}>Lien de parenté avec cet élève *</label>
+                                        <select name="parent_lien" value={formData.parent_lien} onChange={handleChange} style={{ ...FIELD, cursor: 'pointer' }}>
+                                            <option value="PERE">Père</option>
+                                            <option value="MERE">Mère</option>
+                                            <option value="TUTEUR">Tuteur</option>
+                                            <option value="ONCLE">Oncle</option>
+                                            <option value="TANTE">Tante</option>
+                                            <option value="FRERE">Frère/Sœur</option>
+                                            <option value="AUTRE">Autre</option>
+                                        </select>
+                                    </div>
+                                    <p style={{ margin: '14px 0 0', fontSize: '12px', color: '#047857', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                        <Info size={14} /> Le nouvel élève sera rattaché à ce compte parent existant — aucun nouveau compte ne sera créé.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                        ) : (
+                        <>
                         <div className="form-grid-2">
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                 <label style={LABEL}>Nom du parent *</label>
@@ -557,8 +714,54 @@ export default function NouveauEleve() {
                                 </button>
                             </div>
                         </div>
+                        </>
+                        )}
                     </div>
                 </motion.div>
+
+                {/* Aperçu « œil » d'un parent avant de le choisir — évite de se
+                    tromper de personne quand plusieurs portent le même nom. */}
+                {previewParent && (
+                    <div onClick={() => setPreviewParent(null)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+                        <div onClick={e => e.stopPropagation()}
+                            style={{ background: 'white', borderRadius: '18px', width: '460px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 25px 50px rgba(0,0,0,0.25)' }}>
+                            <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <div style={{ width: '44px', height: '44px', borderRadius: '50%', background: '#ecfdf5', color: '#059669', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 }}>
+                                        {((previewParent.prenom?.[0] || '') + (previewParent.nom?.[0] || '')).toUpperCase()}
+                                    </div>
+                                    <div>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 800 }}>{previewParent.prenom} {previewParent.nom}</h3>
+                                        <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#64748b' }}>{previewParent.nb_enfants} enfant{previewParent.nb_enfants > 1 ? 's' : ''} déjà inscrit{previewParent.nb_enfants > 1 ? 's' : ''} dans l&apos;école</p>
+                                    </div>
+                                </div>
+                                <button type="button" onClick={() => setPreviewParent(null)} style={{ background: '#f1f5f9', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}><X size={18} /></button>
+                            </div>
+                            <div style={{ padding: '24px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                                {[
+                                    { k: 'Téléphone principal', v: previewParent.telephone_1 },
+                                    { k: 'Téléphone secondaire', v: previewParent.telephone_2 },
+                                    { k: 'Email', v: previewParent.email },
+                                    { k: 'Profession', v: previewParent.profession },
+                                    { k: 'Adresse', v: previewParent.adresse },
+                                    { k: 'Quartier', v: previewParent.quartier },
+                                ].map((f, i) => (
+                                    <div key={i}>
+                                        <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase' }}>{f.k}</p>
+                                        <p style={{ margin: '2px 0 0', fontSize: '14px', color: 'var(--text-primary)' }}>{f.v || '—'}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            <div style={{ padding: '0 24px 24px', display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                                <button type="button" onClick={() => setPreviewParent(null)} style={{ background: 'white', border: '1px solid var(--border-light)', borderRadius: '10px', padding: '10px 18px', cursor: 'pointer', fontWeight: 700, fontSize: '13px', color: '#475569' }}>Fermer</button>
+                                <button type="button" onClick={() => choisirParent(previewParent)} style={{ background: '#059669', border: 'none', borderRadius: '10px', padding: '10px 18px', cursor: 'pointer', fontWeight: 700, fontSize: '13px', color: 'white', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <UserCheck size={16} /> Choisir ce parent
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 {/* ═══ SECTION 3: FACTURATION ═══ */}
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="card" style={{ overflow: 'visible' }}>
@@ -710,7 +913,7 @@ export default function NouveauEleve() {
                         }}
                     >
                         {loading ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
-                        Inscrire l&apos;Élève + Créer Compte Parent
+                        {parentMode === 'existant' ? "Inscrire l'Élève + Rattacher au Parent" : "Inscrire l'Élève + Créer Compte Parent"}
                     </button>
                 </div>
             </form>
