@@ -2611,6 +2611,12 @@ def avis_paiement(facture_id: int, db: Session = Depends(get_db), etablissement_
     if facture.type_frais_id:
         type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == facture.type_frais_id).first()
 
+    # Année scolaire de la facture (celle de l'inscription) — libellé réel pour
+    # l'imprimer sur le reçu, jamais un ID ni une déduction à partir de la date.
+    annee = db.query(AnneeScolaire).filter(
+        AnneeScolaire.annee_id == (facture.annee_id or inscription.annee_id)
+    ).first()
+
     echeances = db.query(EcheanceFacture).filter(
         EcheanceFacture.facture_id == facture_id
     ).all()
@@ -2646,6 +2652,7 @@ def avis_paiement(facture_id: int, db: Session = Depends(get_db), etablissement_
             "montant_restant": float(facture.montant_restant or 0),
             "statut": facture.statut,
             "type_frais": type_frais.libelle if type_frais else "Frais scolaires",
+            "annee_scolaire": annee.libelle if annee else None,
         },
         "eleve": {
             "eleve_id": eleve.eleve_id,
@@ -2653,6 +2660,7 @@ def avis_paiement(facture_id: int, db: Session = Depends(get_db), etablissement_
             "prenom": eleve.prenom,
             "matricule": eleve.matricule,
             "classe": classe.libelle if classe else "",
+            "annee_scolaire": annee.libelle if annee else None,
         },
         "etablissement": {
             "nom": etablissement.nom if etablissement else "SmartSchool",

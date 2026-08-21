@@ -44,7 +44,7 @@ interface BadgeCarteProps {
 }
 
 export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: BadgeCarteProps) {
-    const { etablissementNom, etablissementLogo, carteConfigEleve, carteConfigEnseignant } = useApp();
+    const { etablissementNom, etablissementLogo, carteConfigEleve, carteConfigEnseignant, annees, anneeCouranteId, anneeLibelle } = useApp();
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     
     const [fetchedClasses, setFetchedClasses] = useState<string>('');
@@ -150,12 +150,16 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: B
         height = '400px';
     }
 
-    // Déterminer l'année scolaire en cours
+    // Année scolaire EN COURS de l'école (base de données), pas une déduction à
+    // partir du mois : le libellé réel (2026-2027) plutôt qu'une heuristique de
+    // date. Repli sur la date seulement si le contexte n'est pas encore chargé.
     const currentYear = new Date().getFullYear();
     const currentMonth = new Date().getMonth();
-    const anneeScolaire = currentMonth >= 8 
-        ? `${currentYear}-${currentYear + 1}` 
-        : `${currentYear - 1}-${currentYear}`;
+    const anneeCourante = (annees || []).find(a => a.est_courante === 'O')
+        || (annees || []).find(a => a.annee_id === anneeCouranteId);
+    const anneeScolaire = anneeCourante?.libelle
+        || anneeLibelle
+        || (currentMonth >= 8 ? `${currentYear}-${currentYear + 1}` : `${currentYear - 1}-${currentYear}`);
 
     const handlePrint = () => {
         const content = badgeRef.current;
