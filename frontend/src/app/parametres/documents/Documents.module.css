@@ -200,25 +200,33 @@
     background: #0f172a; padding: 1rem 1.75rem; border-radius: 18px;
     box-shadow: 0 20px 40px rgba(0,0,0,0.25); z-index: 100;
     border: 1px solid rgba(255,255,255,0.08); min-width: 480px;
+    box-sizing: border-box;
 }
-/* min-width:480px garanti hors-ecran sur tout telephone — meme bug que
-   parametres/cartes et parametres/finance, 3e fichier CSS distinct */
+/* Mobile : largeur AUTO entre 12px de marge de chaque côté (pas de largeur
+   explicite + padding qui débordait, faute de box-sizing). La barre reste donc
+   toujours dans l'écran. */
 @media (max-width: 768px) {
     .stickyBar {
         min-width: 0;
-        width: calc(100vw - 24px);
-        max-width: 480px;
+        max-width: none;
+        width: auto;
         left: 12px;
         right: 12px;
         transform: none;
         bottom: 1rem;
     }
     .stickyContent {
-        flex-wrap: wrap;
+        flex-direction: column;
+        align-items: stretch;
         gap: 0.75rem;
     }
     .stickyActions {
         width: 100%;
+        justify-content: flex-end;
+    }
+    .saveBtn {
+        flex: 1;
+        justify-content: center;
     }
     .watermarkText {
         font-size: clamp(1.6rem, 8vw, 3.5rem);

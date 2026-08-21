@@ -219,6 +219,36 @@
     z-index: 50;
     border: 1px solid rgba(255, 255, 255, 0.1);
     min-width: 600px;
+    /* Ne jamais déborder de l'écran (mobile) : la largeur mini de 600px sortait
+       des deux côtés sur un téléphone. */
+    max-width: calc(100vw - 2rem);
+    box-sizing: border-box;
+}
+
+/* Mobile : la barre occupe la largeur (marges 1rem), sans centrage translateX,
+   et le contenu s'empile pour rester lisible et bien centré. */
+@media (max-width: 640px) {
+    .stickyBar {
+        left: 1rem;
+        right: 1rem;
+        transform: none;
+        min-width: 0;
+        max-width: none;
+        bottom: 1rem;
+        padding: 0.85rem 1rem;
+    }
+    .stickyContent {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.75rem;
+    }
+    .stickyActions {
+        justify-content: flex-end;
+    }
+    .saveBtn {
+        flex: 1;
+        justify-content: center;
+    }
 }
 
 .stickyContent {
