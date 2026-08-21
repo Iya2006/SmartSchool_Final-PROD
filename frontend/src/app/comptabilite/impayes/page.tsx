@@ -447,12 +447,18 @@ export default function ImpayesPage() {
                                                 <p style={{ fontWeight: 700 }}>{avisData.eleve.prenom} {avisData.eleve.nom}</p>
                                                 <p style={{ fontSize: 12, color: '#64748b' }}>Matricule : {avisData.eleve.matricule}</p>
                                                 <p style={{ fontSize: 12, color: '#64748b' }}>Classe : {avisData.eleve.classe}</p>
+                                                {avisData.eleve.annee_scolaire && (
+                                                    <p style={{ fontSize: 12, color: '#64748b' }}>Année scolaire : {avisData.eleve.annee_scolaire}</p>
+                                                )}
                                             </div>
                                             <div style={{ textAlign: 'right' }}>
                                                 <p style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, marginBottom: 4 }}>FACTURE</p>
                                                 <p style={{ fontWeight: 700 }}>{avisData.facture.numero_facture}</p>
                                                 <p style={{ fontSize: 12, color: '#64748b' }}>Date : {avisData.facture.date_facture}</p>
                                                 <p style={{ fontSize: 12, color: '#64748b' }}>Type : {avisData.facture.type_frais}</p>
+                                                {avisData.facture.annee_scolaire && (
+                                                    <p style={{ fontSize: 12, color: '#64748b' }}>Année : {avisData.facture.annee_scolaire}</p>
+                                                )}
                                             </div>
                                         </div>
                                         {/* Tableau échéances */}

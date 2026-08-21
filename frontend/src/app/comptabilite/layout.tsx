@@ -77,6 +77,7 @@ const MODULES = [
             { id: 'paie', label: 'Préparer la paie', path: '/comptabilite/salaires?tab=paie', tab: 'paie' },
             { id: 'avances', label: 'Primes & avances', path: '/comptabilite/salaires?tab=avances', tab: 'avances' },
             { id: 'bulletins', label: 'Bulletins de paie', path: '/comptabilite/salaires?tab=bulletins', tab: 'bulletins' },
+            { id: 'salaires-historique', label: 'Historique des salaires', path: '/comptabilite/salaires/historique' },
         ]
     },
     {

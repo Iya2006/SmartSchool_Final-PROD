@@ -79,6 +79,15 @@ export default function SyncStatusIndicator() {
         label = 'En ligne — à jour';
     }
 
+    // Quand TOUT va bien (en ligne, rien en attente), on n'affiche RIEN ici :
+    // le badge « En ligne — à jour » encombrait le header et masquait l'année
+    // en cours. Le statut « en ligne » est désormais porté par la pastille verte
+    // de l'avatar (Topbar). L'indicateur ne réapparaît que s'il y a un vrai
+    // signal (hors-ligne, synchro en attente, action requise, session à renouveler).
+    const toutVaBien = online && !state.syncing && state.pendingCount === 0
+        && state.blockedCount === 0 && !sessionLikelyExpired;
+    if (toutVaBien) return null;
+
     return (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             <button
