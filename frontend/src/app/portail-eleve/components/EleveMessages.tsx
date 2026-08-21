@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Send, Inbox, Loader2, Mail, MessageSquare, User, AlertTriangle, SendHorizonal } from 'lucide-react';
+import { Send, Inbox, Loader2, Mail, MessageSquare, User, AlertTriangle, SendHorizonal, Trash2 } from 'lucide-react';
 import api from '@/lib/api';
 import styles from '../portail-eleve.module.css';
 import { MessagesData } from '../types';
@@ -36,6 +36,24 @@ export default function EleveMessages({
     const [msgSending, setMsgSending] = useState(false);
     const [msgSuccess, setMsgSuccess] = useState('');
     const [msgError, setMsgError] = useState('');
+    const [deleting, setDeleting] = useState(false);
+
+    // « Supprimer pour moi » : masque le message de MA boîte. Il reste visible
+    // pour les autres (un message envoyé à toute la classe n'est jamais effacé).
+    const supprimerMessage = async (messageId?: number) => {
+        if (!messageId) return;
+        if (!confirm('Supprimer ce message de votre boîte ?')) return;
+        setDeleting(true);
+        try {
+            await api.delete(`/api/portail-eleve/${eleveId}/messages/${messageId}`);
+            setSelectedMsgIndex(0);
+            refetchMessages();
+        } catch {
+            alert('Suppression impossible. Réessayez.');
+        } finally {
+            setDeleting(false);
+        }
+    };
 
     React.useEffect(() => {
         if (!eleveId) return;
@@ -314,12 +332,12 @@ export default function EleveMessages({
                         {currentMessage ? (
                             <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                                 {/* Message details header */}
-                                <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                                        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', border: '1px solid #e2e8f0' }}>
+                                <div style={{ padding: '20px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: 0 }}>
+                                        <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', border: '1px solid #e2e8f0', flexShrink: 0 }}>
                                             <User size={18} />
                                         </div>
-                                        <div>
+                                        <div style={{ minWidth: 0 }}>
                                             <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.3px' }}>
                                                 {mailboxTab === 'received' ? 'De' : 'À'}
                                             </p>
@@ -334,6 +352,18 @@ export default function EleveMessages({
                                             </p>
                                         </div>
                                     </div>
+                                    <button
+                                        onClick={() => supprimerMessage(currentMessage.message_id)}
+                                        disabled={deleting}
+                                        title="Supprimer de ma boîte"
+                                        aria-label="Supprimer ce message de ma boîte"
+                                        style={{ background: '#f8fafc', border: '1px solid #e2e8f0', cursor: 'pointer', color: '#64748b', padding: '8px', display: 'flex', alignItems: 'center', gap: '6px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, flexShrink: 0 }}
+                                        onMouseOver={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = '#fee2e2'; e.currentTarget.style.borderColor = '#fecaca'; }}
+                                        onMouseOut={e => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.borderColor = '#e2e8f0'; }}
+                                    >
+                                        {deleting ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Trash2 size={15} />}
+                                        <span>Supprimer</span>
+                                    </button>
                                 </div>
 
                                 {/* Message subject & body */}

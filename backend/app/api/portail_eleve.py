@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.core.security import verify_password, hash_password
 from app.core.auth import create_access_token, get_current_user
 from app.core.rate_limit import limiter
+from app.core.messagerie import sous_requete_messages_masques, masquer_message
 from app.models.academique import (
     Eleve, Inscription, Classe, Matiere,
     Note, Evaluation, Bulletin, BulletinLigne, Facture, Paiement, Presence,
@@ -270,7 +271,9 @@ def eleve_dashboard(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Sessi
 
     nb_messages_non_lus = db.query(Message).filter(
         or_(*filters_non_lus),
-        Message.statut == "ENVOYE"
+        Message.statut == "ENVOYE",
+        # Un message masqué (« Supprimer pour moi ») ne compte plus comme non lu.
+        Message.message_id.notin_(sous_requete_messages_masques(db, "ELEVE", eleve_id)),
     ).count()
 
     return {
@@ -711,10 +714,17 @@ def get_messages_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Se
         filters.append((Message.destinataire_type == "CLASSE") & (Message.destinataire_id == insc.classe_id))
         filters.append((Message.destinataire_type == "CLASSE_ELEVES") & (Message.destinataire_id == insc.classe_id))
 
-    received = db.query(Message).filter(or_(*filters)).order_by(desc(Message.date_envoi)).limit(50).all()
+    # « Supprimer pour moi » : messages que CET élève a masqués de sa boîte.
+    masques = sous_requete_messages_masques(db, "ELEVE", eleve_id)
+
+    received = db.query(Message).filter(
+        or_(*filters),
+        Message.message_id.notin_(masques),
+    ).order_by(desc(Message.date_envoi)).limit(50).all()
     sent = db.query(Message).filter(
         Message.expediteur_type == "ELEVE",
-        Message.expediteur_id == eleve_id
+        Message.expediteur_id == eleve_id,
+        Message.message_id.notin_(masques),
     ).order_by(desc(Message.date_envoi)).limit(20).all()
 
     def fmt(m):
@@ -789,6 +799,26 @@ def marquer_lu_eleve(eleve_id: int, message_id: int, _auth: dict = Depends(_elev
         msg.date_lecture = datetime.now()
         db.commit()
     return {"message": "OK"}
+
+
+@router.delete("/{eleve_id}/messages/{message_id}")
+def supprimer_message_eleve(eleve_id: int, message_id: int, _auth: dict = Depends(_eleve_auth), db: Session = Depends(get_db)):
+    """« Supprimer pour moi » — masque le message de la boîte de cet élève.
+
+    Le message reste visible pour les autres (un message diffusé à toute une
+    classe n'est jamais effacé de la base)."""
+    eleve = db.query(Eleve).filter(Eleve.eleve_id == eleve_id).first()
+    if not eleve:
+        raise HTTPException(404, "Élève non trouvé")
+    msg = db.query(Message).filter(
+        Message.message_id == message_id,
+        Message.etablissement_id == eleve.etablissement_id,
+    ).first()
+    if not msg:
+        raise HTTPException(404, "Message non trouvé")
+    masquer_message(db, message_id, "ELEVE", eleve_id)
+    db.commit()
+    return {"message": "Message supprimé de votre boîte"}
 
 
 # ================================================================
