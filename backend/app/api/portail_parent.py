@@ -12,6 +12,7 @@ from app.core.security import verify_password
 from app.core.auth import create_access_token, get_current_user
 from app.core.rate_limit import limiter
 from app.core.annee_lock import get_active_trimestre_id
+from app.core.messagerie import sous_requete_messages_masques, masquer_message
 from app.models.academique import (
     Parent, EleveParent, Eleve, Inscription, Classe, Matiere,
     Note, Evaluation, Bulletin, BulletinLigne, Facture, Paiement, Presence,
@@ -825,16 +826,21 @@ def get_messages_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db:
             (Message.destinataire_type == "CLASSE_PARENTS") & (Message.destinataire_id == cid)
         )
 
+    # « Supprimer pour moi » : messages que CE parent a masqués de sa boîte.
+    masques = sous_requete_messages_masques(db, "PARENT", parent_id)
+
     received = db.query(Message).filter(
         Message.etablissement_id.in_(ecoles or [-1]),
         or_(*filters),
+        Message.message_id.notin_(masques),
     ).order_by(desc(Message.date_envoi)).limit(50).all()
 
     # Messages sent by this parent — bornés à son école pour la même raison.
     sent = db.query(Message).filter(
         Message.etablissement_id.in_(ecoles or [-1]),
         Message.expediteur_type == "PARENT",
-        Message.expediteur_id == parent_id
+        Message.expediteur_id == parent_id,
+        Message.message_id.notin_(masques),
     ).order_by(desc(Message.date_envoi)).limit(20).all()
 
     def format_msg(m):
@@ -897,7 +903,9 @@ def count_non_lus_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db
     count = db.query(Message).filter(
         Message.etablissement_id.in_(ecoles or [-1]),
         or_(*filters),
-        Message.statut == "ENVOYE"
+        Message.statut == "ENVOYE",
+        # Un message masqué (« Supprimer pour moi ») ne compte plus comme non lu.
+        Message.message_id.notin_(sous_requete_messages_masques(db, "PARENT", parent_id)),
     ).count()
 
     return {"non_lus": count}
@@ -919,6 +927,24 @@ def marquer_lu_parent(parent_id: int, message_id: int, _auth: dict = Depends(_pa
         msg.date_lecture = datetime.now()
         db.commit()
     return {"message": "OK"}
+
+
+@router.delete("/{parent_id}/messages/{message_id}")
+def supprimer_message_parent(parent_id: int, message_id: int, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
+    """« Supprimer pour moi » — masque le message de la boîte de ce parent.
+
+    Le message reste visible pour les autres (un message diffusé à toute une
+    classe / tous les parents n'est jamais effacé de la base)."""
+    ecoles = _ecoles_du_parent(db, parent_id)
+    msg = db.query(Message).filter(
+        Message.message_id == message_id,
+        Message.etablissement_id.in_(ecoles or [-1]),
+    ).first()
+    if not msg:
+        raise HTTPException(404, "Message non trouvé")
+    masquer_message(db, message_id, "PARENT", parent_id)
+    db.commit()
+    return {"message": "Message supprimé de votre boîte"}
 
 
 class ParentMessageSend(BaseModel):

@@ -10,7 +10,7 @@ import {
     CheckCircle2, AlertCircle, Users, Clock, BookOpen, Wand2, Check, XCircle,
     Mail, MailOpen, Filter, ArrowRight, Zap, FileText, Shield, Award, Download,
     UserPlus, Search, Phone, Inbox, TrendingUp, BarChart3, Radio, Megaphone,
-    Handshake, ClipboardCheck, Wallet, ScrollText, Sparkles, Bell, Lock, User, Smartphone, School, Edit3, AlertTriangle, GraduationCap, ArrowLeft
+    Handshake, ClipboardCheck, Wallet, ScrollText, Sparkles, Bell, Lock, User, Smartphone, School, Edit3, AlertTriangle, GraduationCap, ArrowLeft, Trash2
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -183,6 +183,28 @@ function CommunicationAdminPageInner() {
     }, []);
 
     useEffect(() => { if (tab === 'parents') loadParentMessages(); }, [tab, loadParentMessages]);
+
+    // « Supprimer pour moi » : masque le message de la boîte admin (il reste
+    // visible pour les autres destinataires). On retire la ligne localement
+    // sans recharger toute la page.
+    const [suppressionEnCours, setSuppressionEnCours] = useState<number | null>(null);
+    const supprimerMessage = async (messageId: number, source: 'admin' | 'parents') => {
+        if (!confirm('Supprimer ce message de votre boîte ? Il restera visible pour les autres destinataires.')) return;
+        setSuppressionEnCours(messageId);
+        try {
+            await api.delete(`/api/communication/messages/${messageId}`);
+            if (source === 'parents') {
+                setParentMessages(prev => prev.filter((m: any) => m.message_id !== messageId));
+            } else {
+                setMessages(prev => prev.filter((m: any) => m.message_id !== messageId));
+            }
+            showSuccess('Message supprimé de votre boîte');
+        } catch (err: any) {
+            showError(err.response?.data?.detail || 'Suppression impossible');
+        } finally {
+            setSuppressionEnCours(null);
+        }
+    };
 
     const handleSendParentMsg = async () => {
         if (!pmSujet.trim()) { showError('Le sujet est requis'); return; }
@@ -523,7 +545,20 @@ function CommunicationAdminPageInner() {
                                             </p>
                                         </div>
                                     </div>
-                                    <span style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, background: cfg.bg, color: cfg.color, display: 'flex', alignItems: 'center', gap: '4px' }}>{cfg.lucide} {cfg.label}</span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                                        <span style={{ padding: '4px 10px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, background: cfg.bg, color: cfg.color, display: 'flex', alignItems: 'center', gap: '4px' }}>{cfg.lucide} {cfg.label}</span>
+                                        <button
+                                            onClick={() => supprimerMessage(m.message_id, 'admin')}
+                                            disabled={suppressionEnCours === m.message_id}
+                                            title="Supprimer de ma boîte"
+                                            aria-label="Supprimer ce message de ma boîte"
+                                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '4px', display: 'flex', alignItems: 'center', borderRadius: '6px' }}
+                                            onMouseEnter={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = '#fee2e2'; }}
+                                            onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'none'; }}
+                                        >
+                                            {suppressionEnCours === m.message_id ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}
+                                        </button>
+                                    </div>
                                 </div>
                                 {m.contenu && (() => {
                                     const parts = m.contenu.split('---PHOTO_META---');
@@ -711,7 +746,20 @@ function CommunicationAdminPageInner() {
                                                             {' • '}{m.date_envoi ? new Date(m.date_envoi).toLocaleString('fr-FR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
                                                         </p>
                                                     </div>
-                                                    <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '9px', fontWeight: 700, background: cfg.bg, color: cfg.color }}>{cfg.icon} {cfg.label}</span>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                                                        <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '9px', fontWeight: 700, background: cfg.bg, color: cfg.color }}>{cfg.icon} {cfg.label}</span>
+                                                        <button
+                                                            onClick={() => supprimerMessage(m.message_id, 'parents')}
+                                                            disabled={suppressionEnCours === m.message_id}
+                                                            title="Supprimer de ma boîte"
+                                                            aria-label="Supprimer ce message de ma boîte"
+                                                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '3px', display: 'flex', alignItems: 'center', borderRadius: '6px' }}
+                                                            onMouseEnter={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = '#fee2e2'; }}
+                                                            onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'none'; }}
+                                                        >
+                                                            {suppressionEnCours === m.message_id ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />}
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 {m.contenu && (() => {
                                                     const parts = m.contenu.split('---PHOTO_META---');

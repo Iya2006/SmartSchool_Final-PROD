@@ -153,6 +153,22 @@ export default function TeacherDashboard() {
 
     useEffect(() => { loadData(); }, [loadData]);
 
+    // « Supprimer pour moi » : masque le message de MA boîte. Il reste visible
+    // pour les autres (un message envoyé à tous les enseignants n'est jamais effacé).
+    const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    const supprimerMessage = async (messageId: number) => {
+        if (!confirm('Supprimer ce message de votre boîte ?')) return;
+        setDeletingMsgId(messageId);
+        try {
+            await api.delete(`/api/communication/messages/${messageId}`);
+            setMessages(prev => prev.filter(m => m.message_id !== messageId));
+        } catch {
+            alert('Suppression impossible. Réessayez.');
+        } finally {
+            setDeletingMsgId(null);
+        }
+    };
+
     const openDispoForm = (msg: AdminMessage) => {
         setActiveDemande(msg);
         setDispoSlots([]);
@@ -348,6 +364,16 @@ export default function TeacherDashboard() {
                                                     {m.contenu && <p style={{ margin: '6px 0 0', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>{m.contenu}</p>}
                                                 </div>
                                             </div>
+                                            <button
+                                                onClick={() => supprimerMessage(m.message_id)}
+                                                disabled={deletingMsgId === m.message_id}
+                                                title="Supprimer de ma boîte"
+                                                aria-label="Supprimer ce message de ma boîte"
+                                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: '6px', display: 'flex', alignItems: 'center', borderRadius: '8px', flexShrink: 0, alignSelf: 'flex-start' }}
+                                                onMouseOver={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = '#fee2e2'; }}
+                                                onMouseOut={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'none'; }}>
+                                                {deletingMsgId === m.message_id ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Trash2 size={14} />}
+                                            </button>
                                             {isEmploiDemande && (() => {
                                                 const nbDispos = mesSujets.length; // will reuse for display
                                                 const msgDate = m.date_envoi ? new Date(m.date_envoi) : null;

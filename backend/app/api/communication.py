@@ -13,6 +13,7 @@ import json
 from app.core.database import get_db
 from app.core.auth import get_current_user, require_etablissement, require_roles, ADMIN_TIER_ROLES
 from app.core.annee_courante import resoudre_annee
+from app.core.messagerie import sous_requete_messages_masques, masquer_message
 from app.models.academique import (
     Message, DemandeEmploi, Disponibilite, Enseignant,
     Classe, ClasseMatiere, Matiere, Affectation, CreneauEmploi,
@@ -68,6 +69,8 @@ def list_messages(
             Message.expediteur_type == "ADMIN",
             Message.destinataire_type == "ADMIN"
         ))
+        # « Supprimer pour moi » : boîte admin partagée par établissement.
+        viewer_type, viewer_id = "ADMIN", etablissement_id
     elif role == "ENSEIGNANT":
         if not _est_admin_tier(current_user):
             if current_user.get("type") != "enseignant":
@@ -75,6 +78,7 @@ def list_messages(
             enseignant_id = int(current_user.get("sub"))
         if not enseignant_id:
             raise HTTPException(400, "enseignant_id requis")
+        viewer_type, viewer_id = "ENSEIGNANT", enseignant_id
 
         # Récupérer les classes de l'enseignant pour les messages CLASSE_ENSEIGNANTS
         classes_ens = db.query(Affectation.classe_id).filter(
@@ -98,6 +102,11 @@ def list_messages(
 
     if objet_type:
         q = q.filter(Message.objet_type == objet_type)
+
+    # Cacher les messages que ce destinataire a masqués (« Supprimer pour moi »).
+    q = q.filter(Message.message_id.notin_(
+        sous_requete_messages_masques(db, viewer_type, viewer_id)
+    ))
 
     msgs = q.order_by(desc(Message.date_envoi)).limit(100).all()
 
@@ -216,6 +225,37 @@ def marquer_lu(message_id: int, db: Session = Depends(get_db), etablissement_id:
     m.date_lecture = datetime.now()
     db.commit()
     return {"message": "Message marqué comme lu"}
+
+
+@router.delete("/messages/{message_id}")
+def supprimer_message_pour_moi(
+    message_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """« Supprimer pour moi » — masque le message de la boîte de l'appelant.
+
+    Admin (boîte partagée par établissement) ou enseignant (sa propre boîte).
+    On ne supprime JAMAIS la ligne partagée : le message reste visible pour les
+    autres destinataires (un message diffusé à toute une classe le reste)."""
+    m = db.query(Message).filter(
+        Message.message_id == message_id,
+        Message.etablissement_id == etablissement_id,
+    ).first()
+    if not m:
+        raise HTTPException(404, "Message non trouvé")
+
+    if _est_admin_tier(current_user):
+        viewer_type, viewer_id = "ADMIN", etablissement_id
+    elif current_user.get("type") == "enseignant":
+        viewer_type, viewer_id = "ENSEIGNANT", int(current_user.get("sub"))
+    else:
+        raise HTTPException(403, "Accès refusé")
+
+    masquer_message(db, message_id, viewer_type, viewer_id)
+    db.commit()
+    return {"message": "Message supprimé de votre boîte"}
 
 
 # ============================================================================
@@ -906,7 +946,9 @@ def list_messages_parents(db: Session = Depends(get_db), etablissement_id: int =
         or_(
             Message.destinataire_type.in_(["PARENT", "TOUS_PARENTS", "CLASSE_PARENTS"]),
             Message.expediteur_type == "PARENT",
-        )
+        ),
+        # « Supprimer pour moi » : même boîte admin (partagée par établissement).
+        Message.message_id.notin_(sous_requete_messages_masques(db, "ADMIN", etablissement_id)),
     ).order_by(desc(Message.date_envoi)).limit(200).all()
 
     parent_ids = {m.expediteur_id for m in msgs if m.expediteur_type == "PARENT" and m.expediteur_id}

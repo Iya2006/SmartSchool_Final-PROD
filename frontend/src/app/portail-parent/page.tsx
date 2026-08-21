@@ -11,7 +11,7 @@ import {
     Shield, Loader2, Lock, Home, ArrowLeft, LogOut, ChevronDown, Send, Inbox,
     PieChart, Activity, TrendingDown, Mail, MailOpen, Settings, Key,
     Camera, Upload, ImageIcon, ChevronLeft, ShoppingBag, Download, CheckCircle2, XCircle, PenLine, AlertTriangle, Target,
-    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil, Hourglass, Menu, Utensils
+    UserCheck, School, ClipboardList, Trophy, Smartphone, Users, Pencil, Hourglass, Menu, Utensils, Trash2
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
@@ -434,6 +434,25 @@ export default function PortailParent() {
     const markRead = async (msg: MsgItem) => {
         if (!data || msg.statut !== 'ENVOYE') return;
         try { await api.put(`/api/portail-parent/${data.parent.parent_id}/messages/${msg.message_id}/lire`); loadUnread(); } catch {}
+    };
+
+    // « Supprimer pour moi » : masque le message de MA boîte. Il reste visible
+    // pour les autres (un message envoyé à tous les parents n'est jamais effacé).
+    const [deletingMsgId, setDeletingMsgId] = useState<number | null>(null);
+    const deleteMessage = async (msg: MsgItem, e?: React.MouseEvent) => {
+        if (e) e.stopPropagation();
+        if (!data) return;
+        if (!confirm('Supprimer ce message de votre boîte ?')) return;
+        setDeletingMsgId(msg.message_id);
+        try {
+            await api.delete(`/api/portail-parent/${data.parent.parent_id}/messages/${msg.message_id}`);
+            if (selectedMsg?.message_id === msg.message_id) setSelectedMsg(null);
+            loadMessages(); loadUnread();
+        } catch {
+            alert('Suppression impossible. Réessayez.');
+        } finally {
+            setDeletingMsgId(null);
+        }
     };
 
     const sendMessage = async () => {
@@ -1515,6 +1534,16 @@ export default function PortailParent() {
                                                                                     {m.date_envoi ? new Date(m.date_envoi).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' }) : ''}
                                                                                 </p>
                                                                             </div>
+                                                                            <button
+                                                                                onClick={e => deleteMessage(m, e)}
+                                                                                disabled={deletingMsgId === m.message_id}
+                                                                                title="Supprimer de ma boîte"
+                                                                                aria-label="Supprimer ce message de ma boîte"
+                                                                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cbd5e1', padding: '6px', display: 'flex', alignItems: 'center', borderRadius: '8px', flexShrink: 0 }}
+                                                                                onMouseOver={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = '#fee2e2'; }}
+                                                                                onMouseOut={e => { e.currentTarget.style.color = '#cbd5e1'; e.currentTarget.style.background = 'none'; }}>
+                                                                                {deletingMsgId === m.message_id ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Trash2 size={15} />}
+                                                                            </button>
                                                                         </div>
                                                                     </div>
                                                                 );
@@ -1539,7 +1568,19 @@ export default function PortailParent() {
                                                                                 <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{m.sujet}</p>
                                                                                 <p style={{ margin: '4px 0 0', fontSize: '11px', color: '#94a3b8' }}>→ Administration • {m.date_envoi ? new Date(m.date_envoi).toLocaleDateString('fr-FR') : ''}</p>
                                                                             </div>
-                                                                            <Send size={14} color="#94a3b8" />
+                                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                                                                <Send size={14} color="#94a3b8" />
+                                                                                <button
+                                                                                    onClick={e => deleteMessage(m, e)}
+                                                                                    disabled={deletingMsgId === m.message_id}
+                                                                                    title="Supprimer de ma boîte"
+                                                                                    aria-label="Supprimer ce message de ma boîte"
+                                                                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#cbd5e1', padding: '6px', display: 'flex', alignItems: 'center', borderRadius: '8px' }}
+                                                                                    onMouseOver={e => { e.currentTarget.style.color = '#ef4444'; e.currentTarget.style.background = '#fee2e2'; }}
+                                                                                    onMouseOut={e => { e.currentTarget.style.color = '#cbd5e1'; e.currentTarget.style.background = 'none'; }}>
+                                                                                    {deletingMsgId === m.message_id ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Trash2 size={15} />}
+                                                                                </button>
+                                                                            </div>
                                                                         </div>
                                                                     </div>
                                                                 ))}

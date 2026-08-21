@@ -1023,6 +1023,32 @@ class Message(Base):
     date_lecture = Column(DateTime, nullable=True)
 
 
+class MessageMasque(Base):
+    """« Supprimer pour moi » — masque un message de la boîte d'UN destinataire.
+
+    On ne supprime JAMAIS la ligne ss_messages partagée : un même message peut
+    avoir été diffusé à toute une classe / tous les parents (une seule ligne vue
+    par plusieurs personnes). Effacer la ligne l'effacerait pour tout le monde.
+    Ici chacun masque le message de SA propre vue, les autres continuent de le
+    voir — modèle « Supprimer pour moi ».
+
+    `viewer` = qui a masqué :
+      - ADMIN : viewer_id = etablissement_id. La boîte admin est partagée par
+        établissement (voir communication.list_messages role=ADMIN, qui ne
+        filtre pas par compte admin), donc le masquage l'est aussi.
+      - ENSEIGNANT / PARENT / ELEVE : viewer_id = l'identifiant de la personne.
+    """
+    __tablename__ = "ss_messages_masques"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    message_id = Column(Integer, ForeignKey("ss_messages.message_id"), nullable=False)
+    viewer_type = Column(String(20), nullable=False)  # ADMIN, ENSEIGNANT, PARENT, ELEVE
+    viewer_id = Column(Integer, nullable=False)
+    date_masquage = Column(DateTime, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("message_id", "viewer_type", "viewer_id", name="uq_message_masque"),
+    )
+
+
 class Disponibilite(Base):
     """Disponibilité soumise par un enseignant en réponse à une demande."""
     __tablename__ = "ss_disponibilites"
