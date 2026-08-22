@@ -235,16 +235,6 @@ export default function CentralisationNotesPage() {
         setLoading(false);
     }, [selectedClasse, selectedTrimestre]);
 
-    // Créer une composition/évaluation directement depuis l'écran de
-    // centralisation : on ouvre la classe (vue détail) et le formulaire de
-    // création, sans que l'utilisateur ait à deviner qu'il faut d'abord passer
-    // par « Voir les Notes ».
-    const creerCompositionDepuisOverview = async () => {
-        if (!selectedClasse) { alert('Choisissez d’abord une classe.'); return; }
-        await loadClasseDetail();
-        setShowSessionForm(true);
-    };
-
     useEffect(() => {
         if (selectedClasse) loadClasseDetail();
     }, [selectedClasse, selectedTrimestre, loadClasseDetail]);
@@ -766,11 +756,6 @@ export default function CentralisationNotesPage() {
                             style={{ padding: '10px 24px', borderRadius: '10px', border: 'none', background: selectedClasse ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : '#e2e8f0', color: selectedClasse ? 'white' : '#94a3b8', fontSize: '14px', fontWeight: 700, cursor: selectedClasse ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <Eye size={16} /> Voir les Notes
                         </button>
-                        <button onClick={creerCompositionDepuisOverview} disabled={!selectedClasse || loading}
-                            title={selectedClasse ? "Créer une composition / évaluation pour cette classe" : "Choisissez d’abord une classe"}
-                            style={{ padding: '10px 24px', borderRadius: '10px', border: '1.5px solid #059669', background: selectedClasse ? '#ecfdf5' : '#f8fafc', color: selectedClasse ? '#059669' : '#94a3b8', fontSize: '14px', fontWeight: 700, cursor: selectedClasse ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <ClipboardList size={16} /> Créer une composition
-                        </button>
                     </div>
 
                     {/* ═══ LISTE DES ÉVALUATIONS CENTRALISÉES ═══ */}
@@ -802,11 +787,6 @@ export default function CentralisationNotesPage() {
                                 <ClipboardList size={48} style={{ marginBottom: '12px', opacity: 0.3 }} />
                                 <p style={{ fontSize: '15px', fontWeight: 600 }}>Aucune évaluation</p>
                                 <p style={{ fontSize: '13px' }}>Créez une composition depuis une classe, ou attendez que les enseignants saisissent leurs notes.</p>
-                                <button onClick={creerCompositionDepuisOverview} disabled={!selectedClasse || loading}
-                                    title={selectedClasse ? undefined : "Choisissez d’abord une classe ci-dessus"}
-                                    style={{ marginTop: '16px', padding: '10px 22px', borderRadius: '10px', border: 'none', background: selectedClasse ? 'linear-gradient(135deg, #059669, #10b981)' : '#e2e8f0', color: selectedClasse ? 'white' : '#94a3b8', fontSize: '13.5px', fontWeight: 700, cursor: selectedClasse ? 'pointer' : 'not-allowed', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
-                                    <ClipboardList size={15} /> {selectedClasse ? 'Créer une composition maintenant' : 'Sélectionnez une classe'}
-                                </button>
                             </div>
                         ) : (
                             <div style={{ overflowX: 'auto' }}>
