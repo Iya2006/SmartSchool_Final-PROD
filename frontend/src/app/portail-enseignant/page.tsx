@@ -908,12 +908,16 @@ export default function PortailEnseignant() {
                 display: 'flex', flexDirection: 'column', flexShrink: 0,
                 boxShadow: '4px 0 24px rgba(0,0,0,0.2)'
             }}>
-                {/* Logo */}
+                {/* Logo + nom de l'ÉCOLE (jamais « SmartSchool ») */}
                 <div style={{ padding: '24px 20px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: `linear-gradient(135deg, ${primaryColor}, ${accentColor})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 900, color: 'white' }}>S</div>
-                        <div>
-                            <p style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: 'white', letterSpacing: '0.5px' }}>SMARTSCHOOL</p>
+                        <div style={{ width: '40px', height: '40px', borderRadius: '12px', flexShrink: 0, overflow: 'hidden', background: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', fontWeight: 900, color: 'white' }}>
+                            {etablissementLogo
+                                ? <img src={etablissementLogo.startsWith('http') ? etablissementLogo : `${API_BASE}${etablissementLogo}`} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                                : ((etablissementNom || 'É')[0]).toUpperCase()}
+                        </div>
+                        <div style={{ overflow: 'hidden' }}>
+                            <p style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: 'white', letterSpacing: '0.3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{etablissementNom || 'Mon École'}</p>
                             <p style={{ margin: 0, fontSize: '10px', color: 'rgba(255,255,255,0.5)', fontWeight: 500 }}>Portail Enseignant</p>
                         </div>
                     </div>
@@ -945,7 +949,6 @@ export default function PortailEnseignant() {
                         { key: 'messages' as const, label: 'Messages', icon: MailIcon },
                         { key: 'devoirs' as const, label: 'Devoirs', icon: BookOpen },
                         { key: 'documents' as const, label: 'Documents & Partages', icon: FileText },
-                        { key: 'liens' as const, label: 'Liens Externes', icon: ExternalLink },
                         { key: 'evenements' as const, label: 'Événements', icon: Calendar },
                         { key: 'activites' as const, label: 'Activités', icon: Activity },
                         { key: 'paiements' as const, label: 'Mes Paiements', icon: Banknote }

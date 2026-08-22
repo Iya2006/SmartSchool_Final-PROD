@@ -236,18 +236,8 @@ export default function HistoriquePresences() {
                 >
                     <UserIcon size={18} /> Personnel
                 </button>
-                <button 
-                    onClick={() => setActiveTab('eleves')}
-                    style={{ 
-                        padding: '12px 24px', background: 'transparent', border: 'none', 
-                        borderBottom: activeTab === 'eleves' ? '3px solid #3b82f6' : '3px solid transparent',
-                        color: activeTab === 'eleves' ? '#3b82f6' : '#64748b',
-                        fontWeight: activeTab === 'eleves' ? 700 : 600, fontSize: '15px', cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.2s', marginBottom: '-2px'
-                    }}
-                >
-                    <UserIcon size={18} /> Élèves
-                </button>
+                {/* Onglet « Élèves » retiré : l'assiduité des élèves se suit via
+                    l'appel en séance (Appel du jour), pas ici — c'était un doublon. */}
             </div>
 
             {/* Filters */}
