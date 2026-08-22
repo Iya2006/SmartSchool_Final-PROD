@@ -1590,6 +1590,11 @@ def create_depense(data: DepenseCreate, db: Session = Depends(get_db), etablisse
     # la dépense créée simplement en changeant ce champ dans le body.
     payload = data.model_dump()
     payload["etablissement_id"] = etablissement_id
+    # Une dépense saisie par le comptable est APPROUVÉE d'emblée : plus d'étape
+    # d'approbation séparée. Elle est donc immédiatement déduite du solde réel
+    # (les rapports comptent « VALIDE »), cohérent avec le plafond vérifié
+    # ci-dessus qui ne laisse jamais le solde passer négatif.
+    payload["statut"] = "VALIDE"
     dep = Depense(**payload)
     db.add(dep)
     db.commit()
