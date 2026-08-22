@@ -54,9 +54,14 @@ def _setup(db: Session):
     db.add(parent); db.commit(); db.refresh(parent)
     db.add(EleveParent(eleve_id=eleve.eleve_id, parent_id=parent.parent_id, lien_parente="MERE"))
 
-    # L'emploi du temps configuré : un créneau ACTIVE sur la classe.
+    # L'emploi du temps configuré : un créneau ACTIVE le lundi, ET un le SAMEDI.
+    # Le samedi est le cas qui « ne se voyait pas » côté élève/parent (grille
+    # figée lundi→vendredi) : on vérifie qu'il remonte bien de l'API.
     db.add(CreneauEmploi(classe_id=classe.classe_id, matiere_id=matiere.matiere_id, enseignant_id=ens.enseignant_id,
                          jour="LUNDI", heure_debut="08:00", heure_fin="09:00", salle="Salle 1",
+                         annee_id=annee.annee_id, statut="ACTIVE"))
+    db.add(CreneauEmploi(classe_id=classe.classe_id, matiere_id=matiere.matiere_id, enseignant_id=ens.enseignant_id,
+                         jour="SAMEDI", heure_debut="08:00", heure_fin="09:00", salle="Salle 2",
                          annee_id=annee.annee_id, statut="ACTIVE"))
     db.commit()
     return etab, eleve, parent
@@ -70,10 +75,9 @@ def test_eleve_voit_emploi_du_temps(client: TestClient, db: Session):
     edt = client.get(f"/api/portail-eleve/{eleve.eleve_id}/emploi-du-temps", headers=h)
     assert edt.status_code == 200, edt.text
     data = edt.json()
-    assert len(data) == 1
-    assert data[0]["jour"] == "LUNDI"
-    assert data[0]["matiere"] == "Mathématiques"
-    assert data[0]["salle"] == "Salle 1"
+    jours = {c["jour"] for c in data}
+    assert jours == {"LUNDI", "SAMEDI"}, "L'élève doit voir aussi le cours du samedi"
+    assert all(c["matiere"] == "Mathématiques" for c in data)
 
 
 def test_parent_voit_emploi_du_temps_de_lenfant(client: TestClient, db: Session):
@@ -84,6 +88,5 @@ def test_parent_voit_emploi_du_temps_de_lenfant(client: TestClient, db: Session)
     edt = client.get(f"/api/portail-parent/{parent.parent_id}/enfant/{eleve.eleve_id}/emploi-du-temps", headers=h)
     assert edt.status_code == 200, edt.text
     data = edt.json()
-    assert len(data) == 1
-    assert data[0]["jour"] == "LUNDI"
-    assert data[0]["matiere"] == "Mathématiques"
+    jours = {c["jour"] for c in data}
+    assert jours == {"LUNDI", "SAMEDI"}, "Le parent doit voir aussi le cours du samedi de l'enfant"

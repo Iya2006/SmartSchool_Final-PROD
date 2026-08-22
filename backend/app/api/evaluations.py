@@ -2427,7 +2427,9 @@ def generer_fiche_classement_pdf(
 
     marge = 1.0 * cm
     tab_w = largeur - 2 * marge
-    col_rang, col_mat, col_nom = 1.0 * cm, 2.0 * cm, 4.6 * cm
+    # Colonne matricule élargie : les matricules réels (ex. ELV-LYCETOK-00003,
+    # 17 caractères) ne tenaient pas dans 2 cm et débordaient sur le nom.
+    col_rang, col_mat, col_nom = 1.0 * cm, 2.8 * cm, 4.6 * cm
     col_moy, col_mention = 1.5 * cm, 2.2 * cm
     reste = tab_w - (col_rang + col_mat + col_nom + col_moy + col_mention)
     col_matiere = reste / max(len(matieres_cols), 1)
@@ -2477,12 +2479,27 @@ def generer_fiche_classement_pdf(
         x = marge + 0.1 * cm
         pdf.drawString(x, y - 0.36 * cm, str(r["rang"]))
         x += col_rang
-        pdf.setFont("Helvetica", 7)
-        pdf.drawString(x, y - 0.36 * cm, (el.matricule if el else "") or "")
+        # Matricule affiché EN ENTIER sans déborder : on réduit la police juste
+        # ce qu'il faut pour qu'il tienne dans sa colonne (et, tout à la fin
+        # seulement, on tronque si un matricule est vraiment démesuré).
+        mat = (el.matricule if el else "") or ""
+        mat_font = 7.0
+        largeur_dispo = col_mat - 0.2 * cm
+        while mat_font > 5.0 and pdf.stringWidth(mat, "Helvetica", mat_font) > largeur_dispo:
+            mat_font -= 0.5
+        while mat and pdf.stringWidth(mat, "Helvetica", mat_font) > largeur_dispo:
+            mat = mat[:-1]
+        pdf.setFont("Helvetica", mat_font)
+        pdf.drawString(x, y - 0.36 * cm, mat)
         x += col_mat
+        # Le nom aussi est borné à sa colonne, pour ne pas empiéter sur les
+        # matières quand il est très long.
         pdf.setFont("Helvetica", 8)
         nom = ("%s %s" % (el.nom, el.prenom)) if el else ("#%s" % r["inscription_id"])
-        pdf.drawString(x, y - 0.36 * cm, nom[:30])
+        nom = nom[:30]
+        while nom and pdf.stringWidth(nom, "Helvetica", 8) > col_nom - 0.2 * cm:
+            nom = nom[:-1]
+        pdf.drawString(x, y - 0.36 * cm, nom)
         x += col_nom
 
         par_matiere = {l["matiere_id"]: l["moyenne_matiere"] for l in r["lignes"]}

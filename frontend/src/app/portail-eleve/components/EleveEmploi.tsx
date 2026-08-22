@@ -3,8 +3,8 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Calendar, Clock, Loader2, MapPin, User, Utensils } from 'lucide-react';
 import styles from '../portail-eleve.module.css';
-import { CreneauEDT, JOURS_ORDER, JOURS_LABEL, SUBJECT_COLORS } from '../types';
-import { chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
+import { CreneauEDT, SUBJECT_COLORS } from '../types';
+import { chargerHoraires, creneauxDeLaJournee, joursAffichesEmploi, LIBELLE_JOUR, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
 
 interface EleveEmploiProps {
     edtData: CreneauEDT[];
@@ -17,6 +17,12 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
     // le monde voit exactement la même grille (mêmes créneaux, mêmes pauses).
     const [horaires, setHoraires] = useState<Horaires>(HORAIRES_DEFAUT);
     useEffect(() => { chargerHoraires().then(setHoraires).catch(() => {}); }, []);
+    // Colonnes = jours ouvrés de l'école (samedi inclus si configuré), plus tout
+    // jour où un cours existe réellement. Fini le lundi→vendredi figé.
+    const joursAffiches = useMemo(
+        () => joursAffichesEmploi(horaires.joursOuvres, edtData.map(c => c.jour)),
+        [horaires, edtData]
+    );
     const lignes = useMemo(() => {
         const debuts = new Map<string, string>();
         creneauxDeLaJournee(horaires).forEach(h => debuts.set(h.debut, h.fin));
@@ -56,9 +62,9 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
                     <thead>
                         <tr>
                             <th style={{ width: '80px', background: '#f8fafc', borderRadius: '10px' }}></th>
-                            {JOURS_ORDER.map(j => (
-                                <th 
-                                    key={j} 
+                            {joursAffiches.map(j => (
+                                <th
+                                    key={j}
                                     style={{ 
                                         padding: '12px 10px', 
                                         fontSize: '12px', 
@@ -72,7 +78,7 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
                                         boxShadow: `0 4px 10px ${couleurPortail}15`
                                     }}
                                 >
-                                    {JOURS_LABEL[j]}
+                                    {LIBELLE_JOUR[j]}
                                 </th>
                             ))}
                         </tr>
@@ -84,7 +90,7 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
                             <React.Fragment key={h}>
                             {pauseAvant && (
                                 <tr>
-                                    <td colSpan={JOURS_ORDER.length + 1} style={{ padding: '8px', textAlign: 'center', fontSize: '11px', color: '#92400e', fontWeight: 700, background: '#fef3c7', borderRadius: '10px' }}>
+                                    <td colSpan={joursAffiches.length + 1} style={{ padding: '8px', textAlign: 'center', fontSize: '11px', color: '#92400e', fontWeight: 700, background: '#fef3c7', borderRadius: '10px' }}>
                                         <Utensils size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> {pauseAvant.debut} — {pauseAvant.fin} • Pause
                                     </td>
                                 </tr>
@@ -105,7 +111,7 @@ export default function EleveEmploi({ edtData, loading, couleurPortail }: EleveE
                                     <Clock size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'middle' }} />
                                     <span style={{ verticalAlign: 'middle' }}>{h}<br /><span style={{ fontSize: '10px', opacity: 0.7 }}>{endH}</span></span>
                                 </td>
-                                {JOURS_ORDER.map(jour => {
+                                {joursAffiches.map(jour => {
                                     const slot = edtData.find(c => c.jour === jour && c.heure_debut.slice(0, 5) === h);
                                     const ci = slot ? edtData.indexOf(slot) % SUBJECT_COLORS.length : 0;
                                     const c = SUBJECT_COLORS[ci];

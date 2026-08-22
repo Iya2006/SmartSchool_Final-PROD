@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
 import { useRouter } from 'next/navigation';
-import { chargerHoraires, creneauxDeLaJournee, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
+import { chargerHoraires, creneauxDeLaJournee, joursAffichesEmploi, LIBELLE_JOUR, HORAIRES_DEFAUT, type Horaires } from '@/lib/horaires';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Phone, User, GraduationCap, Wallet, CreditCard, TrendingUp, ChevronRight,
@@ -49,7 +49,9 @@ interface Enfant {
 interface FinResume { total_factures: number; total_paye: number; total_restant: number; taux: number; }
 interface DashData { parent: ParentInfo; enfants: Enfant[]; finance_resume: FinResume; nb_enfants: number; }
 
-const JOURS = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi'];
+// Les colonnes de l'emploi du temps ne sont plus figées lundi→vendredi :
+// elles suivent les jours ouvrés de l'école (voir joursAffiches, calculé plus
+// bas à partir de `horaires.joursOuvres` + les jours réellement pourvus).
 const HEURES = ['08:00', '09:00', '10:00', '11:00', '12:00', '14:00', '15:00', '16:00'];
 const SLOT_COLORS: Record<string, { bg: string; border: string; text: string }> = {
     'Français': { bg: '#fef3c7', border: '#f59e0b', text: '#92400e' },
@@ -104,6 +106,12 @@ export default function PortailParent() {
         edtSlots.forEach(s => { if (s.heure_debut) debuts.set(s.heure_debut.slice(0, 5), (s.heure_fin || '').slice(0, 5)); });
         return Array.from(debuts.entries()).map(([debut, fin]) => ({ debut, fin })).sort((a, b) => a.debut.localeCompare(b.debut));
     }, [edtSlots, horaires]);
+    // Colonnes = jours ouvrés de l'école (samedi inclus si configuré) + tout jour
+    // réellement pourvu d'un cours.
+    const joursAffiches = useMemo(
+        () => joursAffichesEmploi(horaires.joursOuvres, edtSlots.map(s => s.jour)),
+        [horaires, edtSlots]
+    );
     const [bulletinData, setBulletinData] = useState<any>(null);
     const [bulletinLoading, setBulletinLoading] = useState(false);
     // La période part vide : on ne devine pas le découpage de l'année. Le
@@ -1214,8 +1222,8 @@ export default function PortailParent() {
                                                         <thead>
                                                             <tr>
                                                                 <th style={{ padding: '10px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textAlign: 'center', width: '70px', borderBottom: '2px solid #f1f5f9' }}>HEURE</th>
-                                                                {JOURS.map(j => (
-                                                                    <th key={j} style={{ padding: '10px', fontSize: '12px', fontWeight: 700, color: '#1e293b', textAlign: 'center', borderBottom: '2px solid #f1f5f9' }}>{j}</th>
+                                                                {joursAffiches.map(j => (
+                                                                    <th key={j} style={{ padding: '10px', fontSize: '12px', fontWeight: 700, color: '#1e293b', textAlign: 'center', borderBottom: '2px solid #f1f5f9' }}>{LIBELLE_JOUR[j]}</th>
                                                                 ))}
                                                             </tr>
                                                         </thead>
@@ -1227,7 +1235,7 @@ export default function PortailParent() {
                                                                     <Fragment key={h}>
                                                                     {pauseAvant && (
                                                                         <tr key={`pause-${pauseAvant.debut}`}>
-                                                                            <td colSpan={JOURS.length + 1} style={{ padding: '8px', textAlign: 'center', fontSize: '11px', color: '#92400e', fontWeight: 700, background: '#fef3c7' }}>
+                                                                            <td colSpan={joursAffiches.length + 1} style={{ padding: '8px', textAlign: 'center', fontSize: '11px', color: '#92400e', fontWeight: 700, background: '#fef3c7' }}>
                                                                                 <Utensils size={11} style={{ display: 'inline', verticalAlign: 'middle', marginRight: '4px' }} /> {pauseAvant.debut} — {pauseAvant.fin} • Pause
                                                                             </td>
                                                                         </tr>
@@ -1236,8 +1244,8 @@ export default function PortailParent() {
                                                                         <td style={{ padding: '8px', fontSize: '11px', color: '#94a3b8', textAlign: 'center', fontWeight: 600, verticalAlign: 'top' }}>
                                                                             {h}<br /><span style={{ fontSize: '10px' }}>{endH}</span>
                                                                         </td>
-                                                                        {JOURS.map(j => {
-                                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j.toUpperCase() && s.heure_debut.slice(0, 5) === h);
+                                                                        {joursAffiches.map(j => {
+                                                                            const slot = edtSlots.find(s => s.jour.toUpperCase() === j && s.heure_debut.slice(0, 5) === h);
                                                                             if (!slot) return <td key={j} style={{ padding: '4px' }} />;
                                                                             const colors = SLOT_COLORS[slot.matiere] || SLOT_COLORS['default'];
                                                                             return (
