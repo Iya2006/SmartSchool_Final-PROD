@@ -17,7 +17,7 @@ const CURRENT_YEAR = new Date().getFullYear();
 const ANNEES = Array.from({ length: 6 }, (_, i) => CURRENT_YEAR - 4 + i);
 
 export default function ExportsPage() {
-    const { etablissementId, anneeId } = useApp();
+    const { etablissementId, anneeId, etablissementNom } = useApp();
     const [tab, setTab] = useState<'journalier' | 'mensuel' | 'classe'>('journalier');
     const [loading, setLoading] = useState(false);
 
@@ -46,8 +46,8 @@ export default function ExportsPage() {
             }
         });
         // On simule headerInfo avec une requete bidon ou statique car pas d'endpoint dédié ecole, on recupere de la premiere classe par ex
-        setHeaderInfo({ nom: 'SmartSchool', adresse: 'Conakry, Guinée', tel: '+224 620 00 00 00' });
-    }, [etablissementId, anneeId]);
+        setHeaderInfo({ nom: etablissementNom || 'École', adresse: 'Conakry, Guinée', tel: '+224 620 00 00 00' });
+    }, [etablissementId, anneeId, etablissementNom]);
 
     const fetchData = useCallback(async () => {
         setLoading(true);

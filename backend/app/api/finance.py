@@ -3207,7 +3207,7 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db), etablissem
 
     y -= 1.0 * cm
     pdf.setFont("Helvetica-Oblique", 8)
-    pdf.drawCentredString(largeur / 2, y, "Ce reçu est généré automatiquement par SmartSchool. Conservez-le pour vos archives.")
+    pdf.drawCentredString(largeur / 2, y, "Ce reçu est généré automatiquement. Conservez-le pour vos archives.")
 
     # === Filigrane ===
     if _bool(doc_settings.get("documents.filigrane_recus", "false")):
