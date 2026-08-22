@@ -2478,7 +2478,12 @@ def generer_fiche_classement_pdf(
         pdf.drawString(x, y - 0.36 * cm, str(r["rang"]))
         x += col_rang
         pdf.setFont("Helvetica", 7)
-        pdf.drawString(x, y - 0.36 * cm, (el.matricule if el else "") or "")
+        # Le matricule est tronqué à la largeur de sa colonne : sans cela un
+        # matricule long débordait sur la colonne « nom » d'à côté.
+        mat = (el.matricule if el else "") or ""
+        while mat and pdf.stringWidth(mat, "Helvetica", 7) > col_mat - 0.2 * cm:
+            mat = mat[:-1]
+        pdf.drawString(x, y - 0.36 * cm, mat)
         x += col_mat
         pdf.setFont("Helvetica", 8)
         nom = ("%s %s" % (el.nom, el.prenom)) if el else ("#%s" % r["inscription_id"])
