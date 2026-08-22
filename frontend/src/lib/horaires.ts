@@ -90,6 +90,21 @@ export function ordonnerJours(jours: string[]): string[] {
     return JOURS_SEMAINE.filter(j => choisis.has(j));
 }
 
+/**
+ * Colonnes (codes de jour) à afficher dans une grille d'emploi du temps.
+ *
+ * On part des jours ouvrés configurés par l'école (samedi inclus si elle
+ * travaille le samedi) et on y ajoute, par sécurité, tout jour où un cours
+ * existe réellement — ainsi un créneau du samedi reste visible même si le
+ * réglage « jours ouvrés » a changé depuis. Le tout remis dans l'ordre de la
+ * semaine. Remplace les listes figées lundi→vendredi des portails, qui
+ * masquaient purement et simplement le samedi.
+ */
+export function joursAffichesEmploi(joursOuvres: string[], joursAvecCours: string[] = []): string[] {
+    const jours = ordonnerJours([...joursOuvres, ...joursAvecCours]);
+    return jours.length > 0 ? jours : ordonnerJours(HORAIRES_DEFAUT.joursOuvres);
+}
+
 export const HORAIRES_DEFAUT: Horaires = {
     debut: '08:00',
     fin: '17:00',
