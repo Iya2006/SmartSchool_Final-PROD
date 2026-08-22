@@ -68,6 +68,10 @@ export default function Topbar() {
     const { sidebarCollapsed, toggleSidebarCollapsed, openMobileSidebar } = useUI();
     const { user } = useAuth();
     const isMobile = useIsMobile();
+    // Seul un rôle admin (direction) peut CHANGER d'année et consulter une
+    // année passée. Comptable, surveillant, opérateur, etc. restent toujours
+    // sur l'année en cours — ils voient l'année, sans pouvoir la changer.
+    const peutChangerAnnee = isAdminSystemRole(user?.role);
     const [query, setQuery] = useState('');
     const [isFocused, setIsFocused] = useState(false);
     const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -200,7 +204,14 @@ export default function Topbar() {
                 </div>
                 )}
 
-                {annees.length > 0 && !isMobile && (
+                {annees.length > 0 && !isMobile && !peutChangerAnnee && (
+                    // Non-admin : l'année en cours, en lecture seule (pas de sélecteur).
+                    <div className={styles.yearBadge} title="Année en cours">
+                        <Calendar size={14} />
+                        <span style={{ fontWeight: 600 }}>{anneeLibelle}</span>
+                    </div>
+                )}
+                {annees.length > 0 && !isMobile && peutChangerAnnee && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {/* Sélecteur d'année : choisir une année passée fait basculer
                             TOUT le système en consultation (lecture seule — l'écriture

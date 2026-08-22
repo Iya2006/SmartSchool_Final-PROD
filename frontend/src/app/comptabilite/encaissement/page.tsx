@@ -79,7 +79,7 @@ function Badge({ statut }: { statut: string }) {
 function EncaissementContent() {
     const searchParams = useSearchParams();
     const urlEleveId = searchParams.get('eleve_id');
-    const { etablissementId, anneeId: anneeCouranteId } = useApp();
+    const { etablissementId, anneeId: anneeCouranteId, lectureSeule } = useApp();
 
     // Steps: 'search' | 'solde' | 'payer' | 'recu'
     const [step, setStep] = useState<'search' | 'solde' | 'payer' | 'recu'>('search');
@@ -740,8 +740,9 @@ function EncaissementContent() {
                                         style={{ flex: 1, padding: '14px', background: '#f1f5f9', color: '#475569', border: 'none', borderRadius: 10, fontWeight: 600, cursor: 'pointer', fontSize: 14 }}>
                                         Annuler
                                     </button>
-                                    <button type="submit" disabled={payLoading}
-                                        style={{ flex: 2, padding: '14px', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 800, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: payLoading ? 0.7 : 1 }}>
+                                    <button type="submit" disabled={payLoading || lectureSeule}
+                                        title={lectureSeule ? "Année en lecture seule — encaissement impossible" : undefined}
+                                        style={{ flex: 2, padding: '14px', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', borderRadius: 10, fontWeight: 800, cursor: (payLoading || lectureSeule) ? 'not-allowed' : 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: (payLoading || lectureSeule) ? 0.6 : 1 }}>
                                         {payLoading ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
                                         {payLoading ? 'Enregistrement...' : 'Valider le paiement'}
                                     </button>

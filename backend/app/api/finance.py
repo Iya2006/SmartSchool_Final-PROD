@@ -1590,6 +1590,11 @@ def create_depense(data: DepenseCreate, db: Session = Depends(get_db), etablisse
     # la dépense créée simplement en changeant ce champ dans le body.
     payload = data.model_dump()
     payload["etablissement_id"] = etablissement_id
+    # Une dépense saisie par le comptable est APPROUVÉE d'emblée : plus d'étape
+    # d'approbation séparée. Elle est donc immédiatement déduite du solde réel
+    # (les rapports comptent « VALIDE »), cohérent avec le plafond vérifié
+    # ci-dessus qui ne laisse jamais le solde passer négatif.
+    payload["statut"] = "VALIDE"
     dep = Depense(**payload)
     db.add(dep)
     db.commit()
@@ -3202,7 +3207,7 @@ def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db), etablissem
 
     y -= 1.0 * cm
     pdf.setFont("Helvetica-Oblique", 8)
-    pdf.drawCentredString(largeur / 2, y, "Ce reçu est généré automatiquement par SmartSchool. Conservez-le pour vos archives.")
+    pdf.drawCentredString(largeur / 2, y, "Ce reçu est généré automatiquement. Conservez-le pour vos archives.")
 
     # === Filigrane ===
     if _bool(doc_settings.get("documents.filigrane_recus", "false")):

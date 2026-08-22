@@ -18,7 +18,7 @@ const CURRENT_YEAR = new Date().getFullYear();
 const ANNEES = Array.from({ length: 6 }, (_, i) => CURRENT_YEAR - 4 + i);
 
 export default function RapportsPage() {
-    const { etablissementId, anneeId } = useApp();
+    const { etablissementId, anneeId, etablissementNom } = useApp();
     const [tab, setTab] = useState<'mensuel' | 'annuel' | 'eleve' | 'cloture'>('mensuel');
     const [loading, setLoading] = useState(false);
 
@@ -243,8 +243,8 @@ export default function RapportsPage() {
                         <>
                             {/* Printable header */}
                             <div className="print-only" style={{ display: 'none', textAlign: 'center', marginBottom: 30, borderBottom: '2px solid #1e293b', paddingBottom: 16 }}>
-                                <h1 style={{ fontSize: 24, fontWeight: 800 }}>Smart School Guinea</h1>
-                                <p style={{ color: '#64748b' }}>Conakry, République de Guinée • Système de Gestion Scolaire</p>
+                                <h1 style={{ fontSize: 24, fontWeight: 800 }}>{etablissementNom || 'École'}</h1>
+                                <p style={{ color: '#64748b' }}>Conakry, République de Guinée • Rapport financier</p>
                             </div>
 
                             {/* 1. MONTHLY REPORT VIEW */}

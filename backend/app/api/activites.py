@@ -120,16 +120,19 @@ def publier_activite(activite_id: int, db: Session = Depends(get_db), etablissem
     db.commit()
     db.refresh(a)
     try:
-        from app.models.academique import SsMessage
+        from app.models.academique import SsMessage, Etablissement
         # Extrait de la f-string : un antislash dans une expression de f-string
         # n'est accepté qu'à partir de Python 3.12 et faisait échouer la
         # compilation en 3.11.
         heure_affichee = a.heure or "Aujourd'hui"
         description_affichee = a.description or ""
+        # L'expéditeur porte le nom de l'ÉCOLE, jamais « SmartSchool ».
+        _etab = db.query(Etablissement).filter(Etablissement.etablissement_id == a.etablissement_id).first()
+        nom_ecole = (_etab.nom if _etab and _etab.nom else "Administration")
         msg = SsMessage(
             etablissement_id=a.etablissement_id,
             expediteur_type="ADMIN",
-            expediteur_nom="Administration SmartSchool",
+            expediteur_nom=nom_ecole,
             sujet=f"📢 Activité Publiée : {a.titre}",
             contenu=f"Programme du jour : {a.titre}\nHeure : {heure_affichee}\nDescription : {description_affichee}",
             objet="NOTIFICATION_ACTIVITE",

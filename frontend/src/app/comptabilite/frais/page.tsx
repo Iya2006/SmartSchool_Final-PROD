@@ -80,7 +80,7 @@ function FraisScolaritePage() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const tabParam = searchParams.get('tab') || 'types';
-    const { etablissementId, anneeId: anneeCouranteId } = useApp();
+    const { etablissementId, anneeId: anneeCouranteId, lectureSeule } = useApp();
     const isMobile = useIsMobile();
 
     // Data loaded via React Query
@@ -705,7 +705,9 @@ function FraisScolaritePage() {
                             <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', color: '#0f172a' }}>Paramétrage des Tarifs</h3>
                             <p style={{ margin: 0, color: '#64748b', fontSize: '13px' }}>Gérez tous les types de frais applicables aux élèves</p>
                         </div>
-                        <button onClick={openNewTypeFrais} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>
+                        <button onClick={openNewTypeFrais} disabled={lectureSeule}
+                            title={lectureSeule ? "Année en lecture seule — modification impossible" : undefined}
+                            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: lectureSeule ? 'not-allowed' : 'pointer', fontSize: '14px', opacity: lectureSeule ? 0.5 : 1 }}>
                             <PlusCircle size={16} /> Nouveau type de frais
                         </button>
                     </div>
@@ -922,10 +924,11 @@ function FraisScolaritePage() {
                             <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', color: '#0f172a' }}>Gestion des Factures</h3>
                             <p style={{ margin: 0, color: '#64748b', fontSize: '13px' }}>{filteredFactures.length} facture(s) trouvée(s)</p>
                         </div>
-                        <button onClick={() => {
+                        <button disabled={lectureSeule} onClick={() => {
                             setFactClasseMontants({}); setFactTypeFraisId(''); setFactMontant(''); setFactNbEcheances('1');
                             setShowFactureModal(true);
-                        }} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', fontSize: '14px' }}>
+                        }} title={lectureSeule ? "Année en lecture seule — facturation impossible" : undefined}
+                        style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: lectureSeule ? 'not-allowed' : 'pointer', fontSize: '14px', opacity: lectureSeule ? 0.5 : 1 }}>
                             <PlusCircle size={16} /> Facturer une classe
                         </button>
                     </div>

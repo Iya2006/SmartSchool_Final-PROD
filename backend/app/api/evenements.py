@@ -131,11 +131,14 @@ def publier_evenement(evenement_id: int, db: Session = Depends(get_db), etabliss
     db.commit()
     db.refresh(e)
     try:
-        from app.models.academique import SsMessage
+        from app.models.academique import SsMessage, Etablissement
+        # L'expéditeur porte le nom de l'ÉCOLE, jamais « SmartSchool ».
+        _etab = db.query(Etablissement).filter(Etablissement.etablissement_id == e.etablissement_id).first()
+        nom_ecole = (_etab.nom if _etab and _etab.nom else "Administration")
         msg = SsMessage(
             etablissement_id=e.etablissement_id,
             expediteur_type="ADMIN",
-            expediteur_nom="Administration SmartSchool",
+            expediteur_nom=nom_ecole,
             sujet=f"📢 Événement Publié : {e.titre}",
             contenu=f"L'administration a publié un nouvel événement : {e.titre}\nDate : {e.date_debut}\nLieu : {e.lieu or 'Établissement'}\nAudience : {e.cible}",
             objet="NOTIFICATION_EVENEMENT",

@@ -120,7 +120,12 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: B
     const colorEnd = config.colorEnd || (isEnseignant ? '#3b0764' : '#0f172a');
     const gradientAngle = config.gradientAngle !== undefined ? config.gradientAngle : 135;
     const logoPosition = config.logoPosition || 'center';
-    const footerText = config.footerText || (isEnseignant ? 'SmartSchool — Personnel Enseignant' : 'SmartSchool — Excellence Éducative');
+    // Le pied de carte porte le nom de l'ÉCOLE, jamais « SmartSchool ». Si
+    // l'école a saisi un pied personnalisé, on le respecte ; sinon (vide ou
+    // ancien défaut de marque), on retombe sur le nom de l'établissement.
+    const _footerBrandDefaults = ['SmartSchool — Excellence Éducative', 'SmartSchool — Personnel Enseignant'];
+    const _footerPerso = config.footerText && !_footerBrandDefaults.includes(config.footerText) ? config.footerText : '';
+    const footerText = _footerPerso || etablissementNom || (isEnseignant ? 'Personnel Enseignant' : 'Carte Scolaire');
     const showQrCode = config.showQrCode !== false;
     const showDateNaissance = !!config.showDateNaissance;
     const showClasse = config.showClasse !== false;
