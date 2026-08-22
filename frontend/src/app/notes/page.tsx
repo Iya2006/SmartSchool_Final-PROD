@@ -68,8 +68,14 @@ export default function CentralisationNotesPage() {
     const [classes, setClasses] = useState<any[]>([]);
     const [trimestres, setTrimestres] = useState<any[]>([]);
     const [selectedClasse, setSelectedClasse] = useState<number | null>(null);
-    const [selectedTrimestre, setSelectedTrimestre] = useState<number>(1);
+    // 0 = aucune période sélectionnée. NE JAMAIS revenir à 1 « par défaut » :
+    // l'identifiant 1 est la toute première période créée sur la plateforme,
+    // donc celle d'une AUTRE école — un appel notes-centralisees?trimestre_id=1
+    // renvoie alors 404 et l'écran restait vide sans rien expliquer.
+    const [selectedTrimestre, setSelectedTrimestre] = useState<number>(0);
     const [classeData, setClasseData] = useState<ClasseData | null>(null);
+    // Message d'erreur du chargement d'une classe (avant : avalé en silence).
+    const [detailError, setDetailError] = useState<string>('');
     const [evalsCentralisees, setEvalsCentralisees] = useState<EvalCentralisee[]>([]);
     const [stats, setStats] = useState({ total_evaluations: 0, centralisees: 0, non_centralisees: 0, taux_centralisation: 0 });
     const [loading, setLoading] = useState(false);
@@ -226,12 +232,26 @@ export default function CentralisationNotesPage() {
     // Load classe detail view
     const loadClasseDetail = useCallback(async () => {
         if (!selectedClasse) return;
+        // Sans période valide, l'appel partirait avec trimestre_id=0 (ou celui
+        // d'une autre école) et échouerait en silence. On le dit clairement.
+        if (!selectedTrimestre) {
+            setDetailError("Aucune période (trimestre) n'est configurée pour l'année en cours. Configurez le calendrier avant de centraliser les notes.");
+            setClasseData(null);
+            return;
+        }
         setLoading(true);
+        setDetailError('');
         try {
             const res = await api.get(`/api/evaluations/classe/${selectedClasse}/notes-centralisees?trimestre_id=${selectedTrimestre}`);
             setClasseData(res.data);
             setViewMode('detail');
-        } catch (e) { console.error(e); }
+        } catch (e: any) {
+            console.error(e);
+            // On remonte le détail du serveur au lieu de laisser l'écran vide.
+            setDetailError(e?.response?.data?.detail
+                || "Impossible de charger les notes de cette classe pour cette période.");
+            setClasseData(null);
+        }
         setLoading(false);
     }, [selectedClasse, selectedTrimestre]);
 
@@ -740,23 +760,52 @@ export default function CentralisationNotesPage() {
                                 </optgroup>
                             ))}
                         </select>
-                        <select value={selectedTrimestre} onChange={e => setSelectedTrimestre(Number(e.target.value))}
-                            style={{ padding: '10px 16px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', fontWeight: 600, minWidth: '200px', background: 'white', cursor: 'pointer' }}>
+                        <select value={selectedTrimestre || ''} onChange={e => setSelectedTrimestre(Number(e.target.value))}
+                            disabled={trimestres.length === 0}
+                            style={{ padding: '10px 16px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', fontWeight: 600, minWidth: '200px', background: 'white', cursor: trimestres.length === 0 ? 'not-allowed' : 'pointer' }}>
+                            {/* Plus de repli codé en dur (value=1) : ne proposer que les
+                                vraies périodes de l'école. */}
                             {trimestres.length > 0 ? trimestres.map((t: any) => (
                                 <option key={t.trimestre_id} value={t.trimestre_id}>{t.libelle}</option>
                             )) : (
-                                <>
-                                    <option value={1}>1er Trimestre</option>
-                                    <option value={2}>2ème Trimestre</option>
-                                    <option value={3}>3ème Trimestre</option>
-                                </>
+                                <option value="">— Aucune période configurée —</option>
                             )}
                         </select>
-                        <button onClick={loadClasseDetail} disabled={!selectedClasse || loading}
-                            style={{ padding: '10px 24px', borderRadius: '10px', border: 'none', background: selectedClasse ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : '#e2e8f0', color: selectedClasse ? 'white' : '#94a3b8', fontSize: '14px', fontWeight: 700, cursor: selectedClasse ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button onClick={loadClasseDetail} disabled={!selectedClasse || !selectedTrimestre || loading}
+                            title={!selectedTrimestre ? "Configurez d'abord le calendrier (périodes) de l'année en cours" : undefined}
+                            style={{ padding: '10px 24px', borderRadius: '10px', border: 'none', background: (selectedClasse && selectedTrimestre) ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : '#e2e8f0', color: (selectedClasse && selectedTrimestre) ? 'white' : '#94a3b8', fontSize: '14px', fontWeight: 700, cursor: (selectedClasse && selectedTrimestre) ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <Eye size={16} /> Voir les Notes
                         </button>
                     </div>
+
+                    {/* Année sans périodes configurées : cause n°1 du « rien ne sort »
+                        quand on choisit une classe. On l'explique et on donne le lien. */}
+                    {trimestres.length === 0 && (
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '16px', borderRadius: '12px', background: '#fffbeb', border: '1px solid #fde68a', marginBottom: '20px' }}>
+                            <AlertCircle size={20} style={{ color: '#d97706', flexShrink: 0, marginTop: '2px' }} />
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#92400e', marginBottom: '4px' }}>
+                                    Aucune période (trimestre) configurée pour l&apos;année en cours
+                                </div>
+                                <div style={{ fontSize: '12.5px', color: '#92400e', lineHeight: 1.5, marginBottom: '12px' }}>
+                                    Impossible de centraliser ou calculer des notes tant que le calendrier de l&apos;année n&apos;est pas défini. Créez les trimestres (ou semestres) de l&apos;année en cours, puis revenez ici.
+                                </div>
+                                <button onClick={() => window.location.href = '/parametres/calendrier'}
+                                    style={{ padding: '8px 16px', borderRadius: '10px', border: 'none', background: '#d97706', color: 'white', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                    Configurer le calendrier
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Erreur de chargement d'une classe (période invalide, accès refusé…) :
+                        remontée à l'écran au lieu de laisser une page muette. */}
+                    {detailError && trimestres.length > 0 && (
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '14px 16px', borderRadius: '12px', background: '#fef2f2', border: '1px solid #fecaca', marginBottom: '20px' }}>
+                            <AlertCircle size={18} style={{ color: '#dc2626', flexShrink: 0 }} />
+                            <span style={{ fontSize: '13px', color: '#991b1b', fontWeight: 600 }}>{detailError}</span>
+                        </div>
+                    )}
 
                     {/* ═══ LISTE DES ÉVALUATIONS CENTRALISÉES ═══ */}
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
