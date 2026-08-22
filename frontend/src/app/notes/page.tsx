@@ -938,6 +938,25 @@ export default function CentralisationNotesPage() {
                                     <div style={{ fontSize: '14px', fontWeight: 800, color: '#0f172a', marginBottom: '4px' }}>
                                         Créer une composition ou une évaluation
                                     </div>
+                                    {classeData.matieres.length === 0 ? (
+                                    /* Règle : pas d'épreuve possible sans matière rattachée à la classe. */
+                                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '16px', borderRadius: '12px', background: '#fffbeb', border: '1px solid #fde68a' }}>
+                                        <AlertCircle size={20} style={{ color: '#d97706', flexShrink: 0, marginTop: '2px' }} />
+                                        <div style={{ flex: 1 }}>
+                                            <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#92400e', marginBottom: '4px' }}>
+                                                Cette classe n&apos;a aucune matière configurée
+                                            </div>
+                                            <div style={{ fontSize: '12.5px', color: '#92400e', lineHeight: 1.5, marginBottom: '12px' }}>
+                                                Impossible de créer une composition ou une évaluation tant qu&apos;aucune matière n&apos;est rattachée à {classeData.classe.libelle}. Configurez d&apos;abord les matières de la classe (attribution automatique du programme guinéen ou ajout manuel).
+                                            </div>
+                                            <button onClick={() => window.location.href = `/classes/configurer/${selectedClasse}`}
+                                                style={{ padding: '8px 16px', borderRadius: '10px', border: 'none', background: '#d97706', color: 'white', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                                <BookOpen size={14} /> Configurer les matières de la classe
+                                            </button>
+                                        </div>
+                                    </div>
+                                    ) : (
+                                    <>
                                     <div style={{ fontSize: '12.5px', color: '#64748b', marginBottom: '10px' }}>
                                         Une seule saisie crée l&apos;épreuve pour <strong>toutes les matières</strong> de {classeData.classe.libelle} ({classeData.matieres.length} matières).
                                         Les enseignants n&apos;auront plus qu&apos;à saisir leurs notes.
@@ -1069,6 +1088,8 @@ export default function CentralisationNotesPage() {
                                             </button>
                                         </div>
                                     </div>
+                                    </>
+                                    )}
 
                                     {sessions.length > 0 && (
                                         <div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
