@@ -11,6 +11,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import SyncStatusIndicator from '@/components/SyncStatusIndicator';
+import LectureSeuleBanner from '@/components/LectureSeuleBanner';
 
 // SEPT ENTREES, pas douze.
 //
@@ -411,6 +412,7 @@ export default function ComptabiliteLayout({ children }: { children: React.React
 
                 {/* Page Content */}
                 <div style={{ flex: 1, overflow: 'auto', padding: isMobile ? '14px' : '24px' }}>
+                    <LectureSeuleBanner />
                     {children}
                 </div>
             </main>

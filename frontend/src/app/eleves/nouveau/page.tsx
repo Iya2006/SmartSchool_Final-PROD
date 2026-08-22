@@ -40,7 +40,7 @@ const estFraisInscription = (cat?: string) => {
 
 export default function NouveauEleve() {
     const router = useRouter();
-    const { etablissementId, anneeId } = useApp();
+    const { etablissementId, anneeId, lectureSeule } = useApp();
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -902,7 +902,8 @@ export default function NouveauEleve() {
                         Annuler
                     </Link>
                     <button
-                        type="submit" disabled={loading}
+                        type="submit" disabled={loading || lectureSeule}
+                        title={lectureSeule ? "Année en lecture seule — inscription impossible" : undefined}
                         style={{
                             padding: '14px 32px', borderRadius: '12px',
                             background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white',

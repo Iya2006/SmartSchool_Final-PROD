@@ -68,6 +68,10 @@ interface AppContextType {
     // Année réellement « en cours » (est_courante='O'). Quand anneeId en diffère,
     // l'utilisateur consulte une année passée en lecture seule.
     anneeCouranteId: number;
+    // true quand on consulte une année qui n'est PAS l'année en cours : toute
+    // l'app passe en lecture seule (le serveur refuse déjà l'écriture ; ce
+    // drapeau sert à griser les boutons et afficher la bannière côté UI).
+    lectureSeule: boolean;
     setEtablissementId: (id: number) => void;
     setAnneeId: (id: number) => void;
     annees: AnneeScolaire[];
@@ -199,6 +203,7 @@ const AppContext = createContext<AppContextType>({
     anneeId: 1,
     anneeLibelle: '',
     anneeCouranteId: 1,
+    lectureSeule: false,
     setEtablissementId: () => {},
     setAnneeId: () => {},
     annees: [],
@@ -476,6 +481,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             annees, loading,
             refreshEtablissement: fetchEtablissement,
             anneeCouranteId,
+            lectureSeule: anneeId !== anneeCouranteId,
             refreshAnnee: fetchAnnee,
 
             theme,

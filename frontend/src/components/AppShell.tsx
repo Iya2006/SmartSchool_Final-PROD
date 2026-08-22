@@ -9,6 +9,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { startAutoSync } from '@/lib/syncEngine';
 import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
+import LectureSeuleBanner from '@/components/LectureSeuleBanner';
 
 // Pages en plein écran (pas de Sidebar/Topbar)
 const FULLSCREEN_PATHS = [
@@ -78,6 +79,7 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
             >
                 <div className="no-print"><Topbar /></div>
                 <main style={{ padding: '118px 24px 30px', flex: 1, minWidth: 0 }}>
+                    <LectureSeuleBanner />
                     {children}
                 </main>
             </div>

@@ -82,7 +82,7 @@ function montant(v: number): string {
 }
 
 export default function DepensesPage() {
-    const { etablissementId, anneeId: anneeAffichee } = useApp();
+    const { etablissementId, anneeId: anneeAffichee, lectureSeule } = useApp();
     const [depenses, setDepenses] = useState<Depense[]>([]);
     const [stats, setStats] = useState<Stats | null>(null);
     const [chargement, setChargement] = useState(true);
@@ -173,7 +173,9 @@ export default function DepensesPage() {
                     <button onClick={charger} disabled={chargement} style={boutonDiscret}>
                         <RefreshCw size={15} style={chargement ? { animation: 'spin 1s linear infinite' } : undefined} /> Actualiser
                     </button>
-                    <button onClick={() => setFormulaire(true)} style={boutonPrincipal}>
+                    <button onClick={() => setFormulaire(true)} disabled={lectureSeule}
+                        title={lectureSeule ? "Année en lecture seule — création impossible" : undefined}
+                        style={{ ...boutonPrincipal, ...(lectureSeule ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}>
                         <Plus size={15} /> Nouvelle dépense
                     </button>
                 </div>

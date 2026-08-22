@@ -62,7 +62,7 @@ interface EpreuvePeriode {
 }
 
 export default function CentralisationNotesPage() {
-    const { etablissementId, anneeId } = useApp();
+    const { etablissementId, anneeId, lectureSeule } = useApp();
 
     // State
     const [classes, setClasses] = useState<any[]>([]);
@@ -1514,8 +1514,9 @@ export default function CentralisationNotesPage() {
                                         style={{ padding: '10px 18px', borderRadius: '10px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
                                         Annuler
                                     </button>
-                                    <button onClick={enregistrerNotes} disabled={savingNotes || notesSaisie.length === 0}
-                                        style={{ padding: '10px 22px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <button onClick={enregistrerNotes} disabled={savingNotes || notesSaisie.length === 0 || lectureSeule}
+                                        title={lectureSeule ? "Année en lecture seule — saisie impossible" : undefined}
+                                        style={{ padding: '10px 22px', borderRadius: '10px', border: 'none', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'white', fontSize: '13px', fontWeight: 700, cursor: lectureSeule ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', opacity: lectureSeule ? 0.5 : 1 }}>
                                         <Save size={15} /> {savingNotes ? 'Enregistrement...' : 'Enregistrer les notes'}
                                     </button>
                                 </div>
