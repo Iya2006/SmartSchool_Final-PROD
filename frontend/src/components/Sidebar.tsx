@@ -11,7 +11,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, History, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
@@ -132,12 +132,6 @@ export default function Sidebar() {
                         <Link href="/dashboard/presences/scan">
                             <ScanLine size={18} className={styles.menuIcon} />
                             <span className={styles.menuText}>Pointage enseignants</span>
-                        </Link>
-                    </li>
-                    <li className={pathname.startsWith('/dashboard/presences/historique') ? styles.currentPage : ''}>
-                        <Link href="/dashboard/presences/historique">
-                            <History size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Historique Présence</span>
                         </Link>
                     </li>
                     <li className={pathname.startsWith('/salle-des-profs') ? styles.currentPage : ''}>

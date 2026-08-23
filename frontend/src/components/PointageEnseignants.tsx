@@ -20,11 +20,12 @@ type Onglet = 'scanner' | 'manuel' | 'historique';
 const aujourdHui = () => new Date().toISOString().split('T')[0];
 
 /**
- * Pointage des enseignants dans l'espace du surveillant : scanner le badge,
- * OU le saisir à la main (pas de courant/caméra), OU consulter et nettoyer
- * l'historique. Le surveillant voit ici la même chose que l'admin.
+ * Pointage des enseignants : scanner le badge, OU le saisir à la main (pas de
+ * courant/caméra), OU consulter et nettoyer l'historique. Écran unique partagé
+ * par l'admin (dans le back-office) et le surveillant (dans son portail, avec
+ * `onRetour` pour revenir à son poste).
  */
-export default function PointageEnseignantsSurveillant({ onRetour }: { onRetour: () => void }) {
+export default function PointageEnseignants({ onRetour }: { onRetour?: () => void }) {
     const [onglet, setOnglet] = useState<Onglet>('scanner');
     const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
 
@@ -106,9 +107,11 @@ export default function PointageEnseignantsSurveillant({ onRetour }: { onRetour:
     return (
         <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0fdf4 0%, #eff6ff 48%, #ffffff 100%)', padding: '24px' }}>
             <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
-                <button onClick={onRetour} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #cbd5e1', background: 'white', color: '#0f172a', fontWeight: 800, cursor: 'pointer', marginBottom: '16px' }}>
-                    <ArrowLeft size={16} /> Retour au poste surveillance
-                </button>
+                {onRetour && (
+                    <button onClick={onRetour} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #cbd5e1', background: 'white', color: '#0f172a', fontWeight: 800, cursor: 'pointer', marginBottom: '16px' }}>
+                        <ArrowLeft size={16} /> Retour au poste surveillance
+                    </button>
+                )}
 
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '18px' }}>
                     {ongletBtn('scanner', 'Scanner un badge', QrCode)}

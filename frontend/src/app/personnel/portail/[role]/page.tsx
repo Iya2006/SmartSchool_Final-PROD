@@ -35,13 +35,14 @@ import {
     CalendarClock,
     QrCode,
     Send,
+    Trash2,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { getRoleAccessConfig } from '@/lib/roleAccess';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import PointageEnseignantsSurveillant from '@/components/PointageEnseignantsSurveillant';
+import PointageEnseignants from '@/components/PointageEnseignants';
 
 type PortalModule = {
     icon: React.ComponentType<{ size?: number }>;
@@ -1321,6 +1322,19 @@ function SurveillantPortal() {
         }
     };
 
+    // Supprimer l'appel d'une séance (comme l'admin) : efface les présences et
+    // permet de le refaire. Le cours/la séance restent.
+    const supprimerAppelSeance = async (seanceId: number) => {
+        if (!confirm("Supprimer l'appel de cette séance ?\n\nToutes les présences saisies seront effacées et l'appel pourra être refait. Cette action est irréversible.")) return;
+        try {
+            await api.delete(`/api/seances/${seanceId}/appel`);
+            setHistDetail(null);
+            chargerHistorique();
+        } catch (err) {
+            alert(getErrorMessage(err));
+        }
+    };
+
     /** Depuis un cours precis : le professeur, la date et le motif sont deja
      *  connus, il n'y a plus rien a ressaisir de memoire. */
     const signalerDepuisLeCours = (c: CoursDuJour) => {
@@ -1488,7 +1502,7 @@ function SurveillantPortal() {
     // scanner le badge, saisir à la main (sans courant/caméra), ou consulter
     // et nettoyer l'historique. Le scan marche sur téléphone/tablette/ordinateur.
     if (montrerPointage) {
-        return <PointageEnseignantsSurveillant onRetour={() => setMontrerPointage(false)} />;
+        return <PointageEnseignants onRetour={() => setMontrerPointage(false)} />;
     }
 
     return (
@@ -1732,6 +1746,14 @@ function SurveillantPortal() {
                                     );
                                 })}
                             </div>
+                            {histDetail.eleves.length > 0 && (
+                                <div style={{ padding: '14px 20px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end' }}>
+                                    <button type="button" onClick={() => supprimerAppelSeance(histDetail.seance_id)}
+                                        style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #fecaca', background: 'white', color: '#b91c1c', fontWeight: 800, cursor: 'pointer' }}>
+                                        <Trash2 size={15} /> Supprimer l&apos;appel
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
