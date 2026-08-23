@@ -665,3 +665,29 @@ def corriger_presence(
     )
     db.commit()
     return {"message": "Présence corrigée", "presence_id": presence_id, "statut": data.statut}
+
+
+@router_admin.delete("/{seance_id}/appel")
+def supprimer_appel_seance(
+    seance_id: int, request: Request,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Supprime l'appel déjà fait d'une séance : efface toutes les présences
+    saisies et remet la séance en « appel non fait », pour pouvoir le refaire.
+
+    La séance elle-même n'est pas supprimée (le cours a bien eu lieu) — seule
+    la saisie de présence est effacée. Refusé sur une année clôturée.
+    """
+    s = _seance_admin_ou_404(db, seance_id, etablissement_id)
+    verifier_annee_modifiable(db, s.annee_id)
+    nb = db.query(Presence).filter(Presence.seance_id == seance_id).delete(synchronize_session=False)
+    s.appel_fait = "N"
+    s.appel_fait_le = None
+    _log_audit(
+        db, request, current_user, etablissement_id, "SUPPRIMER_APPEL_SEANCE",
+        f"Séance {seance_id} : appel supprimé ({nb} présence(s) effacée(s)).",
+    )
+    db.commit()
+    return {"message": f"Appel supprimé ({nb} présence(s) effacée(s))", "seance_id": seance_id, "presences_supprimees": nb}

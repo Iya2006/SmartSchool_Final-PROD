@@ -6,7 +6,7 @@ import {
     ChevronRight, Loader2, FileText, Download, CheckCircle2, AlertCircle,
     X, Shield, Search, Filter, Clock, Users, BookOpen, Send, Eye,
     XCircle, BarChart3, FileUp, Award, Printer, PenLine, Inbox, Paperclip, UserCheck, Calendar,
-    Megaphone, BellRing, ListChecks
+    Megaphone, BellRing, ListChecks, Trash2
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -209,6 +209,17 @@ export default function CentreEvaluationPage() {
             await api.put(`/api/examens/sujets/${rejectId}/rejeter?raison=${encodeURIComponent(rejectRaison)}`);
             showSuccess('Sujet rejeté, enseignant notifié.');
             setRejectId(null); setRejectRaison('');
+            loadData();
+        } catch (err: any) { showError(err.response?.data?.detail || 'Erreur'); }
+    };
+
+    // Suppression définitive d'un sujet reçu (fichier compris). L'admin peut
+    // supprimer n'importe quel sujet, quel que soit son statut.
+    const handleSupprimer = async (s: SujetItem) => {
+        if (!confirm(`Supprimer définitivement le sujet « ${s.titre || s.matiere_libelle || 'sans titre'} » de ${s.enseignant_nom} ?\n\nLe fichier sera effacé. Cette action est irréversible.`)) return;
+        try {
+            await api.delete(`/api/examens/sujets/${s.sujet_id}`);
+            showSuccess('Sujet supprimé.');
             loadData();
         } catch (err: any) { showError(err.response?.data?.detail || 'Erreur'); }
     };
@@ -520,6 +531,14 @@ export default function CentreEvaluationPage() {
                                                 </button>
                                             </>
                                         )}
+                                        {/* Suppression définitive — l'admin peut retirer n'importe quel sujet. */}
+                                        <button onClick={() => handleSupprimer(s)} title="Supprimer ce sujet" style={{
+                                            padding: '9px 12px', borderRadius: '10px', fontSize: '12px', fontWeight: 600,
+                                            background: 'white', color: '#b91c1c', border: '1px solid #fecaca', cursor: 'pointer',
+                                            display: 'inline-flex', alignItems: 'center'
+                                        }}>
+                                            <Trash2 size={13} />
+                                        </button>
                                     </div>
                                 </motion.div>
                             );

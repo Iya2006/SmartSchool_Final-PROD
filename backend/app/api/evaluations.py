@@ -1561,23 +1561,46 @@ def modifier_session(session_id: int, data: EvaluationSessionUpdate, db: Session
 
 @router.delete("/sessions/{session_id}")
 def supprimer_session(session_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Supprime une composition (toutes ses matières) et ses notes — même centralisée.
+
+    Comme pour une épreuve isolée : les notes sont effacées, la composition ne
+    compte plus dans aucun bulletin (trimestre/semestre), et si elle était
+    centralisée on recalcule les moyennes de la période derrière.
+    """
     session = _session_ou_404(db, session_id, etablissement_id)
     classe = db.query(Classe).filter(Classe.classe_id == session.classe_id).first()
     verifier_annee_modifiable(db, classe.annee_id if classe else None)
 
+    classe_id = session.classe_id
+    trimestre_id = session.trimestre_id
+    trimestre = db.query(Trimestre).filter(Trimestre.trimestre_id == trimestre_id).first()
+    if trimestre and trimestre.statut == "CLOTURE":
+        raise HTTPException(400, f"{trimestre.libelle} est clôturé — suppression impossible.")
+
     evals = db.query(Evaluation).filter(Evaluation.session_id == session_id).all()
     eval_ids = [e.evaluation_id for e in evals]
-    if any(e.statut == "CENTRALISEE" for e in evals):
-        raise HTTPException(
-            400,
-            "Des notes de cette session sont déjà centralisées — suppression impossible."
-        )
+    etait_centralisee = any(e.statut == "CENTRALISEE" for e in evals)
     if eval_ids:
         db.query(Note).filter(Note.evaluation_id.in_(eval_ids)).delete(synchronize_session=False)
+        db.query(PeriodeEpreuve).filter(
+            PeriodeEpreuve.evaluation_id.in_(eval_ids)
+        ).delete(synchronize_session=False)
         db.query(Evaluation).filter(Evaluation.session_id == session_id).delete(synchronize_session=False)
     db.delete(session)
     db.commit()
-    return {"message": f"Session supprimée ({len(eval_ids)} évaluations)"}
+
+    recalcul = False
+    if etait_centralisee and classe_id and trimestre_id:
+        calculer_resultats_periode(db, classe_id, trimestre_id, persist=True)
+        recalcul = True
+
+    return {
+        "message": (
+            f"Composition supprimée ({len(eval_ids)} matière(s))"
+            + (" — moyennes de la période recalculées" if recalcul else "")
+        ),
+        "moyennes_recalculees": recalcul,
+    }
 
 
 # ════════════════════════════════════════════════════════════
@@ -1672,23 +1695,23 @@ def modifier_evaluation(evaluation_id: int, data: EvaluationUpdate, db: Session 
 
 @router.delete("/{evaluation_id}")
 def supprimer_evaluation(evaluation_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Supprime une épreuve et ses notes.
+    """Supprime une épreuve et ses notes — y compris quand elle est centralisée.
 
-    Refusée quand l'épreuve est centralisée : ses notes sont entrées dans des
-    bulletins déjà calculés, et les effacer laisserait des moyennes que plus
-    rien ne justifie. Le bon geste dans ce cas est de passer l'épreuve en
-    ANNULEE (`PUT /{id}/statut`), qui la sort du calcul sans détruire la saisie.
+    Supprimer une épreuve efface ses notes et la retire de toute période : elle
+    ne compte plus dans aucun bulletin (trimestre OU semestre). Si l'épreuve
+    était centralisée, ses notes étaient déjà entrées dans des moyennes de
+    période ; on RECALCULE alors automatiquement les moyennes de cette période
+    juste après, pour qu'aucune moyenne « fantôme » ne subsiste sur les
+    bulletins. La période est forcément ouverte (`_epreuve_modifiable` refuse
+    une année/période clôturée), donc le recalcul est toujours licite.
     """
     ev = _evaluation_ou_404(db, evaluation_id, etablissement_id)
     _epreuve_modifiable(db, ev)
 
-    if ev.statut == "CENTRALISEE":
-        raise HTTPException(
-            400,
-            "Cette épreuve est centralisée : ses notes comptent déjà dans les "
-            "bulletins. Passez-la en « Annulée » pour l'exclure du calcul sans "
-            "perdre la saisie.",
-        )
+    # Mémorisés avant la suppression : servent au recalcul de la période.
+    classe_id = ev.classe_id
+    trimestre_id = ev.trimestre_id
+    etait_centralisee = ev.statut == "CENTRALISEE"
 
     nb_notes = db.query(func.count(Note.note_id)).filter(
         Note.evaluation_id == evaluation_id
@@ -1716,11 +1739,23 @@ def supprimer_evaluation(evaluation_id: int, db: Session = Depends(get_db), etab
             session_supprimee = True
 
     db.commit()
+
+    # Recalcul des moyennes de la période si l'épreuve comptait déjà dans les
+    # bulletins — sinon ils garderaient une moyenne que plus rien ne justifie.
+    recalcul = False
+    if etait_centralisee and classe_id and trimestre_id:
+        calculer_resultats_periode(db, classe_id, trimestre_id, persist=True)
+        recalcul = True
+
     return {
-        "message": f"Épreuve supprimée ({nb_notes} note(s) effacée(s))",
+        "message": (
+            f"Épreuve supprimée ({nb_notes} note(s) effacée(s))"
+            + (" — moyennes de la période recalculées" if recalcul else "")
+        ),
         "evaluation_id": evaluation_id,
         "notes_supprimees": nb_notes,
         "session_supprimee": session_supprimee,
+        "moyennes_recalculees": recalcul,
     }
 
 

@@ -561,10 +561,17 @@ def supprimer_sujet(
     current_user: dict = Depends(get_current_user),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Supprimer un sujet (brouillon ou envoyé uniquement)."""
+    """Supprimer un sujet.
+
+    L'administration (Centre des Examens) peut supprimer n'importe quel sujet
+    reçu — y compris déjà validé ou rejeté — pour faire le ménage. Un
+    enseignant, lui, reste limité à ses propres sujets non encore validés
+    (brouillon ou envoyé).
+    """
     sujet = _charger_sujet_ou_404(db, sujet_id, etablissement_id)
     _verifier_auteur_sujet(sujet, current_user)
-    if sujet.statut not in ["BROUILLON", "ENVOYE"]:
+    est_admin = current_user.get("role", "") in ADMIN_TIER_ROLES
+    if not est_admin and sujet.statut not in ["BROUILLON", "ENVOYE"]:
         raise HTTPException(400, "Seuls les sujets non validés peuvent être supprimés.")
 
     # Delete file
