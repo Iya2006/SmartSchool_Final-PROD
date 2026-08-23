@@ -139,6 +139,37 @@ def saisie_presences_batch(presences: List[PresenceCreate], db: Session = Depend
             db.add(Presence(**{**p.model_dump(), "motif": motif, "est_justifie": justifie}))
         count += 1
     db.commit()
+
+    # L'appel du surveillant (ou de l'admin) passe par cette route. Au
+    # collège/lycée il porte sur une SÉANCE : on met alors à jour les compteurs
+    # dénormalisés de la séance et son état — exactement comme le fait
+    # « Terminer » côté enseignant. Sans cela, l'appel était bien enregistré
+    # (les présences existaient) mais n'apparaissait PAS dans la vue
+    # « Séances (Appels) », qui lit ces champs dénormalisés (appel_fait,
+    # nb_presents…). Le primaire (seance_id absent) n'est pas concerné.
+    seance_ids = {p.seance_id for p in presences if p.seance_id}
+    if seance_ids:
+        from datetime import timezone
+        from app.models.academique import Seance
+        for sid in seance_ids:
+            seance = db.query(Seance).filter(Seance.seance_id == sid).first()
+            if not seance:
+                continue
+            counts = dict(
+                db.query(Presence.statut_presence, func.count(Presence.presence_id))
+                .filter(Presence.seance_id == sid)
+                .group_by(Presence.statut_presence)
+                .all()
+            )
+            seance.nb_presents = counts.get("PRESENT", 0)
+            seance.nb_absents = counts.get("ABSENT", 0) + counts.get("ABSENT_JUSTIFIE", 0)
+            seance.nb_retards = counts.get("RETARD", 0)
+            seance.appel_fait = "O"
+            seance.appel_fait_le = datetime.now(timezone.utc)
+            if seance.statut in ("PREVUE", "EN_COURS"):
+                seance.statut = "EFFECTUEE"
+        db.commit()
+
     return {"message": f"{count} présences enregistrées"}
 
 
