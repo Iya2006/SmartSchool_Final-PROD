@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, QrCode, PencilLine, History, Trash2, Save, Loader2, Search } from 'lucide-react';
 import api from '@/lib/api';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import PointagePersonnelScanner from '@/components/PointagePersonnelScanner';
 
 interface Enseignant { enseignant_id: number; nom: string; prenom: string; matricule?: string; }
@@ -26,6 +27,7 @@ const aujourdHui = () => new Date().toISOString().split('T')[0];
  * `onRetour` pour revenir à son poste).
  */
 export default function PointageEnseignants({ onRetour }: { onRetour?: () => void }) {
+    const isMobile = useIsMobile(900);
     const [onglet, setOnglet] = useState<Onglet>('scanner');
     const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
 
@@ -95,7 +97,10 @@ export default function PointageEnseignants({ onRetour }: { onRetour?: () => voi
 
     const ongletBtn = (cle: Onglet, libelle: string, Icone: React.ComponentType<{ size?: number }>) => (
         <button type="button" onClick={() => setOnglet(cle)} style={{
-            display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px',
+            flex: isMobile ? '1 1 0' : undefined,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: isMobile ? '6px' : '8px',
+            padding: isMobile ? '10px 8px' : '10px 16px', borderRadius: '12px',
+            fontSize: isMobile ? '13px' : '14px', whiteSpace: 'nowrap',
             border: onglet === cle ? '1px solid transparent' : '1px solid #cbd5e1',
             background: onglet === cle ? '#2563eb' : 'white', color: onglet === cle ? 'white' : '#0f172a',
             fontWeight: 800, cursor: 'pointer',
@@ -105,28 +110,26 @@ export default function PointageEnseignants({ onRetour }: { onRetour?: () => voi
     );
 
     return (
-        <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0fdf4 0%, #eff6ff 48%, #ffffff 100%)', padding: '24px' }}>
+        <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0fdf4 0%, #eff6ff 48%, #ffffff 100%)', padding: isMobile ? '12px' : '24px' }}>
             <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
                 {onRetour && (
-                    <button onClick={onRetour} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #cbd5e1', background: 'white', color: '#0f172a', fontWeight: 800, cursor: 'pointer', marginBottom: '16px' }}>
+                    <button onClick={onRetour} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #cbd5e1', background: 'white', color: '#0f172a', fontWeight: 800, cursor: 'pointer', marginBottom: '14px' }}>
                         <ArrowLeft size={16} /> Retour au poste surveillance
                     </button>
                 )}
 
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '18px' }}>
-                    {ongletBtn('scanner', 'Scanner un badge', QrCode)}
-                    {ongletBtn('manuel', 'Saisie manuelle', PencilLine)}
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: isMobile ? '14px' : '18px' }}>
+                    {ongletBtn('scanner', isMobile ? 'Scanner' : 'Scanner un badge', QrCode)}
+                    {ongletBtn('manuel', isMobile ? 'Manuel' : 'Saisie manuelle', PencilLine)}
                     {ongletBtn('historique', 'Historique', History)}
                 </div>
 
                 {onglet === 'scanner' && (
-                    <div style={{ background: 'white', borderRadius: '20px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                        <PointagePersonnelScanner titre="Pointage des enseignants" />
-                    </div>
+                    <PointagePersonnelScanner titre="Pointage des enseignants" />
                 )}
 
                 {onglet === 'manuel' && (
-                    <div style={{ background: 'white', borderRadius: '20px', border: '1px solid #e2e8f0', padding: '24px', maxWidth: '620px' }}>
+                    <div style={{ background: 'white', borderRadius: '20px', border: '1px solid #e2e8f0', padding: isMobile ? '16px' : '24px', maxWidth: '620px' }}>
                         <h2 style={{ margin: '0 0 6px', fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>Saisie manuelle du pointage</h2>
                         <p style={{ margin: '0 0 18px', fontSize: '13px', color: '#64748b', lineHeight: 1.6 }}>
                             À utiliser sans courant, sans caméra, ou pour corriger plus tard. Ré-enregistrer le même enseignant à la même date met à jour son pointage.

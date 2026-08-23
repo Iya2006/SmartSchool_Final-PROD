@@ -64,7 +64,9 @@ interface Props {
  */
 export default function PointagePersonnelScanner({ retourHref, titre = 'Pointage des enseignants' }: Props) {
     const router = useRouter();
-    const isMobile = useIsMobile();
+    // Seuil élargi à 900px : couvre les téléphones ET les tablettes en portrait,
+    // qui doivent tous passer en une seule colonne avec des marges resserrées.
+    const isMobile = useIsMobile(900);
     const [scanResult, setScanResult] = useState<ScanResult | null>(null);
     const [isScanning, setIsScanning] = useState(false);
     const [actionType, setActionType] = useState<ActionType>("AUTO");
@@ -196,66 +198,61 @@ export default function PointagePersonnelScanner({ retourHref, titre = 'Pointage
     };
 
     return (
-        <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'Inter, sans-serif' }}>
+        <div style={{ padding: isMobile ? '12px' : '24px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'Inter, sans-serif' }}>
 
             {/* Header Title */}
-            <div style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
-                    <ScanLine size={20} />
+            <div style={{ marginBottom: isMobile ? '16px' : '24px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ width: '38px', height: '38px', flexShrink: 0, borderRadius: '10px', background: '#3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
+                    <ScanLine size={19} />
                 </div>
-                <h1 style={{ fontSize: '24px', fontWeight: 700, color: '#1e293b', margin: 0 }}>{titre}</h1>
+                <h1 style={{ fontSize: isMobile ? '19px' : '24px', fontWeight: 700, color: '#1e293b', margin: 0 }}>{titre}</h1>
             </div>
 
             {/* Blue Stats Header Box */}
-            <div style={{ background: '#1e40af', borderRadius: '16px', padding: '24px', color: 'white', marginBottom: '24px', boxShadow: '0 10px 25px rgba(30,64,175,0.2)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.2)', paddingBottom: '16px', marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px', fontWeight: 600 }}>
-                        <Clock size={18} /> Présences du {isMounted ? formatDate() : '...'}
+            <div style={{ background: '#1e40af', borderRadius: '16px', padding: isMobile ? '16px' : '24px', color: 'white', marginBottom: isMobile ? '16px' : '24px', boxShadow: '0 10px 25px rgba(30,64,175,0.2)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.2)', paddingBottom: '14px', marginBottom: '14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: isMobile ? '14px' : '16px', fontWeight: 600 }}>
+                        <Clock size={17} /> Présences du {isMounted ? formatDate() : '...'}
                     </div>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '16px' }}>
-                    <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '12px', padding: '16px', textAlign: 'center', backdropFilter: 'blur(10px)' }}>
-                        <div style={{ fontSize: '32px', fontWeight: 800 }}>{stats.total_enregistrements}</div>
-                        <div style={{ fontSize: '13px', opacity: 0.9, marginTop: '4px' }}>Total pointés</div>
-                    </div>
-                    <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '12px', padding: '16px', textAlign: 'center', backdropFilter: 'blur(10px)' }}>
-                        <div style={{ fontSize: '32px', fontWeight: 800 }}>{stats.presences}</div>
-                        <div style={{ fontSize: '13px', opacity: 0.9, marginTop: '4px' }}>Présents</div>
-                    </div>
-                    <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '12px', padding: '16px', textAlign: 'center', backdropFilter: 'blur(10px)' }}>
-                        <div style={{ fontSize: '32px', fontWeight: 800 }}>{stats.total_arrivees}</div>
-                        <div style={{ fontSize: '13px', opacity: 0.9, marginTop: '4px' }}>Arrivées</div>
-                    </div>
-                    <div style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '12px', padding: '16px', textAlign: 'center', backdropFilter: 'blur(10px)' }}>
-                        <div style={{ fontSize: '32px', fontWeight: 800 }}>{stats.total_departs}</div>
-                        <div style={{ fontSize: '13px', opacity: 0.9, marginTop: '4px' }}>Départs</div>
-                    </div>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(120px, 1fr))', gap: isMobile ? '10px' : '16px' }}>
+                    {[
+                        { v: stats.total_enregistrements, l: 'Total pointés' },
+                        { v: stats.presences, l: 'Présents' },
+                        { v: stats.total_arrivees, l: 'Arrivées' },
+                        { v: stats.total_departs, l: 'Départs' },
+                    ].map((s) => (
+                        <div key={s.l} style={{ background: 'rgba(255,255,255,0.15)', borderRadius: '12px', padding: isMobile ? '12px' : '16px', textAlign: 'center', backdropFilter: 'blur(10px)' }}>
+                            <div style={{ fontSize: isMobile ? '24px' : '32px', fontWeight: 800 }}>{s.v}</div>
+                            <div style={{ fontSize: isMobile ? '11.5px' : '13px', opacity: 0.9, marginTop: '4px' }}>{s.l}</div>
+                        </div>
+                    ))}
                 </div>
             </div>
 
             {/* Pointage réservé au PERSONNEL (enseignants/agents). */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0', color: '#3b82f6', fontWeight: 700, fontSize: '15px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isMobile ? '16px' : '24px', paddingBottom: '12px', borderBottom: '2px solid #e2e8f0', color: '#3b82f6', fontWeight: 700, fontSize: isMobile ? '14px' : '15px' }}>
                 <Users size={18} /> Pointage du personnel
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.2fr 1fr', gap: '30px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.2fr 1fr', gap: isMobile ? '16px' : '30px' }}>
                 {/* Scanner Section */}
-                <div style={{ background: 'white', borderRadius: '24px', padding: '32px', boxShadow: '0 10px 40px rgba(0,0,0,0.08)', border: '1px solid #f1f5f9' }}>
+                <div style={{ background: 'white', borderRadius: '20px', padding: isMobile ? '18px' : '32px', boxShadow: '0 10px 40px rgba(0,0,0,0.08)', border: '1px solid #f1f5f9' }}>
 
-                    <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#1e293b', margin: '0 0 24px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <ScanLine size={20} color="#3b82f6" /> Scanner un QR Code
+                    <h2 style={{ fontSize: isMobile ? '16px' : '18px', fontWeight: 700, color: '#1e293b', margin: '0 0 18px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <ScanLine size={19} color="#3b82f6" /> Scanner un QR Code
                     </h2>
 
                     {/* Action Toggle */}
-                    <div style={{ display: 'flex', background: '#0f172a', borderRadius: '16px', padding: '8px', marginBottom: '30px', gap: '10px' }}>
+                    <div style={{ display: 'flex', background: '#0f172a', borderRadius: '14px', padding: '6px', marginBottom: isMobile ? '18px' : '30px', gap: isMobile ? '5px' : '10px' }}>
                         <button
                             onClick={() => setActionType('AUTO')}
                             style={{
-                                flex: 1, padding: '12px', borderRadius: '12px', border: 'none',
+                                flex: 1, padding: isMobile ? '10px 4px' : '12px', borderRadius: '11px', border: 'none',
                                 background: actionType === 'AUTO' ? '#f1f5f9' : 'transparent',
                                 color: actionType === 'AUTO' ? '#0f172a' : '#94a3b8',
-                                fontWeight: 700, fontSize: '15px', cursor: 'pointer', transition: 'all 0.3s',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                                fontWeight: 700, fontSize: isMobile ? '13px' : '15px', cursor: 'pointer', transition: 'all 0.3s',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: isMobile ? '5px' : '8px',
                             }}
                         >
                             <RefreshCw size={18} /> Auto
@@ -263,11 +260,11 @@ export default function PointagePersonnelScanner({ retourHref, titre = 'Pointage
                         <button
                             onClick={() => setActionType('ARRIVEE')}
                             style={{
-                                flex: 1, padding: '12px', borderRadius: '12px', border: 'none',
+                                flex: 1, padding: isMobile ? '10px 4px' : '12px', borderRadius: '11px', border: 'none',
                                 background: actionType === 'ARRIVEE' ? '#10b981' : 'transparent',
                                 color: actionType === 'ARRIVEE' ? 'white' : '#94a3b8',
-                                fontWeight: 700, fontSize: '15px', cursor: 'pointer', transition: 'all 0.3s',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                                fontWeight: 700, fontSize: isMobile ? '13px' : '15px', cursor: 'pointer', transition: 'all 0.3s',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: isMobile ? '5px' : '8px',
                             }}
                         >
                             <CheckCircle size={18} /> Arrivée
@@ -275,11 +272,11 @@ export default function PointagePersonnelScanner({ retourHref, titre = 'Pointage
                         <button
                             onClick={() => setActionType('DEPART')}
                             style={{
-                                flex: 1, padding: '12px', borderRadius: '12px', border: 'none',
+                                flex: 1, padding: isMobile ? '10px 4px' : '12px', borderRadius: '11px', border: 'none',
                                 background: actionType === 'DEPART' ? '#f59e0b' : 'transparent',
                                 color: actionType === 'DEPART' ? 'white' : '#94a3b8',
-                                fontWeight: 700, fontSize: '15px', cursor: 'pointer', transition: 'all 0.3s',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+                                fontWeight: 700, fontSize: isMobile ? '13px' : '15px', cursor: 'pointer', transition: 'all 0.3s',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: isMobile ? '5px' : '8px',
                             }}
                         >
                             <LogOut size={18} /> Départ
@@ -301,8 +298,8 @@ export default function PointagePersonnelScanner({ retourHref, titre = 'Pointage
                     </div>
 
                     <div style={{
-                        background: '#0f172a', borderRadius: '20px', overflow: 'hidden',
-                        minHeight: '350px', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: '#0f172a', borderRadius: '18px', overflow: 'hidden',
+                        minHeight: isMobile ? '280px' : '350px', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
                         boxShadow: 'inset 0 0 20px rgba(0,0,0,0.5)',
                         border: `4px solid ${actionType === 'ARRIVEE' ? '#10b981' : actionType === 'DEPART' ? '#f59e0b' : '#3b82f6'}`,
                         transition: 'border-color 0.3s'
@@ -326,8 +323,8 @@ export default function PointagePersonnelScanner({ retourHref, titre = 'Pointage
                 </div>
 
                 {/* Result Section */}
-                <div style={{ background: 'white', borderRadius: '24px', padding: '32px', boxShadow: '0 10px 40px rgba(0,0,0,0.08)', border: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column' }}>
-                    <h2 style={{ fontSize: '18px', fontWeight: 700, color: '#1e293b', margin: '0 0 24px 0', borderBottom: '2px solid #f1f5f9', paddingBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ background: 'white', borderRadius: '20px', padding: isMobile ? '18px' : '32px', boxShadow: '0 10px 40px rgba(0,0,0,0.08)', border: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column' }}>
+                    <h2 style={{ fontSize: isMobile ? '16px' : '18px', fontWeight: 700, color: '#1e293b', margin: '0 0 18px 0', borderBottom: '2px solid #f1f5f9', paddingBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <CheckCircle size={20} color="#10b981" /> Résultat du scan
                     </h2>
 
