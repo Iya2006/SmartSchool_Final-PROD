@@ -2072,9 +2072,10 @@ function SurveillantPortal() {
                                 L&apos;heure de cours — choisir la matiere designe le professeur
                             </p>
                             {feuille.creneaux.length === 0 ? (
-                                <p style={{ margin: 0, fontSize: '13px', color: '#b45309', fontWeight: 700 }}>
-                                    Aucun cours prevu ce jour-la dans l&apos;emploi du temps de la classe.
-                                </p>
+                                <div style={{ margin: 0, fontSize: '13px', color: '#166534', fontWeight: 700, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '10px 14px' }}>
+                                    Aucun cours prévu ce jour-là dans l&apos;emploi du temps.
+                                    <span style={{ fontWeight: 600 }}> Vous pouvez quand même faire l&apos;appel de la demi-journée : cochez les statuts ci-dessous puis « Enregistrer l&apos;appel ».</span>
+                                </div>
                             ) : (
                                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                     {feuille.creneaux.map((cr) => {
@@ -2363,6 +2364,14 @@ function SurveillantPortal() {
                                     <textarea required value={form.description} onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))} rows={5} placeholder="Décrire les faits clairement : lieu, moment, contexte, témoins éventuels…" style={{ padding: '13px 14px', borderRadius: '15px', border: '1px solid #e2e8f0', outline: 'none', background: '#f8fafc', color: '#0f172a', fontWeight: 700, resize: 'vertical' }} />
                                 </label>
                             </div>
+                            {/* L'erreur s'affiche DANS le modal : le bloc global est
+                                rendu derrière l'overlay, donc invisible ici — d'où
+                                l'impression que « le bouton ne passe pas ». */}
+                            {error && (
+                                <div style={{ margin: '0 24px', padding: '11px 14px', borderRadius: '12px', background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', fontWeight: 700, fontSize: '13px' }}>
+                                    {error}
+                                </div>
+                            )}
                             <div style={{ padding: '18px 24px', borderTop: '1px solid #eef2f7', display: 'flex', justifyContent: 'flex-end', gap: '10px', flexWrap: 'wrap' }}>
                                 <button type="button" onClick={() => setShowForm(false)} style={{ padding: '12px 16px', borderRadius: '15px', border: '1px solid #e2e8f0', background: 'white', color: '#475569', fontWeight: 900, cursor: 'pointer' }}>Annuler</button>
                                 <button type="submit" disabled={saving} style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', padding: '12px 16px', borderRadius: '15px', border: 'none', background: '#16a34a', color: 'white', fontWeight: 900, cursor: saving ? 'wait' : 'pointer' }}>
