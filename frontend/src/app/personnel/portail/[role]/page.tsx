@@ -35,14 +35,13 @@ import {
     CalendarClock,
     QrCode,
     Send,
-    ArrowLeft,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { getRoleAccessConfig } from '@/lib/roleAccess';
 import { useIsMobile } from '@/hooks/useIsMobile';
-import PointagePersonnelScanner from '@/components/PointagePersonnelScanner';
+import PointageEnseignantsSurveillant from '@/components/PointageEnseignantsSurveillant';
 
 type PortalModule = {
     icon: React.ComponentType<{ size?: number }>;
@@ -1485,20 +1484,11 @@ function SurveillantPortal() {
         { label: 'Incidents 90 jours', value: String(incidentStats.total_incidents || 0), note: 'déclarés dans la vie scolaire', icon: ClipboardList, color: '#7c3aed' },
     ];
 
-    // C'est le surveillant qui pointe les enseignants (badge QR), depuis son
-    // espace. Le scanner marche sur téléphone, tablette et ordinateur.
+    // C'est le surveillant qui pointe les enseignants, depuis son espace :
+    // scanner le badge, saisir à la main (sans courant/caméra), ou consulter
+    // et nettoyer l'historique. Le scan marche sur téléphone/tablette/ordinateur.
     if (montrerPointage) {
-        return (
-            <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0fdf4 0%, #eff6ff 48%, #ffffff 100%)', padding: '24px' }}>
-                <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
-                    <button onClick={() => setMontrerPointage(false)}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #cbd5e1', background: 'white', color: '#0f172a', fontWeight: 800, cursor: 'pointer' }}>
-                        <ArrowLeft size={16} /> Retour au poste surveillance
-                    </button>
-                    <PointagePersonnelScanner titre="Pointage des enseignants" />
-                </div>
-            </div>
-        );
+        return <PointageEnseignantsSurveillant onRetour={() => setMontrerPointage(false)} />;
     }
 
     return (
