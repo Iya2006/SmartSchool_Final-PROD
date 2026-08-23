@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -14,6 +16,23 @@ from app.models.academique import (
 router = APIRouter(prefix="/api/presences-agents", tags=["Présences Agents (QR)"])
 
 _JOURS_MAP = {0: "LUNDI", 1: "MARDI", 2: "MERCREDI", 3: "JEUDI", 4: "VENDREDI", 5: "SAMEDI", 6: "DIMANCHE"}
+
+
+def _matricule_depuis_qr(qr_data: str) -> str:
+    """Identifiant réel encodé dans un badge.
+
+    Les cartes/badges encodent un TEXTE lisible (nom, « Matricule : X », tél,
+    adresse, classes…), pas seulement le matricule — voir cartes.py::contenu_qr.
+    On en extrait le matricule ; si le QR est déjà un identifiant nu (ancien
+    badge ou repli), on le renvoie tel quel.
+    """
+    txt = (qr_data or "").strip()
+    m = re.search(r"Matricule\s*:\s*([^\r\n]+)", txt, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    # Pas de ligne « Matricule » : soit un identifiant nu, soit la 1re ligne
+    # (le nom) — on garde la valeur brute, la recherche tranchera.
+    return txt.splitlines()[0].strip() if txt else txt
 
 
 def _journee_enseignant(db: Session, type_agent: str, agent_id: int, presence) -> Optional[dict]:
@@ -97,9 +116,14 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissem
     photo = ""
     role = ""
 
+    # Le badge encode un texte lisible : on en extrait le matricule réel avant
+    # toute recherche (sans quoi on cherchait l'agent dont le matricule vaut
+    # « Lycée … Matricule : ENS-… Tél : … », qui n'existe évidemment pas).
+    cle = _matricule_depuis_qr(qr_data)
+
     # Chercher d'abord dans Enseignant
     enseignant = db.query(Enseignant).filter(
-        Enseignant.matricule == qr_data, Enseignant.etablissement_id == etablissement_id
+        Enseignant.matricule == cle, Enseignant.etablissement_id == etablissement_id
     ).first()
     if enseignant:
         agent = enseignant
@@ -109,9 +133,11 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissem
         photo = enseignant.photo_url or ""
         role = "Enseignant"
     else:
-        # Sinon, chercher dans Personnel (Utilisateur)
+        # Sinon, chercher dans Personnel (Utilisateur) — par matricule extrait
+        # OU par nom d'utilisateur (badge encodant l'identifiant nu).
         personnel = db.query(Utilisateur).filter(
-            Utilisateur.nom_utilisateur == qr_data, Utilisateur.etablissement_id == etablissement_id
+            Utilisateur.nom_utilisateur.in_([cle, qr_data.strip()]),
+            Utilisateur.etablissement_id == etablissement_id,
         ).first()
         if personnel:
             agent = personnel
@@ -138,7 +164,7 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissem
     agent_info = {
         "nom": nom_complet,
         "role": role,
-        "matricule": qr_data,
+        "matricule": cle,
         "photo": photo
     }
     

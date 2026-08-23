@@ -109,6 +109,14 @@ export default function PointageEnseignants({ onRetour }: { onRetour?: () => voi
         </button>
     );
 
+    // Champs de la saisie manuelle : plus grands et en 16px sur mobile (sinon
+    // iOS zoome à chaque focus, ce qui casse la mise en page).
+    const champStyle: React.CSSProperties = {
+        width: '100%', marginTop: '6px', padding: isMobile ? '13px 12px' : '10px',
+        borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: isMobile ? '16px' : '14px',
+        background: 'white', boxSizing: 'border-box',
+    };
+
     return (
         <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0fdf4 0%, #eff6ff 48%, #ffffff 100%)', padding: isMobile ? '12px' : '24px' }}>
             <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
@@ -134,10 +142,10 @@ export default function PointageEnseignants({ onRetour }: { onRetour?: () => voi
                         <p style={{ margin: '0 0 18px', fontSize: '13px', color: '#64748b', lineHeight: 1.6 }}>
                             À utiliser sans courant, sans caméra, ou pour corriger plus tard. Ré-enregistrer le même enseignant à la même date met à jour son pointage.
                         </p>
-                        <div style={{ display: 'grid', gap: '14px' }}>
+                        <div style={{ display: 'grid', gap: isMobile ? '16px' : '14px' }}>
                             <label style={{ display: 'block' }}>
-                                <span style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Enseignant</span>
-                                <select value={mEnsId} onChange={e => setMEnsId(e.target.value)} style={{ width: '100%', marginTop: '5px', padding: '10px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '14px' }}>
+                                <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#475569' }}>Enseignant</span>
+                                <select value={mEnsId} onChange={e => setMEnsId(e.target.value)} style={champStyle}>
                                     <option value="">— choisir —</option>
                                     {enseignants.map(e => (
                                         <option key={e.enseignant_id} value={e.enseignant_id}>{e.prenom} {e.nom}{e.matricule ? ` (${e.matricule})` : ''}</option>
@@ -145,26 +153,26 @@ export default function PointageEnseignants({ onRetour }: { onRetour?: () => voi
                                 </select>
                             </label>
                             <label style={{ display: 'block' }}>
-                                <span style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Date</span>
-                                <input type="date" value={mDate} onChange={e => setMDate(e.target.value)} style={{ width: '100%', marginTop: '5px', padding: '10px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '14px' }} />
+                                <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#475569' }}>Date</span>
+                                <input type="date" value={mDate} onChange={e => setMDate(e.target.value)} style={champStyle} />
                             </label>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: isMobile ? '16px' : '14px' }}>
                                 <label style={{ display: 'block' }}>
-                                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Heure d&apos;arrivée</span>
-                                    <input type="time" value={mArrivee} onChange={e => setMArrivee(e.target.value)} style={{ width: '100%', marginTop: '5px', padding: '10px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '14px' }} />
+                                    <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#475569' }}>Heure d&apos;arrivée</span>
+                                    <input type="time" value={mArrivee} onChange={e => setMArrivee(e.target.value)} style={champStyle} />
                                 </label>
                                 <label style={{ display: 'block' }}>
-                                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#475569' }}>Heure de départ (option.)</span>
-                                    <input type="time" value={mDepart} onChange={e => setMDepart(e.target.value)} style={{ width: '100%', marginTop: '5px', padding: '10px', borderRadius: '10px', border: '1px solid #cbd5e1', fontSize: '14px' }} />
+                                    <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#475569' }}>Heure de départ (option.)</span>
+                                    <input type="time" value={mDepart} onChange={e => setMDepart(e.target.value)} style={champStyle} />
                                 </label>
                             </div>
                             {mMsg && (
-                                <div style={{ fontSize: '13px', fontWeight: 600, color: mMsg.ok ? '#059669' : '#b91c1c', background: mMsg.ok ? '#ecfdf5' : '#fef2f2', border: `1px solid ${mMsg.ok ? '#a7f3d0' : '#fecaca'}`, borderRadius: '10px', padding: '10px 12px' }}>
+                                <div style={{ fontSize: '13px', fontWeight: 600, color: mMsg.ok ? '#059669' : '#b91c1c', background: mMsg.ok ? '#ecfdf5' : '#fef2f2', border: `1px solid ${mMsg.ok ? '#a7f3d0' : '#fecaca'}`, borderRadius: '10px', padding: '11px 12px' }}>
                                     {mMsg.texte}
                                 </div>
                             )}
-                            <button onClick={enregistrerManuel} disabled={mSaving} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px', borderRadius: '12px', border: 'none', background: '#2563eb', color: 'white', fontWeight: 800, fontSize: '14px', cursor: mSaving ? 'wait' : 'pointer' }}>
-                                {mSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Enregistrer le pointage
+                            <button onClick={enregistrerManuel} disabled={mSaving} style={{ width: '100%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: isMobile ? '15px' : '12px', borderRadius: '12px', border: 'none', background: '#2563eb', color: 'white', fontWeight: 800, fontSize: isMobile ? '16px' : '14px', cursor: mSaving ? 'wait' : 'pointer', marginTop: '2px' }}>
+                                {mSaving ? <Loader2 size={17} className="animate-spin" /> : <Save size={17} />} Enregistrer le pointage
                             </button>
                         </div>
                     </div>
