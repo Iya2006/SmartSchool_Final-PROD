@@ -912,10 +912,16 @@ def list_incidents(
 @router.post("/incidents", response_model=IncidentOut, status_code=201)
 def create_incident(data: IncidentCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     payload = data.model_dump()
-    # etablissement_id imposé par le compte authentifié, et l'élève concerné
-    # (si fourni) doit appartenir à cette école (Lot 9).
+    # etablissement_id imposé par le compte authentifié.
     payload["etablissement_id"] = etablissement_id
-    if payload.get("eleve_id") and not db.query(Eleve.eleve_id).filter(
+    # Un incident concerne TOUJOURS un élève (colonne NOT NULL + FK). Sans
+    # élève sélectionné, l'ancien code laissait passer eleve_id=0 puis échouait
+    # sur la contrainte de clé étrangère → 500 opaque (« ça ne marche pas »).
+    # On refuse clairement en amont.
+    if not payload.get("eleve_id"):
+        raise HTTPException(status_code=400, detail="Sélectionnez l'élève concerné par l'incident.")
+    # L'élève doit appartenir à cette école (Lot 9).
+    if not db.query(Eleve.eleve_id).filter(
         Eleve.eleve_id == payload["eleve_id"], Eleve.etablissement_id == etablissement_id
     ).first():
         raise HTTPException(status_code=404, detail="Élève non trouvé")

@@ -1462,6 +1462,12 @@ function SurveillantPortal() {
 
     const submitIncident = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
+        // Un incident concerne toujours un élève : sans sélection, on le dit
+        // clairement au lieu d'envoyer une requête qui échouerait côté serveur.
+        if (!form.eleve_id) {
+            setError("Sélectionnez d'abord l'élève concerné par l'incident.");
+            return;
+        }
         setSaving(true);
         setError(null);
         setSuccess(null);
