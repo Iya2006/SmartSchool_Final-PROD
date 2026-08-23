@@ -497,7 +497,7 @@ function getErrorMessage(error: unknown) {
 function BibliothecairePortal() {
     const { user, logout } = useAuth();
     const isMobile = useIsMobile();
-    const { etablissementId } = useApp();
+    const { etablissementId, etablissementNom } = useApp();
     const roleConfig = useMemo(() => getRoleAccessConfig(user?.role), [user?.role]);
     const [stats, setStats] = useState<LibraryStats>(EMPTY_STATS);
     const [ouvrages, setOuvrages] = useState<Ouvrage[]>([]);
@@ -735,7 +735,7 @@ function BibliothecairePortal() {
                                 {[
                                     { label: 'Rôle', value: roleConfig?.label || user?.role || 'Bibliothécaire' },
                                     { label: 'Espace', value: 'Gestion documentaire' },
-                                    { label: 'Établissement', value: `#${etablissementId}` },
+                                    { label: 'Établissement', value: etablissementNom || `#${etablissementId}` },
                                 ].map((item) => (
                                     <div key={item.label} style={{ padding: '12px 14px', borderRadius: '16px', background: '#faf5ff', border: '1px solid #ede9fe' }}>
                                         <p style={{ margin: 0, fontSize: '11px', textTransform: 'uppercase', color: '#8b5cf6', fontWeight: 900 }}>{item.label}</p>
@@ -1114,7 +1114,7 @@ function BibliothecairePortal() {
 function SurveillantPortal() {
     const { user, logout } = useAuth();
     const isMobile = useIsMobile();
-    const { etablissementId, anneeId } = useApp();
+    const { etablissementId, etablissementNom, anneeId } = useApp();
     const roleConfig = useMemo(() => getRoleAccessConfig(user?.role), [user?.role]);
     const [presenceStats, setPresenceStats] = useState<PresenceStats>({ total: 0, presents: 0, absents: 0, retards: 0, taux_presence: 0 });
     const [incidentStats, setIncidentStats] = useState<IncidentStats>({ total_incidents: 0, par_gravite: [], top_types: [] });
@@ -1547,7 +1547,7 @@ function SurveillantPortal() {
                                 {[
                                     { label: 'Rôle', value: roleConfig?.label || user?.role || 'Surveillant' },
                                     { label: 'Mission PDF', value: 'Absences globales / discipline' },
-                                    { label: 'Établissement', value: `#${etablissementId}` },
+                                    { label: 'Établissement', value: etablissementNom || `#${etablissementId}` },
                                 ].map((item) => (
                                     <div key={item.label} style={{ padding: '12px 14px', borderRadius: '16px', background: '#f0fdf4', border: '1px solid #dcfce7' }}>
                                         <p style={{ margin: 0, fontSize: '11px', textTransform: 'uppercase', color: '#16a34a', fontWeight: 900 }}>{item.label}</p>
