@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Clock, CheckCircle, XCircle, Calendar, Loader2, X, Search,
     RefreshCw, User, ArrowLeftRight, Printer, ClipboardList, PlayCircle,
-    AlertTriangle, Filter, Users2, MapPin,
+    AlertTriangle, Filter, Users2, MapPin, Trash2,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -69,6 +69,7 @@ export default function VieScolaireSeancesPage() {
     const [seances, setSeances] = useState<Seance[]>([]);
     const [loading, setLoading] = useState(true);
     const [detail, setDetail] = useState<SeanceDetail | null>(null);
+    const [detailId, setDetailId] = useState<number | null>(null);
 
     const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
     const [classes, setClasses] = useState<Classe[]>([]);
@@ -110,9 +111,25 @@ export default function VieScolaireSeancesPage() {
     useEffect(() => { charger(); }, [charger]);
 
     const ouvrirDetail = (seanceId: number) => {
+        setDetailId(seanceId);
         api.get(`/api/seances/${seanceId}`)
             .then(res => setDetail(res.data))
             .catch(err => console.error(err));
+    };
+
+    // Supprimer l'appel déjà fait d'une séance : efface les présences saisies
+    // et remet la séance en « appel non fait » (le cours reste, l'appel peut
+    // être refait). Réservé à l'espace admin/vie scolaire.
+    const supprimerAppel = async () => {
+        if (!detailId) return;
+        if (!confirm("Supprimer l'appel de cette séance ?\n\nToutes les présences saisies seront effacées et l'appel pourra être refait. Cette action est irréversible.")) return;
+        try {
+            await api.delete(`/api/seances/${detailId}/appel`);
+            setDetail(null); setDetailId(null);
+            charger();
+        } catch (err: any) {
+            alert(err?.response?.data?.detail || 'Suppression impossible');
+        }
     };
 
     const stats = useMemo(() => {
@@ -344,6 +361,19 @@ export default function VieScolaireSeancesPage() {
                                                 }}>{PRESENCE_LABEL[e.statut] || e.statut}</span>
                                             </div>
                                         ))}
+                                        {/* Supprimer l'appel déjà fait : efface les présences et permet
+                                            de le refaire. Visible seulement quand un appel existe. */}
+                                        {detail.eleves.length > 0 && (
+                                            <div className="no-print" style={{ marginTop: '18px', display: 'flex', justifyContent: 'flex-end' }}>
+                                                <button onClick={supprimerAppel} style={{
+                                                    display: 'inline-flex', alignItems: 'center', gap: '6px',
+                                                    padding: '9px 16px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
+                                                    background: 'white', color: '#b91c1c', border: '1px solid #fecaca', cursor: 'pointer',
+                                                }}>
+                                                    <Trash2 size={14} /> Supprimer l&apos;appel
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
