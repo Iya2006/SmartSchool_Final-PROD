@@ -51,7 +51,7 @@ def _setup(db: Session):
     db.add(eleve); db.commit(); db.refresh(eleve)
     insc = Inscription(eleve_id=eleve.eleve_id, classe_id=classe.classe_id, annee_id=annee.annee_id, statut="ACTIVE")
     db.add(insc); db.commit(); db.refresh(insc)
-    ens = Enseignant(etablissement_id=etab.etablissement_id, matricule=f"ENS{uid}", nom="Bah", prenom="Ousmane",
+    ens = Enseignant(etablissement_id=etab.etablissement_id, matricule=f"SECENS{uid}", nom="Bah", prenom="Ousmane",
                      sexe="M", telephone=f"98100{uid:04d}", mot_de_passe=hash_password("x"), statut="ACTIF")
     db.add(ens); db.commit(); db.refresh(ens)
     te = TypeEvaluation(etablissement_id=etab.etablissement_id, code="COMPO", libelle="Composition",

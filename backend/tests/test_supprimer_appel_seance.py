@@ -39,10 +39,10 @@ def _setup(db: Session):
     db.add(classe); db.commit(); db.refresh(classe)
     matiere = Matiere(cycle_id=cycle.cycle_id, code=f"M{uid}", libelle="Maths", note_sur=20)
     db.add(matiere); db.commit(); db.refresh(matiere)
-    ens = Enseignant(etablissement_id=etab.etablissement_id, matricule=f"ENS{uid}", nom="Bah", prenom="O",
+    ens = Enseignant(etablissement_id=etab.etablissement_id, matricule=f"SAPENS{uid}", nom="Bah", prenom="O",
                      sexe="M", telephone=f"99100{uid:04d}", mot_de_passe=hash_password("x"), statut="ACTIF")
     db.add(ens); db.commit(); db.refresh(ens)
-    eleve = Eleve(etablissement_id=etab.etablissement_id, matricule=f"ELV{uid}", nom="Diallo", prenom="Awa",
+    eleve = Eleve(etablissement_id=etab.etablissement_id, matricule=f"SAPELV{uid}", nom="Diallo", prenom="Awa",
                   date_naissance=date(2013, 1, 1), sexe="F", statut="ACTIF")
     db.add(eleve); db.commit(); db.refresh(eleve)
     insc = Inscription(eleve_id=eleve.eleve_id, classe_id=classe.classe_id, annee_id=annee.annee_id, statut="ACTIVE")
