@@ -7,6 +7,21 @@ import { ScanLine, CheckCircle, AlertTriangle, Clock, LogOut, ArrowRightCircle, 
 import api from '@/lib/api';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
+interface CoursJour {
+    heure_debut: string;
+    heure_fin: string;
+    classe: string;
+    matiere: string;
+    salle: string | null;
+}
+interface JourneeAgent {
+    cours: CoursJour[];
+    arrivee: string | null;
+    depart: string | null;
+    retard: boolean;
+    minutes_retard: number;
+    premier_cours: string | null;
+}
 interface ScanResult {
     success: boolean;
     message: string;
@@ -18,6 +33,7 @@ interface ScanResult {
         photo: string;
     };
     heure: string;
+    journee?: JourneeAgent | null;
 }
 
 interface DailyStats {
@@ -376,6 +392,47 @@ export default function PointagePersonnelScanner({ retourHref, titre = 'Pointage
                                     <div style={{ marginBottom: '30px', padding: '16px', borderRadius: '16px', background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca', fontWeight: 600, fontSize: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
                                         <AlertTriangle size={24} />
                                         {scanResult.message}
+                                    </div>
+                                )}
+
+                                {/* Infos de la journée de l'enseignant : arrivée/retard + cours du jour. */}
+                                {scanResult.journee && (
+                                    <div style={{ textAlign: 'left', marginBottom: '24px', background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', padding: '16px' }}>
+                                        {(scanResult.journee.arrivee || scanResult.journee.depart) && (
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', marginBottom: scanResult.journee.cours.length ? '14px' : 0 }}>
+                                                {scanResult.journee.arrivee && (
+                                                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>Arrivée : {scanResult.journee.arrivee}</span>
+                                                )}
+                                                {scanResult.journee.depart && (
+                                                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a' }}>· Départ : {scanResult.journee.depart}</span>
+                                                )}
+                                                {scanResult.journee.arrivee && scanResult.journee.premier_cours && (
+                                                    scanResult.journee.retard ? (
+                                                        <span style={{ fontSize: '12px', fontWeight: 800, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '999px', padding: '3px 12px' }}>
+                                                            En retard de {scanResult.journee.minutes_retard} min
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{ fontSize: '12px', fontWeight: 800, color: '#059669', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '999px', padding: '3px 12px' }}>
+                                                            À l&apos;heure
+                                                        </span>
+                                                    )
+                                                )}
+                                            </div>
+                                        )}
+                                        <div style={{ fontSize: '11px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Cours du jour</div>
+                                        {scanResult.journee.cours.length === 0 ? (
+                                            <div style={{ fontSize: '13px', color: '#94a3b8' }}>Aucun cours prévu aujourd&apos;hui.</div>
+                                        ) : (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                {scanResult.journee.cours.map((c, i) => (
+                                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', fontSize: '12.5px', padding: '7px 10px', borderRadius: '8px', background: '#f8fafc', border: '1px solid #f1f5f9' }}>
+                                                        <span style={{ fontWeight: 800, color: '#1e293b', whiteSpace: 'nowrap' }}>{c.heure_debut}–{c.heure_fin}</span>
+                                                        <span style={{ flex: 1, textAlign: 'center', fontWeight: 600, color: '#334155' }}>{c.matiere} · {c.classe}</span>
+                                                        <span style={{ color: '#94a3b8', whiteSpace: 'nowrap' }}>{c.salle || ''}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
 

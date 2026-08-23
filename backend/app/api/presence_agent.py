@@ -7,9 +7,63 @@ from typing import List, Optional
 
 from app.core.database import get_db
 from app.core.auth import require_etablissement
-from app.models.academique import PresenceAgent, Enseignant, Utilisateur
+from app.models.academique import (
+    PresenceAgent, Enseignant, Utilisateur, CreneauEmploi, Classe, Matiere,
+)
 
 router = APIRouter(prefix="/api/presences-agents", tags=["Présences Agents (QR)"])
+
+_JOURS_MAP = {0: "LUNDI", 1: "MARDI", 2: "MERCREDI", 3: "JEUDI", 4: "VENDREDI", 5: "SAMEDI", 6: "DIMANCHE"}
+
+
+def _journee_enseignant(db: Session, type_agent: str, agent_id: int, presence) -> Optional[dict]:
+    """Infos de la journée à afficher au pointage d'un enseignant :
+    ses cours du jour (emploi du temps) + arrivée/départ + retard éventuel.
+
+    Ne concerne que les enseignants (un agent administratif n'a pas de cours).
+    Le retard est calculé par rapport au début de son premier cours du jour.
+    """
+    if type_agent != "ENSEIGNANT":
+        return None
+    jour = _JOURS_MAP.get(date.today().weekday())
+    rows = (
+        db.query(CreneauEmploi, Classe, Matiere)
+        .join(Classe, Classe.classe_id == CreneauEmploi.classe_id)
+        .join(Matiere, Matiere.matiere_id == CreneauEmploi.matiere_id)
+        .filter(
+            CreneauEmploi.enseignant_id == agent_id,
+            CreneauEmploi.jour == jour,
+            CreneauEmploi.statut == "ACTIVE",
+        )
+        .order_by(CreneauEmploi.heure_debut)
+        .all()
+    )
+    cours = [
+        {"heure_debut": c.heure_debut, "heure_fin": c.heure_fin,
+         "classe": cl.libelle, "matiere": m.libelle, "salle": c.salle}
+        for c, cl, m in rows
+    ]
+    arrivee = presence.heure_arrivee.strftime("%H:%M") if presence and presence.heure_arrivee else None
+    depart = presence.heure_depart.strftime("%H:%M") if presence and presence.heure_depart else None
+    retard, minutes_retard = False, 0
+    if arrivee and cours:
+        try:
+            ah, am = map(int, arrivee.split(":"))
+            ph, pm = map(int, cours[0]["heure_debut"].split(":"))
+            diff = (ah * 60 + am) - (ph * 60 + pm)
+            if diff > 0:
+                retard, minutes_retard = True, diff
+        except (ValueError, TypeError):
+            pass
+    return {
+        "cours": cours,
+        "arrivee": arrivee,
+        "depart": depart,
+        "retard": retard,
+        "minutes_retard": minutes_retard,
+        "premier_cours": cours[0]["heure_debut"] if cours else None,
+    }
+
 
 class ScanRequest(BaseModel):
     qr_data: str
@@ -21,6 +75,8 @@ class ScanResponse(BaseModel):
     action: str # "ARRIVEE" | "DEPART" | "DEJA_ENREGISTRE" | "ERREUR"
     agent: dict
     heure: str
+    # Cours du jour + arrivée/retard de l'enseignant (None pour le personnel).
+    journee: Optional[dict] = None
 
 @router.post("/scan", response_model=ScanResponse)
 def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
@@ -93,9 +149,10 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissem
                 message="Veuillez d'abord enregistrer votre arrivée.",
                 action="ERREUR",
                 agent=agent_info,
-                heure=maintenant.strftime("%H:%M:%S")
+                heure=maintenant.strftime("%H:%M:%S"),
+                journee=_journee_enseignant(db, type_agent, agent_id, None),
             )
-            
+
         # 1er scan : Arrivée
         # etablissement_id désormais peuplé (colonne existante mais jamais
         # renseignée avant le Lot 9 — voir .ai/MULTI_TENANT_PLAN.md).
@@ -114,9 +171,10 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissem
             message="Heure d'arrivée enregistrée avec succès.",
             action="ARRIVEE",
             agent=agent_info,
-            heure=maintenant.strftime("%H:%M:%S")
+            heure=maintenant.strftime("%H:%M:%S"),
+            journee=_journee_enseignant(db, type_agent, agent_id, nouvelle_presence),
         )
-        
+
     elif presence.heure_depart is None:
         if request.action_type == "ARRIVEE":
             return ScanResponse(
@@ -124,9 +182,10 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissem
                 message="Arrivée déjà enregistrée pour aujourd'hui.",
                 action="DEJA_ENREGISTRE",
                 agent=agent_info,
-                heure=presence.heure_arrivee.strftime("%H:%M:%S") if presence.heure_arrivee else "-"
+                heure=presence.heure_arrivee.strftime("%H:%M:%S") if presence.heure_arrivee else "-",
+                journee=_journee_enseignant(db, type_agent, agent_id, presence),
             )
-            
+
         # 2ème scan : Départ
         presence.heure_depart = maintenant
         db.commit()
@@ -135,9 +194,10 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissem
             message="Heure de départ enregistrée avec succès.",
             action="DEPART",
             agent=agent_info,
-            heure=maintenant.strftime("%H:%M:%S")
+            heure=maintenant.strftime("%H:%M:%S"),
+            journee=_journee_enseignant(db, type_agent, agent_id, presence),
         )
-        
+
     else:
         # 3ème scan : Déjà enregistré
         return ScanResponse(
@@ -145,7 +205,8 @@ def scan_qr_code(request: ScanRequest, db: Session = Depends(get_db), etablissem
             message="Vous avez déjà enregistré votre arrivée et votre départ aujourd'hui.",
             action="DEJA_ENREGISTRE",
             agent=agent_info,
-            heure=presence.heure_depart.strftime("%H:%M:%S")
+            heure=presence.heure_depart.strftime("%H:%M:%S"),
+            journee=_journee_enseignant(db, type_agent, agent_id, presence),
         )
 
 def _filtre_agents_etablissement(db: Session, etablissement_id: int):
@@ -240,8 +301,109 @@ def get_historique_presences(
                 "type": p.type_agent
             }
         })
-        
+
     return resultats
+
+
+class PointageManuelRequest(BaseModel):
+    type_agent: str = "ENSEIGNANT"     # "ENSEIGNANT" | "PERSONNEL"
+    agent_id: int
+    date_presence: date
+    heure_arrivee: Optional[str] = None  # "08:05"
+    heure_depart: Optional[str] = None
+
+
+def _parse_heure(valeur: Optional[str]):
+    """« 08:05 » -> time(8, 5). Vide -> None. Format invalide -> 400."""
+    if not valeur:
+        return None
+    try:
+        hh, mm = (int(x) for x in valeur.split(":")[:2])
+        return time(hh, mm)
+    except (ValueError, TypeError):
+        raise HTTPException(400, f"Heure invalide : {valeur} (attendu HH:MM)")
+
+
+@router.post("/manuel")
+def pointage_manuel(
+    request: PointageManuelRequest,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Saisie MANUELLE d'un pointage, sans scan.
+
+    Pour les situations où le badge/la caméra n'est pas utilisable (pas de
+    courant, pas d'appareil) : le surveillant note l'arrivée/le départ à la
+    main, éventuellement plus tard, et tout le monde le voit ensuite. Ré-saisir
+    le même agent/jour met à jour le pointage existant (pas de doublon).
+    """
+    if request.type_agent == "ENSEIGNANT":
+        agent = db.query(Enseignant).filter(
+            Enseignant.enseignant_id == request.agent_id,
+            Enseignant.etablissement_id == etablissement_id,
+        ).first()
+    elif request.type_agent == "PERSONNEL":
+        agent = db.query(Utilisateur).filter(
+            Utilisateur.utilisateur_id == request.agent_id,
+            Utilisateur.etablissement_id == etablissement_id,
+        ).first()
+    else:
+        raise HTTPException(400, "type_agent invalide (ENSEIGNANT ou PERSONNEL)")
+    if not agent:
+        raise HTTPException(404, "Agent introuvable dans cet établissement")
+
+    t_arr = _parse_heure(request.heure_arrivee)
+    t_dep = _parse_heure(request.heure_depart)
+    if t_arr is None and t_dep is None:
+        raise HTTPException(400, "Renseignez au moins l'heure d'arrivée.")
+
+    presence = db.query(PresenceAgent).filter(
+        PresenceAgent.agent_id == request.agent_id,
+        PresenceAgent.type_agent == request.type_agent,
+        PresenceAgent.date_presence == request.date_presence,
+    ).first()
+    if presence:
+        if t_arr is not None:
+            presence.heure_arrivee = t_arr
+        if t_dep is not None:
+            presence.heure_depart = t_dep
+        presence.statut = "PRESENT"
+        action = "MODIFIE"
+    else:
+        presence = PresenceAgent(
+            type_agent=request.type_agent,
+            agent_id=request.agent_id,
+            etablissement_id=etablissement_id,
+            date_presence=request.date_presence,
+            heure_arrivee=t_arr,
+            heure_depart=t_dep,
+            statut="PRESENT",
+        )
+        db.add(presence)
+        action = "CREE"
+    db.commit()
+    db.refresh(presence)
+    return {"message": "Pointage manuel enregistré.", "presence_id": presence.presence_id, "action": action}
+
+
+@router.delete("/{presence_id}")
+def supprimer_presence_agent(
+    presence_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Supprime un pointage (arrivée + départ du jour) — scanné ou saisi à la main."""
+    filtre = _filtre_agents_etablissement(db, etablissement_id)
+    if filtre is False:
+        raise HTTPException(404, "Pointage introuvable")
+    p = db.query(PresenceAgent).filter(
+        PresenceAgent.presence_id == presence_id, filtre
+    ).first()
+    if not p:
+        raise HTTPException(404, "Pointage introuvable")
+    db.delete(p)
+    db.commit()
+    return {"message": "Pointage supprimé.", "presence_id": presence_id}
 
 
 @router.get("/stats")
