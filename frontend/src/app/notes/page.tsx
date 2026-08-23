@@ -609,6 +609,7 @@ export default function CentralisationNotesPage() {
     // dans des bulletins). On annonce les deux avant de demander confirmation.
     const supprimerEpreuve = async (ligne: LigneEval) => {
         const nbNotes = ligne.evaluations.reduce((n, e) => n + (e.nb_notes || 0), 0);
+        const estCentralisee = ligne.evaluations.some(e => e.statut === 'CENTRALISEE');
         const quoi = ligne.session_id
             ? `la composition « ${ligne.libelle} » et ses ${ligne.evaluations.length} matières`
             : `l'épreuve « ${ligne.libelle} »`;
@@ -616,6 +617,9 @@ export default function CentralisationNotesPage() {
             `Supprimer ${quoi} ?\n\n`
             + (nbNotes > 0
                 ? `${nbNotes} note(s) déjà saisie(s) seront définitivement effacées.\n\n`
+                : '')
+            + (estCentralisee
+                ? 'Cette épreuve compte déjà dans les bulletins : les moyennes de la période seront automatiquement recalculées après la suppression.\n\n'
                 : '')
             + 'Cette action est irréversible.'
         )) return;
@@ -915,11 +919,11 @@ export default function CentralisationNotesPage() {
                                                             <Settings2 size={13} />
                                                         </button>
                                                         <button onClick={() => supprimerEpreuve(ligne)}
-                                                            disabled={suppressionEnCours === ligne.cle || toutesCentralisees}
+                                                            disabled={suppressionEnCours === ligne.cle}
                                                             title={toutesCentralisees
-                                                                ? 'Épreuve centralisée : ses notes comptent dans les bulletins. Passez-la en « Annulée » pour l’exclure du calcul.'
+                                                                ? 'Supprimer cette épreuve et ses notes (les moyennes de la période seront recalculées)'
                                                                 : 'Supprimer cette épreuve et ses notes'}
-                                                            style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #fecaca', background: 'white', color: '#b91c1c', fontSize: '12px', fontWeight: 700, cursor: toutesCentralisees ? 'not-allowed' : 'pointer', opacity: toutesCentralisees ? 0.4 : 1, display: 'inline-flex', alignItems: 'center' }}>
+                                                            style={{ padding: '6px 10px', borderRadius: '8px', border: '1px solid #fecaca', background: 'white', color: '#b91c1c', fontSize: '12px', fontWeight: 700, cursor: suppressionEnCours === ligne.cle ? 'not-allowed' : 'pointer', opacity: suppressionEnCours === ligne.cle ? 0.4 : 1, display: 'inline-flex', alignItems: 'center' }}>
                                                             <Trash2 size={13} />
                                                         </button>
                                                     </td>
