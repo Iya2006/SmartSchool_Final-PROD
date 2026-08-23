@@ -11,7 +11,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle, UserX } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
@@ -168,6 +168,12 @@ export default function Sidebar() {
                         <Link href="/vie-scolaire/incidents">
                             <AlertTriangle size={18} className={styles.menuIcon} />
                             <span className={styles.menuText}>Incidents</span>
+                        </Link>
+                    </li>
+                    <li className={pathname.startsWith('/vie-scolaire/absences-enseignants') ? styles.currentPage : ''}>
+                        <Link href="/vie-scolaire/absences-enseignants">
+                            <UserX size={18} className={styles.menuIcon} />
+                            <span className={styles.menuText}>Absences enseignants</span>
                         </Link>
                     </li>
                     <li className={pathname.startsWith('/evenements') ? styles.currentPage : ''}>

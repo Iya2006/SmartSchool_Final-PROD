@@ -775,7 +775,11 @@ class PresenceOut(OrmBase, PresenceBase):
 
 class IncidentBase(BaseModel):
     eleve_id: int
-    etablissement_id: int
+    # Optionnel à l'entrée : le serveur l'impose depuis le compte connecté
+    # (create_incident). Exiger un int cassait la création quand le client
+    # envoyait un établissement absent/null → 422 avant même d'atteindre la
+    # route. Toujours renseigné en sortie.
+    etablissement_id: Optional[int] = None
     type_incident: str
     gravite: str
     description: str
