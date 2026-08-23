@@ -1,10 +1,11 @@
 'use client';
 
-import PointagePersonnelScanner from '@/components/PointagePersonnelScanner';
+import PointageEnseignants from '@/components/PointageEnseignants';
 
-// Écran admin de pointage du personnel. La logique de scan vit dans le
-// composant partagé PointagePersonnelScanner, réutilisé tel quel dans l'espace
-// du surveillant (c'est lui qui pointe réellement les enseignants).
+// Écran admin « Pointage enseignants » : scanner, saisie manuelle et historique
+// (avec suppression) au même endroit — exactement ce que voit le surveillant.
+// L'ancien menu séparé « Historique Présence » est devenu inutile : l'historique
+// vit ici, dans l'onglet dédié.
 export default function ScanPage() {
-    return <PointagePersonnelScanner titre="Scan QR Code" retourHref="/dashboard/presences/historique" />;
+    return <PointageEnseignants />;
 }
