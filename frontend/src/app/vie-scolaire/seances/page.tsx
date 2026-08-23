@@ -11,12 +11,12 @@ import api from '@/lib/api';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface Seance {
-    seance_id: number;
+    seance_id: number | null;
     classe_id: number;
     classe: string;
-    matiere_id: number;
+    matiere_id: number | null;
     matiere: string;
-    enseignant_prevu_id: number;
+    enseignant_prevu_id: number | null;
     enseignant_prevu: string;
     enseignant_reel: string | null;
     date_seance: string;
@@ -29,6 +29,9 @@ interface Seance {
     nb_presents: number | null;
     nb_absents: number | null;
     nb_retards: number | null;
+    // Appel « journée » du primaire (pas de séance/matière — cf. seances.py).
+    est_demi_journee?: boolean;
+    demi_journee?: string;
 }
 interface SeanceDetail extends Seance {
     eleves: { eleve: string; matricule: string | null; statut: string }[];
@@ -110,21 +113,33 @@ export default function VieScolaireSeancesPage() {
 
     useEffect(() => { charger(); }, [charger]);
 
-    const ouvrirDetail = (seanceId: number) => {
-        setDetailId(seanceId);
-        api.get(`/api/seances/${seanceId}`)
+    const ouvrirDetail = (s: Seance) => {
+        // Appel « journée » du primaire : pas de seance_id, on interroge par
+        // classe + date + demi-journée.
+        if (s.est_demi_journee) {
+            setDetailId(null);
+            api.get(`/api/seances/journee/detail?classe_id=${s.classe_id}&date=${s.date_seance}&demi_journee=${s.demi_journee || 'MATIN'}`)
+                .then(res => setDetail(res.data))
+                .catch(err => console.error(err));
+            return;
+        }
+        setDetailId(s.seance_id);
+        api.get(`/api/seances/${s.seance_id}`)
             .then(res => setDetail(res.data))
             .catch(err => console.error(err));
     };
 
-    // Supprimer l'appel déjà fait d'une séance : efface les présences saisies
-    // et remet la séance en « appel non fait » (le cours reste, l'appel peut
-    // être refait). Réservé à l'espace admin/vie scolaire.
+    // Supprimer l'appel déjà fait : efface les présences saisies (le cours reste,
+    // l'appel peut être refait). Vaut pour une séance ET pour un appel journée.
     const supprimerAppel = async () => {
-        if (!detailId) return;
-        if (!confirm("Supprimer l'appel de cette séance ?\n\nToutes les présences saisies seront effacées et l'appel pourra être refait. Cette action est irréversible.")) return;
+        if (!detail) return;
+        if (!confirm("Supprimer l'appel ?\n\nToutes les présences saisies seront effacées et l'appel pourra être refait. Cette action est irréversible.")) return;
         try {
-            await api.delete(`/api/seances/${detailId}/appel`);
+            if (detail.est_demi_journee) {
+                await api.delete(`/api/seances/journee/vider?classe_id=${detail.classe_id}&date=${detail.date_seance}&demi_journee=${detail.demi_journee || 'MATIN'}`);
+            } else {
+                await api.delete(`/api/seances/${detailId}/appel`);
+            }
             setDetail(null); setDetailId(null);
             charger();
         } catch (err: any) {
@@ -250,8 +265,9 @@ export default function VieScolaireSeancesPage() {
                             <tbody>
                                 {seances.map(s => {
                                     const col = couleurPour(s.classe);
+                                    const cle = s.seance_id ?? `dj-${s.classe_id}-${s.date_seance}-${s.demi_journee}`;
                                     return (
-                                        <tr key={s.seance_id} className="seance-row" onClick={() => ouvrirDetail(s.seance_id)} style={{ cursor: 'pointer' }}>
+                                        <tr key={cle} className="seance-row" onClick={() => ouvrirDetail(s)} style={{ cursor: 'pointer' }}>
                                             <td style={{ padding: 0, background: col.border, width: '4px' }}></td>
                                             <td style={tdStyle}>{s.date_seance}</td>
                                             <td style={tdStyle}>{s.heure_debut_prevue}–{s.heure_fin_prevue}</td>

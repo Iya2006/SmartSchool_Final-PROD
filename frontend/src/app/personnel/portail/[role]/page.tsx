@@ -238,7 +238,8 @@ type CoursDuJour = {
 /** Une séance dans l'historique des appels : ce qui était prévu, et la réalité
  *  de l'appel (présents / absents / retards). */
 type SeanceHist = {
-    seance_id: number;
+    seance_id: number | null;
+    classe_id?: number;
     classe: string;
     matiere: string;
     enseignant_prevu: string;
@@ -251,6 +252,9 @@ type SeanceHist = {
     nb_presents: number | null;
     nb_absents: number | null;
     nb_retards: number | null;
+    // Appel « journée » du primaire (pas de séance/matière).
+    est_demi_journee?: boolean;
+    demi_journee?: string;
 };
 
 type SeanceHistDetail = SeanceHist & {
@@ -1325,21 +1329,28 @@ function SurveillantPortal() {
     }, []);
     useEffect(() => { chargerSignalements(); }, [chargerSignalements]);
 
-    const ouvrirDetailSeance = async (seanceId: number) => {
+    const ouvrirDetailSeance = async (s: SeanceHist) => {
         try {
-            const res = await api.get<SeanceHistDetail>(`/api/seances/${seanceId}`);
+            const url = s.est_demi_journee
+                ? `/api/seances/journee/detail?classe_id=${s.classe_id}&date=${s.date_seance}&demi_journee=${s.demi_journee || 'MATIN'}`
+                : `/api/seances/${s.seance_id}`;
+            const res = await api.get<SeanceHistDetail>(url);
             setHistDetail(res.data);
         } catch (err) {
             setError(getErrorMessage(err));
         }
     };
 
-    // Supprimer l'appel d'une séance (comme l'admin) : efface les présences et
-    // permet de le refaire. Le cours/la séance restent.
-    const supprimerAppelSeance = async (seanceId: number) => {
-        if (!confirm("Supprimer l'appel de cette séance ?\n\nToutes les présences saisies seront effacées et l'appel pourra être refait. Cette action est irréversible.")) return;
+    // Supprimer l'appel (comme l'admin) : efface les présences et permet de le
+    // refaire. Vaut pour une séance (collège/lycée) ET un appel journée (primaire).
+    const supprimerAppelSeance = async (s: SeanceHistDetail) => {
+        if (!confirm("Supprimer l'appel ?\n\nToutes les présences saisies seront effacées et l'appel pourra être refait. Cette action est irréversible.")) return;
         try {
-            await api.delete(`/api/seances/${seanceId}/appel`);
+            if (s.est_demi_journee) {
+                await api.delete(`/api/seances/journee/vider?classe_id=${s.classe_id}&date=${s.date_seance}&demi_journee=${s.demi_journee || 'MATIN'}`);
+            } else {
+                await api.delete(`/api/seances/${s.seance_id}/appel`);
+            }
             setHistDetail(null);
             chargerHistorique();
         } catch (err) {
@@ -1706,8 +1717,9 @@ function SurveillantPortal() {
                             <div style={{ display: 'flex', flexDirection: 'column', maxHeight: '460px', overflowY: 'auto' }}>
                                 {histSeances.map((s, idx) => {
                                     const fait = s.appel_fait;
+                                    const cle = s.seance_id ?? `dj-${s.classe_id}-${s.date_seance}-${s.demi_journee}`;
                                     return (
-                                        <button key={s.seance_id} type="button" onClick={() => ouvrirDetailSeance(s.seance_id)}
+                                        <button key={cle} type="button" onClick={() => ouvrirDetailSeance(s)}
                                             style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '13px 24px', borderTop: idx === 0 ? 'none' : '1px solid #f1f5f9', background: 'transparent', flexWrap: 'wrap', textAlign: 'left', border: 'none', cursor: 'pointer', width: '100%' }}>
                                             <div style={{ minWidth: '104px' }}>
                                                 <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 900, color: '#0f172a' }}>{s.heure_debut_prevue?.slice(0, 5)}–{s.heure_fin_prevue?.slice(0, 5)}</p>
@@ -1767,7 +1779,7 @@ function SurveillantPortal() {
                             </div>
                             {histDetail.eleves.length > 0 && (
                                 <div style={{ padding: '14px 20px', borderTop: '1px solid #f1f5f9', display: 'flex', justifyContent: 'flex-end' }}>
-                                    <button type="button" onClick={() => supprimerAppelSeance(histDetail.seance_id)}
+                                    <button type="button" onClick={() => supprimerAppelSeance(histDetail)}
                                         style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #fecaca', background: 'white', color: '#b91c1c', fontWeight: 800, cursor: 'pointer' }}>
                                         <Trash2 size={15} /> Supprimer l&apos;appel
                                     </button>
