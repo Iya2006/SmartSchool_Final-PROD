@@ -35,12 +35,14 @@ import {
     CalendarClock,
     QrCode,
     Send,
+    ArrowLeft,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { getRoleAccessConfig } from '@/lib/roleAccess';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import PointagePersonnelScanner from '@/components/PointagePersonnelScanner';
 
 type PortalModule = {
     icon: React.ComponentType<{ size?: number }>;
@@ -1470,6 +1472,8 @@ function SurveillantPortal() {
         }
     };
 
+    const [montrerPointage, setMontrerPointage] = useState(false);
+
     const kpis = [
         // Les libelles annoncaient « 30 jours » alors que la fenetre est
         // l'annee scolaire, et le taux se disait « sur N pointages » alors
@@ -1480,6 +1484,22 @@ function SurveillantPortal() {
         { label: 'Retards de l’année', value: String(presenceStats.retards || 0), note: 'signaux faibles de discipline', icon: CalendarClock, color: '#f59e0b' },
         { label: 'Incidents 90 jours', value: String(incidentStats.total_incidents || 0), note: 'déclarés dans la vie scolaire', icon: ClipboardList, color: '#7c3aed' },
     ];
+
+    // C'est le surveillant qui pointe les enseignants (badge QR), depuis son
+    // espace. Le scanner marche sur téléphone, tablette et ordinateur.
+    if (montrerPointage) {
+        return (
+            <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0fdf4 0%, #eff6ff 48%, #ffffff 100%)', padding: '24px' }}>
+                <div style={{ maxWidth: '1440px', margin: '0 auto' }}>
+                    <button onClick={() => setMontrerPointage(false)}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 16px', borderRadius: '12px', border: '1px solid #cbd5e1', background: 'white', color: '#0f172a', fontWeight: 800, cursor: 'pointer' }}>
+                        <ArrowLeft size={16} /> Retour au poste surveillance
+                    </button>
+                    <PointagePersonnelScanner titre="Pointage des enseignants" />
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0fdf4 0%, #eff6ff 48%, #ffffff 100%)', padding: '24px' }}>
@@ -1503,6 +1523,10 @@ function SurveillantPortal() {
                                 </p>
                             </div>
                             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                {/* C'est le surveillant qui pointe les enseignants (badge QR). */}
+                                <button type="button" onClick={() => setMontrerPointage(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', padding: '13px 18px', borderRadius: '16px', border: 'none', background: '#2563eb', color: 'white', fontWeight: 900, cursor: 'pointer', boxShadow: '0 18px 34px rgba(37,99,235,0.24)' }}>
+                                    <QrCode size={18} /> Pointage enseignants
+                                </button>
                                 <button type="button" onClick={() => setShowForm(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: '9px', padding: '13px 18px', borderRadius: '16px', border: 'none', background: '#16a34a', color: 'white', fontWeight: 900, cursor: 'pointer', boxShadow: '0 18px 34px rgba(22,163,74,0.24)' }}>
                                     <Plus size={18} /> Déclarer un incident
                                 </button>
