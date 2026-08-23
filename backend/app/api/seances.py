@@ -18,7 +18,7 @@ from datetime import date as date_type, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 from pydantic import BaseModel
 from typing import List, Optional
 
@@ -484,7 +484,74 @@ def list_seances(
         q = q.filter(Seance.statut == statut)
 
     seances = q.order_by(Seance.date_seance.desc(), Seance.heure_debut_prevue.desc()).limit(500).all()
-    return [_serialize_seance(db, s) for s in seances]
+    resultats = [_serialize_seance(db, s) for s in seances]
+
+    # ── Appels de la DEMI-JOURNÉE (primaire) ──────────────────────────────
+    # Au primaire, un seul maître tient la classe : l'appel ne porte pas sur
+    # une matière/séance mais sur la demi-journée (Presence.seance_id = NULL).
+    # Ces appels étaient donc invisibles dans cette vue, qui ne listait que les
+    # séances par matière. On les ajoute ici comme des lignes « journée », pour
+    # que l'admin ET le surveillant voient TOUS les appels au même endroit.
+    # Ignorés dès qu'un filtre matière/enseignant est demandé (le primaire n'en
+    # a pas), ou un statut autre que « Effectuée ».
+    if not matiere_id and not enseignant_id and (not statut or statut == "EFFECTUEE"):
+        dj = (
+            db.query(
+                Presence.date_presence.label("d"),
+                Presence.demi_journee.label("dj"),
+                Classe.classe_id.label("cid"),
+                Classe.libelle.label("clib"),
+                func.count(Presence.presence_id).label("total"),
+                func.sum(case((Presence.statut_presence == "PRESENT", 1), else_=0)).label("p"),
+                func.sum(case((Presence.statut_presence.in_(["ABSENT", "ABSENT_JUSTIFIE"]), 1), else_=0)).label("a"),
+                func.sum(case((Presence.statut_presence == "RETARD", 1), else_=0)).label("r"),
+            )
+            .join(Inscription, Inscription.inscription_id == Presence.inscription_id)
+            .join(Classe, Classe.classe_id == Inscription.classe_id)
+            .filter(Classe.etablissement_id == etablissement_id, Presence.seance_id.is_(None))
+        )
+        if date:
+            dj = dj.filter(Presence.date_presence == date_type.fromisoformat(date))
+        if date_debut:
+            dj = dj.filter(Presence.date_presence >= date_type.fromisoformat(date_debut))
+        if date_fin:
+            dj = dj.filter(Presence.date_presence <= date_type.fromisoformat(date_fin))
+        if classe_id:
+            dj = dj.filter(Classe.classe_id == classe_id)
+        dj = dj.group_by(
+            Presence.date_presence, Presence.demi_journee, Classe.classe_id, Classe.libelle
+        ).order_by(Presence.date_presence.desc()).limit(500)
+
+        libelle_dj = {"MATIN": "Matin", "SOIR": "Après-midi"}
+        for row in dj.all():
+            resultats.append({
+                "seance_id": None,
+                "est_demi_journee": True,
+                "classe_id": row.cid,
+                "classe": row.clib,
+                "matiere_id": None,
+                "matiere": "Appel de la journée",
+                "enseignant_prevu_id": None,
+                "enseignant_prevu": "Maître de la classe",
+                "enseignant_reel": None,
+                "date_seance": str(row.d),
+                "demi_journee": row.dj,
+                "heure_debut_prevue": libelle_dj.get(row.dj, row.dj or ""),
+                "heure_fin_prevue": "",
+                "heure_debut_reelle": None,
+                "heure_fin_reelle": None,
+                "salle": None,
+                "statut": "EFFECTUEE",
+                "motif_statut": None,
+                "appel_fait": True,
+                "appel_fait_le": None,
+                "nb_presents": int(row.p or 0),
+                "nb_absents": int(row.a or 0),
+                "nb_retards": int(row.r or 0),
+            })
+        resultats.sort(key=lambda x: (x.get("date_seance") or "", x.get("heure_debut_prevue") or ""), reverse=True)
+
+    return resultats
 
 
 @router_admin.get("/eleve/{eleve_id}")
@@ -691,3 +758,101 @@ def supprimer_appel_seance(
     )
     db.commit()
     return {"message": f"Appel supprimé ({nb} présence(s) effacée(s))", "seance_id": seance_id, "presences_supprimees": nb}
+
+
+# ── Appel de la DEMI-JOURNÉE (primaire) : détail + suppression ────────────────
+# Chemins volontairement en deux segments (/journee/…) pour ne PAS entrer en
+# collision avec /{seance_id} ni /{seance_id}/appel.
+
+def _presences_journee(db: Session, classe_id: int, jour: date_type, dj: str):
+    return (
+        db.query(Presence)
+        .join(Inscription, Inscription.inscription_id == Presence.inscription_id)
+        .filter(
+            Inscription.classe_id == classe_id,
+            Presence.date_presence == jour,
+            Presence.demi_journee == dj,
+            Presence.seance_id.is_(None),
+        )
+        .all()
+    )
+
+
+@router_admin.get("/journee/detail")
+def detail_appel_journee(
+    classe_id: int, date: str, demi_journee: str = "MATIN",
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Le détail nominatif d'un appel de la demi-journée (primaire)."""
+    classe = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    jour = date_type.fromisoformat(date)
+    dj = (demi_journee or "MATIN").upper()
+    presences = _presences_journee(db, classe_id, jour, dj)
+    insc = {i.inscription_id: i for i in db.query(Inscription).filter(
+        Inscription.inscription_id.in_([p.inscription_id for p in presences] or [0])
+    ).all()}
+    eleves = {e.eleve_id: e for e in db.query(Eleve).filter(
+        Eleve.eleve_id.in_([i.eleve_id for i in insc.values()] or [0])
+    ).all()}
+    liste = []
+    for p in presences:
+        i = insc.get(p.inscription_id)
+        el = eleves.get(i.eleve_id) if i else None
+        liste.append({
+            "eleve": f"{el.prenom} {el.nom}" if el else "?",
+            "matricule": el.matricule if el else None,
+            "statut": p.statut_presence,
+        })
+    liste.sort(key=lambda x: x["eleve"])
+    return {
+        "seance_id": None,
+        "est_demi_journee": True,
+        "classe_id": classe_id,
+        "classe": classe.libelle,
+        "matiere": "Appel de la journée",
+        "enseignant_prevu": "Maître de la classe",
+        "enseignant_reel": None,
+        "date_seance": date,
+        "demi_journee": dj,
+        "heure_debut_prevue": {"MATIN": "Matin", "SOIR": "Après-midi"}.get(dj, dj),
+        "heure_fin_prevue": "",
+        "statut": "EFFECTUEE",
+        "motif_statut": None,
+        "nb_presents": sum(1 for p in presences if p.statut_presence == "PRESENT"),
+        "nb_absents": sum(1 for p in presences if p.statut_presence in ("ABSENT", "ABSENT_JUSTIFIE")),
+        "nb_retards": sum(1 for p in presences if p.statut_presence == "RETARD"),
+        "eleves": liste,
+    }
+
+
+@router_admin.delete("/journee/vider")
+def supprimer_appel_journee(
+    classe_id: int, date: str, demi_journee: str, request: Request,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Supprime l'appel de la demi-journée (primaire) : efface les présences."""
+    classe = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+    verifier_annee_modifiable(db, classe.annee_id)
+    jour = date_type.fromisoformat(date)
+    dj = (demi_journee or "MATIN").upper()
+    ids = [p.presence_id for p in _presences_journee(db, classe_id, jour, dj)]
+    nb = 0
+    if ids:
+        nb = db.query(Presence).filter(Presence.presence_id.in_(ids)).delete(synchronize_session=False)
+    _log_audit(
+        db, request, current_user, etablissement_id, "SUPPRIMER_APPEL_JOURNEE",
+        f"Classe {classe_id} {date} {dj} : appel demi-journée supprimé ({nb} présence(s)).",
+    )
+    db.commit()
+    return {"message": f"Appel supprimé ({nb} présence(s) effacée(s))", "presences_supprimees": nb}
