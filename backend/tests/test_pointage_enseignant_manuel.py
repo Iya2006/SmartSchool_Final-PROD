@@ -94,12 +94,33 @@ def test_pointage_manuel_puis_suppression(client: TestClient, db: Session):
 def test_scan_renvoie_les_cours_du_jour(client: TestClient, db: Session):
     etab, ens, admin = _setup(db)
     headers = _headers(client, admin.nom_utilisateur)
+    # Le badge encode un TEXTE lisible (comme cartes.py::contenu_qr), pas le
+    # matricule nu : le scan doit tout de même retrouver l'enseignant.
+    qr_texte = (
+        f"{ens.prenom} {ens.nom}\n"
+        f"Matricule : {ens.matricule}\n"
+        f"Tél : {ens.telephone}\n"
+        f"Adresse : Conakry\n"
+        f"Classes : 6A"
+    )
     r = client.post("/api/presences-agents/scan", headers=headers, json={
-        "qr_data": ens.matricule, "action_type": "ARRIVEE",
+        "qr_data": qr_texte, "action_type": "ARRIVEE",
     })
     assert r.status_code == 200, r.text
     data = r.json()
+    assert data["agent"]["matricule"] == ens.matricule, "Le matricule affiché doit être propre, pas le blob"
     assert data["journee"] is not None, "Le scan doit renvoyer les infos de la journée"
     assert len(data["journee"]["cours"]) == 1
     assert data["journee"]["cours"][0]["matiere"] == "Maths"
     assert data["journee"]["arrivee"] is not None
+
+
+def test_scan_matricule_nu_fonctionne_toujours(client: TestClient, db: Session):
+    """Un ancien badge encodant le matricule nu doit continuer à marcher."""
+    etab, ens, admin = _setup(db)
+    headers = _headers(client, admin.nom_utilisateur)
+    r = client.post("/api/presences-agents/scan", headers=headers, json={
+        "qr_data": ens.matricule, "action_type": "ARRIVEE",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["agent"]["matricule"] == ens.matricule

@@ -165,12 +165,16 @@ export default function PointagePersonnelScanner({ retourHref, titre = 'Pointage
                 audio.play().catch(() => {});
             }
         } catch (error: any) {
+            // Le badge encode un texte lisible : on n'affiche pas tout le blob
+            // dans la carte, seulement le matricule s'il y figure.
+            const m = decodedText.match(/Matricule\s*:\s*([^\r\n]+)/i);
+            const matriculeLisible = (m ? m[1] : decodedText.split('\n')[0]).trim().slice(0, 40);
             // Pointage RÉSERVÉ AUX ENSEIGNANTS/agents : plus de repli élève.
             setScanResult({
                 success: false,
                 message: error.response?.data?.detail || error.response?.data?.message || "Badge inconnu ou non attribué à un enseignant.",
                 action: "ERREUR",
-                agent: { nom: "Inconnu", role: "-", matricule: decodedText, photo: "" },
+                agent: { nom: "Inconnu", role: "-", matricule: matriculeLisible, photo: "" },
                 heure: new Date().toLocaleTimeString('fr-FR')
             });
         } finally {
