@@ -906,7 +906,41 @@ def list_incidents(
         query = query.filter(Incident.gravite == gravite)
     if statut:
         query = query.filter(Incident.statut == statut)
-    return query.order_by(Incident.date_incident.desc()).offset(skip).limit(limit).all()
+    incidents = query.order_by(Incident.date_incident.desc()).offset(skip).limit(limit).all()
+
+    # Enrichissement en BATCH (jamais une requête par incident) : nom de
+    # l'élève + sa classe, pour que la vue admin soit lisible.
+    eleve_ids = [i.eleve_id for i in incidents]
+    eleves = {e.eleve_id: e for e in db.query(Eleve).filter(Eleve.eleve_id.in_(eleve_ids)).all()} if eleve_ids else {}
+    classes = {}
+    if eleve_ids:
+        from app.models.academique import Classe as _Classe
+        for insc, cl in (
+            db.query(Inscription, _Classe)
+            .join(_Classe, _Classe.classe_id == Inscription.classe_id)
+            .filter(Inscription.eleve_id.in_(eleve_ids), Inscription.statut == "ACTIVE")
+            .all()
+        ):
+            classes[insc.eleve_id] = cl.libelle
+
+    resultats = []
+    for i in incidents:
+        e = eleves.get(i.eleve_id)
+        resultats.append({
+            "incident_id": i.incident_id,
+            "eleve_id": i.eleve_id,
+            "etablissement_id": i.etablissement_id,
+            "type_incident": i.type_incident,
+            "gravite": i.gravite,
+            "description": i.description,
+            "signale_par": i.signale_par,
+            "date_incident": i.date_incident,
+            "statut": i.statut,
+            "eleve_nom": f"{e.prenom} {e.nom}" if e else None,
+            "matricule": e.matricule if e else None,
+            "classe": classes.get(i.eleve_id),
+        })
+    return resultats
 
 
 @router.post("/incidents", response_model=IncidentOut, status_code=201)

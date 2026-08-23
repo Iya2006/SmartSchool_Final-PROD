@@ -786,6 +786,10 @@ class IncidentOut(OrmBase, IncidentBase):
     incident_id: int
     date_incident: Optional[date] = None
     statut: str
+    # Enrichis par l'endpoint pour la vue admin (nom lisible, pas juste un id).
+    eleve_nom: Optional[str] = None
+    matricule: Optional[str] = None
+    classe: Optional[str] = None
 
 
 # ============================================================================

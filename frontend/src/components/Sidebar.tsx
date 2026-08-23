@@ -164,6 +164,12 @@ export default function Sidebar() {
                             <span className={styles.menuText}>Séances (Appel)</span>
                         </Link>
                     </li>
+                    <li className={pathname.startsWith('/vie-scolaire/incidents') ? styles.currentPage : ''}>
+                        <Link href="/vie-scolaire/incidents">
+                            <AlertTriangle size={18} className={styles.menuIcon} />
+                            <span className={styles.menuText}>Incidents</span>
+                        </Link>
+                    </li>
                     <li className={pathname.startsWith('/evenements') ? styles.currentPage : ''}>
                         <Link href="/evenements">
                             <Calendar size={18} className={styles.menuIcon} />

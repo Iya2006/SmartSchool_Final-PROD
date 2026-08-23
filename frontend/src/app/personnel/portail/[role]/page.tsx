@@ -1313,6 +1313,18 @@ function SurveillantPortal() {
 
     useEffect(() => { chargerHistorique(); }, [chargerHistorique]);
 
+    // Suivi de MES signalements d'absence d'enseignant : le surveillant
+    // constate, mais il doit voir ce que la direction en a fait (validé →
+    // retenue, écarté → rien, ou encore en attente).
+    const [mesSignalements, setMesSignalements] = useState<any[]>([]);
+    const chargerSignalements = useCallback(async () => {
+        try {
+            const r = await api.get('/api/vie-scolaire/absences-enseignant');
+            setMesSignalements(r.data?.items || []);
+        } catch { setMesSignalements([]); }
+    }, []);
+    useEffect(() => { chargerSignalements(); }, [chargerSignalements]);
+
     const ouvrirDetailSeance = async (seanceId: number) => {
         try {
             const res = await api.get<SeanceHistDetail>(`/api/seances/${seanceId}`);
@@ -1377,6 +1389,7 @@ function SurveillantPortal() {
             setSignalement((v) => ({ ...v, enseignant_id: '', motif: '', est_justifie: false }));
             setCoursCoches([]);
             chargerCoursDuJour();
+            chargerSignalements();
         } catch (err) {
             setError(getErrorMessage(err));
         } finally {
@@ -1891,6 +1904,54 @@ function SurveillantPortal() {
                         </button>
                     </form>
                 </section>
+
+                {/* Suivi de mes signalements d'absence : le surveillant voit ce
+                    que la direction a décidé (en attente / validé → retenue / écarté). */}
+                {mesSignalements.length > 0 && (
+                    <section style={{ background: 'white', borderRadius: '30px', border: '1px solid #e2e8f0', boxShadow: '0 24px 58px rgba(15,23,42,0.06)', overflow: 'hidden' }}>
+                        <div style={{ padding: '20px 24px', borderBottom: '1px solid #eef2f7', background: 'linear-gradient(135deg, #ffffff, #f5f3ff)' }}>
+                            <p style={{ margin: 0, fontSize: '12px', color: '#7c3aed', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Corps enseignant</p>
+                            <h2 style={{ margin: '6px 0 0', fontSize: '22px', color: '#111827', fontWeight: 950 }}>Suivi de mes signalements d&apos;absence</h2>
+                            <p style={{ margin: '6px 0 0', fontSize: '13.5px', color: '#64748b' }}>Vous constatez ; la direction tranche. Voici où en est chaque signalement.</p>
+                        </div>
+                        <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '620px' }}>
+                                <thead>
+                                    <tr style={{ background: '#faf5ff' }}>
+                                        {['Enseignant', 'Date', 'Statut', 'Impact paie'].map((h, i) => (
+                                            <th key={i} style={{ textAlign: i === 0 ? 'left' : 'center', padding: '11px 16px', fontSize: '11px', fontWeight: 900, color: '#64748b', textTransform: 'uppercase' }}>{h}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {mesSignalements.map((s: any) => {
+                                        const st = String(s.statut || '').toUpperCase();
+                                        const badge = st === 'VALIDE'
+                                            ? { l: 'Validée', bg: '#ecfdf5', fg: '#059669' }
+                                            : st === 'ECARTE'
+                                                ? { l: 'Écartée', bg: '#f1f5f9', fg: '#64748b' }
+                                                : { l: 'En attente', bg: '#fffbeb', fg: '#b45309' };
+                                        return (
+                                            <tr key={s.absence_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                                <td style={{ padding: '11px 16px', fontSize: '13px' }}>
+                                                    <div style={{ fontWeight: 800, color: '#1e293b' }}>{s.employe}</div>
+                                                    {s.poste && <div style={{ fontSize: '11px', color: '#94a3b8' }}>{s.poste}</div>}
+                                                </td>
+                                                <td style={{ padding: '11px 16px', fontSize: '12.5px', textAlign: 'center', color: '#475569', whiteSpace: 'nowrap' }}>{String(s.date_absence || '').slice(0, 10)}</td>
+                                                <td style={{ padding: '11px 16px', textAlign: 'center' }}>
+                                                    <span style={{ fontSize: '11px', fontWeight: 800, padding: '3px 12px', borderRadius: '999px', background: badge.bg, color: badge.fg }}>{badge.l}</span>
+                                                </td>
+                                                <td style={{ padding: '11px 16px', textAlign: 'center', fontSize: '12px', fontWeight: 700, color: s.retient_sur_la_paie ? '#b91c1c' : '#94a3b8' }}>
+                                                    {s.retient_sur_la_paie ? 'Retenue sur salaire' : (s.est_justifie ? 'Justifiée' : '—')}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                )}
 
                 {(error || success) && (
                     <div style={{ padding: '14px 18px', borderRadius: '18px', background: error ? '#fef2f2' : '#f0fdf4', border: `1px solid ${error ? '#fecaca' : '#bbf7d0'}`, color: error ? '#991b1b' : '#166534', fontWeight: 800 }}>
