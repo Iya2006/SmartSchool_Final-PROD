@@ -62,9 +62,9 @@ def main():
     from app.core.database import SessionLocal
     from app.core.security import hash_password
     from app.models.academique import (
-        AnneeScolaire, Classe, ClasseMatiere, Cycle, Eleve, EleveParent, Enseignant,
-        Etablissement, Evaluation, Inscription, Matiere, Niveau, Note, Parent,
-        Presence, Trimestre, TypeEvaluation, Utilisateur,
+        Affectation, AnneeScolaire, Classe, ClasseMatiere, Cycle, Eleve, EleveParent,
+        Enseignant, Etablissement, Evaluation, Inscription, Matiere, Niveau, Note,
+        Parent, Presence, Trimestre, TypeEvaluation, Utilisateur,
     )
 
     db = SessionLocal()
@@ -85,7 +85,7 @@ def main():
                 continue
             rec = _creer_ecole(
                 db, code, i, args, mdp_hash, seq,
-                {"AnneeScolaire": AnneeScolaire, "Classe": Classe, "ClasseMatiere": ClasseMatiere,
+                {"Affectation": Affectation, "AnneeScolaire": AnneeScolaire, "Classe": Classe, "ClasseMatiere": ClasseMatiere,
                  "Cycle": Cycle, "Eleve": Eleve, "EleveParent": EleveParent, "Enseignant": Enseignant,
                  "Etablissement": Etablissement, "Evaluation": Evaluation, "Inscription": Inscription,
                  "Matiere": Matiere, "Niveau": Niveau, "Note": Note, "Parent": Parent,
@@ -121,7 +121,7 @@ def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
                                date_debut=date(2026, 9, 1), date_fin=date(2027, 7, 1),
                                statut="EN_COURS", est_courante="O")
     db.add(annee); db.commit(); db.refresh(annee)
-    trimestre = M["Trimestre"](annee_id=annee.annee_id, code=f"{code}-T1", libelle="1er Trimestre", numero=1,
+    trimestre = M["Trimestre"](annee_id=annee.annee_id, code=f"L{idx}T1", libelle="1er Trimestre", numero=1,
                                date_debut=date(2026, 9, 1), date_fin=date(2026, 12, 20), statut="EN_COURS")
     db.add(trimestre); db.commit(); db.refresh(trimestre)
     cycle = M["Cycle"](etablissement_id=etab.etablissement_id, code=f"{code}-CY", libelle="Collège", ordre=2)
@@ -150,6 +150,7 @@ def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
         db.refresh(ens)
 
     classe_ids, eleve_ids, eleves_rec, parents_rec = [], [], [], []
+    prof_classe = {}  # enseignant_id -> classe_id (affectation réelle)
     matiere = M["Matiere"](cycle_id=cycle.cycle_id, code=f"{code}-MATH", libelle="Mathématiques", note_sur=20)
     db.add(matiere); db.commit(); db.refresh(matiere)
 
@@ -163,6 +164,13 @@ def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
         db.commit()
 
         prof = enseignants[c % len(enseignants)]
+        # Affectation réelle prof ↔ classe ↔ matière (sinon les endpoints
+        # enseignant qui vérifient l'affectation renvoient 403/404).
+        db.add(M["Affectation"](enseignant_id=prof.enseignant_id, matiere_id=matiere.matiere_id,
+                                classe_id=classe.classe_id, annee_id=annee.annee_id,
+                                nb_heures_semaine=4, est_principal="O", statut="ACTIVE"))
+        db.commit()
+        prof_classe.setdefault(prof.enseignant_id, classe.classe_id)
         # Une évaluation centralisée par classe (pour peupler bulletins/notes).
         ev = M["Evaluation"](matiere_id=matiere.matiere_id, classe_id=classe.classe_id,
                              trimestre_id=trimestre.trimestre_id, type_eval_id=type_eval.type_eval_id,
@@ -195,8 +203,8 @@ def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
         db.commit()
 
     ens_rec = [{"identifiant": e.matricule, "mot_de_passe": MDP, "enseignant_id": e.enseignant_id,
-                "classe_id": classe_ids[i % len(classe_ids)] if classe_ids else None}
-               for i, e in enumerate(enseignants)]
+                "classe_id": prof_classe.get(e.enseignant_id)}
+               for e in enseignants]
 
     return {
         "code": code,
@@ -215,24 +223,56 @@ def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
 
 
 def _reset(db, Etablissement):
-    """Supprime toutes les écoles LOAD- (cascade laissée à la base : on retire
-    les établissements de test créés par ce seeder uniquement)."""
+    """Supprime toutes les écoles LOAD- et TOUTES leurs données dérivées, dans
+    l'ordre des clés étrangères (enfants d'abord). Scopé par etablissement_id :
+    ne touche QUE les données créées par ce seeder."""
     from sqlalchemy import text
     etabs = db.query(Etablissement).filter(Etablissement.code.like(f"{CODE_PREFIX}%")).all()
     if not etabs:
+        print("Aucune donnée LOAD- à supprimer.")
         return
-    ids = [e.etablissement_id for e in etabs]
-    # Suppression ordonnée par SQL brut (dépend des FK réelles ; ON DELETE non
-    # garanti partout). On s'appuie sur les colonnes etablissement_id présentes.
-    for e in etabs:
-        db.delete(e)
-    try:
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        print("Reset partiel : certaines FK bloquent la suppression directe.")
-        print("  Détail :", exc)
-        print("  → sur une base de test locale, le plus simple est de recréer le schéma.")
+    ids = tuple(e.etablissement_id for e in etabs)
+    inlist = "(" + ",".join(str(i) for i in ids) + ")"
+
+    # Sous-ensembles réutilisés.
+    classes = f"SELECT classe_id FROM ss_classes WHERE etablissement_id IN {inlist}"
+    inscriptions = f"SELECT inscription_id FROM ss_inscriptions WHERE classe_id IN ({classes})"
+    evals = f"SELECT evaluation_id FROM ss_evaluations WHERE classe_id IN ({classes})"
+    annees = f"SELECT annee_id FROM ss_annees_scolaires WHERE etablissement_id IN {inlist}"
+    cycles = f"SELECT cycle_id FROM ss_cycles WHERE etablissement_id IN {inlist}"
+
+    # Ordre : enfants → parents.
+    statements = [
+        f"DELETE FROM ss_notes WHERE inscription_id IN ({inscriptions})",
+        f"DELETE FROM ss_notes WHERE evaluation_id IN ({evals})",
+        f"DELETE FROM ss_presences WHERE inscription_id IN ({inscriptions})",
+        f"DELETE FROM ss_eleve_parent WHERE eleve_id IN (SELECT eleve_id FROM ss_eleves WHERE etablissement_id IN {inlist})",
+        f"DELETE FROM ss_inscriptions WHERE classe_id IN ({classes})",
+        f"DELETE FROM ss_affectations WHERE classe_id IN ({classes})",
+        f"DELETE FROM ss_evaluations WHERE classe_id IN ({classes})",
+        f"DELETE FROM ss_classe_matieres WHERE classe_id IN ({classes})",
+        f"DELETE FROM ss_classes WHERE etablissement_id IN {inlist}",
+        f"DELETE FROM ss_trimestres WHERE annee_id IN ({annees})",
+        f"DELETE FROM ss_matieres WHERE cycle_id IN ({cycles})",
+        f"DELETE FROM ss_niveaux WHERE cycle_id IN ({cycles})",
+        f"DELETE FROM ss_types_evaluation WHERE etablissement_id IN {inlist}",
+        f"DELETE FROM ss_annees_scolaires WHERE etablissement_id IN {inlist}",
+        f"DELETE FROM ss_cycles WHERE etablissement_id IN {inlist}",
+        f"DELETE FROM ss_eleves WHERE etablissement_id IN {inlist}",
+        f"DELETE FROM ss_parents WHERE etablissement_id IN {inlist}",
+        f"DELETE FROM ss_enseignants WHERE etablissement_id IN {inlist}",
+        f"DELETE FROM ss_utilisateurs WHERE etablissement_id IN {inlist}",
+        f"DELETE FROM ss_etablissements WHERE etablissement_id IN {inlist}",
+    ]
+    for sql in statements:
+        try:
+            db.execute(text(sql))
+        except Exception as exc:
+            db.rollback()
+            print(f"Échec sur : {sql}\n  {exc}")
+            raise
+    db.commit()
+    print(f"Supprimé : {len(etabs)} école(s) LOAD- et leurs données.")
 
 
 if __name__ == "__main__":

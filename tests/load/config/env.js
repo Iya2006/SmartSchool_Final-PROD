@@ -4,7 +4,9 @@
 
 export const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8300').replace(/\/+$/, '');
 export const TEST_ENV = __ENV.TEST_ENV || 'local';
-export const DATA_FILE = __ENV.DATA_FILE || './data/accounts.json';
+// Chemin résolu par open() dans lib/data.js — DONC relatif à lib/ (k6 résout
+// open() par rapport au fichier appelant, pas au CWD). D'où « ../data/… ».
+export const DATA_FILE = __ENV.DATA_FILE || '../data/accounts.json';
 
 // Paramètres génériques (surchargés par --env selon le palier de test).
 export const VUS = parseInt(__ENV.VUS || '10', 10);
