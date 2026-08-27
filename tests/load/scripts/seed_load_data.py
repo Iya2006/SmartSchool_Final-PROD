@@ -67,6 +67,13 @@ def main():
         Parent, Presence, Trimestre, TypeEvaluation, Utilisateur,
     )
 
+    modeles = {"Affectation": Affectation, "AnneeScolaire": AnneeScolaire, "Classe": Classe, "ClasseMatiere": ClasseMatiere,
+               "Cycle": Cycle, "Eleve": Eleve, "EleveParent": EleveParent, "Enseignant": Enseignant,
+               "Etablissement": Etablissement, "Evaluation": Evaluation, "Inscription": Inscription,
+               "Matiere": Matiere, "Niveau": Niveau, "Note": Note, "Parent": Parent,
+               "Presence": Presence, "Trimestre": Trimestre, "TypeEvaluation": TypeEvaluation,
+               "Utilisateur": Utilisateur}
+
     db = SessionLocal()
     try:
         if args.reset:
@@ -83,15 +90,25 @@ def main():
             if db.query(Etablissement).filter(Etablissement.code == code).first():
                 print(f"  {code} existe déjà — ignoré (utilise --reset pour repartir).")
                 continue
-            rec = _creer_ecole(
-                db, code, i, args, mdp_hash, seq,
-                {"Affectation": Affectation, "AnneeScolaire": AnneeScolaire, "Classe": Classe, "ClasseMatiere": ClasseMatiere,
-                 "Cycle": Cycle, "Eleve": Eleve, "EleveParent": EleveParent, "Enseignant": Enseignant,
-                 "Etablissement": Etablissement, "Evaluation": Evaluation, "Inscription": Inscription,
-                 "Matiere": Matiere, "Niveau": Niveau, "Note": Note, "Parent": Parent,
-                 "Presence": Presence, "Trimestre": Trimestre, "TypeEvaluation": TypeEvaluation,
-                 "Utilisateur": Utilisateur},
-            )
+            # Réessai avec connexion FRAÎCHE : sur un réseau distant instable, le
+            # pooler peut lâcher en plein batch. L'école étant atomique (commit
+            # unique), un échec ne laisse rien — on rejoue proprement.
+            rec = None
+            for tentative in range(1, 5):
+                try:
+                    rec = _creer_ecole(db, code, i, args, mdp_hash, seq, modeles)
+                    break
+                except Exception as exc:  # noqa: BLE001 — résilience réseau volontaire
+                    try:
+                        db.rollback()
+                        db.close()
+                    except Exception:
+                        pass
+                    db = SessionLocal()  # pool_pre_ping fournit une connexion vivante
+                    print(f"  {code} : tentative {tentative} échouée ({type(exc).__name__}), on réessaie…")
+            if rec is None:
+                print(f"  {code} : ABANDON après 4 tentatives.")
+                continue
             out["etablissements"].append(rec)
             print(f"  {code} : {len(rec['enseignants'])} ens, {len(rec['eleves'])} élèves, {len(rec['classe_ids'])} classes.")
 
@@ -99,6 +116,7 @@ def main():
         with open(DATA_OUT, "w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)
         print(f"\nDataset écrit : {DATA_OUT}")
+        print(f"  Écoles créées : {len(out['etablissements'])}")
         print(f"  Mot de passe de tous les comptes : {MDP}")
     finally:
         db.close()
@@ -115,28 +133,31 @@ class _Seq:
 
 
 def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
+    # UNE école = UNE transaction (flush pour obtenir les IDs, un seul commit à
+    # la fin). Sur un réseau instable (batch distant), l'école est ainsi
+    # atomique et REJOUABLE : un échec ne laisse aucune donnée partielle.
     etab = M["Etablissement"](code=code, nom=f"École de charge {idx}", type_etablissement="COLLEGE")
-    db.add(etab); db.commit(); db.refresh(etab)
+    db.add(etab); db.flush()
     annee = M["AnneeScolaire"](etablissement_id=etab.etablissement_id, code=f"{code}-AN", libelle="2026-2027",
                                date_debut=date(2026, 9, 1), date_fin=date(2027, 7, 1),
                                statut="EN_COURS", est_courante="O")
-    db.add(annee); db.commit(); db.refresh(annee)
+    db.add(annee); db.flush()
     trimestre = M["Trimestre"](annee_id=annee.annee_id, code=f"L{idx}T1", libelle="1er Trimestre", numero=1,
                                date_debut=date(2026, 9, 1), date_fin=date(2026, 12, 20), statut="EN_COURS")
-    db.add(trimestre); db.commit(); db.refresh(trimestre)
+    db.add(trimestre); db.flush()
     cycle = M["Cycle"](etablissement_id=etab.etablissement_id, code=f"{code}-CY", libelle="Collège", ordre=2)
-    db.add(cycle); db.commit(); db.refresh(cycle)
+    db.add(cycle); db.flush()
     niveau = M["Niveau"](cycle_id=cycle.cycle_id, code=f"{code}-N", libelle="6e", ordre=1)
-    db.add(niveau); db.commit(); db.refresh(niveau)
+    db.add(niveau); db.flush()
     type_eval = M["TypeEvaluation"](etablissement_id=etab.etablissement_id, code="COMPO", libelle="Composition",
                                     coefficient=2, statut="ACTIF")
-    db.add(type_eval); db.commit(); db.refresh(type_eval)
+    db.add(type_eval); db.flush()
 
     admin = M["Utilisateur"](nom="Admin", prenom=f"Ecole{idx}", nom_utilisateur=f"load.admin.{idx}",
                              email=f"load.admin.{idx}@loadtest.local", telephone=f"6{seq.next():09d}"[:12],
                              mot_de_passe=mdp_hash, role="ADMIN", statut="ACTIF",
                              etablissement_id=etab.etablissement_id)
-    db.add(admin); db.commit()
+    db.add(admin); db.flush()
 
     # Enseignants
     enseignants = []
@@ -145,23 +166,20 @@ def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
                               nom="Prof", prenom=f"{idx}-{e}", sexe="M", telephone=f"7{seq.next():09d}"[:12],
                               mot_de_passe=mdp_hash, statut="ACTIF")
         db.add(ens); enseignants.append(ens)
-    db.commit()
-    for ens in enseignants:
-        db.refresh(ens)
+    db.flush()
 
     classe_ids, eleve_ids, eleves_rec, parents_rec = [], [], [], []
     prof_classe = {}  # enseignant_id -> classe_id (affectation réelle)
     matiere = M["Matiere"](cycle_id=cycle.cycle_id, code=f"{code}-MATH", libelle="Mathématiques", note_sur=20)
-    db.add(matiere); db.commit(); db.refresh(matiere)
+    db.add(matiere); db.flush()
 
     for c in range(args.classes):
         classe = M["Classe"](etablissement_id=etab.etablissement_id, annee_id=annee.annee_id,
                              niveau_id=niveau.niveau_id, code=f"{code}-CL-{c}", libelle=f"6e {c+1}", statut="ACTIVE")
-        db.add(classe); db.commit(); db.refresh(classe)
+        db.add(classe); db.flush()
         classe_ids.append(classe.classe_id)
         db.add(M["ClasseMatiere"](classe_id=classe.classe_id, matiere_id=matiere.matiere_id,
                                   coefficient=2, nb_heures_semaine=4, est_active="O"))
-        db.commit()
 
         prof = enseignants[c % len(enseignants)]
         # Affectation réelle prof ↔ classe ↔ matière (sinon les endpoints
@@ -169,23 +187,22 @@ def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
         db.add(M["Affectation"](enseignant_id=prof.enseignant_id, matiere_id=matiere.matiere_id,
                                 classe_id=classe.classe_id, annee_id=annee.annee_id,
                                 nb_heures_semaine=4, est_principal="O", statut="ACTIVE"))
-        db.commit()
         prof_classe.setdefault(prof.enseignant_id, classe.classe_id)
         # Une évaluation centralisée par classe (pour peupler bulletins/notes).
         ev = M["Evaluation"](matiere_id=matiere.matiere_id, classe_id=classe.classe_id,
                              trimestre_id=trimestre.trimestre_id, type_eval_id=type_eval.type_eval_id,
                              enseignant_id=prof.enseignant_id, libelle="Compo T1", date_evaluation=date(2026, 10, 1),
                              note_sur=20, coefficient=2, statut="CENTRALISEE")
-        db.add(ev); db.commit(); db.refresh(ev)
+        db.add(ev); db.flush()
 
         for s in range(args.eleves):
             elv = M["Eleve"](etablissement_id=etab.etablissement_id, matricule=f"{code}-ELV-{c}-{s:03d}",
                             nom="Eleve", prenom=f"{c}-{s}", date_naissance=date(2013, 1, 1), sexe="F",
                             statut="ACTIF", mot_de_passe=mdp_hash)
-            db.add(elv); db.commit(); db.refresh(elv)
+            db.add(elv); db.flush()
             insc = M["Inscription"](eleve_id=elv.eleve_id, classe_id=classe.classe_id,
                                     annee_id=annee.annee_id, statut="ACTIVE")
-            db.add(insc); db.commit(); db.refresh(insc)
+            db.add(insc); db.flush()
             db.add(M["Note"](evaluation_id=ev.evaluation_id, inscription_id=insc.inscription_id,
                              valeur=12, est_absent="N"))
             db.add(M["Presence"](inscription_id=insc.inscription_id, date_presence=date(2026, 10, 1),
@@ -196,11 +213,12 @@ def _creer_ecole(db, code, idx, args, mdp_hash, seq, M):
 
             parent = M["Parent"](etablissement_id=etab.etablissement_id, nom="Parent", prenom=f"{c}-{s}",
                                  telephone_1=f"62{seq.next():08d}"[:12], mot_de_passe=mdp_hash, statut="ACTIF")
-            db.add(parent); db.commit(); db.refresh(parent)
+            db.add(parent); db.flush()
             db.add(M["EleveParent"](eleve_id=elv.eleve_id, parent_id=parent.parent_id, lien_parente="MERE"))
             parents_rec.append({"telephone": parent.telephone_1, "mot_de_passe": MDP,
                                 "parent_id": parent.parent_id, "enfant_ids": [elv.eleve_id]})
-        db.commit()
+
+    db.commit()  # UN seul commit : l'école entière ou rien.
 
     ens_rec = [{"identifiant": e.matricule, "mot_de_passe": MDP, "enseignant_id": e.enseignant_id,
                 "classe_id": prof_classe.get(e.enseignant_id)}
