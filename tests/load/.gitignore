@@ -1,0 +1,6 @@
+# Données de test générées (comptes synthétiques) et sorties k6 — jamais versionnées.
+data/accounts.json
+results/*.json
+results/*.csv
+results/*.html
+*.log

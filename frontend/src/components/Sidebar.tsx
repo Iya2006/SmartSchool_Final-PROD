@@ -96,15 +96,24 @@ export default function Sidebar() {
                     if ((e.target as HTMLElement).closest('a')) closeMobileSidebar();
                 }}>
 
-                    <li className={styles.sidebarTitle}>
-                        <h6 className={styles.titleText}>Dashboards</h6>
-                    </li>
-                    <li className={pathname === '/dashboard' ? styles.currentPage : ''}>
-                        <Link href="/dashboard">
-                            <PieChart size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Dashboard</span>
-                        </Link>
-                    </li>
+                    {/* Le tableau de bord est un poste de PILOTAGE, pas un écran
+                        de travail : réservé au fondateur, et au directeur général
+                        seulement si le fondateur lui a ouvert la comptabilité (les
+                        deux vont ensemble). Le directeur de niveau ne le voit plus.
+                        Le contrôle réel reste côté serveur ; on aligne le menu. */}
+                    {canAccessPathForRole(user?.role, '/dashboard', user?.role_base, user?.acces_comptabilite) && (
+                        <>
+                            <li className={styles.sidebarTitle}>
+                                <h6 className={styles.titleText}>Dashboards</h6>
+                            </li>
+                            <li className={pathname === '/dashboard' ? styles.currentPage : ''}>
+                                <Link href="/dashboard">
+                                    <PieChart size={18} className={styles.menuIcon} />
+                                    <span className={styles.menuText}>Dashboard</span>
+                                </Link>
+                            </li>
+                        </>
+                    )}
 
 
                     <li className={styles.sidebarTitle}>
@@ -122,18 +131,28 @@ export default function Sidebar() {
                             <span className={styles.menuText}>Enseignants</span>
                         </Link>
                     </li>
-                    <li className={pathname.startsWith('/personnel') ? styles.currentPage : ''}>
-                        <Link href="/personnel">
-                            <Shield size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Personnel</span>
-                        </Link>
-                    </li>
-                    <li className={pathname.startsWith('/dashboard/presences/scan') ? styles.currentPage : ''}>
-                        <Link href="/dashboard/presences/scan">
-                            <ScanLine size={18} className={styles.menuIcon} />
-                            <span className={styles.menuText}>Pointage enseignants</span>
-                        </Link>
-                    </li>
+                    {/* Créer/gérer les fiches du personnel reste au fondateur et
+                        au directeur général : le directeur de niveau (pédagogique)
+                        n'y accède pas. Verrou réel côté serveur. */}
+                    {canAccessPathForRole(user?.role, '/personnel', user?.role_base, user?.acces_comptabilite) && (
+                        <li className={pathname.startsWith('/personnel') ? styles.currentPage : ''}>
+                            <Link href="/personnel">
+                                <Shield size={18} className={styles.menuIcon} />
+                                <span className={styles.menuText}>Personnel</span>
+                            </Link>
+                        </li>
+                    )}
+                    {/* Le pointage vit techniquement sous /dashboard : il suit donc
+                        le même droit — masqué à qui n'a pas le tableau de bord,
+                        pour ne pas laisser un lien qui renverrait ailleurs. */}
+                    {canAccessPathForRole(user?.role, '/dashboard/presences/scan', user?.role_base, user?.acces_comptabilite) && (
+                        <li className={pathname.startsWith('/dashboard/presences/scan') ? styles.currentPage : ''}>
+                            <Link href="/dashboard/presences/scan">
+                                <ScanLine size={18} className={styles.menuIcon} />
+                                <span className={styles.menuText}>Pointage enseignants</span>
+                            </Link>
+                        </li>
+                    )}
                     <li className={pathname.startsWith('/salle-des-profs') ? styles.currentPage : ''}>
                         <Link href="/salle-des-profs">
                             <Briefcase size={18} className={styles.menuIcon} />

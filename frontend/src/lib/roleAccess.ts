@@ -60,16 +60,19 @@ export const ROLE_ACCESS_CONFIG: Record<string, RoleAccessConfig> = {
     DIRECTEUR_NIVEAU: {
         role: 'DIRECTEUR_NIVEAU',
         label: 'Directeur des Études',
-        redirectPath: '/dashboard',
-        // Réunion des deux listes : le délégué garde ses écrans pédagogiques
-        // (archive, fournitures, galerie, centre d'évaluation, activités) et
-        // gagne ceux ajoutés depuis (son profil, la vie scolaire). Aucune ne
-        // touche à /comptabilite — c'est le seul interdit du poste.
-        allowedPrefixes: ['/dashboard', '/personnel', '/classes', '/eleves', '/enseignants', '/cartes', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/monitoring', '/profil', '/vie-scolaire'],
+        // Il n'a plus le tableau de bord (réservé au fondateur, et au DG à qui
+        // le fondateur a ouvert la comptabilité) : on l'amène directement à
+        // l'écran Élèves, son point d'entrée pédagogique.
+        redirectPath: '/eleves',
+        // Bras PÉDAGOGIQUE de la direction. Trois écrans lui sont fermés, et
+        // pour de bon (pas seulement dans le menu) : le tableau de bord, la
+        // comptabilité (jamais eue) et le personnel — ces trois-là restent au
+        // fondateur et à la direction générale.
+        allowedPrefixes: ['/classes', '/eleves', '/enseignants', '/cartes', '/familles', '/communication', '/examens', '/emploi-du-temps', '/matieres', '/notes', '/bulletins', '/resultats-annuels', '/evenements', '/activites', '/archive', '/fournitures', '/galerie', '/centre-evaluation', '/salle-des-profs', '/monitoring', '/profil', '/vie-scolaire'],
         tier: 'full-admin',
         hasSystemAccess: true,
-        description: 'Délégué pédagogique de la direction : évaluations, notes, bulletins, résultats de fin d\'année, examens et archive. Pas d\'accès à la comptabilité.',
-        interfaceLabel: 'Dashboard de coordination académique',
+        description: 'Délégué pédagogique de la direction : évaluations, notes, bulletins, résultats de fin d\'année, examens et archive. Pas d\'accès au tableau de bord, à la comptabilité ni au personnel.',
+        interfaceLabel: 'Espace de coordination académique',
     },
     ADMIN: {
         role: 'ADMIN',
@@ -226,20 +229,43 @@ export const getRoleAccessConfig = (
     return null;
 };
 
+/**
+ * Le directeur général est le seul rôle dont l'accès au tableau de bord ET à la
+ * comptabilité dépend d'un choix du fondateur à la création (`acces_comptabilite`).
+ * Fermé (« N »), il garde tout le pilotage de l'école SAUF ces deux écrans, qui
+ * s'ouvrent et se ferment d'un seul geste. Un DG à qui le champ n'est pas
+ * renseigné (jetons anciens) vaut « O » : accès conservé.
+ */
+const estDgSansComptabilite = (
+    role?: string | null, roleBase?: string | null, accesComptabilite?: string | null,
+): boolean =>
+    (role === 'DG' || roleBase === 'DG') && (accesComptabilite || 'O') !== 'O';
+
 export const getRedirectPathForRole = (
-    role?: string | null, roleBase?: string | null,
+    role?: string | null, roleBase?: string | null, accesComptabilite?: string | null,
 ): string => {
     const config = getRoleAccessConfig(role, roleBase);
     if (!config) return DEFAULT_ROLE_REDIRECT;
-    return config.hasSystemAccess ? config.redirectPath : '/login';
+    if (!config.hasSystemAccess) return '/login';
+    // Le DG sans comptabilité perd le tableau de bord (sa page d'accueil par
+    // défaut) : on l'amène aux Élèves plutôt que sur un écran qu'il ne voit plus.
+    if (estDgSansComptabilite(role, roleBase, accesComptabilite)) return '/eleves';
+    return config.redirectPath;
 };
 
 export const canAccessPathForRole = (
-    role: string | undefined | null, pathname: string, roleBase?: string | null,
+    role: string | undefined | null, pathname: string,
+    roleBase?: string | null, accesComptabilite?: string | null,
 ): boolean => {
     const config = getRoleAccessConfig(role, roleBase);
     if (!config) return pathname.startsWith(DEFAULT_ROLE_REDIRECT);
     if (!config.hasSystemAccess) return pathname === '/login';
+    // Le DG à qui le fondateur a fermé la comptabilité n'a ni le tableau de bord
+    // ni la caisse (les deux vont ensemble) — tout le reste lui reste ouvert.
+    if (estDgSansComptabilite(role, roleBase, accesComptabilite)
+        && (pathname.startsWith('/dashboard') || pathname.startsWith('/comptabilite'))) {
+        return false;
+    }
     return config.allowedPrefixes.some((prefix) => pathname.startsWith(prefix));
 };
 
