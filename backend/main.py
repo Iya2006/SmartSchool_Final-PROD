@@ -251,9 +251,47 @@ def exige_acces_finance(current_user: dict = Depends(get_current_user)) -> dict:
             raise HTTPException(status_code=403, detail="Ce compte n'a pas acces a la comptabilite.")
     return current_user
 
+# Rôles autorisés sur le tableau de bord de direction.
+#
+# LE TABLEAU DE BORD EST UN POSTE DE PILOTAGE, PAS UN ÉCRAN DE TRAVAIL
+# Le fondateur (ADMIN/FONDATEUR) et l'éditeur (SUPER_ADMIN) le voient toujours.
+# Le directeur général le partage — mais seulement si le fondateur lui a ouvert
+# la comptabilité à sa création : pour le DG, le tableau de bord et la caisse
+# s'ouvrent (et se ferment) d'un seul geste. Le directeur de niveau, bras
+# PÉDAGOGIQUE, ne l'a pas — comme il n'a ni la caisse ni le personnel. Ce
+# blocage est imposé ici, pas seulement dans le menu du navigateur.
+DASHBOARD_ROLES = ("SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG")
+
+
+def exige_acces_dashboard(current_user: dict = Depends(get_current_user)) -> dict:
+    """Accès au tableau de bord — même logique que la finance pour le DG.
+
+    ADMIN, FONDATEUR et SUPER_ADMIN y ont droit sans condition. Le DG n'y accède
+    que si le fondateur l'a autorisé à sa création (`acces_comptabilite == 'O'`,
+    la valeur par défaut) : le tableau de bord suit exactement la même case que
+    la comptabilité. Le directeur de niveau (absent de DASHBOARD_ROLES) reçoit
+    403 — un vrai blocage, pas un menu caché.
+    """
+    from app.core.auth import roles_du_compte
+    roles = roles_du_compte(current_user)
+    if not (roles & set(DASHBOARD_ROLES)):
+        raise HTTPException(status_code=403, detail="Acces refuse : privileges insuffisants pour cette ressource")
+    # Seul le DG « pur » est soumis au choix du fondateur (un DG qui cumule
+    # ADMIN/FONDATEUR/SUPER_ADMIN garde l'accès quoi qu'il arrive).
+    if "DG" in roles and not (roles & {"SUPER_ADMIN", "ADMIN", "FONDATEUR"}):
+        if (current_user.get("acces_comptabilite") or "O") != "O":
+            raise HTTPException(status_code=403, detail="Ce compte n'a pas acces au tableau de bord.")
+    return current_user
+
 # RH / Personnel : direction + rôles métiers internes autorisés à consulter leur espace.
+#
+# LE DIRECTEUR DE NIVEAU EN EST VOLONTAIREMENT ABSENT
+# Créer et gérer les fiches du personnel — comme le tableau de bord et la
+# caisse — reste au fondateur et à la direction générale. Le directeur de
+# niveau (bras pédagogique) ne gère pas le personnel : il est retiré ici, aligné
+# sur le menu (frontend) et imposé côté serveur, pas seulement caché.
 PERSONNEL_ROLES = (
-    *ADMIN_TIER_ROLES,
+    "SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG",
     "COMPTABLE",
     "BIBLIOTHECAIRE",
     "INFORMATICIEN",
@@ -341,7 +379,7 @@ async def enregistrer_incident(request: Request, exc: Exception):
         },
     )
 
-app.include_router(dashboard_router, dependencies=[Depends(get_current_user)])
+app.include_router(dashboard_router, dependencies=[Depends(exige_acces_dashboard)])
 app.include_router(cartes_router, dependencies=[Depends(get_current_user)])
 app.include_router(eleves_router, dependencies=[Depends(get_current_user), Depends(_MOD_ELEVES)])
 app.include_router(enseignants_router, dependencies=[Depends(get_current_user), Depends(_MOD_ENSEIGNANTS)])

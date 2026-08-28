@@ -49,8 +49,10 @@ export const AuthContext = createContext<AuthContextType>({
     logout: () => {},
 });
 
-export const getRedirectPath = (userRole: string, roleBase?: string | null): string => {
-    return getRedirectPathForRole(userRole, roleBase);
+export const getRedirectPath = (
+    userRole: string, roleBase?: string | null, accesComptabilite?: string | null,
+): string => {
+    return getRedirectPathForRole(userRole, roleBase, accesComptabilite);
 };
 
 // Pages accessibles sans compte. `/inscription` en fait partie : un
@@ -121,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        const targetPath = getRedirectPath(user.role, user.role_base);
+        const targetPath = getRedirectPath(user.role, user.role_base, user.acces_comptabilite);
 
         if (pathname === SELECTION_ETABLISSEMENT) {
             router.push(targetPath);
@@ -133,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
         }
 
-        if (!canAccessPathForRole(user.role, pathname, user.role_base)) {
+        if (!canAccessPathForRole(user.role, pathname, user.role_base, user.acces_comptabilite)) {
             router.push(targetPath);
         }
     }, [checked, token, user, pathname, router]);
@@ -145,7 +147,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('smartschool_token', newToken);
         localStorage.setItem('smartschool_user', JSON.stringify(newUser));
 
-        router.push(getRedirectPath(newUser.role, newUser.role_base));
+        router.push(getRedirectPath(newUser.role, newUser.role_base, newUser.acces_comptabilite));
     };
 
     const logout = async () => {

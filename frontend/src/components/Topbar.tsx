@@ -82,10 +82,11 @@ export default function Topbar() {
         // sinon un directeur de niveau retrouvait « Comptabilité » par la
         // recherche, un écran qui lui est justement fermé.
         return base.filter((item) => {
-            if (!canAccessPathForRole(user?.role, item.href, user?.role_base)) return false;
-            // Un DG à qui le fondateur a fermé la comptabilité ne la retrouve
-            // pas non plus par la recherche.
-            if (item.href.startsWith('/comptabilite') && user?.role === 'DG' && user?.acces_comptabilite === 'N') return false;
+            // Le flag `acces_comptabilite` ferme aussi, pour le DG concerné, le
+            // tableau de bord et la comptabilité — et le directeur de niveau n'a
+            // plus dashboard/personnel dans ses préfixes : la recherche ne
+            // propose donc que des écrans réellement accessibles.
+            if (!canAccessPathForRole(user?.role, item.href, user?.role_base, user?.acces_comptabilite)) return false;
             return true;
         });
     }, [user?.role, user?.role_base, user?.acces_comptabilite]);
