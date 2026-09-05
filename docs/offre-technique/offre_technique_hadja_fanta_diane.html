@@ -1,0 +1,1505 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Offre technique — SmartSchool — École Hadja Fanta Diane</title>
+<style>
+  @page { size: A4; margin: 0; }
+
+  :root{
+    --bleu:        #29ABE2;
+    --bleu-fort:   #0E9BD6;
+    --bleu-nuit:   #1F5E7E;
+    --bleu-titre:  #1786BC;
+    --bleu-pale:   #EAF6FC;
+    --bleu-carte:  #F4FBFE;
+    --bleu-bord:   #D8ECF7;
+    --texte:       #3F4A52;
+    --gris:        #6B7A85;
+    --gris-clair:  #94A9B4;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    font-family: Arial, Helvetica, sans-serif;
+    color: var(--texte);
+    font-size: 10.6pt;
+    line-height: 1.42;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .page{
+    width: 210mm;
+    min-height: 297mm;
+    padding: 18mm 18mm 15mm;
+    position: relative;
+    page-break-after: always;
+    background: #fff;
+    overflow: hidden;
+  }
+  .page:last-child{ page-break-after: auto; }
+
+  .pied{
+    position: absolute;
+    left: 18mm; right: 18mm; bottom: 8mm;
+    display: flex; align-items: center;
+    font-size: 8pt;
+  }
+  .pied .centre{ flex:1; text-align:center; color:#A8D8EF; }
+  .pied .num{ color:#7FB8CE; font-weight:700; white-space:nowrap; }
+
+  /* ── Couverture ─────────────────────────────────────────── */
+  .couverture{
+    padding:0;
+    background: linear-gradient(155deg,#26A9E1 0%, #3EB8E8 38%, #8FD3F1 72%, #CDEAF9 100%);
+    position: relative;
+  }
+  .cercle{ position:absolute; border-radius:50%; border:1.5px solid rgba(255,255,255,.35); }
+  .c1{ width:300px; height:300px; top:-90px; right:-70px; }
+  .c2{ width:190px; height:190px; top:20px;  right:-30px; }
+  .c3{ width:420px; height:420px; bottom:80px; left:-230px; border-color:rgba(255,255,255,.28); }
+  .cv-corps{ position:relative; z-index:2; padding: 26mm 20mm 0; }
+  .marque{
+    display:inline-block; background:#fff; color:#1487C4;
+    font-size:15pt; font-weight:700; letter-spacing:.14em;
+    padding:11px 22px; border-radius:5px;
+  }
+  .marque em{ font-style:normal; color:#0E9BD6; }
+  .sous-marque{
+    margin-top:9px; color:rgba(255,255,255,.9);
+    font-size:8.5pt; letter-spacing:.22em; font-weight:600;
+  }
+  .cv-eyebrow{
+    margin-top:52mm; color:rgba(255,255,255,.92);
+    font-size:9.5pt; letter-spacing:.26em; font-weight:700;
+  }
+  .cv-titre{
+    margin:10px 0 0; color:#fff; font-size:33pt; font-weight:700;
+    line-height:1.14; max-width:135mm;
+  }
+  .cv-soustitre{ margin:12px 0 0; color:rgba(255,255,255,.93); font-size:14pt; }
+  .cv-pilule{
+    display:inline-block; margin-top:24px; background:#fff; color:#1487C4;
+    font-size:11.5pt; font-weight:700; padding:11px 26px; border-radius:40px;
+  }
+  .cv-bas{
+    position:absolute; left:0; right:0; bottom:0; z-index:2;
+    background:#fff; border-top:4px solid #1FA3DD;
+    padding:9mm 20mm; display:flex; justify-content:space-between;
+  }
+  .cv-bas .lib{ color:#1487C4; font-size:7.5pt; letter-spacing:.16em; font-weight:700; }
+  .cv-bas .val{ color:#1F5E7E; font-size:9.5pt; font-weight:700; margin-top:4px; }
+  .cv-bas .droite{ text-align:right; }
+
+  /* ── Titres ─────────────────────────────────────────────── */
+  .entete{ display:flex; align-items:center; gap:14px; }
+  .puce-num{
+    background:var(--bleu-fort); color:#fff; font-weight:700; font-size:13pt;
+    width:42px; height:34px; border-radius:5px;
+    display:flex; align-items:center; justify-content:center; flex:none;
+  }
+  h1.section{ margin:0; font-size:19pt; color:var(--bleu-nuit); font-weight:700; }
+  .filet{ height:2px; background:var(--bleu-bord); margin:11px 0 20px; }
+
+  h2{
+    font-size:13pt; color:var(--bleu-titre); font-weight:700;
+    margin:16px 0 7px; padding-left:11px; border-left:4px solid var(--bleu);
+  }
+  h3{ font-size:10.6pt; color:var(--bleu-titre); font-weight:700; margin:12px 0 3px; }
+  p{ margin:0 0 7px; }
+
+  ul{ margin:0 0 10px; padding:0; list-style:none; }
+  li{ position:relative; padding-left:13px; margin-bottom:3.4px; }
+  li:before{ content:"•"; position:absolute; left:0; color:var(--bleu); font-weight:700; }
+
+  /* ── Blocs ──────────────────────────────────────────────── */
+  .encadre{
+    background:var(--bleu-pale); border-left:4px solid var(--bleu);
+    padding:11px 15px; border-radius:0 5px 5px 0; margin:11px 0;
+  }
+  .encadre p:last-child{ margin-bottom:0; }
+
+  .bloc-bleu{
+    background: linear-gradient(135deg,#1FA3DD,#2FB4E8);
+    color:#fff; border-radius:7px; padding:15px 20px; margin:13px 0;
+  }
+  .bloc-bleu .t{ font-weight:700; font-size:12pt; margin-bottom:7px; }
+  .bloc-bleu p{ margin:0; color:rgba(255,255,255,.95); }
+
+  .carte{
+    background:var(--bleu-carte); border:1px solid var(--bleu-bord);
+    border-radius:6px; padding:9px 14px; margin-bottom:7px;
+  }
+  .carte .t{ color:var(--bleu-titre); font-weight:700; font-size:10.5pt; margin-bottom:2px; }
+  .carte p{ margin:0; font-size:10pt; }
+
+  .role{
+    border:1px solid #E4EFF5; border-left:4px solid var(--bleu);
+    border-radius:7px; padding:10px 15px; margin-bottom:8px;
+  }
+  .role .t{ color:var(--bleu-titre); font-weight:700; font-size:11.5pt; }
+  .role .st{ color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin:1px 0 7px; }
+  .role li{ font-size:10pt; margin-bottom:2.6px; }
+
+  .bande{
+    background:#E8F5FC; border-radius:4px; padding:7px 14px;
+    color:#16638A; font-weight:700; font-size:11pt; margin:15px 0 4px;
+  }
+
+  table{ width:100%; border-collapse:collapse; margin:8px 0 11px; font-size:9.8pt; }
+  thead th{
+    background:var(--bleu-nuit); color:#fff; text-align:left;
+    padding:7.5px 10px; font-size:9.2pt; font-weight:700;
+  }
+  thead th:first-child{ border-radius:4px 0 0 0; }
+  thead th:last-child{ border-radius:0 4px 0 0; }
+  tbody td{ padding:6.5px 10px; border-bottom:1px solid #EDF5F9; vertical-align:top; }
+  tbody tr:nth-child(even) td{ background:#F8FCFE; }
+  td.cle{ font-weight:700; color:var(--bleu-nuit); }
+  td.num{ color:var(--bleu-fort); font-weight:700; width:26px; }
+
+  .check{ display:flex; gap:11px; align-items:flex-start;
+          background:var(--bleu-carte); border:1px solid var(--bleu-bord);
+          border-radius:6px; padding:9px 14px; margin-bottom:6px; }
+  .check .v{
+    flex:none; width:19px; height:19px; border-radius:50%;
+    background:var(--bleu-fort); color:#fff; font-size:9pt; font-weight:700;
+    display:flex; align-items:center; justify-content:center; margin-top:1px;
+  }
+  .check b{ color:var(--bleu-titre); }
+  .check div{ font-size:10pt; }
+
+  .sommaire-l{
+    display:flex; align-items:center; gap:16px;
+    padding:10px 0; border-bottom:1px solid #EDF5F9;
+  }
+  .sommaire-l .n{
+    flex:none; width:26px; height:26px; border-radius:50%;
+    background:var(--bleu-fort); color:#fff; font-size:8.5pt; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .sommaire-l .t{ color:var(--bleu-nuit); font-weight:700; font-size:11pt; }
+
+  .aremplir{
+    color:#B4762A; background:#FFF6E6; border-bottom:1px dotted #D9A34E;
+    padding:0 3px; border-radius:2px; font-weight:600;
+  }
+
+  .signature{ margin-top:26px; font-size:10.5pt; }
+  .signature .n{ font-weight:700; color:var(--bleu-nuit); }
+  .cachet{
+    margin-top:16px; border:1px dashed #C3DDEB; border-radius:6px;
+    padding:22px; color:var(--gris-clair); font-size:9.5pt; text-align:center;
+  }
+
+  .fin{
+    background:linear-gradient(135deg,#1FA3DD,#3EB8E8); color:#fff;
+    border-radius:8px; padding:24px 26px; margin-top:6px;
+  }
+  .fin p{ color:rgba(255,255,255,.96); }
+  .fin p:last-child{ margin-bottom:0; }
+  .bloc-signature{
+    display:flex; justify-content:space-between; gap:24px;
+    border-top:2px solid var(--bleu-bord); margin-top:26px; padding-top:16px; font-size:10pt;
+  }
+  .bloc-signature .g .m{ color:var(--bleu-nuit); font-weight:700; font-size:13pt; }
+  .bloc-signature .g div{ color:var(--gris); }
+  .bloc-signature .d{ text-align:right; color:var(--gris); }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ COUVERTURE ═══════════════ -->
+<div class="page couverture">
+  <div class="cercle c1"></div>
+  <div class="cercle c2"></div>
+  <div class="cercle c3"></div>
+  <div class="cv-corps">
+    <div class="marque">TRILLION<em>X</em></div>
+    <div class="sous-marque">SERVICES NUMÉRIQUES</div>
+
+    <div class="cv-eyebrow">OFFRE TECHNIQUE</div>
+    <h1 class="cv-titre">Système de gestion scolaire</h1>
+    <div class="cv-soustitre">Solution SmartSchool</div>
+    <div class="cv-pilule">École Hadja Fanta Diane</div>
+  </div>
+  <div class="cv-bas">
+    <div>
+      <div class="lib">PRÉSENTÉ PAR</div>
+      <div class="val">TrillionX — éditeur de la solution SmartSchool</div>
+    </div>
+    <div class="droite">
+      <div class="lib">LIEU &amp; DATE</div>
+      <div class="val">Conakry — Septembre 2026</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ LETTRE DE SOUMISSION ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">✉</div><h1 class="section">Lettre de soumission</h1></div>
+  <div class="filet"></div>
+
+  <p style="text-align:right; color:var(--gris);">Conakry, le <span class="aremplir">[jour] septembre 2026</span></p>
+
+  <p style="margin-top:18px;"><b>À l'attention de la Direction<br>École Hadja Fanta Diane</b><br>
+  <span style="color:var(--gris);">Conakry, République de Guinée</span></p>
+
+  <p style="margin-top:20px;"><b>Objet :</b> remise d'une offre technique pour la mise en place d'un
+  système de gestion scolaire.</p>
+
+  <p style="margin-top:18px;">Madame, Monsieur,</p>
+
+  <p>À la suite de la présentation de la solution SmartSchool au sein de votre établissement et de
+  l'intérêt que vous nous avez manifesté, nous avons l'honneur de vous adresser notre offre
+  technique pour la mise en place d'un système de gestion scolaire complet à l'École Hadja Fanta
+  Diane.</p>
+
+  <p>La présente offre décrit la solution proposée, son périmètre fonctionnel détaillé, son
+  architecture technique, les modalités de mise en place, la formation de vos équipes, le support
+  assuré après la mise en service ainsi que nos engagements.</p>
+
+  <p>Nous avons construit SmartSchool à partir du fonctionnement réel des établissements guinéens :
+  cycles primaire, collège et lycée, notation sur 20, trimestres, examens nationaux, encaissements
+  en espèces comme en Mobile Money, et connexion internet qui n'est pas toujours au rendez-vous.
+  Cette proposition ne vous demande donc pas d'adapter votre organisation à un outil : c'est l'outil
+  qui se règle sur la vôtre.</p>
+
+  <p>Nous restons à votre disposition pour toute présentation complémentaire, pour une démonstration
+  sur site, et pour adapter cette proposition aux spécificités de votre établissement.</p>
+
+  <p>La présente offre est valable <b>soixante (60) jours</b> à compter de sa date de remise. Les
+  conditions financières font l'objet d'une offre financière distincte, remise séparément.</p>
+
+  <p>Nous vous prions d'agréer, Madame, Monsieur, l'expression de notre considération distinguée.</p>
+
+  <div class="signature">
+    <div class="n"><span class="aremplir">[Nom et prénom]</span></div>
+    <div style="color:var(--gris);"><span class="aremplir">[Fonction]</span></div>
+    <div style="color:var(--gris);">TrillionX — Services numériques</div>
+    <div style="color:var(--gris);"><span class="aremplir">[Téléphone]</span> · <span class="aremplir">[Adresse électronique]</span></div>
+  </div>
+
+  <div class="cachet">Signature et cachet de l'entreprise</div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ SOMMAIRE ═══════════════ -->
+<div class="page">
+  <h1 style="margin:0 0 6px; font-size:22pt; color:var(--bleu-fort);">Sommaire</h1>
+  <div style="width:64px; height:4px; background:var(--bleu); border-radius:2px; margin-bottom:22px;"></div>
+
+  <div class="sommaire-l"><div class="n">01</div><div class="t">Présentation de TrillionX</div></div>
+  <div class="sommaire-l"><div class="n">02</div><div class="t">Objectif de l'offre</div></div>
+  <div class="sommaire-l"><div class="n">03</div><div class="t">Périmètre de la solution</div></div>
+  <div class="sommaire-l"><div class="n">04</div><div class="t">Architecture technique et accès</div></div>
+  <div class="sommaire-l"><div class="n">05</div><div class="t">Prérequis et responsabilités partagées</div></div>
+  <div class="sommaire-l"><div class="n">06</div><div class="t">Reprise des données existantes</div></div>
+  <div class="sommaire-l"><div class="n">07</div><div class="t">Méthodologie et planning de réalisation</div></div>
+  <div class="sommaire-l"><div class="n">08</div><div class="t">Équipe projet et gouvernance</div></div>
+  <div class="sommaire-l"><div class="n">09</div><div class="t">Recette et validation</div></div>
+  <div class="sommaire-l"><div class="n">10</div><div class="t">Formation et accompagnement</div></div>
+  <div class="sommaire-l"><div class="n">11</div><div class="t">Maintenance, support et niveaux de service</div></div>
+  <div class="sommaire-l"><div class="n">12</div><div class="t">Sécurité, sauvegarde et protection des données</div></div>
+  <div class="sommaire-l"><div class="n">13</div><div class="t">Réversibilité et propriété des données</div></div>
+  <div class="sommaire-l"><div class="n">14</div><div class="t">Livrables</div></div>
+  <div class="sommaire-l"><div class="n">15</div><div class="t">Engagements techniques</div></div>
+  <div class="sommaire-l"><div class="n">16</div><div class="t">Hypothèses, limites et exclusions</div></div>
+  <div class="sommaire-l"><div class="n">17</div><div class="t">Conditions et validité de l'offre</div></div>
+  <div class="sommaire-l"><div class="n">18</div><div class="t">Conclusion</div></div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 01 — PRÉSENTATION ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">01</div><h1 class="section">Présentation de TrillionX</h1></div>
+  <div class="filet"></div>
+
+  <h2>Qui nous sommes</h2>
+  <p>TrillionX est une entreprise guinéenne de services numériques, éditrice de la solution
+  SmartSchool. Nous concevons, développons et exploitons nos solutions nous-mêmes : l'établissement
+  s'adresse directement à ceux qui ont construit l'outil, sans intermédiaire et sans support
+  délocalisé.</p>
+
+  <table>
+    <tbody>
+      <tr><td class="cle" style="width:42%;">Dénomination</td><td>TrillionX — Services numériques</td></tr>
+      <tr><td class="cle">Forme juridique</td><td><span class="aremplir">[SARL / SA / entreprise individuelle]</span></td></tr>
+      <tr><td class="cle">Registre du commerce (RCCM)</td><td><span class="aremplir">[numéro]</span></td></tr>
+      <tr><td class="cle">Identification fiscale (NIF)</td><td><span class="aremplir">[numéro]</span></td></tr>
+      <tr><td class="cle">Siège social</td><td><span class="aremplir">[adresse complète — Conakry]</span></td></tr>
+      <tr><td class="cle">Téléphone</td><td><span class="aremplir">[numéro]</span></td></tr>
+      <tr><td class="cle">Adresse électronique</td><td><span class="aremplir">[email]</span></td></tr>
+      <tr><td class="cle">Représentant légal</td><td><span class="aremplir">[nom, fonction]</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Notre métier</h2>
+  <p>Nous éditons SmartSchool, un système de gestion scolaire complet destiné aux établissements
+  guinéens. La solution couvre l'ensemble de la vie d'une école : scolarité, pédagogie, vie
+  scolaire, communication avec les familles, ressources humaines, comptabilité et finances.</p>
+
+  <p>Elle a été conçue à partir de l'organisation réelle des écoles du pays, et non adaptée depuis
+  un produit étranger. Les cycles, la notation sur 20, les trimestres, les classes d'examen, les
+  encaissements en espèces et en Mobile Money, la semaine de cours incluant le samedi : tout cela
+  est prévu d'origine.</p>
+
+  <h2>Notre organisation pour ce projet</h2>
+  <p>L'équipe réunit les compétences nécessaires à un projet de ce type : conception et
+  développement de la solution, mise en place et paramétrage chez le client, formation des
+  utilisateurs, support et maintenance après la mise en service.</p>
+
+  <div class="encadre">
+    <p><b>Interlocuteur unique.</b> <span class="aremplir">[Nom, fonction]</span> —
+    <span class="aremplir">[téléphone]</span> · <span class="aremplir">[email]</span><br>
+    Il est votre interlocuteur pour toute la durée du projet, du premier échange jusqu'à
+    l'exploitation courante. Vous n'aurez jamais à réexpliquer votre dossier.</p>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <div class="entete"><div class="puce-num">01</div><h1 class="section">Notre engagement</h1></div>
+  <div class="filet"></div>
+
+  <p>L'École Hadja Fanta Diane figure parmi les tout premiers établissements que nous accompagnons
+  avec SmartSchool. Nous préférons vous le dire franchement plutôt que de le laisser deviner — et
+  nous pensons que c'est, pour vous, un avantage réel.</p>
+
+  <div class="carte">
+    <div class="t">Une attention que vous n'auriez pas ailleurs</div>
+    <p>Vous ne serez pas un dossier parmi des centaines. Votre projet est suivi directement par
+    l'équipe qui a écrit la solution, avec une disponibilité qu'un éditeur installé ne peut
+    structurellement plus offrir.</p>
+  </div>
+
+  <div class="carte">
+    <div class="t">Vous parlez à celui qui corrige</div>
+    <p>Il n'y a pas de revendeur, pas de centre d'appel, pas d'échelon intermédiaire. Une anomalie
+    signalée le matin est examinée par la personne capable de la corriger, pas par un intermédiaire
+    chargé de la transmettre.</p>
+  </div>
+
+  <div class="carte">
+    <div class="t">Votre organisation façonne l'outil</div>
+    <p>Vos remarques d'usage sont prises en compte dans les évolutions de la solution. Les besoins
+    d'un établissement pionnier orientent le produit ; ceux du centième arrivent dans une file
+    d'attente.</p>
+  </div>
+
+  <div class="carte">
+    <div class="t">Une solution déjà construite, pas une promesse</div>
+    <p>Être notre premier client ne signifie pas essuyer les plâtres. La solution est développée,
+    éprouvée et opérationnelle : la mise en place ne comporte aucune phase de développement, et le
+    périmètre décrit en section 03 est disponible dès aujourd'hui.</p>
+  </div>
+
+  <div class="bloc-bleu">
+    <div class="t">Établissement de référence</div>
+    <p>Nous souhaitons faire de l'École Hadja Fanta Diane un établissement de référence : la
+    réussite de ce déploiement engage notre réputation bien au-delà d'un contrat. C'est
+    l'engagement le plus sérieux que nous puissions prendre devant vous.</p>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 02 — OBJECTIF ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">02</div><h1 class="section">Objectif de l'offre</h1></div>
+  <div class="filet"></div>
+
+  <h2>Contexte</h2>
+  <p>La gestion quotidienne d'un établissement scolaire — inscriptions, notes, bulletins,
+  présences, communication avec les familles, finances — repose encore souvent sur des outils
+  dispersés (registres papier, tableurs, cahiers). Cette dispersion entraîne des pertes de temps,
+  des erreurs de saisie, un manque de visibilité pour la direction et une communication limitée
+  avec les parents.</p>
+
+  <p>À la suite de la présentation de la solution SmartSchool, l'École Hadja Fanta Diane a
+  manifesté son intérêt pour un système unique, centralisé et fiable, capable de couvrir l'ensemble
+  de ses activités. La présente offre technique décrit précisément la solution proposée, son
+  périmètre fonctionnel, sa mise en place, la formation, le support et nos engagements.</p>
+
+  <h2>Le besoin de l'école</h2>
+  <ul>
+    <li>Centraliser la scolarité (élèves, classes, notes, bulletins) dans un seul environnement.</li>
+    <li>Assurer un suivi rigoureux des présences et de la vie scolaire.</li>
+    <li>Maîtriser la gestion financière (frais de scolarité, encaissements, dépenses, paie).</li>
+    <li>Améliorer la communication avec les parents et les élèves.</li>
+    <li>Donner à la direction une vision claire et en temps réel de l'établissement.</li>
+    <li>Disposer d'un outil accessible, y compris en cas de connexion internet instable.</li>
+  </ul>
+
+  <div class="bloc-bleu">
+    <div class="t">Objectif principal</div>
+    <p>Mettre à la disposition de l'École Hadja Fanta Diane un système de gestion scolaire complet,
+    sécurisé et opérationnel, adapté à son organisation, permettant de piloter l'ensemble de ses
+    activités pédagogiques, administratives et financières depuis une plateforme unique.</p>
+  </div>
+
+  <h2>Objectifs spécifiques</h2>
+  <ul>
+    <li>Numériser et centraliser les dossiers des élèves, du personnel et des classes.</li>
+    <li>Automatiser le calcul des moyennes et la production des bulletins.</li>
+    <li>Fiabiliser le suivi des présences (élèves et enseignants) et de la discipline.</li>
+    <li>Structurer la gestion financière et comptable de l'établissement.</li>
+    <li>Offrir aux parents et aux élèves un accès à leurs informations via des espaces dédiés.</li>
+    <li>Attribuer à chaque intervenant un accès adapté à son rôle.</li>
+  </ul>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <h2 style="margin-top:0;">Résultats attendus</h2>
+
+  <div class="carte"><div class="t">Gain de temps</div><p>Réduction significative du temps consacré aux tâches administratives répétitives.</p></div>
+  <div class="carte"><div class="t">Fiabilité</div><p>Bulletins et documents scolaires produits rapidement, sans erreur de calcul.</p></div>
+  <div class="carte"><div class="t">Transparence financière</div><p>Meilleur suivi des paiements et de la situation comptable.</p></div>
+  <div class="carte"><div class="t">Communication renforcée</div><p>Un lien régulier et fluide avec les familles.</p></div>
+  <div class="carte"><div class="t">Pilotage éclairé</div><p>Une direction mieux informée pour décider au quotidien.</p></div>
+  <div class="carte"><div class="t">Organisation professionnelle</div><p>Un fonctionnement scolaire plus fluide et fiable.</p></div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 03 — PÉRIMÈTRE ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">03</div><h1 class="section">Périmètre de la solution</h1></div>
+  <div class="filet"></div>
+
+  <div class="encadre">
+    <p>Cette section présente l'ensemble des fonctionnalités réellement disponibles dans la
+    solution SmartSchool telle que présentée à l'établissement.</p>
+  </div>
+
+  <h2>Comment ça marche, simplement</h2>
+  <p>SmartSchool est une application qui s'utilise depuis un ordinateur, une tablette ou un
+  téléphone. Elle réunit, dans un seul espace sécurisé réservé à votre école, toutes les fonctions
+  de gestion de l'établissement. Chaque personne se connecte avec ses propres identifiants et ne
+  voit que ce qui la concerne. Les informations de votre école sont séparées de celles des autres
+  établissements et protégées : personne d'autre n'y a accès. L'application est accessible partout
+  — au bureau, en classe ou à la maison — depuis n'importe quel appareil connecté.</p>
+
+  <div class="carte" style="background:#EAF6FC; border-color:#BFE3F5;">
+    <div class="t">Une application accessible partout</div>
+    <ul style="margin-top:6px; margin-bottom:0;">
+      <li>Accessible depuis un ordinateur, une tablette ou un téléphone.</li>
+      <li>Une seule plateforme pour toute l'école.</li>
+      <li>Une interface simple, qui s'adapte à chaque écran.</li>
+      <li><b>Utilisable même en connexion instable</b> : les saisies effectuées pendant une coupure
+      sont conservées, puis transmises automatiquement dès le retour de la connexion.</li>
+      <li>Aucun logiciel à installer, aucune mise à jour à faire soi-même.</li>
+    </ul>
+  </div>
+
+  <h2>Ce que chaque personne peut faire dans son espace</h2>
+  <p>Chaque personne se connecte à son propre espace et n'y voit que ce qui la concerne. Voici, en
+  clair, ce que chacun peut faire.</p>
+
+  <div class="role">
+    <div class="t">La Direction (fondateur / administrateur)</div>
+    <div class="st">Le responsable de l'école : il voit et gère tout.</div>
+    <ul>
+      <li>Créer et gérer tous les comptes (personnel, enseignants, accès).</li>
+      <li>Suivre toute l'école d'un coup d'œil : effectifs, finances, présences, alertes.</li>
+      <li>Accéder aux finances et à la comptabilité de l'école.</li>
+      <li>Configurer l'école : année scolaire, classes, matières, règles de notation.</li>
+      <li>Faire tout ce que font les autres.</li>
+    </ul>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <div class="role">
+    <div class="t">Le Directeur Général</div>
+    <div class="st">Il dirige l'école au quotidien.</div>
+    <ul>
+      <li>Piloter l'école : élèves, personnel, pédagogie.</li>
+      <li>Créer et gérer les comptes du personnel.</li>
+      <li>Voir les finances et le tableau de bord — uniquement si la direction l'y a autorisé à la création de son compte.</li>
+    </ul>
+  </div>
+
+  <div class="role">
+    <div class="t">Le Directeur des Études</div>
+    <div class="st">Le responsable de tout ce qui touche à la pédagogie.</div>
+    <ul>
+      <li>Gérer les classes, les matières et les emplois du temps.</li>
+      <li>Suivre les évaluations, rassembler les notes et produire les bulletins.</li>
+      <li>Gérer les résultats de fin d'année, les examens et l'archive scolaire.</li>
+      <li>Ne voit pas les finances, ni le personnel, ni le tableau de bord de direction.</li>
+    </ul>
+  </div>
+
+  <div class="role">
+    <div class="t">Le Comptable</div>
+    <div class="st">Il gère l'argent de l'école.</div>
+    <ul>
+      <li>Enregistrer les paiements des frais de scolarité (Mobile Money, espèces, virement) et éditer les reçus.</li>
+      <li>Suivre les impayés et lancer les relances.</li>
+      <li>Enregistrer les dépenses de l'école.</li>
+      <li>Gérer la paie du personnel : salaires, primes, avances.</li>
+      <li>Tenir la comptabilité de l'établissement.</li>
+    </ul>
+  </div>
+
+  <div class="role">
+    <div class="t">Le Surveillant</div>
+    <div class="st">Il s'occupe de la présence et de la discipline.</div>
+    <ul>
+      <li>Faire l'appel des élèves : par cours au collège et au lycée, par demi-journée au primaire.</li>
+      <li>Pointer la présence des enseignants en scannant leur badge (téléphone, tablette ou ordinateur), ou à la main.</li>
+      <li>Enregistrer les incidents de discipline.</li>
+      <li>Signaler les absences des enseignants.</li>
+    </ul>
+  </div>
+
+  <div class="role">
+    <div class="t">L'Opérateur / la Secrétaire</div>
+    <div class="st">L'accueil et la saisie au quotidien.</div>
+    <ul>
+      <li>Inscrire et réinscrire les élèves.</li>
+      <li>Gérer les dossiers des élèves et des familles.</li>
+      <li>Traiter les opérations courantes du secrétariat.</li>
+    </ul>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <div class="role">
+    <div class="t">Le Bibliothécaire</div>
+    <div class="st">Il gère la bibliothèque de l'école.</div>
+    <ul>
+      <li>Gérer les livres : liste des ouvrages et exemplaires.</li>
+      <li>Enregistrer les prêts et les retours.</li>
+    </ul>
+  </div>
+
+  <div class="role">
+    <div class="t">L'Informaticien</div>
+    <div class="st">Il gère le matériel informatique.</div>
+    <ul>
+      <li>Gérer les équipements informatiques de l'école.</li>
+      <li>Suivre les pannes et les demandes techniques.</li>
+    </ul>
+  </div>
+
+  <div class="role">
+    <div class="t">L'Enseignant</div>
+    <div class="st">Son espace personnel de travail.</div>
+    <ul>
+      <li>Voir ses classes, ses matières et son emploi du temps.</li>
+      <li>Saisir les notes de ses élèves.</li>
+      <li>Faire l'appel de ses propres cours.</li>
+      <li>Remplir le cahier de textes (leçons et devoirs donnés).</li>
+    </ul>
+  </div>
+
+  <div class="role">
+    <div class="t">Le Parent</div>
+    <div class="st">Il suit son enfant, à distance.</div>
+    <ul>
+      <li>Suivre la scolarité de son ou ses enfants : notes, bulletins, présences.</li>
+      <li>Voir les paiements et la situation financière.</li>
+      <li>Communiquer avec l'école.</li>
+    </ul>
+  </div>
+
+  <div class="role">
+    <div class="t">L'Élève</div>
+    <div class="st">Son espace personnel.</div>
+    <ul>
+      <li>Consulter ses notes et ses bulletins.</li>
+      <li>Voir son emploi du temps.</li>
+      <li>Consulter ses informations personnelles.</li>
+    </ul>
+  </div>
+
+  <div class="encadre">
+    <p>L'école peut aussi créer des rôles à ses propres appellations — par exemple « censeur » ou
+    « caissier » — qui reprennent les droits d'un profil existant.</p>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <div class="entete"><div class="puce-num">03</div><h1 class="section">Le détail des fonctionnalités</h1></div>
+  <div class="filet"></div>
+
+  <p>En complément des espaces présentés précédemment, voici l'ensemble des fonctions disponibles,
+  regroupées par domaine, avec leur utilité.</p>
+
+  <div class="bande">A. Pilotage &amp; administration</div>
+  <h3>Tableau de bord de direction</h3>
+  <div class="st" style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Un poste de pilotage qui donne à la direction une vue d'ensemble et en temps réel de l'établissement.</div>
+  <ul>
+    <li>Indicateurs clés : effectifs élèves, enseignants, classes.</li>
+    <li>Vision financière consolidée : recettes, dépenses, impayés, modes d'encaissement.</li>
+    <li>Suivi des présences et du rendement pédagogique par cycle et par classe.</li>
+    <li>Alertes et signaux prioritaires (recouvrement, relances, engagement des familles).</li>
+    <li>Raccourcis vers les actions importantes du jour.</li>
+  </ul>
+  <h3>Paramètres &amp; sécurité</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La configuration de l'école et la maîtrise des accès.</div>
+  <ul>
+    <li>Année scolaire et périodes (trimestres ou semestres) au choix de l'école.</li>
+    <li>Règles de notation : notes sur 20 ou sur 10, coefficients, moyenne de passage, mentions.</li>
+    <li>Jours ouvrés de l'école, horaires de cours, pause et seuils de retard.</li>
+    <li>Définition des rôles et de ce que chaque personne peut voir ou faire.</li>
+    <li>Historique des actions importantes.</li>
+  </ul>
+
+  <div class="bande">B. Scolarité</div>
+  <h3>Élèves &amp; inscriptions</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Le dossier complet de chaque élève, de l'inscription à l'archivage.</div>
+  <ul>
+    <li>Dossiers élèves avec photo et informations d'état civil.</li>
+    <li>Attribution automatique des numéros matricules.</li>
+    <li>Inscriptions et réinscriptions d'une année à l'autre.</li>
+    <li>Cartes / badges scolaires avec un code à scanner.</li>
+    <li>Historique de scolarité conservé par année (archive).</li>
+  </ul>
+  <h3>Classes &amp; matières</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">L'organisation académique de l'établissement.</div>
+  <ul>
+    <li>Création des classes par cycle et niveau (maternelle, primaire, collège, lycée).</li>
+    <li>Configuration des matières par classe avec coefficients.</li>
+    <li>Répartition des effectifs.</li>
+  </ul>
+  <h3>Familles</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Le lien entre les élèves et leurs parents.</div>
+  <ul>
+    <li>Gestion des parents et tuteurs.</li>
+    <li>Rattachement d'un ou plusieurs enfants à chaque parent.</li>
+    <li>Base des contacts pour la communication.</li>
+  </ul>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <div class="bande" style="margin-top:0;">C. Ressources humaines</div>
+  <h3>Personnel &amp; enseignants</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La gestion des ressources humaines de l'école.</div>
+  <ul>
+    <li>Fiches du personnel (enseignants et personnel non enseignant).</li>
+    <li>Affectation des enseignants aux classes et aux matières.</li>
+    <li>Gestion des statuts (actif / inactif) et des rôles.</li>
+    <li>Informations de rémunération (réservées à la direction et à la comptabilité).</li>
+  </ul>
+
+  <div class="bande">D. Pédagogie</div>
+  <h3>Emploi du temps &amp; cahier de textes</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">L'organisation des cours et le suivi pédagogique.</div>
+  <ul>
+    <li>Emploi du temps par classe et par enseignant, avec salles et créneaux.</li>
+    <li>Prise en compte des jours ouvrés réels de l'école (y compris le samedi).</li>
+    <li>Horaires de cours, durée des créneaux et pause propres à l'établissement.</li>
+    <li>Cahier de textes / ressources pédagogiques.</li>
+  </ul>
+  <h3>Évaluations &amp; centralisation des notes</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">De la saisie des notes par l'enseignant jusqu'au calcul officiel.</div>
+  <ul>
+    <li>Différents types d'évaluations (devoirs, interrogations, compositions…).</li>
+    <li>Création de compositions groupées couvrant toutes les matières d'une classe.</li>
+    <li>Saisie des notes par les enseignants depuis leur espace.</li>
+    <li>Centralisation et contrôle des notes par la direction / le directeur des études.</li>
+    <li>Calcul automatique des moyennes selon les coefficients configurés.</li>
+  </ul>
+  <h3>Bulletins</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La production des bulletins scolaires, sans erreur de calcul.</div>
+  <ul>
+    <li>Bulletins de période (trimestriels / semestriels) et bulletin annuel.</li>
+    <li>Moyennes, rangs, mentions et appréciations.</li>
+    <li>Impression au format PDF, avec un code à scanner qui garantit l'authenticité du bulletin.</li>
+  </ul>
+  <h3>Résultats de fin d'année &amp; passage</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La clôture de l'année et les décisions de passage.</div>
+  <ul>
+    <li>Calcul des résultats annuels par classe.</li>
+    <li>Décisions de passage / redoublement selon les seuils configurés.</li>
+    <li>Prise en compte des résultats officiels pour les classes d'examen.</li>
+    <li>Clôture d'année et archivage de la scolarité.</li>
+  </ul>
+  <h3>Centre des examens</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">L'organisation des examens et des compositions.</div>
+  <ul>
+    <li>Gestion des sujets d'examen (réservés à la direction et aux enseignants).</li>
+    <li>Créneaux et emplois du temps d'examen.</li>
+  </ul>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <div class="bande" style="margin-top:0;">E. Vie scolaire</div>
+  <h3>Séances, appels &amp; présences</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Un suivi rigoureux de la présence des élèves, adapté à chaque cycle.</div>
+  <ul>
+    <li>Appel par séance et par matière pour le collège et le lycée.</li>
+    <li>Appel par demi-journée pour le primaire.</li>
+    <li>Historique des appels et des présences, consultable par la direction et le surveillant.</li>
+    <li>Synchronisation avec l'emploi du temps et les affectations.</li>
+  </ul>
+  <h3>Pointage des enseignants</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Le contrôle de la présence des enseignants, réalisé par le surveillant.</div>
+  <ul>
+    <li>Pointage par scan du badge (QR) sur téléphone, tablette ou ordinateur.</li>
+    <li>Pointage manuel possible (sans caméra).</li>
+    <li>Affichage des cours du jour de l'enseignant et de son heure d'arrivée / retard.</li>
+    <li>Historique de présence du personnel.</li>
+  </ul>
+  <h3>Discipline &amp; absences des enseignants</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Le suivi des incidents et des absences.</div>
+  <ul>
+    <li>Enregistrement des incidents de discipline liés aux élèves.</li>
+    <li>Consultation des incidents par l'administration et le surveillant.</li>
+    <li>Signalement et suivi des absences d'enseignants.</li>
+  </ul>
+
+  <div class="bande">F. Communication &amp; vie de l'établissement</div>
+  <h3>Communication</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Le lien entre l'école, le personnel et les familles.</div>
+  <ul>
+    <li>Messagerie interne entre l'administration, les enseignants et les familles.</li>
+    <li>Diffusion d'annonces et d'informations.</li>
+  </ul>
+  <h3>Événements, activités &amp; galerie</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">L'animation et la mémoire de la vie scolaire.</div>
+  <ul>
+    <li>Agenda des événements de l'établissement.</li>
+    <li>Activités du jour.</li>
+    <li>Galerie photos de l'école.</li>
+  </ul>
+  <h3>Fournitures scolaires</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La gestion des fournitures et du matériel.</div>
+  <ul>
+    <li>Listes de fournitures scolaires.</li>
+    <li>Suivi du matériel de l'établissement.</li>
+  </ul>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <div class="bande" style="margin-top:0;">G. Bibliothèque &amp; parc informatique</div>
+  <h3>Bibliothèque</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La gestion du fonds documentaire.</div>
+  <ul>
+    <li>Catalogue des ouvrages et des exemplaires.</li>
+    <li>Gestion des prêts et des retours.</li>
+  </ul>
+  <h3>Parc informatique</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Le suivi des équipements et de l'assistance technique interne.</div>
+  <ul>
+    <li>Inventaire des équipements informatiques.</li>
+    <li>Gestion des tickets et incidents techniques.</li>
+  </ul>
+
+  <div class="bande">H. Comptabilité &amp; finances</div>
+  <h3>Facturation &amp; encaissements</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La gestion des frais de scolarité et des recettes.</div>
+  <ul>
+    <li>Facturation des frais de scolarité et échéanciers.</li>
+    <li>Encaissements multi-modes : Mobile Money (MTN, Orange), espèces, virement.</li>
+    <li>Reçus de paiement et suivi des impayés / relances.</li>
+  </ul>
+  <h3>Dépenses &amp; paie</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La gestion des sorties d'argent et de la rémunération du personnel.</div>
+  <ul>
+    <li>Suivi des dépenses et des fournisseurs.</li>
+    <li>Paie : salaires, primes, avances, arriérés et bulletins de paie.</li>
+  </ul>
+  <h3>Comptabilité de l'école</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">La tenue complète des comptes de l'établissement.</div>
+  <ul>
+    <li>Suivi de tous les comptes, des recettes et des dépenses.</li>
+    <li>Situation financière et suivi des soldes à tout moment.</li>
+    <li>Suivi des biens de l'école (matériel, mobilier) et des budgets.</li>
+    <li>Clôture des comptes en fin d'année.</li>
+    <li>Comptabilité conforme aux normes en vigueur.</li>
+  </ul>
+
+  <div class="bande">I. Espaces dédiés (portails)</div>
+  <h3>Portails parent, élève et enseignant</h3>
+  <div style="color:var(--gris-clair); font-style:italic; font-size:9.5pt; margin-bottom:4px;">Un accès personnalisé pour chaque public.</div>
+  <ul>
+    <li>Portail parent : notes, bulletins, présences, paiements et communication.</li>
+    <li>Portail élève : notes, bulletins, emploi du temps et informations personnelles.</li>
+    <li>Portail enseignant : notes, appels, cahier de textes et emploi du temps.</li>
+    <li>Espaces métiers dédiés : surveillant, bibliothécaire, informaticien, opérateur.</li>
+  </ul>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 04 — ARCHITECTURE ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">04</div><h1 class="section">Architecture technique et accès</h1></div>
+  <div class="filet"></div>
+
+  <h2>Comment la solution est mise à disposition</h2>
+  <p>SmartSchool est une application accessible par internet, hébergée sur le <b>SCloud de
+  TrillionX</b>, notre infrastructure d'hébergement, et exploitée par nos soins.
+  L'établissement n'a <b>aucun serveur à acheter, à installer ni à entretenir</b>. Il n'y a pas non
+  plus de logiciel à installer sur chaque poste : l'application s'ouvre depuis un navigateur
+  internet, comme un site web.</p>
+
+  <p>Chaque établissement dispose de son propre espace. Les données de l'École Hadja Fanta Diane
+  sont séparées de celles de tout autre établissement utilisant la solution.</p>
+
+  <h2>Accès à l'application</h2>
+  <table>
+    <tbody>
+      <tr><td class="cle" style="width:38%;">Adresse d'accès</td><td>Une adresse internet dédiée, communiquée à la mise en service</td></tr>
+      <tr><td class="cle">Appareils</td><td>Ordinateur, tablette ou téléphone</td></tr>
+      <tr><td class="cle">Logiciel à installer</td><td>Aucun — un navigateur internet suffit</td></tr>
+      <tr><td class="cle">Navigateurs pris en charge</td><td>Chrome, Edge, Firefox, Safari, dans une version récente</td></tr>
+      <tr><td class="cle">Nombre d'utilisateurs</td><td>Non limité pour l'établissement</td></tr>
+      <tr><td class="cle">Système d'exploitation</td><td>Indifférent — Windows, Android, iOS, macOS</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Fonctionnement en connexion instable</h2>
+  <p>La solution reste utilisable lorsque la connexion internet est faible ou momentanément
+  interrompue. Les saisies effectuées pendant la coupure — un appel, une note — sont conservées sur
+  l'appareil, puis transmises automatiquement dès le retour de la connexion. Aucune saisie n'est
+  perdue et aucune manipulation particulière n'est demandée à l'utilisateur.</p>
+
+  <p>Ce fonctionnement répond directement à la contrainte de connectivité exprimée par
+  l'établissement en section 02.</p>
+
+  <p>L'application peut également être ajoutée à l'écran d'accueil d'un téléphone ou d'une tablette :
+  elle s'ouvre alors comme une application ordinaire, sans passer par le navigateur.</p>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <h2 style="margin-top:0;">Hébergement — le SCloud de TrillionX</h2>
+  <p>L'application et les données de l'établissement sont hébergées sur le <b>SCloud de
+  TrillionX</b>, notre infrastructure d'hébergement dédiée aux solutions que nous éditons. Elle est
+  administrée par nos équipes : l'établissement n'a aucun contrat technique à souscrire, aucun
+  prestataire supplémentaire à gérer et un seul interlocuteur en cas de difficulté.</p>
+  <table>
+    <tbody>
+      <tr><td class="cle" style="width:38%;">Infrastructure</td><td>SCloud de TrillionX — hébergement professionnel en centre de données</td></tr>
+      <tr><td class="cle">Exploitation</td><td>Assurée intégralement par TrillionX — aucune intervention de l'établissement</td></tr>
+      <tr><td class="cle">Liaison</td><td>Connexion chiffrée (HTTPS) entre l'appareil de l'utilisateur et le SCloud</td></tr>
+      <tr><td class="cle">Données</td><td>Conservées sur le SCloud, sauvegardées quotidiennement (voir section 12)</td></tr>
+      <tr><td class="cle">Disponibilité visée</td><td>Service accessible en continu ; voir les niveaux de service en section 11</td></tr>
+      <tr><td class="cle">Séparation</td><td>Un espace propre à l'établissement, isolé de tout autre établissement hébergé</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Mises à jour</h2>
+  <p>Les améliorations et corrections sont déployées par TrillionX directement sur le SCloud.
+  Elles sont <b>disponibles automatiquement</b> pour l'établissement :</p>
+  <ul>
+    <li>sans intervention de sa part ;</li>
+    <li>sans réinstallation sur les postes ;</li>
+    <li>sans interruption de service notable ;</li>
+    <li>sans coût supplémentaire pour les évolutions d'intérêt général.</li>
+  </ul>
+  <p>L'école bénéficie ainsi en continu des évolutions de la solution, y compris de celles
+  demandées par d'autres établissements.</p>
+
+  <h2>Ce que l'établissement n'a pas à gérer</h2>
+  <div class="carte"><div class="t">Aucun serveur</div><p>Pas d'achat, pas d'installation, pas de climatisation de local technique, pas d'onduleur.</p></div>
+  <div class="carte"><div class="t">Aucune sauvegarde manuelle</div><p>Les sauvegardes sont automatiques et assurées par TrillionX.</p></div>
+  <div class="carte"><div class="t">Aucune mise à jour à installer</div><p>Les nouveautés arrivent d'elles-mêmes, sur tous les postes en même temps.</p></div>
+  <div class="carte"><div class="t">Aucune compétence informatique requise</div><p>L'usage quotidien ne demande que de savoir se servir d'un navigateur internet.</p></div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 05 — PRÉREQUIS ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">05</div><h1 class="section">Prérequis et responsabilités partagées</h1></div>
+  <div class="filet"></div>
+
+  <p>La réussite du projet repose sur une répartition claire des rôles entre l'établissement et
+  TrillionX. Cette section précise ce que chacun apporte.</p>
+
+  <h2>À la charge de TrillionX</h2>
+  <ul>
+    <li>Mise à disposition de la plateforme et de son hébergement.</li>
+    <li>Paramétrage de l'établissement : année scolaire, cycles, classes, matières, coefficients,
+    règles de notation, jours ouvrés et horaires, rôles et comptes.</li>
+    <li>Intégration des données de départ transmises par l'établissement.</li>
+    <li>Formation des utilisateurs selon leur profil.</li>
+    <li>Accompagnement au démarrage, support et maintenance.</li>
+    <li>Sauvegarde, sécurité et exploitation technique de la solution.</li>
+  </ul>
+
+  <h2>À la charge de l'établissement</h2>
+  <table>
+    <thead><tr><th style="width:34%;">Élément</th><th>Précision</th></tr></thead>
+    <tbody>
+      <tr><td class="cle">Un référent projet</td><td>Interlocuteur unique de TrillionX, disposant de l'autorité nécessaire pour valider les choix de paramétrage</td></tr>
+      <tr><td class="cle">Une connexion internet</td><td>Dans l'établissement, permettant l'usage quotidien de l'application</td></tr>
+      <tr><td class="cle">Les équipements</td><td>Ordinateurs, tablettes ou téléphones — au minimum un poste au secrétariat et un à la comptabilité</td></tr>
+      <tr><td class="cle">Les données de départ</td><td>Liste des élèves, du personnel, des classes et grille des frais de scolarité (voir section 06)</td></tr>
+      <tr><td class="cle">La disponibilité des équipes</td><td>Aux dates de formation retenues d'un commun accord</td></tr>
+      <tr><td class="cle">La désignation des rôles</td><td>Qui fait quoi dans l'application, et qui accède à quoi</td></tr>
+    </tbody>
+  </table>
+
+  <div class="encadre">
+    <p><b>Point de départ du planning.</b> Le planning présenté en section 07 court à compter de la
+    réception complète des données de départ et de la désignation du référent projet. Tout retard
+    sur ces deux points décale le planning d'autant — nous le signalerons sans délai à la direction
+    plutôt que de le découvrir en fin de parcours.</p>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 06 — REPRISE DES DONNÉES ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">06</div><h1 class="section">Reprise des données existantes</h1></div>
+  <div class="filet"></div>
+
+  <p>La mise en service suppose que l'établissement retrouve, dès le premier jour, ses élèves, ses
+  classes et son personnel dans l'application. Cette section précise ce qui est repris, comment, et
+  par qui.</p>
+
+  <h2>Données reprises</h2>
+  <table>
+    <thead><tr><th style="width:24%;">Donnée</th><th>Contenu attendu</th><th style="width:22%;">Fournie par</th></tr></thead>
+    <tbody>
+      <tr><td class="cle">Élèves</td><td>Nom, prénom, date et lieu de naissance, sexe, classe</td><td>Établissement</td></tr>
+      <tr><td class="cle">Familles</td><td>Parent ou tuteur, téléphone, lien de parenté</td><td>Établissement</td></tr>
+      <tr><td class="cle">Personnel</td><td>Nom, fonction, matières et classes enseignées</td><td>Établissement</td></tr>
+      <tr><td class="cle">Classes</td><td>Cycle, niveau, effectif</td><td>Établissement</td></tr>
+      <tr><td class="cle">Frais de scolarité</td><td>Grille tarifaire par classe</td><td>Établissement</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Format et modalités</h2>
+  <p>Les données sont transmises sous forme de tableau (fichier Excel ou équivalent) selon un
+  <b>modèle fourni par TrillionX</b>, ou sur listes papier si l'établissement ne dispose pas de
+  fichier informatique — ce cas est prévu et ne pose pas de difficulté.</p>
+  <ul>
+    <li>Saisie et intégration assurées par TrillionX à partir des éléments transmis.</li>
+    <li>Contrôle de cohérence et signalement des informations manquantes ou contradictoires.</li>
+    <li>Vérification et validation de l'exactitude des données par l'établissement avant la mise en
+    service.</li>
+  </ul>
+
+  <div class="encadre">
+    <p>TrillionX intègre fidèlement les informations qui lui sont transmises, mais ne peut se
+    porter garant de l'exactitude de données qu'il n'a pas produites. La relecture par
+    l'établissement, avant la mise en service, fait partie de la recette (section 09).</p>
+  </div>
+
+  <h2>Volume prévu</h2>
+  <p>La présente offre couvre la reprise de <span class="aremplir">[nombre]</span> élèves et
+  <span class="aremplir">[nombre]</span> membres du personnel. Au-delà de ce volume, les modalités
+  seront convenues ensemble, sans que cela remette en cause le reste de l'offre.</p>
+
+  <h2>Historique des années antérieures</h2>
+  <p>La reprise des <b>notes et bulletins des années scolaires antérieures</b> n'est pas comprise
+  dans la présente offre. Elle peut faire l'objet d'une prestation complémentaire si
+  l'établissement le souhaite. L'année en cours, elle, est reprise intégralement.</p>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 07 — PLANNING ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">07</div><h1 class="section">Méthodologie et planning</h1></div>
+  <div class="filet"></div>
+
+  <div class="encadre">
+    <p>La solution étant <b>déjà développée et opérationnelle</b>, sa mise en place ne comporte
+    aucune phase de développement. Elle se déroule en quelques jours seulement, à travers des
+    étapes claires et maîtrisées.</p>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th style="width:22px;">#</th><th style="width:24%;">Étape</th><th>Contenu</th><th style="width:16%;">Durée</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="num">1</td><td class="cle">Préparation</td><td>Recueil des informations de l'école, cadrage des besoins, désignation du référent projet</td><td>2 jours</td></tr>
+      <tr><td class="num">2</td><td class="cle">Configuration</td><td>Paramétrage de l'année, des cycles, classes, matières, coefficients, horaires, rôles et comptes</td><td>3 jours</td></tr>
+      <tr><td class="num">3</td><td class="cle">Mise en place</td><td>Intégration des données de départ (élèves, familles, personnel, classes, frais)</td><td>3 jours</td></tr>
+      <tr><td class="num">4</td><td class="cle">Tests &amp; validation</td><td>Vérification du bon fonctionnement avec l'établissement, procès-verbal de recette</td><td>2 jours</td></tr>
+      <tr><td class="num">5</td><td class="cle">Formation</td><td>Formation des utilisateurs, par groupes et selon les profils</td><td>3 jours</td></tr>
+      <tr><td class="num">6</td><td class="cle">Déploiement</td><td>Mise en service réelle et démarrage accompagné</td><td>2 jours</td></tr>
+      <tr style="background:#EAF6FC;"><td></td><td class="cle">Total</td><td>Délai global de mise en service</td><td class="cle">≈ 3 semaines</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Notre méthode</h2>
+  <div class="carte"><div class="t">Configurer avant de former</div><p>Les équipes sont formées sur <b>leurs propres classes et leurs propres élèves</b>, jamais sur des données de démonstration. Ce qu'elles voient en formation est ce qu'elles retrouveront le lendemain.</p></div>
+  <div class="carte"><div class="t">Valider avant de déployer</div><p>Aucune mise en service n'est prononcée sans que l'établissement ait vérifié lui-même, sur ses données, que le fonctionnement attendu est bien réalisé.</p></div>
+  <div class="carte"><div class="t">Accompagner après le démarrage</div><p>Les premiers jours d'usage réel sont les plus délicats. C'est là que nous sommes le plus présents, pas au moment de la signature.</p></div>
+
+  <h2>Suivi</h2>
+  <p>Un point d'avancement est tenu à la fin de chaque étape avec le référent de l'établissement.
+  Le planning ci-dessus court à compter de la réception complète des données de départ et de la
+  désignation du référent (section 05).</p>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 08 — GOUVERNANCE ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">08</div><h1 class="section">Équipe projet et gouvernance</h1></div>
+  <div class="filet"></div>
+
+  <h2>Interlocuteurs du projet</h2>
+  <table>
+    <thead><tr><th style="width:28%;">Rôle</th><th>Responsabilité</th><th style="width:22%;">Titulaire</th></tr></thead>
+    <tbody>
+      <tr><td class="cle">Chef de projet TrillionX</td><td>Pilotage, planning, interlocuteur unique de l'école</td><td><span class="aremplir">[nom]</span></td></tr>
+      <tr><td class="cle">Responsable technique</td><td>Paramétrage, intégration des données, hébergement, sécurité</td><td><span class="aremplir">[nom]</span></td></tr>
+      <tr><td class="cle">Formateur</td><td>Formation des utilisateurs, accompagnement au démarrage</td><td><span class="aremplir">[nom]</span></td></tr>
+      <tr><td class="cle">Référent établissement</td><td>Décisions de paramétrage, transmission des données, validation de la recette</td><td>À désigner par l'école</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Suivi du projet</h2>
+  <ul>
+    <li>Un <b>point d'avancement</b> à la fin de chaque étape du planning.</li>
+    <li>Un <b>compte rendu écrit</b> des décisions prises et des points restants.</li>
+    <li>Un <b>canal de contact permanent</b> entre le chef de projet et le référent de
+    l'établissement, pendant toute la durée de la mise en place.</li>
+    <li>Une <b>alerte immédiate</b> en cas de risque de décalage du planning, quelle qu'en soit
+    l'origine.</li>
+  </ul>
+
+  <h2>Après la mise en service</h2>
+  <p>Le chef de projet reste l'interlocuteur de l'établissement pendant toute la période
+  d'accompagnement au démarrage. Le relais est ensuite passé au support (section 11), sans que
+  l'établissement ait à réexpliquer son dossier : le contexte est transmis en interne.</p>
+
+  <div class="encadre">
+    <p><b>Un principe que nous tenons.</b> L'établissement n'a jamais à chercher son interlocuteur.
+    Un seul nom, un seul numéro, du premier jour jusqu'à l'exploitation courante.</p>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 09 — RECETTE ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">09</div><h1 class="section">Recette et validation</h1></div>
+  <div class="filet"></div>
+
+  <p>La recette est le moment où l'établissement vérifie, sur ses propres données, que le système
+  livré correspond à ce qui a été promis. Elle marque la fin de la mise en place et le début de
+  l'exploitation.</p>
+
+  <h2>Déroulement</h2>
+  <p>À l'issue de la mise en place, une séance de recette est organisée avec l'établissement.
+  TrillionX présente le système paramétré et l'établissement vérifie point par point, avec ses
+  propres classes et ses propres élèves, que le fonctionnement attendu est bien réalisé.</p>
+
+  <h2>Points vérifiés ensemble</h2>
+  <table>
+    <thead><tr><th style="width:34%;">Domaine</th><th>Vérification</th></tr></thead>
+    <tbody>
+      <tr><td class="cle">Accès</td><td>Connexion de chaque profil d'utilisateur à son espace, avec ses seuls droits</td></tr>
+      <tr><td class="cle">Configuration</td><td>Classes, matières, coefficients, horaires et jours ouvrés conformes à l'organisation de l'école</td></tr>
+      <tr><td class="cle">Données reprises</td><td>Présence et exactitude des dossiers élèves, des familles et du personnel</td></tr>
+      <tr><td class="cle">Pédagogie</td><td>Saisie d'une note, calcul d'une moyenne, production et impression d'un bulletin</td></tr>
+      <tr><td class="cle">Vie scolaire</td><td>Enregistrement d'un appel, pointage d'un enseignant</td></tr>
+      <tr><td class="cle">Finances</td><td>Enregistrement d'un paiement, édition d'un reçu, suivi d'un impayé</td></tr>
+      <tr><td class="cle">Portails</td><td>Accès d'un parent et d'un élève à leur espace</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Procès-verbal de recette</h2>
+  <p>La recette donne lieu à un <b>procès-verbal signé par les deux parties</b>. Les réserves
+  éventuelles y sont consignées ; TrillionX les lève dans un délai de <b>5 jours ouvrés</b>, puis la
+  recette est prononcée.</p>
+
+  <div class="bloc-bleu">
+    <div class="t">Ce que vaut la signature</div>
+    <p>La signature du procès-verbal, sans réserve ou après levée des réserves, vaut acceptation de
+    la solution et marque le début de la période de support décrite en section 11.</p>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 10 — FORMATION ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">10</div><h1 class="section">Formation et accompagnement</h1></div>
+  <div class="filet"></div>
+
+  <p>Pour que la solution soit pleinement adoptée, TrillionX assure la formation des utilisateurs
+  et les accompagne à la prise en main. Un outil que personne ne sait utiliser ne rend aucun
+  service : la formation n'est pas une option de cette offre.</p>
+
+  <h2>Utilisateurs formés</h2>
+  <ul>
+    <li>La direction (fondateur / directeur général / directeur des études).</li>
+    <li>Le personnel administratif (secrétariat / opérateurs).</li>
+    <li>La comptabilité.</li>
+    <li>Les surveillants.</li>
+    <li>Les enseignants.</li>
+  </ul>
+
+  <h2>Contenu de la formation</h2>
+  <ul>
+    <li>Prise en main générale de la plateforme et de la connexion sécurisée.</li>
+    <li>Gestion des élèves, des classes et des inscriptions.</li>
+    <li>Saisie des notes, centralisation et production des bulletins.</li>
+    <li>Suivi des présences, appels et pointage des enseignants.</li>
+    <li>Utilisation de la comptabilité et des encaissements (pour les profils concernés).</li>
+    <li>Communication avec les familles et usage des portails.</li>
+    <li>Bonnes pratiques d'utilisation et de sécurité.</li>
+  </ul>
+
+  <h2>Déroulement</h2>
+  <p>La formation est organisée par groupes, en fonction des rôles, à travers des sessions
+  pratiques directement sur le système, avec des cas concrets propres à l'établissement. Chaque
+  participant manipule lui-même : personne ne se contente de regarder.</p>
+
+  <h2>Accompagnement &amp; assistance au démarrage</h2>
+  <ul>
+    <li>Accompagnement lors des premières utilisations réelles.</li>
+    <li>Assistance rapprochée pendant la phase de démarrage.</li>
+    <li>Réponses aux questions et ajustements en fonction des retours.</li>
+  </ul>
+
+  <h2>Documentation</h2>
+  <p>Des guides d'utilisation adaptés aux différents profils sont mis à disposition pour faciliter
+  l'autonomie des équipes et permettre la formation d'un nouvel arrivant en cours d'année.</p>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 11 — SUPPORT ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">11</div><h1 class="section">Maintenance, support et niveaux de service</h1></div>
+  <div class="filet"></div>
+
+  <p>Après la mise en service, TrillionX assure le bon fonctionnement continu de la solution.</p>
+
+  <h2>Canaux et horaires</h2>
+  <table>
+    <tbody>
+      <tr><td class="cle" style="width:32%;">Canaux</td><td>Téléphone, WhatsApp, courrier électronique</td></tr>
+      <tr><td class="cle">Horaires</td><td>Du lundi au vendredi, 8h — 18h · Samedi, 8h — 13h</td></tr>
+      <tr><td class="cle">Contact support</td><td><span class="aremplir">[numéro]</span> · <span class="aremplir">[email]</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Délais de prise en charge</h2>
+  <table>
+    <thead><tr><th style="width:18%;">Gravité</th><th>Description</th><th style="width:19%;">Prise en charge</th><th style="width:19%;">Résolution visée</th></tr></thead>
+    <tbody>
+      <tr><td class="cle">Bloquant</td><td>L'application est inaccessible, ou une fonction essentielle est totalement inutilisable (connexion, notes, encaissements)</td><td>4 heures ouvrées</td><td>1 jour ouvré</td></tr>
+      <tr><td class="cle">Majeur</td><td>Une fonction est dégradée mais un contournement existe</td><td>1 jour ouvré</td><td>3 jours ouvrés</td></tr>
+      <tr><td class="cle">Mineur</td><td>Gêne d'affichage ou demande d'ajustement sans effet sur l'usage</td><td>2 jours ouvrés</td><td>Prochaine mise à jour</td></tr>
+    </tbody>
+  </table>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<div class="page">
+  <div class="entete"><div class="puce-num">11</div><h1 class="section">Maintenance et support (suite)</h1></div>
+  <div class="filet"></div>
+
+  <h2>Prestations comprises</h2>
+  <div class="carte"><div class="t">Support technique</div><p>Assistance aux utilisateurs après la mise en service.</p></div>
+  <div class="carte"><div class="t">Maintenance corrective</div><p>Correction des anomalies et des défauts signalés.</p></div>
+  <div class="carte"><div class="t">Mises à jour</div><p>Intégration régulière des améliorations, déployées automatiquement, sans intervention de l'établissement.</p></div>
+  <div class="carte"><div class="t">Maintenance évolutive</div><p>Évolutions possibles selon les besoins de l'établissement, étudiées au cas par cas.</p></div>
+  <div class="carte"><div class="t">Assistance</div><p>Accompagnement disponible pour répondre aux questions des équipes.</p></div>
+
+  <h2>Ce qui n'est pas compris</h2>
+  <ul>
+    <li>Le développement de fonctions nouvelles hors périmètre (voir section 16).</li>
+    <li>La réparation ou le remplacement du matériel de l'établissement.</li>
+    <li>Le rétablissement de la connexion internet de l'établissement.</li>
+    <li>La saisie courante des données, qui relève des équipes de l'école.</li>
+  </ul>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 12 — SÉCURITÉ ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">12</div><h1 class="section">Sécurité, sauvegarde et protection des données</h1></div>
+  <div class="filet"></div>
+
+  <h2>Accès et identification</h2>
+  <ul>
+    <li>Chaque utilisateur dispose de ses <b>propres identifiants personnels</b>.</li>
+    <li>Les mots de passe sont conservés sous forme chiffrée : ils ne sont lisibles par personne,
+    y compris par TrillionX.</li>
+    <li>Chaque utilisateur n'accède <b>qu'aux fonctions correspondant à son rôle</b>.</li>
+    <li>Les échanges entre l'appareil et le serveur sont <b>chiffrés (HTTPS)</b>.</li>
+  </ul>
+
+  <h2>Séparation des établissements</h2>
+  <p>Les données de l'École Hadja Fanta Diane sont <b>strictement séparées</b> de celles de tout
+  autre établissement utilisant la solution. Aucun utilisateur d'un autre établissement ne peut y
+  accéder, sous aucune forme et par aucun chemin.</p>
+
+  <h2>Traçabilité</h2>
+  <p>Les actions sensibles réalisées dans l'application sont enregistrées : l'établissement peut
+  savoir qui a fait quoi et à quel moment.</p>
+
+  <h2>Sauvegardes</h2>
+  <table>
+    <tbody>
+      <tr><td class="cle" style="width:32%;">Fréquence</td><td>Quotidienne, automatique</td></tr>
+      <tr><td class="cle">Durée de conservation</td><td>30 jours glissants</td></tr>
+      <tr><td class="cle">Délai de restauration</td><td>Sous 24 heures ouvrées, sur demande de la direction</td></tr>
+      <tr><td class="cle">Périmètre</td><td>L'ensemble des données de l'établissement</td></tr>
+      <tr><td class="cle">À la charge de l'école</td><td>Rien — aucune manipulation n'est demandée</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Protection des données personnelles</h2>
+  <p>Les données traitées concernent des élèves, dont des mineurs. TrillionX s'engage à :</p>
+  <ul>
+    <li>ne les utiliser <b>que</b> pour le fonctionnement du service ;</li>
+    <li>ne les communiquer à <b>aucun tiers</b>, à aucun titre, ni gratuitement ni contre rémunération ;</li>
+    <li>ne les exploiter à <b>aucune fin commerciale ou publicitaire</b> ;</li>
+    <li>respecter la réglementation applicable en Guinée en matière de protection des données à
+    caractère personnel ;</li>
+    <li><b>restituer et effacer</b> ces données en fin de relation, selon les modalités de la
+    section 13.</li>
+  </ul>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 13 — RÉVERSIBILITÉ ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">13</div><h1 class="section">Réversibilité et propriété des données</h1></div>
+  <div class="filet"></div>
+
+  <div class="encadre">
+    <p>Nous préférons répondre à cette question avant qu'elle soit posée. Une école confie à un
+    prestataire les dossiers de ses élèves et ses comptes : elle a le droit de savoir ce qu'elle
+    récupère si la relation s'arrête.</p>
+  </div>
+
+  <h2>Propriété des données</h2>
+  <p><b>Les données saisies dans l'application appartiennent à l'École Hadja Fanta Diane</b> —
+  dossiers élèves, notes, bulletins, présences, écritures comptables et tout autre contenu produit
+  par l'établissement. TrillionX en assure la conservation et la sécurité, mais n'en est pas
+  propriétaire et ne peut en disposer à quelque titre que ce soit.</p>
+
+  <h2>Propriété de la solution</h2>
+  <p>La solution SmartSchool elle-même, sa conception et son code demeurent la propriété de
+  TrillionX. L'établissement bénéficie d'un droit d'usage complet pendant toute la durée de la
+  relation.</p>
+
+  <h2>En cas de fin de relation</h2>
+  <p>Quelle qu'en soit la raison, et à la seule demande de l'établissement, TrillionX s'engage à :</p>
+  <table>
+    <thead><tr><th style="width:40%;">Engagement</th><th>Modalité</th></tr></thead>
+    <tbody>
+      <tr><td class="cle">Restitution intégrale</td><td>L'ensemble des données de l'établissement, dans un format exploitable : tableaux et documents PDF</td></tr>
+      <tr><td class="cle">Délai</td><td>15 jours ouvrés à compter de la demande écrite</td></tr>
+      <tr><td class="cle">Effacement</td><td>Suppression définitive des données de nos systèmes après restitution et confirmation écrite de l'établissement</td></tr>
+      <tr><td class="cle">Coût</td><td>Aucun — la restitution des données de l'école ne se facture pas</td></tr>
+    </tbody>
+  </table>
+
+  <div class="bloc-bleu">
+    <div class="t">Un engagement sans réserve</div>
+    <p>Aucune donnée de l'établissement n'est retenue comme moyen de pression, dans aucune
+    circonstance, y compris en cas de désaccord commercial. Les dossiers des élèves d'une école ne
+    sont pas un instrument de négociation.</p>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 14 — LIVRABLES ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">14</div><h1 class="section">Livrables</h1></div>
+  <div class="filet"></div>
+
+  <p>À l'issue de la prestation, l'établissement disposera de l'ensemble des éléments suivants.</p>
+
+  <div class="check"><div class="v">✓</div><div>Un <b>système de gestion scolaire opérationnel</b>, propre à l'École Hadja Fanta Diane.</div></div>
+  <div class="check"><div class="v">✓</div><div>L'ensemble des <b>modules et fonctionnalités</b> décrits dans le périmètre de la présente offre.</div></div>
+  <div class="check"><div class="v">✓</div><div>Les <b>comptes utilisateurs</b> créés et configurés selon les rôles définis.</div></div>
+  <div class="check"><div class="v">✓</div><div>L'<b>accès à la plateforme</b> depuis ordinateur, tablette et téléphone.</div></div>
+  <div class="check"><div class="v">✓</div><div>La solution <b>paramétrée et prête à l'emploi</b> : année scolaire, classes, matières, coefficients, horaires.</div></div>
+  <div class="check"><div class="v">✓</div><div>Les <b>données de départ intégrées</b> et validées : élèves, familles, personnel, classes, frais.</div></div>
+  <div class="check"><div class="v">✓</div><div>La <b>documentation et les guides</b> de formation destinés aux différents profils.</div></div>
+  <div class="check"><div class="v">✓</div><div>Le <b>procès-verbal de recette</b> signé par les deux parties.</div></div>
+  <div class="check"><div class="v">✓</div><div>Les <b>coordonnées du support</b> et les modalités d'assistance après la mise en service.</div></div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 15 — ENGAGEMENTS ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">15</div><h1 class="section">Engagements techniques</h1></div>
+  <div class="filet"></div>
+
+  <p>TrillionX s'engage sur la qualité, la sécurité et la fiabilité de la solution fournie.</p>
+
+  <div class="check"><div class="v">✓</div><div><b>Confidentialité des données</b> — les données de l'école restent la propriété de l'établissement et ne sont ni divulguées ni utilisées à d'autres fins.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Sécurité des accès</b> — connexion protégée et accès strictement limité au rôle de chaque utilisateur.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Protection des données</b> — les informations de votre école sont séparées de celles des autres établissements et protégées.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Fiabilité du système</b> — une solution stable, pensée pour un usage quotidien.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Sauvegardes</b> — sauvegarde quotidienne, conservation 30 jours, restauration sous 24 heures ouvrées.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Délais de support</b> — prise en charge d'un incident bloquant sous 4 heures ouvrées.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Correction des anomalies</b> — prise en charge des anomalies signalées, selon les niveaux de service de la section 11.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Réversibilité</b> — restitution intégrale et gratuite des données sous 15 jours ouvrés, sur simple demande.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Qualité de la prestation</b> — accompagnement sérieux et professionnel tout au long du projet.</div></div>
+  <div class="check"><div class="v">✓</div><div><b>Respect du périmètre</b> — la solution livrée correspond au périmètre décrit dans la présente offre.</div></div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 16 — LIMITES ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">16</div><h1 class="section">Hypothèses, limites et exclusions</h1></div>
+  <div class="filet"></div>
+
+  <div class="encadre">
+    <p>Cette section précise ce qui n'est pas compris dans l'offre. Nous préférons l'écrire
+    clairement dès le départ : une attente non exprimée est une déception assurée.</p>
+  </div>
+
+  <h2>Hypothèses retenues</h2>
+  <p>La présente offre a été établie sur la base des hypothèses suivantes :</p>
+  <ul>
+    <li>L'établissement dispose d'une connexion internet et des équipements nécessaires à ses utilisateurs.</li>
+    <li>Les données de départ sont transmises dans les délais convenus (section 06).</li>
+    <li>Un référent projet est désigné et disponible pendant la mise en place (section 05).</li>
+    <li>Les effectifs correspondent à ceux indiqués en section 06.</li>
+    <li>La formation se déroule dans les locaux de l'établissement, aux dates convenues.</li>
+  </ul>
+  <p>Un écart significatif sur l'un de ces points peut avoir un effet sur le planning. Il sera
+  signalé à la direction dès qu'il est constaté.</p>
+
+  <h2>Non compris dans la présente offre</h2>
+  <ul>
+    <li>La fourniture de matériel : ordinateurs, tablettes, téléphones, imprimantes, lecteurs.</li>
+    <li>La fourniture ou l'installation d'une connexion internet.</li>
+    <li>La reprise des notes et bulletins des années scolaires antérieures.</li>
+    <li>Le développement de fonctions nouvelles non décrites au périmètre de la section 03.</li>
+    <li>L'interconnexion avec un système tiers existant.</li>
+    <li>La saisie courante des données par les équipes de l'école après la mise en service.</li>
+    <li>Les formations complémentaires au-delà de celles prévues en section 10.</li>
+  </ul>
+
+  <h2>Évolutions ultérieures</h2>
+  <p>Toute demande de fonction nouvelle est étudiée avec attention et fait l'objet d'une
+  proposition distincte. Nombre d'évolutions présentent un intérêt général : lorsqu'elles sont
+  intégrées à la solution, elles bénéficient alors à l'établissement <b>sans coût
+  supplémentaire</b>, au titre des mises à jour de la section 11.</p>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 17 — CONDITIONS ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">17</div><h1 class="section">Conditions et validité de l'offre</h1></div>
+  <div class="filet"></div>
+
+  <table>
+    <tbody>
+      <tr><td class="cle" style="width:34%;">Objet du document</td><td>Offre <b>technique</b>. Les conditions financières font l'objet d'une offre financière distincte, remise séparément.</td></tr>
+      <tr><td class="cle">Validité de l'offre</td><td>Soixante (60) jours à compter de la date de remise</td></tr>
+      <tr><td class="cle">Modèle de service</td><td>Abonnement incluant l'hébergement, les mises à jour, le support et la maintenance</td></tr>
+      <tr><td class="cle">Durée d'engagement</td><td><span class="aremplir">[annuelle, renouvelable]</span></td></tr>
+      <tr><td class="cle">Périmètre d'utilisation</td><td>École Hadja Fanta Diane uniquement</td></tr>
+      <tr><td class="cle">Nombre d'utilisateurs</td><td>Non limité au sein de l'établissement</td></tr>
+      <tr><td class="cle">Langue</td><td>Français</td></tr>
+      <tr><td class="cle">Confidentialité</td><td>Le présent document est confidentiel et destiné au seul usage de son destinataire</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Documents constitutifs</h2>
+  <p>La relation entre les parties s'appuiera sur les documents suivants :</p>
+  <ul>
+    <li>La présente offre technique.</li>
+    <li>L'offre financière, remise séparément.</li>
+    <li>Le contrat de service signé entre les parties.</li>
+    <li>Le procès-verbal de recette (section 09).</li>
+  </ul>
+
+  <h2>Suite à donner</h2>
+  <p>Nous restons à la disposition de la direction pour présenter cette offre de vive voix, réaliser
+  une démonstration sur site avec vos propres données, et répondre à toute question. La mise en
+  place peut démarrer dès accord de l'établissement et transmission des données de départ.</p>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<!-- ═══════════════ 18 — CONCLUSION ═══════════════ -->
+<div class="page">
+  <div class="entete"><div class="puce-num">18</div><h1 class="section">Conclusion</h1></div>
+  <div class="filet"></div>
+
+  <div class="fin">
+    <p>À travers la solution SmartSchool, TrillionX propose à l'École Hadja Fanta Diane un système
+    de gestion scolaire complet, fiable et sécurisé, couvrant l'ensemble de ses activités
+    pédagogiques, administratives et financières.</p>
+
+    <p>Notre engagement va au-delà de la simple fourniture d'un outil : nous accompagnons
+    l'établissement dans la mise en place, la formation de ses équipes et l'utilisation quotidienne
+    du système, afin d'en tirer pleinement profit.</p>
+
+    <p>Nous nous engageons sur des délais écrits, sur la protection des données qui nous sont
+    confiées et sur leur restitution intégrale à tout moment. Une école ne confie pas seulement des
+    fichiers à un prestataire : elle lui confie le dossier scolaire de ses élèves et les comptes de
+    l'établissement. Nous mesurons ce que cela suppose.</p>
+
+    <p>Nous restons à la disposition de la direction pour présenter tout complément d'information
+    et adapter, si besoin, la solution aux spécificités de l'établissement. C'est avec un réel
+    enthousiasme que TrillionX souhaite accompagner l'École Hadja Fanta Diane dans sa
+    transformation numérique.</p>
+  </div>
+
+  <div class="bloc-signature">
+    <div class="g">
+      <div class="m">TRILLIONX</div>
+      <div>Services numériques — Éditeur de la solution SmartSchool</div>
+      <div style="margin-top:10px;"><span class="aremplir">[Téléphone]</span> · <span class="aremplir">[Email]</span></div>
+    </div>
+    <div class="d">
+      <div>Offre technique — Système de gestion scolaire SmartSchool</div>
+      <div>École Hadja Fanta Diane · Conakry, Septembre 2026</div>
+      <div style="margin-top:10px;">Offre valable 60 jours</div>
+    </div>
+  </div>
+
+  <div class="pied"><div class="centre">SmartSchool · TrillionX — École Hadja Fanta Diane</div><div class="num"></div></div>
+</div>
+
+<script>
+  // Numérotation : la couverture ne porte pas de numéro, les pages suivantes
+  // sont numérotées « n / total » comme dans le document d'origine.
+  (function () {
+    var pages = document.querySelectorAll('.page');
+    var total = pages.length;
+    pages.forEach(function (p, i) {
+      var n = p.querySelector('.num');
+      if (n) n.textContent = (i + 1) + ' / ' + total;
+    });
+  })();
+</script>
+</body>
+</html>
