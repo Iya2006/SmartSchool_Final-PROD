@@ -20,8 +20,8 @@ import styles from './FondConstellation.module.css';
 /** Symboles mathématiques dessinés en texte. */
 const SYMBOLES = ['π', '∑', '√', '∞', '+', '÷', '×'];
 
-/** Teintes claires, lisibles sur le bleu nuit du fond. */
-const TEINTES = ['#bcd4ff', '#a9f0ff', '#b6f5da', '#c3c9ff'];
+/** Teintes soutenues, lisibles sur le bleu très pâle du fond. */
+const TEINTES = ['#5b8ce0', '#3fa8c4', '#3fae8c', '#7f8ad6'];
 
 /** Tracés des icônes scolaires (style trait fin, 24x24). */
 const ICONES = [
@@ -61,7 +61,7 @@ interface Particule {
 function imageIcone(trace: string): HTMLImageElement {
     const svg =
         '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ' +
-        'fill="none" stroke="#e6f0ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
+        'fill="none" stroke="#5b84cf" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
         trace + '</svg>';
     const img = new Image();
     img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
@@ -128,7 +128,7 @@ export default function FondConstellation() {
                     const dy = particules[a].y - particules[b].y;
                     const distance = Math.hypot(dx, dy);
                     if (distance < 125) {
-                        ctx.globalAlpha = (1 - distance / 125) * 0.24;
+                        ctx.globalAlpha = (1 - distance / 125) * 0.3;
                         ctx.strokeStyle = particules[a].teinte;
                         ctx.lineWidth = 1;
                         ctx.beginPath();
@@ -159,7 +159,7 @@ export default function FondConstellation() {
                 }
 
                 if (p.genre === 'point') {
-                    ctx.globalAlpha = 0.8;
+                    ctx.globalAlpha = 0.7;
                     ctx.fillStyle = p.teinte;
                     ctx.beginPath();
                     ctx.arc(p.x, p.y, 1.7, 0, Math.PI * 2);
@@ -167,11 +167,11 @@ export default function FondConstellation() {
                 } else if (p.genre === 'icone') {
                     const img = images[p.icone];
                     if (img && img.complete && img.naturalWidth) {
-                        ctx.globalAlpha = 0.6;
+                        ctx.globalAlpha = 0.5;
                         ctx.drawImage(img, p.x - p.taille / 2, p.y - p.taille / 2, p.taille, p.taille);
                     }
                 } else {
-                    ctx.globalAlpha = 0.55;
+                    ctx.globalAlpha = 0.45;
                     ctx.fillStyle = p.teinte;
                     ctx.font = `600 ${p.taille}px 'Sora', sans-serif`;
                     ctx.fillText(p.symbole, p.x, p.y);
@@ -246,7 +246,7 @@ function dessinerUneFois(
             const dy = particules[a].y - particules[b].y;
             const distance = Math.hypot(dx, dy);
             if (distance < 125) {
-                ctx.globalAlpha = (1 - distance / 125) * 0.24;
+                ctx.globalAlpha = (1 - distance / 125) * 0.3;
                 ctx.strokeStyle = particules[a].teinte;
                 ctx.lineWidth = 1;
                 ctx.beginPath();
@@ -260,7 +260,7 @@ function dessinerUneFois(
     ctx.textBaseline = 'middle';
     for (const p of particules) {
         if (p.genre === 'point') {
-            ctx.globalAlpha = 0.8;
+            ctx.globalAlpha = 0.7;
             ctx.fillStyle = p.teinte;
             ctx.beginPath();
             ctx.arc(p.x, p.y, 1.7, 0, Math.PI * 2);
@@ -268,11 +268,11 @@ function dessinerUneFois(
         } else if (p.genre === 'icone') {
             const img = images[p.icone];
             if (img && img.complete && img.naturalWidth) {
-                ctx.globalAlpha = 0.6;
+                ctx.globalAlpha = 0.5;
                 ctx.drawImage(img, p.x - p.taille / 2, p.y - p.taille / 2, p.taille, p.taille);
             }
         } else {
-            ctx.globalAlpha = 0.55;
+            ctx.globalAlpha = 0.45;
             ctx.fillStyle = p.teinte;
             ctx.font = `600 ${p.taille}px 'Sora', sans-serif`;
             ctx.fillText(p.symbole, p.x, p.y);

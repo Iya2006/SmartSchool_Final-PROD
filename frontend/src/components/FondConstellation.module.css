@@ -13,16 +13,21 @@
     z-index: 0;
     overflow: hidden;
     pointer-events: none;
-    background: radial-gradient(130% 120% at 50% 4%, #33509c 0%, #24396f 60%, #1c2d5b 100%);
+    background: radial-gradient(130% 120% at 50% 0%, #ffffff 0%, #eff5fe 42%, #dbe8fb 100%);
 }
 
-/* Les « auréoles » : halos colorés diffus qui donnent la profondeur. */
+/*
+ * Les « auréoles » : halos colorés diffus qui donnent la profondeur.
+ *
+ * PAS de `mix-blend-mode: screen` ici : ce mode pousse toujours vers le blanc,
+ * donc sur un fond clair il effacerait purement et simplement les halos. Sur
+ * fond clair, ce sont des aplats pastel posés en opacité simple.
+ */
 .halo {
     position: absolute;
     border-radius: 50%;
-    filter: blur(80px);
-    opacity: 0.55;
-    mix-blend-mode: screen;
+    filter: blur(90px);
+    opacity: 0.5;
 }
 
 .halo1 {
@@ -30,7 +35,7 @@
     height: 46vw;
     left: -8vw;
     top: -10vw;
-    background: radial-gradient(circle, #60a5fa, transparent 62%);
+    background: radial-gradient(circle, #bcd7fb, transparent 64%);
 }
 
 .halo2 {
@@ -38,7 +43,7 @@
     height: 40vw;
     right: -6vw;
     top: 0;
-    background: radial-gradient(circle, #34d399, transparent 62%);
+    background: radial-gradient(circle, #bdf0dc, transparent 64%);
 }
 
 .halo3 {
@@ -46,7 +51,7 @@
     height: 44vw;
     left: 24vw;
     bottom: -18vw;
-    background: radial-gradient(circle, #818cf8, transparent 62%);
+    background: radial-gradient(circle, #cdd4fb, transparent 64%);
 }
 
 /* Constellation éducative dessinée au canvas. */
@@ -58,11 +63,11 @@
     display: block;
 }
 
-/* Voile de lisibilité : assombrit légèrement pour que le texte reste net. */
+/* Voile de lisibilité : éclaircit légèrement pour que le texte reste net. */
 .voile {
     position: fixed;
     inset: 0;
     z-index: 1;
     pointer-events: none;
-    background: radial-gradient(120% 110% at 50% 45%, rgba(16, 28, 64, 0.05), rgba(16, 28, 64, 0.42));
+    background: radial-gradient(120% 110% at 50% 45%, rgba(255, 255, 255, 0.35), rgba(226, 237, 252, 0.25));
 }

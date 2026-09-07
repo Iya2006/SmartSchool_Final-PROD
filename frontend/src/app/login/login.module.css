@@ -9,9 +9,31 @@
  * `overflow: hidden` sur la scène — la page ne défilerait plus dès que le
  * contenu dépasse l'écran. Le décor est en `position: fixed`, donc il ne gêne
  * jamais le défilement.
+ *
+ * PALETTE CLAIRE
+ * Le fond est blanc bleuté : tout ce qui s'y pose est donc encré (texte bleu
+ * nuit) et non ajouré. Les jetons ci-dessous sont l'unique source de vérité
+ * des couleurs — les mêmes que dans `inscription.module.css`. Ne pas semer de
+ * valeurs en dur ailleurs dans le fichier, sinon les deux écrans divergent.
  */
 
 .scene {
+    --texte: #12213f;
+    --texte-doux: #44567a;
+    --texte-pale: #7b8aa8;
+    --carte-fond: rgba(255, 255, 255, 0.88);
+    --carte-bord: rgba(37, 99, 235, 0.16);
+    --champ-fond: #ffffff;
+    --champ-bord: #d5e1f6;
+    --accent: #2563eb;
+    --accent-fonce: #1d4ed8;
+    --vert: #0ea371;
+
+    /* L'écran assume un rendu clair quel que soit le thème du système : sans
+       cela, un poste en mode sombre repeint les contrôles natifs (liste
+       déroulante, remplissage automatique) en sombre au milieu du blanc. */
+    color-scheme: light;
+
     position: relative;
     z-index: 2;
     min-height: 100dvh;
@@ -22,7 +44,7 @@
     grid-template-columns: 1.06fr 0.94fr;
     gap: clamp(30px, 5vw, 56px);
     align-items: center;
-    color: #f3f7ff;
+    color: var(--texte);
     font-family: 'Inter', system-ui, sans-serif;
 }
 
@@ -46,10 +68,9 @@
     display: grid;
     place-items: center;
     flex-shrink: 0;
-    background: linear-gradient(140deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.1));
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    box-shadow: 0 16px 40px -14px rgba(59, 130, 246, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.4);
-    backdrop-filter: blur(10px);
+    background: linear-gradient(140deg, #2563eb, #10b981);
+    border: 1px solid rgba(37, 99, 235, 0.2);
+    box-shadow: 0 16px 34px -14px rgba(37, 99, 235, 0.7);
 }
 
 .marqueNom {
@@ -64,10 +85,10 @@
     margin: 3px 0 0;
     font-size: 12.5px;
     font-weight: 600;
-    color: rgba(243, 247, 255, 0.8);
+    color: var(--texte-doux);
 }
 
-.marqueSignature b { color: #a9f5d8; font-weight: 700; }
+.marqueSignature b { color: var(--vert); font-weight: 700; }
 
 .surtitre {
     display: inline-flex;
@@ -76,14 +97,13 @@
     align-self: flex-start;
     padding: 7px 13px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.14);
-    border: 1px solid rgba(255, 255, 255, 0.24);
+    background: rgba(37, 99, 235, 0.09);
+    border: 1px solid rgba(37, 99, 235, 0.22);
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.13em;
     text-transform: uppercase;
-    color: #dbe8ff;
-    backdrop-filter: blur(8px);
+    color: var(--accent);
 }
 
 .titre {
@@ -94,11 +114,10 @@
     letter-spacing: -0.02em;
     margin: 0;
     text-wrap: balance;
-    text-shadow: 0 2px 28px rgba(12, 24, 58, 0.5);
 }
 
 .degrade {
-    background: linear-gradient(100deg, #a8c9ff, #a9f5d8);
+    background: linear-gradient(100deg, #2563eb, #0ea371);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -108,7 +127,7 @@
     margin: 0;
     font-size: 15px;
     line-height: 1.65;
-    color: rgba(243, 247, 255, 0.8);
+    color: var(--texte-doux);
     max-width: 46ch;
 }
 
@@ -120,16 +139,16 @@
     align-items: flex-start;
     padding: 14px 15px;
     border-radius: 15px;
-    background: rgba(255, 255, 255, 0.11);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid rgba(37, 99, 235, 0.14);
+    box-shadow: 0 10px 26px -18px rgba(18, 33, 63, 0.5);
     transition: transform 0.25s ease, background 0.25s ease, border-color 0.25s ease;
 }
 
 .atout:hover {
     transform: translateY(-2px);
-    background: rgba(255, 255, 255, 0.17);
-    border-color: rgba(168, 201, 255, 0.55);
+    background: #ffffff;
+    border-color: rgba(37, 99, 235, 0.32);
 }
 
 .atoutIcone {
@@ -139,13 +158,12 @@
     border-radius: 10px;
     display: grid;
     place-items: center;
-    color: #eaf3ff;
-    background: linear-gradient(140deg, rgba(96, 165, 250, 0.55), rgba(52, 211, 153, 0.45));
-    border: 1px solid rgba(255, 255, 255, 0.26);
+    color: #ffffff;
+    background: linear-gradient(140deg, #3b82f6, #10b981);
 }
 
 .atoutTitre { margin: 0 0 3px; font-size: 13.5px; font-weight: 700; font-family: 'Sora', system-ui, sans-serif; }
-.atoutTexte { margin: 0; font-size: 12.4px; line-height: 1.5; color: rgba(243, 247, 255, 0.8); }
+.atoutTexte { margin: 0; font-size: 12.4px; line-height: 1.5; color: var(--texte-doux); }
 
 .garanties {
     display: flex;
@@ -154,15 +172,15 @@
     gap: 9px 13px;
     font-size: 12px;
     font-weight: 600;
-    color: rgba(243, 247, 255, 0.8);
+    color: var(--texte-doux);
 }
 
 .pointVert {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #34d399;
-    box-shadow: 0 0 10px 1px rgba(52, 211, 153, 0.9);
+    background: #10b981;
+    box-shadow: 0 0 8px 1px rgba(16, 185, 129, 0.55);
     display: inline-block;
 }
 
@@ -177,9 +195,9 @@
     margin: 0 auto;
     border-radius: 24px;
     padding: clamp(24px, 3vw, 32px);
-    background: rgba(255, 255, 255, 0.13);
-    border: 1px solid rgba(255, 255, 255, 0.24);
-    box-shadow: 0 40px 110px -42px rgba(8, 18, 45, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    background: var(--carte-fond);
+    border: 1px solid var(--carte-bord);
+    box-shadow: 0 30px 80px -34px rgba(18, 33, 63, 0.35), 0 2px 6px rgba(18, 33, 63, 0.06);
     backdrop-filter: blur(24px) saturate(1.25);
     -webkit-backdrop-filter: blur(24px) saturate(1.25);
     animation: apparition 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
@@ -203,15 +221,15 @@
     margin: 0 0 6px;
 }
 
-.salutationTexte { margin: 0 0 22px; font-size: 13.5px; color: rgba(243, 247, 255, 0.8); }
+.salutationTexte { margin: 0 0 22px; font-size: 13.5px; color: var(--texte-doux); }
 
 .erreur {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    background: rgba(239, 68, 68, 0.2);
-    border: 1px solid rgba(255, 150, 150, 0.5);
-    color: #ffe2e2;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(220, 38, 38, 0.35);
+    color: #b42318;
     border-radius: 13px;
     padding: 12px 14px;
     font-size: 13px;
@@ -229,15 +247,15 @@
     gap: 10px;
 }
 
-.libelle { font-size: 12.5px; font-weight: 600; color: #f3f7ff; }
-.mention { font-size: 11px; font-weight: 600; color: rgba(243, 247, 255, 0.58); }
+.libelle { font-size: 12.5px; font-weight: 600; color: var(--texte); }
+.mention { font-size: 11px; font-weight: 600; color: var(--texte-pale); }
 
 .cadreChamp { position: relative; display: flex; align-items: center; }
 
 .iconeChamp {
     position: absolute;
     left: 14px;
-    color: rgba(243, 247, 255, 0.58);
+    color: var(--texte-pale);
     display: grid;
     place-items: center;
     pointer-events: none;
@@ -247,21 +265,21 @@
     width: 100%;
     font-family: 'Inter', system-ui, sans-serif;
     font-size: 14px;
-    color: #f3f7ff;
-    background: rgba(255, 255, 255, 0.12);
-    border: 1.5px solid rgba(255, 255, 255, 0.26);
+    color: var(--texte);
+    background: var(--champ-fond);
+    border: 1.5px solid var(--champ-bord);
     border-radius: 13px;
     padding: 13px 15px 13px 43px;
     outline: none;
     transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
 
-.saisie::placeholder { color: rgba(243, 247, 255, 0.58); }
+.saisie::placeholder { color: var(--texte-pale); }
 
 .saisie:focus {
-    border-color: #a8c9ff;
+    border-color: var(--accent);
     box-shadow: 0 0 0 4px rgba(147, 190, 255, 0.28);
-    background: rgba(255, 255, 255, 0.19);
+    background: var(--champ-fond);
 }
 
 .oeil {
@@ -271,7 +289,7 @@
     height: 33px;
     border: none;
     background: transparent;
-    color: rgba(243, 247, 255, 0.58);
+    color: var(--texte-pale);
     cursor: pointer;
     border-radius: 9px;
     display: grid;
@@ -279,7 +297,7 @@
     transition: color 0.18s ease, background 0.18s ease;
 }
 
-.oeil:hover { color: #ffffff; background: rgba(255, 255, 255, 0.16); }
+.oeil:hover { color: var(--accent); background: rgba(37, 99, 235, 0.09); }
 
 .oubli {
     display: block;
@@ -291,21 +309,21 @@
     font-family: 'Inter', system-ui, sans-serif;
     font-size: 12.5px;
     font-weight: 600;
-    color: #c2dbff;
+    color: var(--accent);
 }
 
-.oubli:hover { text-decoration: underline; color: #ffffff; }
+.oubli:hover { text-decoration: underline; color: var(--accent-fonce); }
 
 .panneauOubli {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.24);
+    background: rgba(37, 99, 235, 0.07);
+    border: 1px solid rgba(37, 99, 235, 0.2);
     border-radius: 13px;
     padding: 12px 14px;
     font-size: 12.5px;
-    color: rgba(243, 247, 255, 0.88);
+    color: var(--texte-doux);
     margin: -10px 0 18px;
     overflow: hidden;
 }
@@ -314,7 +332,7 @@
     background: none;
     border: none;
     cursor: pointer;
-    color: rgba(243, 247, 255, 0.6);
+    color: var(--texte-pale);
     flex-shrink: 0;
     padding: 0;
     display: grid;
@@ -355,7 +373,7 @@
     align-items: center;
     gap: 10px;
     margin: 20px 0 0;
-    color: rgba(243, 247, 255, 0.58);
+    color: var(--texte-pale);
     font-size: 11px;
     font-weight: 600;
 }
@@ -365,7 +383,7 @@
     content: "";
     flex: 1;
     height: 1px;
-    background: rgba(255, 255, 255, 0.24);
+    background: var(--carte-bord);
 }
 
 /* ── Liens complémentaires ────────────────────────────────────────── */
@@ -385,22 +403,22 @@
     gap: 12px;
     padding: 12px 15px;
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.11);
-    border: 1px solid rgba(255, 255, 255, 0.24);
-    backdrop-filter: blur(10px);
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid var(--carte-bord);
+    box-shadow: 0 10px 26px -18px rgba(18, 33, 63, 0.5);
     text-decoration: none;
     transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
 }
 
 .lien:hover {
-    border-color: rgba(168, 201, 255, 0.7);
+    border-color: rgba(37, 99, 235, 0.4);
     transform: translateY(-1px);
-    background: rgba(255, 255, 255, 0.17);
+    background: #ffffff;
 }
 
-.lienTitre { font-size: 12.5px; font-weight: 700; color: #ffffff; display: block; }
-.lienSousTitre { font-size: 11.5px; color: rgba(243, 247, 255, 0.8); display: block; margin-top: 1px; }
-.lienFleche { color: #a8c9ff; flex-shrink: 0; }
+.lienTitre { font-size: 12.5px; font-weight: 700; color: var(--texte); display: block; }
+.lienSousTitre { font-size: 11.5px; color: var(--texte-doux); display: block; margin-top: 1px; }
+.lienFleche { color: var(--accent); flex-shrink: 0; }
 
 .installer {
     margin: 12px auto 0;
@@ -414,21 +432,21 @@
     font-family: 'Inter', system-ui, sans-serif;
     font-size: 12.5px;
     font-weight: 600;
-    color: #c2dbff;
+    color: var(--accent);
 }
 
-.installer:hover { color: #ffffff; }
+.installer:hover { color: var(--accent-fonce); }
 
 .signature {
     margin: 18px auto 0;
     font-size: 11.5px;
-    color: rgba(243, 247, 255, 0.58);
+    color: var(--texte-pale);
     text-align: center;
     max-width: 410px;
     line-height: 1.7;
 }
 
-.signature a { color: #c2dbff; font-weight: 600; text-decoration: none; }
+.signature a { color: var(--accent); font-weight: 600; text-decoration: none; }
 .signature a:hover { text-decoration: underline; }
 
 .rotation { animation: rotation 1s linear infinite; }
