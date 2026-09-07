@@ -2,6 +2,12 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "main": ".open-next/worker.js",
   "name": "smartschool-frontend",
+  // On ne publie pas sur *.workers.dev : l'application est servie directement
+  // sur le domaine de l'école. Cloudflare crée le DNS et le certificat.
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "trxsmartschool.com", "custom_domain": true }
+  ],
   "compatibility_date": "2025-09-01",
   "compatibility_flags": [
     "nodejs_compat",
