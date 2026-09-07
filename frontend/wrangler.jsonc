@@ -5,8 +5,13 @@
   // On ne publie pas sur *.workers.dev : l'application est servie directement
   // sur le domaine de l'école. Cloudflare crée le DNS et le certificat.
   "workers_dev": false,
+  // `www` autant que le domaine nu, par simple confort : un visiteur qui tape
+  // l'adresse avec le prefixe doit tomber sur le site, pas sur une erreur.
+  // (Le domaine introuvable dans certains navigateurs n'avait rien a voir :
+  // saisi sans le `.com`, un nom seul part en recherche, pas en adresse.)
   "routes": [
-    { "pattern": "trxsmartschool.com", "custom_domain": true }
+    { "pattern": "trxsmartschool.com", "custom_domain": true },
+    { "pattern": "www.trxsmartschool.com", "custom_domain": true }
   ],
   "compatibility_date": "2025-09-01",
   "compatibility_flags": [
