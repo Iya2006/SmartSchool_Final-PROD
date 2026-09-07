@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import api from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 
@@ -450,25 +450,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // du thème quand le login révèle enfin l'école du compte.
     }, [fetchEtablissement, fetchTheme, fetchAnnee, isAuthenticated]);
 
-    // Mettre à jour le titre et le favicon
+    // Titre et icône de l'onglet.
+    //
+    // L'IDENTITÉ D'UNE ÉCOLE N'APPARTIENT QU'À SON ESPACE CONNECTÉ.
+    // Cet effet écrivait le nom et le logo de l'école dans l'onglet en
+    // permanence. Sur les pages publiques — vitrine, connexion, inscription —
+    // un visiteur voyait donc le nom (et le logo) de la DERNIÈRE école ouverte
+    // sur ce poste, qui ne le regarde pas ; et le titre changeait d'une page
+    // publique à l'autre selon le moment où l'identité finissait de charger.
+    // Hors session, l'onglet porte désormais la seule marque SmartSchool.
+    const faviconOrigine = useRef<string | null>(null);
+
     useEffect(() => {
-        if (typeof window !== 'undefined') {
-            document.title = `${etablissementNom} | SmartSchool ERP`;
-            
-            if (etablissementLogo) {
-                const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
-                const iconUrl = etablissementLogo.startsWith('http') ? etablissementLogo : `${API_BASE}${etablissementLogo}`;
-                
-                let link: HTMLLinkElement | null = document.querySelector("link[rel~='icon']");
-                if (!link) {
-                    link = document.createElement('link');
-                    link.rel = 'icon';
-                    document.head.appendChild(link);
-                }
-                link.href = iconUrl;
-            }
+        if (typeof window === 'undefined') return;
+
+        // L'icône posée par Next (app/icon.png) est mémorisée au premier rendu :
+        // on la restaure telle quelle plutôt que de coder un chemin en dur.
+        let lien = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
+        if (!lien) {
+            lien = document.createElement('link');
+            lien.rel = 'icon';
+            document.head.appendChild(lien);
         }
-    }, [etablissementNom, etablissementLogo]);
+        if (faviconOrigine.current === null) {
+            faviconOrigine.current = lien.getAttribute('href') || '';
+        }
+
+        if (!isAuthenticated) {
+            document.title = 'SmartSchool — Gestion scolaire';
+            if (faviconOrigine.current) lien.href = faviconOrigine.current;
+            return;
+        }
+
+        document.title = `${etablissementNom} | SmartSchool ERP`;
+
+        if (etablissementLogo) {
+            const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
+            lien.href = etablissementLogo.startsWith('http')
+                ? etablissementLogo
+                : `${API_BASE}${etablissementLogo}`;
+        } else if (faviconOrigine.current) {
+            // École sans logo : on ne garde pas celui de l'école précédente.
+            lien.href = faviconOrigine.current;
+        }
+    }, [etablissementNom, etablissementLogo, isAuthenticated]);
 
     return (
         <AppContext.Provider value={{

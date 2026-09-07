@@ -33,6 +33,18 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
+# `.env.production` est volontairement versionne : il ne contient qu'une
+# variable NEXT_PUBLIC_*, donc integree au bundle envoye au navigateur et
+# publique par nature (ce n'est pas un secret). La versionner garantit que
+# TOUT build de production — y compris celui de Cloudflare — vise la bonne
+# API. Sans elle, le build retomberait sur le defaut `localhost:8300` et le
+# site deploye ne joindrait plus le backend.
+!.env.production
+
+# journaux de build/deploiement produits localement
+cf_*.log
+build_check.log
+test_check.log
 
 # vercel
 .vercel
