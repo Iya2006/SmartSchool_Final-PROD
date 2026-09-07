@@ -25,7 +25,6 @@ import {
 // de « identifiants incorrects » suppose de pouvoir nommer l'adresse appelée.
 import api, { API_BASE_URL } from '@/lib/api';
 import SmartSchoolMark from '@/components/SmartSchoolMark';
-import FondConstellation from '@/components/FondConstellation';
 import styles from './login.module.css';
 
 const ATOUTS = [
@@ -105,7 +104,7 @@ export default function LoginPage() {
 
     return (
         <>
-            <FondConstellation />
+            <div className={styles.fond} aria-hidden="true" />
 
             <div className={styles.scene}>
 

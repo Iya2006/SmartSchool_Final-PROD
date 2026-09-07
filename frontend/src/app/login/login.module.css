@@ -1,5 +1,5 @@
 /*
- * Écran de connexion — posé sur le fond vivant (FondConstellation).
+ * Écran de connexion — posé sur un dégradé clair immobile (`.fond` ci-dessous).
  *
  * Deux colonnes sur grand écran : l'argumentaire à gauche, le formulaire à
  * droite. Sous 960px on empile, et l'argumentaire se réduit à l'essentiel pour
@@ -7,7 +7,7 @@
  *
  * ATTENTION : ne jamais fixer de hauteur ici (`height: 100%`) ni poser
  * `overflow: hidden` sur la scène — la page ne défilerait plus dès que le
- * contenu dépasse l'écran. Le décor est en `position: fixed`, donc il ne gêne
+ * contenu dépasse l'écran. Le fond est en `position: fixed`, donc il ne gêne
  * jamais le défilement.
  *
  * PALETTE CLAIRE
@@ -16,6 +16,21 @@
  * des couleurs — les mêmes que dans `inscription.module.css`. Ne pas semer de
  * valeurs en dur ailleurs dans le fichier, sinon les deux écrans divergent.
  */
+
+/*
+ * Fond de l'écran : un dégradé clair, immobile.
+ *
+ * `position: fixed` et non un fond posé sur la scène : la scène est bornée à
+ * 1240px et centrée, elle ne couvrirait pas les côtés. Fixe, le dégradé tient
+ * tout l'écran sans jamais entrer dans le flux, donc sans gêner le défilement.
+ */
+.fond {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: radial-gradient(130% 120% at 50% 0%, #ffffff 0%, #eff5fe 42%, #dbe8fb 100%);
+}
 
 .scene {
     --texte: #12213f;

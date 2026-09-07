@@ -25,7 +25,6 @@ import {
     Eye, EyeOff, Loader2, Lock, Mail, MapPin, Phone, Sparkles, User,
 } from 'lucide-react';
 import SmartSchoolMark from '@/components/SmartSchoolMark';
-import FondConstellation from '@/components/FondConstellation';
 import api from '@/lib/api';
 import styles from './inscription.module.css';
 
@@ -158,7 +157,7 @@ export default function InscriptionPage() {
     if (succes) {
         return (
             <>
-                <FondConstellation />
+                <div className={styles.fond} aria-hidden="true" />
                 <div className={`${styles.scene} ${styles.sceneCentree}`}>
                     <motion.div
                         initial={{ opacity: 0, y: 12 }}
@@ -197,7 +196,7 @@ export default function InscriptionPage() {
 
     return (
         <>
-            <FondConstellation />
+            <div className={styles.fond} aria-hidden="true" />
 
             <div className={styles.scene}>
 

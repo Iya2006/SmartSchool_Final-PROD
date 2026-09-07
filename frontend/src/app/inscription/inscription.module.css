@@ -4,13 +4,22 @@
  * Le formulaire est long (trois étapes, jusqu'à huit champs) : la scène ne doit
  * donc JAMAIS être bornée en hauteur ni masquer son débordement, sinon la page
  * cesse de défiler et la fin du formulaire devient inatteignable. Le décor est
- * en `position: fixed` (voir FondConstellation), la scène en `min-height`.
+ * en `position: fixed` (voir `.fond`), la scène en `min-height`.
  *
  * PALETTE CLAIRE
  * Mêmes jetons que `login.module.css` — les deux écrans se suivent, ils doivent
  * rester au même diapason. Toute couleur nouvelle passe par un jeton, sinon
  * la prochaine retouche n'en corrigera qu'un des deux.
  */
+
+/* Même fond immobile que l'écran de connexion — voir `login.module.css`. */
+.fond {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: radial-gradient(130% 120% at 50% 0%, #ffffff 0%, #eff5fe 42%, #dbe8fb 100%);
+}
 
 .scene {
     --texte: #12213f;
