@@ -13,16 +13,21 @@
  *
  * Trois étapes plutôt qu'un formulaire unique : quinze champs d'un coup font
  * abandonner, et l'erreur de saisie n'apparaît qu'à la fin.
+ *
+ * L'habillage suit désormais celui de la connexion (fond vivant, carte en
+ * verre) ; la logique de validation et d'envoi est inchangée.
  */
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     AlertTriangle, ArrowLeft, ArrowRight, Building2, CheckCircle2, Clock,
-    Eye, EyeOff, Loader2, Lock, Mail, MapPin, Phone, User,
+    Eye, EyeOff, Loader2, Lock, Mail, MapPin, Phone, Sparkles, User,
 } from 'lucide-react';
 import SmartSchoolMark from '@/components/SmartSchoolMark';
+import FondConstellation from '@/components/FondConstellation';
 import api from '@/lib/api';
+import styles from './inscription.module.css';
 
 const TYPES = [
     { code: 'PRIMAIRE', libelle: 'École primaire' },
@@ -61,6 +66,24 @@ const CYCLES = [
     { code: 'PRM', libelle: 'Primaire' },
     { code: 'CLG', libelle: 'Collège' },
     { code: 'LYC', libelle: 'Lycée' },
+];
+
+const ATOUTS = [
+    {
+        Icone: CheckCircle2,
+        titre: 'Inscription gratuite',
+        texte: 'Créez la demande de votre école en quelques minutes.',
+    },
+    {
+        Icone: Lock,
+        titre: 'Vos données vous appartiennent',
+        texte: 'Séparées des autres établissements et protégées.',
+    },
+    {
+        Icone: User,
+        titre: 'Accompagnement au démarrage',
+        texte: 'Nous formons vos équipes et restons à vos côtés.',
+    },
 ];
 
 export default function InscriptionPage() {
@@ -134,237 +157,326 @@ export default function InscriptionPage() {
     // ── Confirmation ──────────────────────────────────────────────────────
     if (succes) {
         return (
-            <Page>
-                <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} style={carte}>
-                    <div style={{ display: 'grid', placeItems: 'center', gap: '18px', textAlign: 'center' }}>
-                        <div style={{ width: 64, height: 64, borderRadius: '20px', background: '#dcfce7', display: 'grid', placeItems: 'center' }}>
-                            <CheckCircle2 size={32} style={{ color: '#16a34a' }} />
+            <>
+                <FondConstellation />
+                <div className={`${styles.scene} ${styles.sceneCentree}`}>
+                    <motion.div
+                        initial={{ opacity: 0, y: 12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={styles.carte}
+                    >
+                        <div className={styles.confirmation}>
+                            <div className={styles.confirmationIcone}>
+                                <CheckCircle2 size={32} />
+                            </div>
+                            <h1 className={styles.confirmationTitre}>Demande enregistrée</h1>
+                            <p className={styles.confirmationTexte}>{succes}</p>
+                            <div className={styles.attente}>
+                                <Clock size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+                                <span>
+                                    Votre compte existe déjà, mais la connexion reste fermée tant que
+                                    SmartSchool n&apos;a pas validé votre établissement.
+                                </span>
+                            </div>
+                            <Link
+                                href="/login"
+                                className={`${styles.boutonPrincipal} ${styles.boutonPrincipalActif}`}
+                                style={{ textDecoration: 'none', flex: 'initial', padding: '13px 28px' }}
+                            >
+                                Retour à la connexion
+                            </Link>
                         </div>
-                        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#0f172a' }}>
-                            Demande enregistrée
-                        </h1>
-                        <p style={{ margin: 0, fontSize: '14px', color: '#475569', lineHeight: 1.6, maxWidth: '420px' }}>
-                            {succes}
-                        </p>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '14px 16px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '12px', textAlign: 'left' }}>
-                            <Clock size={16} style={{ color: '#b45309', flexShrink: 0, marginTop: 2 }} />
-                            <span style={{ fontSize: '13px', color: '#92400e', lineHeight: 1.5 }}>
-                                Votre compte existe déjà, mais la connexion reste fermée tant que
-                                SmartSchool n&apos;a pas validé votre établissement.
-                            </span>
-                        </div>
-                        <Link href="/login" style={{ ...boutonPrincipal, textDecoration: 'none', display: 'inline-flex', width: 'auto', padding: '12px 28px' }}>
-                            Retour à la connexion
-                        </Link>
-                    </div>
-                </motion.div>
-            </Page>
+                    </motion.div>
+                </div>
+            </>
         );
     }
 
     // ── Formulaire ────────────────────────────────────────────────────────
+    const etapeCouranteOk = etape === 1 ? etape1Ok : etape2Ok;
+
     return (
-        <Page>
-            <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} style={carte}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '6px' }}>
-                    <div style={{ width: 42, height: 42, borderRadius: '13px', background: 'linear-gradient(135deg,#1e3a8a,#3b82f6)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                        <SmartSchoolMark size={21} color="#fff" />
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                        <h1 style={{ margin: 0, fontSize: '19px', fontWeight: 800, color: '#0f172a' }}>Inscrire mon établissement</h1>
-                        <p style={{ margin: '2px 0 0', fontSize: '12.5px', color: '#64748b' }}>
-                            Votre demande est vérifiée par SmartSchool avant activation.
-                        </p>
-                    </div>
-                </div>
+        <>
+            <FondConstellation />
 
-                <Progression etape={etape} />
+            <div className={styles.scene}>
 
-                {erreur && (
-                    <div style={{ display: 'flex', gap: '10px', padding: '12px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '11px' }}>
-                        <AlertTriangle size={16} style={{ color: '#dc2626', flexShrink: 0, marginTop: 1 }} />
-                        <span style={{ fontSize: '13px', color: '#b91c1c', lineHeight: 1.5 }}>{erreur}</span>
+                {/* ── Argumentaire ── */}
+                <section className={styles.presentation}>
+                    <div className={styles.marque}>
+                        <div className={styles.marqueSigle}>
+                            <SmartSchoolMark size={27} color="#ffffff" />
+                        </div>
+                        <div>
+                            <p className={styles.marqueNom}>SMARTSCHOOL</p>
+                            <p className={styles.marqueSignature}>
+                                par <b>TrillionX</b> — Pilotez votre école. Simplement.
+                            </p>
+                        </div>
                     </div>
-                )}
 
-                <AnimatePresence mode="wait">
+                    <span className={styles.surtitre}>
+                        <Sparkles size={13} /> Nouvel établissement
+                    </span>
+
+                    <h2 className={styles.titre}>
+                        Faites entrer<br />votre école<br />
+                        <span className={styles.degrade}>dans SmartSchool.</span>
+                    </h2>
+
+                    <p className={styles.accroche}>
+                        Trois étapes suffisent. Vous devenez l&apos;administrateur de votre
+                        établissement et créez ensuite vos enseignants, élèves, parents et personnels.
+                    </p>
+
+                    <div className={styles.atouts}>
+                        {ATOUTS.map(({ Icone, titre, texte }) => (
+                            <div key={titre} className={styles.atout}>
+                                <div className={styles.atoutIcone}><Icone size={17} /></div>
+                                <div>
+                                    <h3 className={styles.atoutTitre}>{titre}</h3>
+                                    <p className={styles.atoutTexte}>{texte}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className={styles.garanties}>
+                        <span className={styles.pointVert} /><span>Sans engagement</span>
+                        <span className={styles.separateurPoint}>•</span><span>Mise en place rapide</span>
+                        <span className={styles.separateurPoint}>•</span><span>Support inclus</span>
+                    </div>
+                </section>
+
+                {/* ── Formulaire ── */}
+                <section className={styles.colonneFormulaire}>
                     <motion.div
-                        key={etape}
-                        initial={{ opacity: 0, x: 14 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: -14 }}
-                        transition={{ duration: 0.18 }}
-                        style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}
+                        initial={{ opacity: 0, y: 12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={styles.carte}
                     >
-                        {etape === 1 && (
-                            <>
-                                <Champ label="Nom de l'établissement" requis icone={<Building2 size={15} />}>
-                                    <input style={input} value={f.nom_etablissement} onChange={set('nom_etablissement')}
-                                        placeholder="Groupe Scolaire La Renaissance" autoFocus />
-                                </Champ>
-                                <Champ label="Type d'établissement" requis>
-                                    <select style={input} value={f.type_etablissement} onChange={set('type_etablissement')}>
-                                        <option value="">Choisir…</option>
-                                        {TYPES.map(t => <option key={t.code} value={t.code}>{t.libelle}</option>)}
-                                    </select>
-                                </Champ>
+                        <div className={styles.enTete}>
+                            <div className={styles.enTeteSigle}>
+                                <SmartSchoolMark size={21} color="#fff" />
+                            </div>
+                            <div style={{ minWidth: 0 }}>
+                                <h1 className={styles.enTeteTitre}>Inscrire mon établissement.</h1>
+                                <p className={styles.enTeteTexte}>
+                                    Votre demande est vérifiée par SmartSchool avant activation.
+                                </p>
+                            </div>
+                        </div>
 
-                                {f.type_etablissement === 'COMPLEXE' && (
-                                    <Champ label="Cycles de votre complexe" requis>
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                                            {CYCLES.map(c => {
-                                                const coche = f.cycles.includes(c.code);
-                                                return (
-                                                    <label key={c.code}
-                                                        style={{
-                                                            display: 'flex', alignItems: 'center', gap: '8px',
-                                                            padding: '10px 14px', borderRadius: '10px', cursor: 'pointer',
-                                                            border: `1.5px solid ${coche ? '#2563eb' : '#e2e8f0'}`,
-                                                            background: coche ? '#eff6ff' : 'white',
-                                                            color: coche ? '#1d4ed8' : '#475569', fontWeight: 600, fontSize: '14px',
-                                                            transition: 'all 0.15s', userSelect: 'none',
-                                                        }}>
-                                                        <input type="checkbox" checked={coche} onChange={() => toggleCycle(c.code)}
-                                                            style={{ width: '16px', height: '16px', accentColor: '#2563eb', cursor: 'pointer' }} />
-                                                        {c.libelle}
-                                                    </label>
-                                                );
-                                            })}
+                        <Progression etape={etape} />
+
+                        {erreur && (
+                            <div className={styles.erreur}>
+                                <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                                <span>{erreur}</span>
+                            </div>
+                        )}
+
+                        <AnimatePresence mode="wait">
+                            <motion.div
+                                key={etape}
+                                initial={{ opacity: 0, x: 14 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                exit={{ opacity: 0, x: -14 }}
+                                transition={{ duration: 0.18 }}
+                                className={styles.groupe}
+                            >
+                                {etape === 1 && (
+                                    <>
+                                        <Champ label="Nom de l'établissement" requis icone={<Building2 size={15} />}>
+                                            <input className={styles.saisie} value={f.nom_etablissement}
+                                                onChange={set('nom_etablissement')}
+                                                placeholder="Groupe Scolaire La Renaissance" autoFocus />
+                                        </Champ>
+
+                                        <Champ label="Type d'établissement" requis>
+                                            <select className={styles.saisie} value={f.type_etablissement}
+                                                onChange={set('type_etablissement')}>
+                                                <option value="">Choisir…</option>
+                                                {TYPES.map(t => <option key={t.code} value={t.code}>{t.libelle}</option>)}
+                                            </select>
+                                        </Champ>
+
+                                        {f.type_etablissement === 'COMPLEXE' && (
+                                            <Champ label="Cycles de votre complexe" requis>
+                                                <div className={styles.cycles}>
+                                                    {CYCLES.map(c => {
+                                                        const coche = f.cycles.includes(c.code);
+                                                        return (
+                                                            <label
+                                                                key={c.code}
+                                                                className={`${styles.cycle} ${coche ? styles.cycleCoche : ''}`}
+                                                            >
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={coche}
+                                                                    onChange={() => toggleCycle(c.code)}
+                                                                    className={styles.caseCycle}
+                                                                />
+                                                                {c.libelle}
+                                                            </label>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <p className={styles.indication} style={{ marginTop: '2px' }}>
+                                                    Cochez uniquement les cycles que votre école couvre (au moins un).
+                                                </p>
+                                            </Champ>
+                                        )}
+
+                                        <div className={styles.deux}>
+                                            <Champ label="Ville" icone={<MapPin size={15} />}>
+                                                <input className={styles.saisie} value={f.ville}
+                                                    onChange={set('ville')} placeholder="Conakry" />
+                                            </Champ>
+                                            <Champ label="Téléphone de l'école" icone={<Phone size={15} />}>
+                                                <input className={styles.saisie} value={f.telephone_etablissement}
+                                                    onChange={set('telephone_etablissement')} placeholder="622 00 00 00" />
+                                            </Champ>
                                         </div>
-                                        <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#94a3b8' }}>
-                                            Cochez uniquement les cycles que votre école couvre (au moins un).
-                                        </p>
-                                    </Champ>
+
+                                        <Champ label="Adresse">
+                                            <input className={styles.saisie} value={f.adresse}
+                                                onChange={set('adresse')} placeholder="Quartier, commune" />
+                                        </Champ>
+                                    </>
                                 )}
-                                <Deux>
-                                    <Champ label="Ville" icone={<MapPin size={15} />}>
-                                        <input style={input} value={f.ville} onChange={set('ville')} placeholder="Conakry" />
-                                    </Champ>
-                                    <Champ label="Téléphone de l'école" icone={<Phone size={15} />}>
-                                        <input style={input} value={f.telephone_etablissement} onChange={set('telephone_etablissement')} placeholder="622 00 00 00" />
-                                    </Champ>
-                                </Deux>
-                                <Champ label="Adresse">
-                                    <input style={input} value={f.adresse} onChange={set('adresse')} placeholder="Quartier, commune" />
-                                </Champ>
-                            </>
-                        )}
 
-                        {etape === 2 && (
-                            <>
-                                <p style={aide}>
-                                    Vous serez l&apos;<strong>administrateur</strong> de cet établissement.
-                                    Ces informations serviront à vous connecter.
-                                </p>
-                                <Deux>
-                                    <Champ label="Prénom" requis icone={<User size={15} />}>
-                                        <input style={input} value={f.prenom} onChange={set('prenom')} autoFocus />
-                                    </Champ>
-                                    <Champ label="Nom" requis>
-                                        <input style={input} value={f.nom} onChange={set('nom')} />
-                                    </Champ>
-                                </Deux>
-                                <Champ label="Adresse e-mail" requis icone={<Mail size={15} />}>
-                                    <input style={input} type="email" value={f.email} onChange={set('email')} placeholder="vous@votre-ecole.gn" />
-                                </Champ>
-                                <Champ label="Téléphone" requis icone={<Phone size={15} />}>
-                                    <input style={input} value={f.telephone} onChange={set('telephone')} placeholder="623 00 00 00" />
-                                </Champ>
-                            </>
-                        )}
+                                {etape === 2 && (
+                                    <>
+                                        <p className={styles.aide}>
+                                            Vous serez l&apos;<strong>administrateur</strong> de cet établissement.
+                                            Ces informations serviront à vous connecter.
+                                        </p>
+                                        <div className={styles.deux}>
+                                            <Champ label="Prénom" requis icone={<User size={15} />}>
+                                                <input className={styles.saisie} value={f.prenom}
+                                                    onChange={set('prenom')} autoFocus />
+                                            </Champ>
+                                            <Champ label="Nom" requis>
+                                                <input className={styles.saisie} value={f.nom} onChange={set('nom')} />
+                                            </Champ>
+                                        </div>
+                                        <Champ label="Adresse e-mail" requis icone={<Mail size={15} />}>
+                                            <input className={styles.saisie} type="email" value={f.email}
+                                                onChange={set('email')} placeholder="vous@votre-ecole.gn" />
+                                        </Champ>
+                                        <Champ label="Téléphone" requis icone={<Phone size={15} />}>
+                                            <input className={styles.saisie} value={f.telephone}
+                                                onChange={set('telephone')} placeholder="623 00 00 00" />
+                                        </Champ>
+                                    </>
+                                )}
 
-                        {etape === 3 && (
-                            <>
-                                <p style={aide}>
-                                    Choisissez le mot de passe avec lequel vous vous connecterez une fois
-                                    votre établissement validé.
-                                </p>
-                                <Champ label="Mot de passe" requis icone={<Lock size={15} />}>
-                                    <div style={{ position: 'relative' }}>
-                                        <input style={{ ...input, paddingRight: '42px' }} type={voirMdp ? 'text' : 'password'}
-                                            value={f.mot_de_passe} onChange={set('mot_de_passe')} autoFocus />
-                                        <button type="button" onClick={() => setVoirMdp(v => !v)}
-                                            aria-label={voirMdp ? 'Masquer' : 'Afficher'}
-                                            style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 4 }}>
-                                            {voirMdp ? <EyeOff size={16} /> : <Eye size={16} />}
-                                        </button>
-                                    </div>
-                                    <span style={{ fontSize: '11.5px', color: f.mot_de_passe.length >= 8 ? '#16a34a' : '#94a3b8' }}>
-                                        8 caractères minimum
-                                    </span>
-                                </Champ>
-                                <Champ label="Confirmer le mot de passe" requis icone={<Lock size={15} />}>
-                                    <input style={input} type="password" value={f.confirmation} onChange={set('confirmation')} />
-                                    {f.confirmation.length > 0 && f.confirmation !== f.mot_de_passe && (
-                                        <span style={{ fontSize: '11.5px', color: '#dc2626' }}>Les deux mots de passe diffèrent.</span>
-                                    )}
-                                </Champ>
-                                <Recapitulatif f={f} />
-                            </>
-                        )}
+                                {etape === 3 && (
+                                    <>
+                                        <p className={styles.aide}>
+                                            Choisissez le mot de passe avec lequel vous vous connecterez une fois
+                                            votre établissement validé.
+                                        </p>
+                                        <Champ label="Mot de passe" requis icone={<Lock size={15} />}>
+                                            <div className={styles.cadreMotDePasse}>
+                                                <input
+                                                    className={styles.saisie}
+                                                    style={{ paddingRight: '42px' }}
+                                                    type={voirMdp ? 'text' : 'password'}
+                                                    value={f.mot_de_passe}
+                                                    onChange={set('mot_de_passe')}
+                                                    autoFocus
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setVoirMdp(v => !v)}
+                                                    aria-label={voirMdp ? 'Masquer' : 'Afficher'}
+                                                    className={styles.oeil}
+                                                >
+                                                    {voirMdp ? <EyeOff size={16} /> : <Eye size={16} />}
+                                                </button>
+                                            </div>
+                                            <span className={`${styles.indication} ${f.mot_de_passe.length >= 8 ? styles.indicationOk : ''}`}>
+                                                8 caractères minimum
+                                            </span>
+                                        </Champ>
+                                        <Champ label="Confirmer le mot de passe" requis icone={<Lock size={15} />}>
+                                            <input className={styles.saisie} type="password"
+                                                value={f.confirmation} onChange={set('confirmation')} />
+                                            {f.confirmation.length > 0 && f.confirmation !== f.mot_de_passe && (
+                                                <span className={styles.indicationErreur}>
+                                                    Les deux mots de passe diffèrent.
+                                                </span>
+                                            )}
+                                        </Champ>
+                                        <Recapitulatif f={f} />
+                                    </>
+                                )}
+                            </motion.div>
+                        </AnimatePresence>
+
+                        {/* Navigation — empilée sur mobile, jamais coupée */}
+                        <div className={styles.navigation}>
+                            {etape > 1 && (
+                                <button
+                                    onClick={() => { setEtape(e => e - 1); setErreur(''); }}
+                                    className={styles.boutonSecondaire}
+                                >
+                                    <ArrowLeft size={16} /> Retour
+                                </button>
+                            )}
+                            {etape < 3 ? (
+                                <button
+                                    onClick={() => { setEtape(e => e + 1); setErreur(''); }}
+                                    disabled={!etapeCouranteOk}
+                                    className={`${styles.boutonPrincipal} ${etapeCouranteOk ? styles.boutonPrincipalActif : styles.boutonPrincipalInactif}`}
+                                >
+                                    Continuer <ArrowRight size={16} />
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={envoyer}
+                                    disabled={!etape3Ok || envoi}
+                                    className={`${styles.boutonPrincipal} ${etape3Ok && !envoi ? styles.boutonPrincipalActif : styles.boutonPrincipalInactif}`}
+                                >
+                                    {envoi
+                                        ? <><Loader2 size={16} className={styles.rotation} /> Envoi en cours…</>
+                                        : <>Envoyer ma demande <ArrowRight size={16} /></>}
+                                </button>
+                            )}
+                        </div>
+
+                        <p className={styles.pied}>
+                            Vous avez déjà un compte ?{' '}
+                            <Link href="/login">Se connecter</Link>
+                        </p>
                     </motion.div>
-                </AnimatePresence>
 
-                {/* Navigation — empilée sur mobile, jamais coupée */}
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '4px' }}>
-                    {etape > 1 && (
-                        <button onClick={() => { setEtape(e => e - 1); setErreur(''); }} style={boutonSecondaire}>
-                            <ArrowLeft size={16} /> Retour
-                        </button>
-                    )}
-                    {etape < 3 ? (
-                        <button
-                            onClick={() => { setEtape(e => e + 1); setErreur(''); }}
-                            disabled={etape === 1 ? !etape1Ok : !etape2Ok}
-                            style={{ ...boutonPrincipal, opacity: (etape === 1 ? etape1Ok : etape2Ok) ? 1 : 0.5, cursor: (etape === 1 ? etape1Ok : etape2Ok) ? 'pointer' : 'not-allowed' }}
-                        >
-                            Continuer <ArrowRight size={16} />
-                        </button>
-                    ) : (
-                        <button onClick={envoyer} disabled={!etape3Ok || envoi}
-                            style={{ ...boutonPrincipal, opacity: etape3Ok && !envoi ? 1 : 0.5, cursor: etape3Ok && !envoi ? 'pointer' : 'not-allowed' }}>
-                            {envoi ? <><Loader2 size={16} className="animate-spin" /> Envoi en cours…</> : <>Envoyer ma demande <ArrowRight size={16} /></>}
-                        </button>
-                    )}
-                </div>
-
-                <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b', textAlign: 'center' }}>
-                    Vous avez déjà un compte ?{' '}
-                    <Link href="/login" style={{ color: '#2563eb', fontWeight: 700, textDecoration: 'none' }}>Se connecter</Link>
-                </p>
-            </motion.div>
-        </Page>
+                    <p className={styles.signature}>
+                        <Link href="/">← Retour à l&apos;accueil</Link><br />
+                        TrillionX — Services numériques · SmartSchool
+                    </p>
+                </section>
+            </div>
+        </>
     );
 }
 
 /* ────────────────────────────── présentation ────────────────────────────── */
 
-function Page({ children }: { children: React.ReactNode }) {
-    return (
-        <div style={{
-            minHeight: '100vh', background: 'linear-gradient(135deg,#0f172a 0%,#111827 52%,#1e3a8a 100%)',
-            display: 'grid', placeItems: 'center', padding: 'clamp(16px, 4vw, 48px)',
-        }}>
-            {children}
-        </div>
-    );
-}
-
 function Progression({ etape }: { etape: number }) {
     const etapes = ['Établissement', 'Administrateur', 'Mot de passe'];
     return (
-        <div style={{ display: 'flex', gap: '6px', margin: '4px 0 2px' }}>
+        <div className={styles.etapes}>
             {etapes.map((libelle, i) => {
-                const n = i + 1;
-                const atteint = etape >= n;
+                const atteint = etape >= i + 1;
                 return (
-                    <div key={libelle} style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ height: 4, borderRadius: 99, background: atteint ? '#2563eb' : '#e2e8f0', transition: 'background .2s' }} />
-                        <span style={{
-                            display: 'block', marginTop: 6, fontSize: '11px', fontWeight: atteint ? 800 : 600,
-                            color: atteint ? '#2563eb' : '#94a3b8',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>{libelle}</span>
+                    <div key={libelle} className={styles.etape}>
+                        <div className={`${styles.etapeBarre} ${atteint ? styles.etapeBarreActive : ''}`} />
+                        <span className={`${styles.etapeLibelle} ${atteint ? styles.etapeLibelleActif : ''}`}>
+                            {libelle}
+                        </span>
                     </div>
                 );
             })}
@@ -376,30 +488,20 @@ function Champ({ label, requis, icone, children }: {
     label: string; requis?: boolean; icone?: React.ReactNode; children: React.ReactNode;
 }) {
     return (
-        <label style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                {icone}{label}{requis && <span style={{ color: '#dc2626' }}>*</span>}
+        <label className={styles.champ}>
+            <span className={styles.libelle}>
+                {icone}{label}{requis && <span className={styles.requis}>*</span>}
             </span>
             {children}
         </label>
     );
 }
 
-function Deux({ children }: { children: React.ReactNode }) {
-    return (
-        <div style={{ display: 'grid', gap: '14px', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-            {children}
-        </div>
-    );
-}
-
 function Recapitulatif({ f }: { f: Formulaire }) {
     const type = TYPES.find(t => t.code === f.type_etablissement)?.libelle || f.type_etablissement;
     return (
-        <div style={{ padding: '13px 15px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-            <span style={{ fontSize: '10.5px', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Récapitulatif
-            </span>
+        <div className={styles.recapitulatif}>
+            <span className={styles.recapitulatifTitre}>Récapitulatif</span>
             <Ligne libelle="Établissement" valeur={f.nom_etablissement} />
             <Ligne libelle="Type" valeur={type} />
             {f.ville && <Ligne libelle="Ville" valeur={f.ville} />}
@@ -411,40 +513,9 @@ function Recapitulatif({ f }: { f: Formulaire }) {
 
 function Ligne({ libelle, valeur }: { libelle: string; valeur: string }) {
     return (
-        <div style={{ display: 'flex', gap: '10px', fontSize: '12.5px' }}>
-            <span style={{ color: '#94a3b8', flexShrink: 0 }}>{libelle}</span>
-            <span style={{ color: '#0f172a', fontWeight: 700, marginLeft: 'auto', textAlign: 'right', wordBreak: 'break-word' }}>
-                {valeur || '—'}
-            </span>
+        <div className={styles.recapitulatifLigne}>
+            <span className={styles.recapitulatifLibelle}>{libelle}</span>
+            <span className={styles.recapitulatifValeur}>{valeur || '—'}</span>
         </div>
     );
 }
-
-const carte: React.CSSProperties = {
-    width: '100%', maxWidth: '520px', background: '#fff', borderRadius: '20px',
-    padding: 'clamp(20px, 4vw, 32px)', display: 'flex', flexDirection: 'column', gap: '16px',
-    boxShadow: '0 24px 60px rgba(2,6,23,0.32)',
-};
-
-const input: React.CSSProperties = {
-    width: '100%', padding: '11px 13px', borderRadius: '10px', border: '1px solid #cbd5e1',
-    fontSize: '14px', color: '#0f172a', background: '#fff', outline: 'none',
-};
-
-const aide: React.CSSProperties = {
-    margin: 0, fontSize: '13px', color: '#475569', lineHeight: 1.55,
-    padding: '11px 13px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '11px',
-};
-
-const boutonPrincipal: React.CSSProperties = {
-    flex: 1, minWidth: '160px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    gap: '8px', padding: '12px 20px', borderRadius: '11px', border: 'none',
-    background: 'linear-gradient(135deg,#1e3a8a,#2563eb)', color: '#fff',
-    fontSize: '14px', fontWeight: 700, cursor: 'pointer',
-};
-
-const boutonSecondaire: React.CSSProperties = {
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '7px',
-    padding: '12px 18px', borderRadius: '11px', border: '1px solid #cbd5e1',
-    background: '#fff', color: '#475569', fontSize: '14px', fontWeight: 700, cursor: 'pointer',
-};

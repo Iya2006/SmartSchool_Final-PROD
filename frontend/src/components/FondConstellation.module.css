@@ -1,0 +1,68 @@
+/*
+ * Fond vivant partagé par les écrans publics (connexion, inscription).
+ *
+ * POURQUOI `position: fixed`
+ * Le fond ne doit JAMAIS entrer dans le flux de la page : sinon, dès qu'un
+ * contenu dépasse la hauteur de l'écran (le formulaire d'inscription, par
+ * exemple), il se retrouve rogné et la page ne défile plus. En le fixant,
+ * la page garde un défilement normal quelle que soit la longueur du contenu.
+ */
+.fond {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: radial-gradient(130% 120% at 50% 4%, #33509c 0%, #24396f 60%, #1c2d5b 100%);
+}
+
+/* Les « auréoles » : halos colorés diffus qui donnent la profondeur. */
+.halo {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.55;
+    mix-blend-mode: screen;
+}
+
+.halo1 {
+    width: 46vw;
+    height: 46vw;
+    left: -8vw;
+    top: -10vw;
+    background: radial-gradient(circle, #60a5fa, transparent 62%);
+}
+
+.halo2 {
+    width: 40vw;
+    height: 40vw;
+    right: -6vw;
+    top: 0;
+    background: radial-gradient(circle, #34d399, transparent 62%);
+}
+
+.halo3 {
+    width: 44vw;
+    height: 44vw;
+    left: 24vw;
+    bottom: -18vw;
+    background: radial-gradient(circle, #818cf8, transparent 62%);
+}
+
+/* Constellation éducative dessinée au canvas. */
+.toile {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* Voile de lisibilité : assombrit légèrement pour que le texte reste net. */
+.voile {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: radial-gradient(120% 110% at 50% 45%, rgba(16, 28, 64, 0.05), rgba(16, 28, 64, 0.42));
+}

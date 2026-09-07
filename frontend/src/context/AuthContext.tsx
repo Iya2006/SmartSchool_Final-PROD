@@ -58,7 +58,12 @@ export const getRedirectPath = (
 // Pages accessibles sans compte. `/inscription` en fait partie : un
 // fondateur qui vient inscrire son ecole n'a par definition aucun compte,
 // et sans cette ligne il serait renvoye au login qu'il ne peut pas passer.
-const PUBLIC_PATHS = ['/login', '/login/ecole', '/inscription'];
+//
+// `/` est la vitrine publique : un visiteur qui decouvre SmartSchool doit
+// pouvoir la lire sans compte. Un visiteur DEJA connecte, lui, n'y reste pas :
+// aucun role n'a `/` dans ses prefixes autorises, donc le controle plus bas le
+// renvoie vers l'espace de son role.
+const PUBLIC_PATHS = ['/', '/login', '/login/ecole', '/inscription'];
 
 /** Écran où un administrateur plateforme choisit l'école dans laquelle il
  * travaille. Il n'appartient à aucune école : sans ce passage, toutes les

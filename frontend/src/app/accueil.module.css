@@ -1,0 +1,597 @@
+/*
+ * Page vitrine publique (racine du site).
+ *
+ * Elle s'adresse aux directions d'école qui ne connaissent pas encore
+ * SmartSchool : on explique le problème, ce que la solution change, ce qu'elle
+ * contient et comment nous joindre — avant de proposer la connexion.
+ */
+
+.page {
+    background: #ffffff;
+    color: #0d1424;
+    line-height: 1.65;
+    overflow-x: hidden;
+}
+
+.contenu {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 0 clamp(18px, 4vw, 32px);
+}
+
+/* ── Barre de navigation ─────────────────────────────────────────── */
+.nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(11, 20, 40, 0.85);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.navInterieur {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 66px;
+    gap: 18px;
+}
+
+.marque {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    color: #eaf1ff;
+    text-decoration: none;
+}
+
+.marqueSigle {
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    background: linear-gradient(140deg, #2563eb, #10b981);
+    box-shadow: 0 8px 20px -8px rgba(37, 99, 235, 0.9);
+}
+
+.marqueTexte {
+    font-family: var(--police-titre, 'Sora', system-ui, sans-serif);
+    font-weight: 800;
+    font-size: 17px;
+    letter-spacing: 0.02em;
+    line-height: 1;
+}
+
+.marqueTexte span {
+    display: block;
+    font-weight: 600;
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #8fa6d8;
+    margin-top: 3px;
+}
+
+.navLiens {
+    display: flex;
+    gap: 26px;
+    align-items: center;
+}
+
+.navLiens a {
+    font-size: 14px;
+    font-weight: 500;
+    color: rgba(234, 241, 255, 0.78);
+    text-decoration: none;
+}
+
+.navLiens a:hover {
+    color: #ffffff;
+}
+
+@media (max-width: 860px) {
+    .navLiens { display: none; }
+}
+
+/* ── Boutons ─────────────────────────────────────────────────────── */
+.bouton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-family: var(--police-titre, 'Sora', system-ui, sans-serif);
+    font-weight: 700;
+    font-size: 14.5px;
+    padding: 12px 22px;
+    border-radius: 12px;
+    cursor: pointer;
+    border: none;
+    text-decoration: none;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    white-space: nowrap;
+}
+
+.boutonPrincipal {
+    background: linear-gradient(100deg, #2563eb, #4f74f0 55%, #10b981);
+    color: #ffffff;
+    box-shadow: 0 14px 30px -12px rgba(37, 99, 235, 0.8);
+}
+
+.boutonPrincipal:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 20px 40px -14px rgba(37, 99, 235, 0.9);
+}
+
+.boutonTransparent {
+    background: rgba(255, 255, 255, 0.1);
+    color: #eaf1ff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.boutonTransparent:hover { background: rgba(255, 255, 255, 0.18); }
+
+.boutonBlanc {
+    background: #ffffff;
+    color: #2563eb;
+    box-shadow: 0 14px 30px -14px rgba(0, 0, 0, 0.4);
+}
+
+.boutonBlanc:hover { transform: translateY(-2px); }
+
+/* ── Bandeau d'ouverture ─────────────────────────────────────────── */
+.hero {
+    position: relative;
+    background: linear-gradient(165deg, #0a1020 0%, #0d1730 45%, #132a63 100%);
+    color: #eaf1ff;
+    padding: clamp(56px, 9vw, 110px) 0 clamp(70px, 10vw, 130px);
+    overflow: hidden;
+}
+
+.hero::before {
+    content: "";
+    position: absolute;
+    inset: -25%;
+    background:
+        radial-gradient(38% 34% at 15% 18%, rgba(59, 130, 246, 0.5), transparent 62%),
+        radial-gradient(34% 30% at 88% 24%, rgba(16, 185, 129, 0.34), transparent 62%),
+        radial-gradient(42% 38% at 62% 96%, rgba(79, 116, 240, 0.4), transparent 62%);
+    filter: blur(16px);
+    animation: derive 22s ease-in-out infinite alternate;
+}
+
+.hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    background-size: 52px 52px;
+    mask-image: radial-gradient(110% 80% at 50% 10%, #000 35%, transparent 78%);
+}
+
+@keyframes derive {
+    0% { transform: translate3d(0, 0, 0) scale(1); }
+    100% { transform: translate3d(0, -5%, 0) scale(1.1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .hero::before { animation: none; }
+}
+
+.heroInterieur {
+    position: relative;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: 1.08fr 0.92fr;
+    gap: clamp(30px, 5vw, 60px);
+    align-items: center;
+}
+
+@media (max-width: 900px) {
+    .heroInterieur { grid-template-columns: 1fr; }
+}
+
+.pastille {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #a9e9d0;
+    background: rgba(16, 185, 129, 0.14);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    margin-bottom: 22px;
+}
+
+.point {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 10px 1px rgba(16, 185, 129, 0.8);
+    display: inline-block;
+}
+
+.heroTitre {
+    font-family: var(--police-titre, 'Sora', system-ui, sans-serif);
+    font-weight: 800;
+    font-size: clamp(32px, 5.4vw, 56px);
+    line-height: 1.06;
+    letter-spacing: -0.025em;
+    margin: 0 0 18px;
+    text-wrap: balance;
+}
+
+.degrade {
+    background: linear-gradient(100deg, #7db1ff, #8ff0cf);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.heroTexte {
+    font-size: clamp(15.5px, 1.9vw, 18px);
+    color: rgba(234, 241, 255, 0.76);
+    max-width: 52ch;
+    margin: 0 0 30px;
+}
+
+.heroActions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.heroGaranties {
+    margin-top: 28px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    font-size: 13px;
+    color: rgba(234, 241, 255, 0.62);
+}
+
+.heroGaranties span {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
+/* Aperçu illustratif du tableau de bord */
+.apercu {
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 22px;
+    padding: 20px;
+    backdrop-filter: blur(16px);
+    box-shadow: 0 40px 90px -40px rgba(0, 0, 0, 0.8);
+}
+
+.apercuLigne {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 13px;
+    border-radius: 13px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    margin-bottom: 9px;
+}
+
+.apercuLigne:last-of-type { margin-bottom: 0; }
+
+.apercuIcone {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    color: #dbe8ff;
+    background: linear-gradient(140deg, rgba(59, 130, 246, 0.4), rgba(16, 185, 129, 0.3));
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.apercuTitre { font-family: var(--police-titre, 'Sora', system-ui, sans-serif); font-weight: 600; font-size: 13.5px; display: block; }
+.apercuSousTitre { font-size: 11.5px; color: rgba(234, 241, 255, 0.6); display: block; }
+.apercuValeur { margin-left: auto; font-family: var(--police-titre, 'Sora', system-ui, sans-serif); font-weight: 700; font-size: 15px; color: #8ff0cf; }
+.apercuNote { margin: 14px 4px 2px; font-size: 11.5px; color: rgba(234, 241, 255, 0.45); text-align: center; }
+
+/* ── Sections ────────────────────────────────────────────────────── */
+.section { padding: clamp(56px, 8vw, 96px) 0; }
+.sectionClaire { background: #f5f8fd; }
+.centre { text-align: center; }
+.centre .intro { margin-left: auto; margin-right: auto; }
+
+.surtitre {
+    display: inline-block;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #2563eb;
+    margin-bottom: 14px;
+}
+
+.titre {
+    font-family: var(--police-titre, 'Sora', system-ui, sans-serif);
+    font-weight: 700;
+    font-size: clamp(25px, 3.6vw, 38px);
+    line-height: 1.14;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+}
+
+.intro {
+    font-size: clamp(15px, 1.8vw, 17px);
+    color: #54627d;
+    max-width: 62ch;
+    margin: 0 0 12px;
+}
+
+.grille { display: grid; gap: 18px; margin-top: 34px; }
+.grille2 { grid-template-columns: repeat(2, 1fr); }
+.grille3 { grid-template-columns: repeat(3, 1fr); }
+.grille4 { grid-template-columns: repeat(4, 1fr); }
+
+@media (max-width: 900px) {
+    .grille3, .grille4 { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 620px) {
+    .grille2, .grille3, .grille4 { grid-template-columns: 1fr; }
+}
+
+/* Cartes */
+.carte {
+    background: #ffffff;
+    border: 1px solid #e5eaf3;
+    border-radius: 16px;
+    padding: 22px 20px;
+    box-shadow: 0 1px 2px rgba(13, 20, 36, 0.05), 0 20px 50px -28px rgba(13, 20, 36, 0.35);
+    transition: transform 0.25s ease, border-color 0.25s ease;
+}
+
+.carte:hover { transform: translateY(-4px); border-color: #c9d8f5; }
+.carte h3 { font-family: var(--police-titre, 'Sora', system-ui, sans-serif); font-weight: 700; font-size: 16.5px; margin: 12px 0 6px; display: flex; align-items: center; }
+.carte p { font-size: 14px; color: #54627d; margin: 0; }
+
+.icone {
+    width: 44px;
+    height: 44px;
+    border-radius: 13px;
+    display: grid;
+    place-items: center;
+    color: #ffffff;
+    background: linear-gradient(140deg, #2563eb, #4f74f0);
+    box-shadow: 0 12px 26px -12px rgba(37, 99, 235, 0.8);
+}
+
+.iconeVerte {
+    background: linear-gradient(140deg, #10b981, #22d3ee);
+    box-shadow: 0 12px 26px -12px rgba(16, 185, 129, 0.8);
+}
+
+.iconeLigne {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    color: #ffffff;
+    margin-right: 10px;
+    background: linear-gradient(140deg, #2563eb, #4f74f0);
+}
+
+.iconeLigneVerte { background: linear-gradient(140deg, #10b981, #22d3ee); }
+
+/* Problèmes / bénéfices */
+.probleme {
+    background: #ffffff;
+    border: 1px solid #f2d9d9;
+    border-left: 4px solid #ef4444;
+    border-radius: 14px;
+    padding: 18px 20px;
+}
+
+.benefice {
+    background: #ffffff;
+    border: 1px solid #cfeee1;
+    border-left: 4px solid #10b981;
+    border-radius: 14px;
+    padding: 18px 20px;
+}
+
+.probleme b, .benefice b {
+    display: block;
+    font-family: var(--police-titre, 'Sora', system-ui, sans-serif);
+    font-size: 15.5px;
+    margin-bottom: 5px;
+}
+
+.probleme p, .benefice p { margin: 0; font-size: 14px; color: #54627d; }
+
+/* Espaces par rôle */
+.role {
+    background: #ffffff;
+    border: 1px solid #e5eaf3;
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 1px 2px rgba(13, 20, 36, 0.05), 0 20px 50px -28px rgba(13, 20, 36, 0.35);
+}
+
+.roleTitre {
+    font-family: var(--police-titre, 'Sora', system-ui, sans-serif);
+    font-weight: 700;
+    font-size: 15.5px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.roleIcone {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    color: #ffffff;
+    background: linear-gradient(140deg, #2563eb, #4f74f0);
+    box-shadow: 0 8px 18px -9px rgba(37, 99, 235, 0.9);
+}
+
+.roleIconeVerte {
+    background: linear-gradient(140deg, #10b981, #22d3ee);
+    box-shadow: 0 8px 18px -9px rgba(16, 185, 129, 0.9);
+}
+
+.roleListe { margin: 0; padding-left: 0; list-style: none; }
+
+.roleListe li {
+    position: relative;
+    padding-left: 20px;
+    font-size: 13.7px;
+    color: #54627d;
+    margin: 4px 0;
+}
+
+.roleListe li::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 6px;
+    width: 5px;
+    height: 9px;
+    border-right: 2px solid #10b981;
+    border-bottom: 2px solid #10b981;
+    transform: rotate(45deg);
+}
+
+/* Citation */
+.citation {
+    font-family: var(--police-accent, 'Fraunces', Georgia, serif);
+    font-style: italic;
+    font-size: clamp(20px, 3vw, 30px);
+    line-height: 1.35;
+    color: #0d1424;
+    max-width: 22ch;
+    margin: 0;
+}
+
+/* Appel à l'action */
+.appel {
+    background: linear-gradient(150deg, #0b1428, #132a63 60%, #0d3b52);
+    color: #eaf1ff;
+    border-radius: 26px;
+    padding: clamp(34px, 5vw, 58px);
+    position: relative;
+    overflow: hidden;
+    text-align: center;
+}
+
+.appel::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(40% 60% at 82% 20%, rgba(16, 185, 129, 0.28), transparent 62%),
+        radial-gradient(40% 60% at 12% 90%, rgba(59, 130, 246, 0.34), transparent 62%);
+}
+
+.appel > * { position: relative; z-index: 1; }
+.appel .titre { color: #ffffff; }
+.appel .intro { color: rgba(234, 241, 255, 0.78); }
+.appel .surtitre { color: #8ff0cf; }
+
+.appelActions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.contacts {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-top: 26px;
+}
+
+@media (max-width: 720px) {
+    .contacts { grid-template-columns: 1fr; }
+}
+
+.contact {
+    background: rgba(255, 255, 255, 0.09);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 15px;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    backdrop-filter: blur(10px);
+    text-decoration: none;
+    transition: transform 0.2s ease, background 0.2s ease;
+}
+
+.contact:hover { background: rgba(255, 255, 255, 0.15); transform: translateY(-2px); }
+
+.contactIcone {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #8ff0cf;
+}
+
+.contactLibelle {
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(234, 241, 255, 0.6);
+    font-weight: 700;
+    display: block;
+}
+
+.contactValeur {
+    font-family: var(--police-titre, 'Sora', system-ui, sans-serif);
+    font-weight: 700;
+    font-size: 15px;
+    color: #ffffff;
+    word-break: break-all;
+    display: block;
+}
+
+/* Pied de page */
+.pied {
+    background: #0a1020;
+    color: rgba(234, 241, 255, 0.6);
+    padding: 40px 0 34px;
+    font-size: 13.5px;
+}
+
+.piedInterieur {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.piedInterieur a { color: #8fbaff; font-weight: 600; text-decoration: none; }
+.piedInterieur strong { color: #eaf1ff; font-family: var(--police-titre, 'Sora', system-ui, sans-serif); }
