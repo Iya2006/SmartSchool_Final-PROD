@@ -64,7 +64,7 @@ function BulletinsContent() {
             try {
                 const [clsRes, triRes, paramRes, notationRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
-                    api.get('/api/portail-enseignant/referentiels/trimestres'),
+                    api.get(`/api/portail-enseignant/referentiels/trimestres?annee_id=${anneeId}`),
                     api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=DOCUMENTS`).catch(() => ({ data: [] })),
                     api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=NOTATION`).catch(() => ({ data: [] })),
                 ]);
@@ -543,8 +543,8 @@ function BulletinsContent() {
                             </div>
 
                             {/* ═══ BULLETIN CONTENT (PRINTABLE) ═══ */}
-                            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-                                <div ref={printRef} style={{ position: 'relative' }}>
+                            <div className="document-preview-scroll" style={{ flex: 1, padding: '20px' }}>
+                                <div ref={printRef} className="document-preview" style={{ position: 'relative' }}>
                                     {docSettings.filigrane_actif && docSettings.filigrane_bulletins && (
                                         <div style={{
                                             position: 'absolute',

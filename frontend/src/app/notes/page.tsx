@@ -170,7 +170,7 @@ export default function CentralisationNotesPage() {
             try {
                 const [clsRes, triRes, statsRes, typesRes, moisRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
-                    api.get('/api/portail-enseignant/referentiels/trimestres'),
+                    api.get(`/api/portail-enseignant/referentiels/trimestres?annee_id=${anneeId}`),
                     api.get('/api/evaluations/centralisation/stats'),
                     api.get('/api/evaluations/types').catch(() => ({ data: [] })),
                     api.get('/api/evaluations/calendrier/mois').catch(() => ({ data: { mois: [] } })),

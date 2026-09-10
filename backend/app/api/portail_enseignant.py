@@ -110,18 +110,36 @@ def changer_mot_de_passe(enseignant_id: int, data: ChangePasswordRequest, _auth:
 # ================================================================
 @router.get("/referentiels/trimestres")
 def get_trimestres(
+    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Périodes de l'année courante DE SON ÉCOLE.
+    """Périodes de l'année demandée DE SON ÉCOLE — l'année courante si aucune
+    n'est précisée.
 
-    Sans le filtre, `est_courante == "O"` renvoyait l'année de la première
-    école venue : l'enseignant se voyait proposer le calendrier du voisin.
+    Sans le filtre d'établissement, `est_courante == "O"` renvoyait l'année de
+    la première école venue : l'enseignant se voyait proposer le calendrier
+    du voisin.
+
+    `annee_id` explicite (ex: bulletins/page.tsx qui suit le sélecteur
+    d'année de l'en-tête) : sans ce paramètre, cette route restait bloquée
+    sur l'année courante, si bien que consulter les bulletins d'une année
+    passée échouait toujours (mauvais trimestre_id envoyé), alors que le
+    sélecteur de classe lui-même suivait déjà l'année choisie (voir
+    fix(coherence-annee) sur GET /api/classes).
     """
-    annee = db.query(AnneeScolaire).filter(
-        AnneeScolaire.etablissement_id == etablissement_id,
-        AnneeScolaire.est_courante == "O",
-    ).first()
+    if annee_id is not None:
+        # Appartenance vérifiée explicitement : `annee_id` fourni par le
+        # client ne doit jamais pointer vers l'année d'une autre école.
+        annee = db.query(AnneeScolaire).filter(
+            AnneeScolaire.annee_id == annee_id,
+            AnneeScolaire.etablissement_id == etablissement_id,
+        ).first()
+    else:
+        annee = db.query(AnneeScolaire).filter(
+            AnneeScolaire.etablissement_id == etablissement_id,
+            AnneeScolaire.est_courante == "O",
+        ).first()
     if not annee:
         return []
     trimestres = db.query(Trimestre).filter(
