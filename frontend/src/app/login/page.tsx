@@ -21,9 +21,7 @@ import {
     AlertTriangle, ArrowRight, BarChart3, Download, Eye, EyeOff, Info,
     LayoutGrid, Loader2, Lock, Mail, Sparkles, Users, X,
 } from 'lucide-react';
-// `API_BASE_URL` sert au message d'erreur : distinguer « serveur injoignable »
-// de « identifiants incorrects » suppose de pouvoir nommer l'adresse appelée.
-import api, { API_BASE_URL } from '@/lib/api';
+import api from '@/lib/api';
 import SmartSchoolMark from '@/components/SmartSchoolMark';
 import styles from './login.module.css';
 
@@ -76,25 +74,25 @@ export default function LoginPage() {
             // ailleurs. Un problème de réseau doit se dire comme tel.
             const e = err as {
                 response?: { status?: number; data?: { detail?: string } };
-                code?: string;
+                message?: string;
             };
             const statut = e?.response?.status;
             const detail = e?.response?.data?.detail;
 
-            if (!e?.response) {
-                setError(
-                    e?.code === 'ECONNABORTED'
-                        ? "Le serveur met trop de temps à répondre. Réessayez dans un instant."
-                        : `Serveur injoignable (${API_BASE_URL}). Vérifiez qu'il est démarré.`
-                );
-            } else if (statut === 401) {
+            if (statut === 401) {
                 setError(detail || 'Identifiant ou mot de passe incorrect.');
             } else if (statut === 403) {
                 setError(detail || "Ce compte n'a pas accès à l'application.");
             } else if (statut === 429) {
                 setError('Trop de tentatives. Patientez une minute avant de réessayer.');
+            } else if (!e?.response || (statut ?? 0) >= 500) {
+                // Pas de réponse, ou panne du serveur : `lib/api.ts` a déjà
+                // traduit le cas en une phrase compréhensible — sans adresse
+                // d'API ni code technique. On la reprend telle quelle plutôt
+                // que de refaire ce tri ici et de risquer deux formulations.
+                setError(e?.message || 'Serveur indisponible. Réessayez dans un instant.');
             } else {
-                setError(detail || `Le serveur a refusé la connexion (erreur ${statut}).`);
+                setError(detail || "La connexion n'a pas pu aboutir. Réessayez.");
             }
             setLoading(false);
         }
