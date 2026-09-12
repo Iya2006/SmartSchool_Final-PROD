@@ -110,9 +110,9 @@ def changer_mot_de_passe(enseignant_id: int, data: ChangePasswordRequest, _auth:
 # ================================================================
 @router.get("/referentiels/trimestres")
 def get_trimestres(
-    annee_id: Optional[int] = None,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
+    annee_id: Optional[int] = None,
 ):
     """Périodes de l'année demandée DE SON ÉCOLE — l'année courante si aucune
     n'est précisée.
