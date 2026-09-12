@@ -27,6 +27,7 @@ import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
 import { lancerTache } from '@/lib/taskPolling';
 import Pagination from '@/components/Pagination';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface Periode { trimestre_id: number; libelle: string; numero: number; moyenne?: number }
 interface LigneAnnuelle {
@@ -65,6 +66,7 @@ const MENTIONS_ORDRE = ['TRÈS BIEN', 'BIEN', 'ASSEZ BIEN', 'PASSABLE', 'INSUFFI
 
 export default function ResultatsAnnuelsPage() {
     const { etablissementId, anneeId } = useApp();
+    const isMobile = useIsMobile();
 
     const [classes, setClasses] = useState<any[]>([]);
     const [selectedClasse, setSelectedClasse] = useState<number | null>(null);
@@ -309,7 +311,7 @@ export default function ResultatsAnnuelsPage() {
     };
 
     return (
-        <div style={{ padding: '24px 28px', maxWidth: '1500px', margin: '0 auto' }}>
+        <div style={{ padding: isMobile ? '16px' : '24px 28px', maxWidth: '1500px', margin: '0 auto' }}>
             <div style={{ marginBottom: '20px' }}>
                 <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <Trophy size={22} color="#6366f1" /> Résultats de fin d&apos;année
@@ -330,7 +332,7 @@ export default function ResultatsAnnuelsPage() {
                 <div>
                     <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>CLASSE</label>
                     <select value={selectedClasse ?? ''} onChange={e => setSelectedClasse(Number(e.target.value) || null)}
-                        style={{ padding: '9px 14px', borderRadius: '10px', border: '1.5px solid #cbd5e1', fontSize: '13.5px', fontWeight: 600, minWidth: '250px' }}>
+                        style={{ padding: '9px 14px', borderRadius: '10px', border: '1.5px solid #cbd5e1', fontSize: '13.5px', fontWeight: 600, minWidth: isMobile ? '100%' : '250px' }}>
                         <option value="">— choisir une classe —</option>
                         {Object.entries(groupes).map(([cycle, liste]: any) => (
                             <optgroup key={cycle} label={cycle}>
@@ -442,8 +444,8 @@ export default function ResultatsAnnuelsPage() {
                                         <span style={{ color: '#94a3b8' }}>Non saisis : {sansResultat}</span>
                                         <span style={{ color: '#64748b', marginLeft: 'auto' }}>Effectif : {officiels.length}</span>
                                     </div>
-                                    <div style={{ overflowX: 'auto', maxHeight: '460px' }}>
-                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                                    <div className="table-scroll" style={{ maxHeight: '460px' }}>
+                                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '700px' }}>
                                             <thead>
                                                 <tr style={{ background: '#f8fafc' }}>
                                                     <th style={th}>MATRICULE</th>
@@ -531,8 +533,8 @@ export default function ResultatsAnnuelsPage() {
                                     moyenne annuelle = somme des moyennes de période ÷ nombre de périodes
                                 </span>
                             </div>
-                            <div style={{ overflowX: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
+                            <div className="table-scroll">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '900px' }}>
                                     <thead>
                                         <tr style={{ background: '#f8fafc' }}>
                                             <th style={th}>RANG</th>
@@ -612,12 +614,12 @@ export default function ResultatsAnnuelsPage() {
 
             {/* ═══ RAPPORT D'IMPORT (avant écriture) ═══ */}
             {rapport && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '20px' }}
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: isMobile ? '12px' : '20px' }}
                     onClick={() => setRapport(null)}>
                     <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}
                         onClick={e => e.stopPropagation()}
                         style={{ background: 'white', borderRadius: '16px', width: '100%', maxWidth: '760px', maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ padding: '16px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ padding: isMobile ? '14px 16px' : '16px 20px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '10px' }}>
                             <Upload size={18} color="#b45309" />
                             <div>
                                 <div style={{ fontSize: '15px', fontWeight: 800, color: '#0f172a' }}>Vérification avant import</div>
@@ -628,7 +630,7 @@ export default function ResultatsAnnuelsPage() {
                             </button>
                         </div>
 
-                        <div style={{ padding: '16px 20px', overflowY: 'auto' }}>
+                        <div style={{ padding: isMobile ? '14px 16px' : '16px 20px', overflowY: 'auto' }}>
                             <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', fontSize: '13px', fontWeight: 700, marginBottom: '14px' }}>
                                 <span style={{ color: '#0f172a' }}>À importer : {rapport.a_appliquer}</span>
                                 <span style={{ color: '#059669' }}>Admis : {rapport.admis}</span>

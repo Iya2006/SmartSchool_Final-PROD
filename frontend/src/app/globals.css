@@ -351,6 +351,29 @@ input, select, textarea {
   }
 }
 
+/* Apercu d'un document pense pour l'impression (largeur A4 fixe en px,
+   positions absolues) — jamais recompose sur mobile : la mise en page
+   sert aussi de base a `handlePrint` (bulletins/page.tsx), la modifier
+   casserait l'impression. On la reduit a l'echelle a la place, comme un
+   lecteur de document : proportions identiques, juste affichee plus
+   petite. `.document-preview-scroll` masque le vide laisse a droite par
+   le document reduit (son propre encombrement en mise en page ne change
+   pas avec `transform`). */
+.document-preview {
+  transform-origin: top left;
+}
+.document-preview-scroll {
+  overflow-y: auto;
+}
+@media (max-width: 480px) {
+  .document-preview { transform: scale(0.42); }
+  .document-preview-scroll { overflow-x: hidden; }
+}
+@media (min-width: 481px) and (max-width: 768px) {
+  .document-preview { transform: scale(0.56); }
+  .document-preview-scroll { overflow-x: hidden; }
+}
+
 @media (max-width: 768px) {
   .grid-2, .grid-3, .grid-60-40, .grid-40-60 {
     grid-template-columns: 1fr;

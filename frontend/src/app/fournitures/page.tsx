@@ -1,9 +1,10 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ShoppingBag, Plus, Pencil, Trash2, Search, Check, BookOpen, PenTool, Shirt, Package, Layers, Building2, ChevronRight, ToggleLeft, ToggleRight, X, AlertCircle } from 'lucide-react';
+import { ShoppingBag, Plus, Pencil, Trash2, Search, Check, BookOpen, PenTool, Shirt, Package, Layers, Building2, ChevronRight, ToggleLeft, ToggleRight, X, AlertCircle, Menu } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 const CATEGORIES = [
   { key: 'CAHIER',    label: 'Cahiers',    color: '#6366f1', bg: '#eef2ff', icon: BookOpen },
@@ -18,6 +19,8 @@ const EMPTY = { nom: '', description: '', categorie: 'MATERIEL', quantite: 1, pr
 
 export default function FournituresPage() {
   const { etablissementId, anneeId } = useApp();
+  const isMobile = useIsMobile();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [classes, setClasses] = useState<any[]>([]);
   const [loadingClasses, setLoadingClasses] = useState(true);
   const [selectedClass, setSelectedClass] = useState<any>(null);
@@ -111,9 +114,16 @@ export default function FournituresPage() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: '#f8fafc', fontFamily: "'Inter', sans-serif" }}>
-      
-      {/* Sidebar Classes */}
-      <div style={{ width: '300px', background: 'white', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column' }}>
+
+      {/* Sidebar Classes — tiroir sous 768px */}
+      <div style={isMobile ? {
+        width: 'min(280px, 84vw)', background: 'white', borderRight: '1px solid #e2e8f0',
+        display: 'flex', flexDirection: 'column',
+        position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 200,
+        transform: mobileMenuOpen ? 'translateX(0)' : 'translateX(-100%)',
+        transition: 'transform 0.3s ease',
+        boxShadow: mobileMenuOpen ? '10px 0 34px rgba(15,23,42,0.18)' : 'none',
+      } : { width: '300px', background: 'white', borderRight: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '24px 20px', borderBottom: '1px solid #e2e8f0' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{ width: '40px', height: '40px', borderRadius: '10px', background: 'linear-gradient(135deg, #7c3aed, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -134,7 +144,7 @@ export default function FournituresPage() {
           ) : classes.map(c => {
             const isActive = selectedClass?.classe_id === c.classe_id;
             return (
-              <button key={c.classe_id} onClick={() => setSelectedClass(c)}
+              <button key={c.classe_id} onClick={() => { setSelectedClass(c); setMobileMenuOpen(false); }}
                 style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', marginBottom: '8px', borderRadius: '10px', border: 'none', background: isActive ? '#f5f3ff' : 'transparent', color: isActive ? '#6366f1' : '#475569', fontWeight: isActive ? 700 : 500, fontSize: '14px', cursor: 'pointer', transition: 'all 0.2s', textAlign: 'left' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <Building2 size={16} /> {c.libelle}
@@ -146,12 +156,24 @@ export default function FournituresPage() {
         </div>
       </div>
 
+      {/* Overlay du tiroir mobile — clic pour fermer */}
+      {isMobile && mobileMenuOpen && (
+        <div onClick={() => setMobileMenuOpen(false)} aria-hidden="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 190 }} />
+      )}
+
       {/* Main Content */}
-      <div style={{ flex: 1, padding: '32px 40px', overflowY: 'auto' }}>
+      <div style={{ flex: 1, padding: isMobile ? '16px' : '32px 40px', overflowY: 'auto', minWidth: 0 }}>
+        {isMobile && (
+          <button onClick={() => setMobileMenuOpen(true)} aria-label="Choisir une classe"
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 14px', marginBottom: '16px', borderRadius: '10px', border: '1px solid #e2e8f0', background: 'white', color: '#475569', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+            <Menu size={16} /> {selectedClass ? selectedClass.libelle : 'Choisir une classe'}
+          </button>
+        )}
         {selectedClass && (
           <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
             
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: '24px', fontWeight: 800, color: '#0f172a' }}>Fournitures : {selectedClass.libelle}</h2>
                 <p style={{ margin: '4px 0 0', fontSize: '14px', color: '#64748b' }}>Ces fournitures apparaîtront sur les portails des élèves et parents de cette classe.</p>
@@ -196,21 +218,21 @@ export default function FournituresPage() {
                         <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#1e293b' }}>{cat.label}</h3>
                         <span style={{ marginLeft: 'auto', background: 'white', color: cat.color, padding: '2px 8px', borderRadius: '12px', fontSize: '12px', fontWeight: 700 }}>{itemsCat.length}</span>
                       </div>
-                      <div>
+                      <div className="table-scroll">
                         {itemsCat.map((item, idx) => (
-                          <div key={item.fourniture_id} style={{ display: 'flex', alignItems: 'center', padding: '16px 20px', borderBottom: idx < itemsCat.length - 1 ? '1px solid #f1f5f9' : 'none', opacity: item.statut === 'INACTIF' ? 0.6 : 1 }}>
-                            <div style={{ flex: 1 }}>
+                          <div key={item.fourniture_id} style={{ display: 'flex', alignItems: 'center', padding: '16px 20px', borderBottom: idx < itemsCat.length - 1 ? '1px solid #f1f5f9' : 'none', opacity: item.statut === 'INACTIF' ? 0.6 : 1, minWidth: '640px' }}>
+                            <div style={{ flex: 1, minWidth: '160px' }}>
                               <div style={{ fontSize: '15px', fontWeight: 600, color: '#0f172a' }}>{item.nom}</div>
                               {item.description && <div style={{ fontSize: '13px', color: '#64748b', marginTop: '2px' }}>{item.description}</div>}
                             </div>
-                            <div style={{ width: '120px', fontSize: '14px', fontWeight: 600, color: '#475569' }}>{item.quantite} {item.unite}</div>
-                            <div style={{ width: '120px', fontSize: '14px', fontWeight: 700, color: '#059669' }}>{item.prix_unitaire ? `${Number(item.prix_unitaire).toLocaleString('fr-FR')} GNF` : '—'}</div>
-                            <div style={{ width: '120px' }}>
+                            <div style={{ width: '120px', flexShrink: 0, fontSize: '14px', fontWeight: 600, color: '#475569' }}>{item.quantite} {item.unite}</div>
+                            <div style={{ width: '120px', flexShrink: 0, fontSize: '14px', fontWeight: 700, color: '#059669' }}>{item.prix_unitaire ? `${Number(item.prix_unitaire).toLocaleString('fr-FR')} GNF` : '—'}</div>
+                            <div style={{ width: '120px', flexShrink: 0 }}>
                               <span style={{ padding: '4px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 700, background: item.obligatoire === 'O' ? '#fef2f2' : '#f0fdf4', color: item.obligatoire === 'O' ? '#dc2626' : '#16a34a' }}>
                                 {item.obligatoire === 'O' ? 'Obligatoire' : 'Facultatif'}
                               </span>
                             </div>
-                            <div style={{ display: 'flex', gap: '8px' }}>
+                            <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                               <button onClick={() => handleToggle(item.fourniture_id)} style={{ padding: '8px', borderRadius: '8px', border: '1px solid #e2e8f0', background: 'white', cursor: 'pointer', color: item.statut === 'ACTIF' ? '#059669' : '#94a3b8' }}>
                                 {item.statut === 'ACTIF' ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                               </button>
@@ -238,7 +260,7 @@ export default function FournituresPage() {
         {showModal && (
           <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
-              style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '500px', padding: '32px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
+              style={{ background: 'white', borderRadius: '20px', width: '100%', maxWidth: '500px', maxHeight: '90vh', overflowY: 'auto', padding: isMobile ? '20px' : '32px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)' }}>
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
                 <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#0f172a' }}>{editing ? 'Modifier fourniture' : 'Nouvelle fourniture'}</h2>
@@ -262,7 +284,7 @@ export default function FournituresPage() {
                   <input value={form.description} onChange={e => setForm((p:any) => ({...p, description: e.target.value}))} placeholder="Détails, marque..." style={{ width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div className="form-grid-2" style={{ gap: '16px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>CATÉGORIE</label>
                     <select value={form.categorie} onChange={e => setForm((p:any) => ({...p, categorie: e.target.value}))} style={{ width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', background: 'white', boxSizing: 'border-box' }}>
@@ -278,7 +300,7 @@ export default function FournituresPage() {
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px' }}>
                   <div>
                     <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>QUANTITÉ</label>
                     <input type="number" min={1} value={form.quantite} onChange={e => setForm((p:any) => ({...p, quantite: Number(e.target.value)}))} style={{ width: '100%', padding: '12px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', fontSize: '14px', boxSizing: 'border-box' }} />
