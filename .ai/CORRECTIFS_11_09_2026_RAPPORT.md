@@ -88,5 +88,36 @@ prendre pour un gain marginal.
 
 `tsc` propre, 110/110 tests frontend, build propre (le cache `.next/`
 contenait deux erreurs fantômes sur des pages supprimées par la fusion,
-résolues par un rebuild). Tests backend en cours au moment de la rédaction
-de ce rapport (voir mise à jour si nécessaire).
+résolues par un rebuild).
+
+Backend : **991 passés / 10 échoués / 10 ignorés** (suite complète,
+`pytest tests/ --ignore=tests/test_auth.py`).
+
+Un seul échec m'était imputable : `test_les_periodes_sont_celles_de_son_ecole`
+(`test_portails_isolation.py`) appelle `get_trimestres(db, etablissement_id)`
+positionnellement — mon ajout de `annee_id` en premier paramètre décalait
+`db`/`etablissement_id`. Corrigé en réordonnant `annee_id` en dernier
+(commit `9285f94`) ; aucun effet sur la route HTTP, les query params sont
+résolus par nom, pas par position.
+
+Les **10 restants sont pré-existants sur `main`**, sans rapport avec ce
+chantier (sync + 4 pages mobiles) ni avec la production — signalés au
+collaborateur, pas corrigés ici (module évaluations/notation, hors
+périmètre) :
+
+- **3** dans `test_enseignant_remplit_evaluation.py` :
+  `sqlite3.IntegrityError: UNIQUE constraint failed: ss_eleves.matricule`.
+  Passent seuls ; échouent uniquement dans la suite complète — une
+  fuite de données entre tests (matricule codé en dur réutilisé sans
+  isolation) pollue l'état partagé.
+- **7** dans `test_epreuve_correction.py` : `403 "n'est plus l'année en
+  cours"` levé par `app/core/annee_lock.py` (ajouté par le collaborateur
+  dans `e90aded`, APRÈS ces tests). Le code fait ce qu'il doit — bloquer
+  l'écriture sur une année qui n'est plus courante — mais un autre test,
+  plus tôt dans l'ordre alphabétique du run complet, change quelle année
+  est "courante" pour l'établissement de test partagé, cassant
+  l'hypothèse de ces tests. Jamais vérifié contre la suite complète au
+  moment de l'ajout du verrou.
+
+Aucun de ces 10 échecs n'a été modifié — décision volontaire : module et
+fixtures du collaborateur, hors du périmètre de cette session.
