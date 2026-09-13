@@ -608,13 +608,14 @@ export default function DashboardPage() {
                       background: '#f8fafc',
                       border: '1px solid #e2e8f0',
                       fontWeight: 700,
+                      minWidth: 0,
                     }}
                   >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-                      <item.icon size={17} />
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, minWidth: 0, overflowWrap: 'break-word' }}>
+                      <item.icon size={17} style={{ flexShrink: 0 }} />
                       {item.label}
                     </span>
-                    <ArrowRight size={15} />
+                    <ArrowRight size={15} style={{ flexShrink: 0 }} />
                   </Link>
                 ))}
               </div>

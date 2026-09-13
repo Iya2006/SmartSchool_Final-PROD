@@ -512,14 +512,14 @@ function BulletinsContent() {
                             onClick={e => e.stopPropagation()}>
 
                             {/* Modal Toolbar */}
-                            <div style={{ padding: '12px 20px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ padding: '12px 20px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                     <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>Aperçu du bulletin</span>
                                     <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: 700, background: selectedBulletin.statut === 'PUBLIE' ? '#dcfce7' : '#fef3c7', color: selectedBulletin.statut === 'PUBLIE' ? '#16a34a' : '#d97706', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                                         {selectedBulletin.statut === 'PUBLIE' ? <><CheckCircle2 size={14} /> Publié</> : <><Clock size={14} /> Brouillon</>}
                                     </span>
                                 </div>
-                                <div style={{ display: 'flex', gap: '8px' }}>
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                     {selectedBulletin.statut === 'PUBLIE' ? (
                                         <button onClick={() => unpublishBulletin(selectedBulletin.bulletin_id)}
                                             style={{ padding: '8px 18px', borderRadius: '8px', background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>

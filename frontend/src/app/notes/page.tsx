@@ -818,19 +818,22 @@ export default function CentralisationNotesPage() {
                             <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><ClipboardList size={18} /> Évaluations &amp; Compositions</h3>
                             <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                             <select value={statutFiltre} onChange={e => { setStatutFiltre(e.target.value); setEvalsPage(1); }}
-                                style={{ padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600 }}>
+                                style={{ padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, width: '180px', minWidth: 0, flexShrink: 0 }}>
                                 {/* Les quatre états du cycle de vie d'une évaluation,
-                                    tels que le backend les accepte (PUT /{id}/statut). */}
+                                    tels que le backend les accepte (PUT /{id}/statut). Largeur
+                                    fixe (au lieu d'auto) : sans elle, le select prend la largeur
+                                    de sa PLUS LONGUE option ("Publiée — notes saisies...") meme
+                                    fermé, et deborde sur mobile. */}
                                 <option value="">Tous les statuts</option>
                                 <option value="PLANIFIEE">Planifiée — notes à saisir</option>
                                 <option value="PUBLIEE">Publiée — notes saisies, pas encore validées</option>
                                 <option value="CENTRALISEE">Centralisée — compte dans les moyennes</option>
                                 <option value="ANNULEE">Annulée — ne compte pas</option>
                             </select>
-                            <div style={{ position: 'relative', width: 'min(300px, 100%)' }}>
+                            <div style={{ position: 'relative', width: 'min(300px, 100%)', minWidth: 0, flex: '1 1 200px' }}>
                                 <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                 <input type="text" placeholder="Rechercher une épreuve, une classe, un enseignant…" value={search} onChange={e => setSearch(e.target.value)}
-                                    style={{ padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '100%' }} />
+                                    style={{ padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '100%', minWidth: 0, boxSizing: 'border-box' }} />
                             </div>
                             </div>
                         </div>
