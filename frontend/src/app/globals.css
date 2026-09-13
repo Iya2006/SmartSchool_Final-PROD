@@ -364,24 +364,40 @@ input, select, textarea {
 }
 /* Cadre qui epouse la taille REDUITE (post-transform) du document, pour
    qu'il n'y ait plus de vide reserve a droite (le transform seul ne change
-   pas l'encombrement en mise en page du noeud qu'il transforme). */
+   pas l'encombrement en mise en page du noeud qu'il transforme). Centre
+   par defaut ; n'a d'effet que quand une largeur explicite est posee
+   plus bas (sinon un bloc en `width:auto` remplit deja son parent). */
 .document-preview-frame {
   overflow: hidden;
+  margin: 0 auto;
 }
 .document-preview-scroll {
   overflow-y: auto;
 }
+/* L'echelle NE PEUT PAS etre une valeur fixe par palier : verifie au
+   rendu reel (chromium, 375px) qu'une echelle calibree pour le HAUT du
+   palier (480px) deborde deja sur un telephone normal (~360-390px) une
+   fois retire le double padding (overlay 20px*2 + `.document-preview-
+   scroll` 20px*2 = 80px) — le cadre devient plus large que l'espace
+   dispo, `margin:auto` ne peut alors plus centrer et le document reste
+   colle a gauche, le reste hors champ. L'echelle se calcule donc a
+   partir de la largeur reellement disponible (100vw - 80px), plafonnee
+   a la valeur cible pour ne pas grossir inutilement sur les telephones
+   proches de la limite haute du palier. */
 @media (max-width: 480px) {
-  /* min-width force la vraie mise en page 794px avant reduction (sans ca,
-     un conteneur mobile plus etroit ecraserait le document AVANT le
-     transform, au lieu de le reduire fidelement apres coup). */
-  .document-preview { transform: scale(0.42); min-width: 794px; }
-  .document-preview-frame { width: calc(794px * 0.42); margin: 0 auto; }
+  .document-preview-frame {
+    --doc-scale: min(0.42, calc((100vw - 80px) / 794px));
+    width: calc(794px * var(--doc-scale));
+  }
+  .document-preview { transform: scale(var(--doc-scale)); min-width: 794px; }
   .document-preview-scroll { overflow-x: hidden; }
 }
 @media (min-width: 481px) and (max-width: 768px) {
-  .document-preview { transform: scale(0.56); min-width: 794px; }
-  .document-preview-frame { width: calc(794px * 0.56); margin: 0 auto; }
+  .document-preview-frame {
+    --doc-scale: min(0.56, calc((100vw - 80px) / 794px));
+    width: calc(794px * var(--doc-scale));
+  }
+  .document-preview { transform: scale(var(--doc-scale)); min-width: 794px; }
   .document-preview-scroll { overflow-x: hidden; }
 }
 
