@@ -376,12 +376,12 @@ input, select, textarea {
      un conteneur mobile plus etroit ecraserait le document AVANT le
      transform, au lieu de le reduire fidelement apres coup). */
   .document-preview { transform: scale(0.42); min-width: 794px; }
-  .document-preview-frame { width: calc(794px * 0.42); }
+  .document-preview-frame { width: calc(794px * 0.42); margin: 0 auto; }
   .document-preview-scroll { overflow-x: hidden; }
 }
 @media (min-width: 481px) and (max-width: 768px) {
   .document-preview { transform: scale(0.56); min-width: 794px; }
-  .document-preview-frame { width: calc(794px * 0.56); }
+  .document-preview-frame { width: calc(794px * 0.56); margin: 0 auto; }
   .document-preview-scroll { overflow-x: hidden; }
 }
 
