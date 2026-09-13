@@ -422,11 +422,11 @@ function BulletinsContent() {
                         ))}
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 16px', flexWrap: 'wrap', gap: '12px' }}>
                         <h2 style={{ fontSize: '18px', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <ClipboardList size={20} color="#059669" /> {bulletinsTotal} bulletin(s) — {selectedClasseInfo?.libelle} — {selectedTrimestreInfo?.libelle || `Trimestre ${selectedTrimestre}`}
                         </h2>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                             <span style={{ background: '#f0fdf4', color: '#166534', padding: '6px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <CheckCircle2 size={14} /> {filteredBulletins.filter(b => b.statut === 'PUBLIE').length} publiés (page)
                             </span>
@@ -445,7 +445,7 @@ function BulletinsContent() {
                     </div>
 
                     {/* Cards Grid */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(340px, 100%), 1fr))', gap: '16px' }}>
                         {filteredBulletins.map((b, idx) => {
                             const ms = getMentionStyle(b.mention);
                             return (
@@ -544,6 +544,7 @@ function BulletinsContent() {
 
                             {/* ═══ BULLETIN CONTENT (PRINTABLE) ═══ */}
                             <div className="document-preview-scroll" style={{ flex: 1, padding: '20px' }}>
+                                <div className="document-preview-frame">
                                 <div ref={printRef} className="document-preview" style={{ position: 'relative' }}>
                                     {docSettings.filigrane_actif && docSettings.filigrane_bulletins && (
                                         <div style={{
@@ -865,6 +866,7 @@ function BulletinsContent() {
                                             <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.7)' }}>Conakry, Guinée • {new Date().toLocaleDateString('fr-FR')}</div>
                                         </div>
                                     </div>
+                                </div>
                                 </div>
                             </div>
                         </motion.div>

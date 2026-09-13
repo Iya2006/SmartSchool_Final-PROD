@@ -362,15 +362,26 @@ input, select, textarea {
 .document-preview {
   transform-origin: top left;
 }
+/* Cadre qui epouse la taille REDUITE (post-transform) du document, pour
+   qu'il n'y ait plus de vide reserve a droite (le transform seul ne change
+   pas l'encombrement en mise en page du noeud qu'il transforme). */
+.document-preview-frame {
+  overflow: hidden;
+}
 .document-preview-scroll {
   overflow-y: auto;
 }
 @media (max-width: 480px) {
-  .document-preview { transform: scale(0.42); }
+  /* min-width force la vraie mise en page 794px avant reduction (sans ca,
+     un conteneur mobile plus etroit ecraserait le document AVANT le
+     transform, au lieu de le reduire fidelement apres coup). */
+  .document-preview { transform: scale(0.42); min-width: 794px; }
+  .document-preview-frame { width: calc(794px * 0.42); }
   .document-preview-scroll { overflow-x: hidden; }
 }
 @media (min-width: 481px) and (max-width: 768px) {
-  .document-preview { transform: scale(0.56); }
+  .document-preview { transform: scale(0.56); min-width: 794px; }
+  .document-preview-frame { width: calc(794px * 0.56); }
   .document-preview-scroll { overflow-x: hidden; }
 }
 
