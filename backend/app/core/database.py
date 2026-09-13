@@ -6,10 +6,13 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # Configure la base de données PostgreSQL
-# À partir du docker-compose : postgres / admin / admin / mydb / 5433 (port hôte)
+# À partir du docker-compose : postgres / admin / admin / mydb / 15433 (port hôte)
+# Port 15433 (au lieu de 5433) : Windows/Hyper-V réserve dynamiquement des
+# plages de ports (netsh int ipv4 show excludedportrange) qui incluaient 5433,
+# rendant le bind Docker impossible ("access forbidden by its permissions").
 SQLALCHEMY_DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql+pg8000://admin:admin@localhost:5433/mydb"
+    "DATABASE_URL",
+    "postgresql+pg8000://admin:admin@localhost:15433/mydb"
 )
 
 # pool_pre_ping : vérifie qu'une connexion du pool est toujours vivante avant
