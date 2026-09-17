@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useAuth } from '@/context/AuthContext';
 import { useInstallPrompt } from '@/hooks/useInstallPrompt';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -12,7 +13,6 @@ import {
 // `API_BASE_URL` sert au message d'erreur : distinguer « serveur injoignable »
 // de « identifiants incorrects » suppose de pouvoir nommer l'adresse appelée.
 import api, { API_BASE_URL } from '@/lib/api';
-import SmartSchoolMark from '@/components/SmartSchoolMark';
 import styles from './login.module.css';
 
 const BENEFITS = [
@@ -103,7 +103,7 @@ export default function LoginPage() {
                         particulière (ex. GOTCHA) — celui-ci vit dans l'espace de
                         l'établissement, pas sur l'écran de connexion général. */}
                     <div className={styles.heroBadge}>
-                        <SmartSchoolMark size={24} color="#ffffff" />
+                        <Image src="/brand/logo-mark.png" alt="SmartSchool" width={48} height={48} priority />
                     </div>
                     <div>
                         <h1 className={styles.heroWordmark}>SMARTSCHOOL</h1>

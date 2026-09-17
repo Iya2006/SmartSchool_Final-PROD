@@ -16,12 +16,12 @@
  */
 import React, { useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     AlertTriangle, ArrowLeft, ArrowRight, Building2, CheckCircle2, Clock,
     Eye, EyeOff, Loader2, Lock, Mail, MapPin, Phone, User,
 } from 'lucide-react';
-import SmartSchoolMark from '@/components/SmartSchoolMark';
 import api from '@/lib/api';
 
 const TYPES = [
@@ -167,8 +167,8 @@ export default function InscriptionPage() {
         <Page>
             <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} style={carte}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '6px' }}>
-                    <div style={{ width: 42, height: 42, borderRadius: '13px', background: 'linear-gradient(135deg,#1e3a8a,#3b82f6)', display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-                        <SmartSchoolMark size={21} color="#fff" />
+                    <div style={{ width: 42, height: 42, borderRadius: '13px', background: '#ffffff', border: '1px solid #e2e8f0', boxShadow: '0 2px 8px rgba(15,23,42,0.08)', display: 'grid', placeItems: 'center', flexShrink: 0, overflow: 'hidden' }}>
+                        <Image src="/brand/logo-mark.png" alt="SmartSchool" width={42} height={42} priority />
                     </div>
                     <div style={{ minWidth: 0 }}>
                         <h1 style={{ margin: 0, fontSize: '19px', fontWeight: 800, color: '#0f172a' }}>Inscrire mon établissement</h1>
