@@ -3,6 +3,7 @@ import './globals.css';
 import Providers from '@/components/Providers';
 import AppShell from '@/components/AppShell';
 import ProtectionNavigateur from '@/components/ProtectionNavigateur';
+import BootSplash from '@/components/BootSplash';
 
 export const metadata: Metadata = {
   title: 'SMARTSCHOOL - ERP Scolaire National',
@@ -31,6 +32,9 @@ export default function RootLayout({
             contre la fausse manœuvre — la vraie protection est côté serveur,
             où chaque compte ne reçoit que ce qui le concerne. */}
         <ProtectionNavigateur />
+        {/* Overlay pur (le reste de l'arbre monte normalement dessous) —
+            écran de démarrage affiché à l'ouverture de l'app. */}
+        <BootSplash />
         <Providers>
           <AppShell>
             {children}
