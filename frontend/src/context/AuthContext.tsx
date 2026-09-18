@@ -39,6 +39,11 @@ export interface AuthContextType {
     isAuthenticated: boolean;
     login: (token: string, user: UserInfo) => void;
     logout: () => void;
+    /** Vrai juste après un login réussi (pas après un simple rechargement de
+     * page déjà connecté) — consommé par PostLoginSplash pour l'écran de
+     * bienvenue, puis remis à false. */
+    showPostLoginSplash: boolean;
+    setShowPostLoginSplash: (v: boolean) => void;
 }
 
 export const AuthContext = createContext<AuthContextType>({
@@ -47,6 +52,8 @@ export const AuthContext = createContext<AuthContextType>({
     isAuthenticated: false,
     login: () => {},
     logout: () => {},
+    showPostLoginSplash: false,
+    setShowPostLoginSplash: () => {},
 });
 
 export const getRedirectPath = (
@@ -81,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<UserInfo | null>(null);
     const [token, setToken] = useState<string | null>(null);
     const [checked, setChecked] = useState(false);
+    const [showPostLoginSplash, setShowPostLoginSplash] = useState(false);
     const router = useRouter();
     const pathname = usePathname();
 
@@ -152,6 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem('smartschool_token', newToken);
         localStorage.setItem('smartschool_user', JSON.stringify(newUser));
 
+        setShowPostLoginSplash(true);
         router.push(getRedirectPath(newUser.role, newUser.role_base, newUser.acces_comptabilite));
     };
 
@@ -177,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     return (
-        <AuthContext.Provider value={{ user, token, isAuthenticated: !!token, login, logout }}>
+        <AuthContext.Provider value={{ user, token, isAuthenticated: !!token, login, logout, showPostLoginSplash, setShowPostLoginSplash }}>
             {children}
         </AuthContext.Provider>
     );

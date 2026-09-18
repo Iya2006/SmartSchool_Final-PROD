@@ -19,7 +19,7 @@ import {
     FileText, GraduationCap, Landmark, LayoutGrid, Lock, Mail, MessageCircle,
     Phone, ShieldCheck, Target, Users, UserSquare2, Wallet,
 } from 'lucide-react';
-import SmartSchoolMark from '@/components/SmartSchoolMark';
+import Image from 'next/image';
 import styles from './accueil.module.css';
 
 /** Coordonnées commerciales de TrillionX, éditeur de SmartSchool. */
@@ -114,7 +114,7 @@ export default function AccueilPage() {
                 <div className={`${styles.contenu} ${styles.navInterieur}`}>
                     <Link href="/" className={styles.marque}>
                         <span className={styles.marqueSigle}>
-                            <SmartSchoolMark size={19} color="#ffffff" />
+                            <Image src="/brand/logo-mark.png" alt="SmartSchool" width={36} height={36} priority />
                         </span>
                         <span className={styles.marqueTexte}>
                             SmartSchool

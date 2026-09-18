@@ -170,7 +170,7 @@ export default function CentralisationNotesPage() {
             try {
                 const [clsRes, triRes, statsRes, typesRes, moisRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
-                    api.get('/api/portail-enseignant/referentiels/trimestres'),
+                    api.get(`/api/portail-enseignant/referentiels/trimestres?annee_id=${anneeId}`),
                     api.get('/api/evaluations/centralisation/stats'),
                     api.get('/api/evaluations/types').catch(() => ({ data: [] })),
                     api.get('/api/evaluations/calendrier/mois').catch(() => ({ data: { mois: [] } })),
@@ -814,23 +814,26 @@ export default function CentralisationNotesPage() {
                     {/* ═══ LISTE DES ÉVALUATIONS CENTRALISÉES ═══ */}
                     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                         style={{ background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                        <div style={{ padding: '18px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ padding: '18px 24px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
                             <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '6px' }}><ClipboardList size={18} /> Évaluations &amp; Compositions</h3>
-                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                             <select value={statutFiltre} onChange={e => { setStatutFiltre(e.target.value); setEvalsPage(1); }}
-                                style={{ padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600 }}>
+                                style={{ padding: '8px 12px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', fontWeight: 600, width: '180px', minWidth: 0, flexShrink: 0 }}>
                                 {/* Les quatre états du cycle de vie d'une évaluation,
-                                    tels que le backend les accepte (PUT /{id}/statut). */}
+                                    tels que le backend les accepte (PUT /{id}/statut). Largeur
+                                    fixe (au lieu d'auto) : sans elle, le select prend la largeur
+                                    de sa PLUS LONGUE option ("Publiée — notes saisies...") meme
+                                    fermé, et deborde sur mobile. */}
                                 <option value="">Tous les statuts</option>
                                 <option value="PLANIFIEE">Planifiée — notes à saisir</option>
                                 <option value="PUBLIEE">Publiée — notes saisies, pas encore validées</option>
                                 <option value="CENTRALISEE">Centralisée — compte dans les moyennes</option>
                                 <option value="ANNULEE">Annulée — ne compte pas</option>
                             </select>
-                            <div style={{ position: 'relative' }}>
+                            <div style={{ position: 'relative', width: 'min(300px, 100%)', minWidth: 0, flex: '1 1 200px' }}>
                                 <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
                                 <input type="text" placeholder="Rechercher une épreuve, une classe, un enseignant…" value={search} onChange={e => setSearch(e.target.value)}
-                                    style={{ padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '300px' }} />
+                                    style={{ padding: '8px 12px 8px 36px', borderRadius: '8px', border: '1.5px solid #e2e8f0', fontSize: '13px', width: '100%', minWidth: 0, boxSizing: 'border-box' }} />
                             </div>
                             </div>
                         </div>
@@ -842,8 +845,8 @@ export default function CentralisationNotesPage() {
                                 <p style={{ fontSize: '13px' }}>Créez une composition depuis une classe, ou attendez que les enseignants saisissent leurs notes.</p>
                             </div>
                         ) : (
-                            <div style={{ overflowX: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                            <div className="table-scroll">
+                                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '820px' }}>
                                     <thead>
                                         <tr style={{ background: '#f8fafc' }}>
                                             {['Évaluation / Composition', 'Classe', 'Période', 'Date', 'Matières', 'Notes saisies', 'Statut', ''].map(h => (

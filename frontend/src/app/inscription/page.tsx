@@ -24,7 +24,7 @@ import {
     AlertTriangle, ArrowLeft, ArrowRight, Building2, CheckCircle2, Clock,
     Eye, EyeOff, Loader2, Lock, Mail, MapPin, Phone, Sparkles, User,
 } from 'lucide-react';
-import SmartSchoolMark from '@/components/SmartSchoolMark';
+import Image from 'next/image';
 import api from '@/lib/api';
 import styles from './inscription.module.css';
 
@@ -204,7 +204,7 @@ export default function InscriptionPage() {
                 <section className={styles.presentation}>
                     <div className={styles.marque}>
                         <div className={styles.marqueSigle}>
-                            <SmartSchoolMark size={27} color="#ffffff" />
+                            <Image src="/brand/logo-mark.png" alt="SmartSchool" width={54} height={54} priority />
                         </div>
                         <div>
                             <p className={styles.marqueNom}>SMARTSCHOOL</p>
@@ -256,7 +256,7 @@ export default function InscriptionPage() {
                     >
                         <div className={styles.enTete}>
                             <div className={styles.enTeteSigle}>
-                                <SmartSchoolMark size={21} color="#fff" />
+                                <Image src="/brand/logo-mark.png" alt="SmartSchool" width={44} height={44} priority />
                             </div>
                             <div style={{ minWidth: 0 }}>
                                 <h1 className={styles.enTeteTitre}>Inscrire mon établissement.</h1>

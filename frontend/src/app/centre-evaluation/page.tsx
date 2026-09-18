@@ -466,7 +466,7 @@ export default function CentreEvaluationPage() {
                         </button>
                     </div>
                 ) : (
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(280px, 100%), 1fr))', gap: '16px' }}>
                         {filtered.map((s, i) => {
                             const stCfg = STATUT_CONFIG[s.statut] || STATUT_CONFIG.ENVOYE;
                             const fileIcon = s.fichier_type === 'pdf' ? <FileText size={22} /> : s.fichier_type === 'docx' || s.fichier_type === 'doc' ? <PenLine size={22} /> : <Paperclip size={22} />;
@@ -509,7 +509,7 @@ export default function CentreEvaluationPage() {
                                     </div>
 
                                     {/* Actions */}
-                                    <div style={{ display: 'flex', gap: '8px' }}>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                         <button onClick={() => handleDownloadSujet(s.sujet_id, s.fichier_nom || `sujet_${s.sujet_id}`)}
                                             style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', padding: '6px 14px', borderRadius: '8px', border: '1px solid #3b82f6', background: '#eff6ff', color: '#3b82f6', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}>
                                             <Download size={13} /> Télécharger
@@ -638,7 +638,7 @@ export default function CentreEvaluationPage() {
                                         ))}
                                     </select>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                <div className="form-grid-2" style={{ gap: '12px' }}>
                                     <div>
                                         <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', display: 'block', marginBottom: '5px' }}>ÉPREUVE</label>
                                         <select value={demandeType ?? ''} onChange={e => setDemandeType(Number(e.target.value) || null)}

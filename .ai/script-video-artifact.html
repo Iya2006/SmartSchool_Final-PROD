@@ -1,0 +1,739 @@
+<title>Pub Premium SmartSchool</title>
+<style>
+  @font-face {
+    font-family: 'Manrope';
+    src: local('Manrope');
+  }
+  :root {
+    --bg: #f4f6fb;
+    --surface: #ffffff;
+    --surface-2: #eef1f8;
+    --ink: #0f172a;
+    --ink-soft: #475569;
+    --ink-faint: #94a3b8;
+    --line: #e2e8f0;
+    --accent: #1e3a8a;
+    --accent-2: #3b82f6;
+    --accent-soft: #eaf0fe;
+    --good: #059669;
+    --good-soft: #e7f6ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b1220;
+      --surface: #121a2b;
+      --surface-2: #17223a;
+      --ink: #e7ecf7;
+      --ink-soft: #a9b6cc;
+      --ink-faint: #6b7994;
+      --line: #253251;
+      --accent: #7ea2ff;
+      --accent-2: #5b8dff;
+      --accent-soft: #17223f;
+      --good: #34d399;
+      --good-soft: #0f2a22;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1220;
+    --surface: #121a2b;
+    --surface-2: #17223a;
+    --ink: #e7ecf7;
+    --ink-soft: #a9b6cc;
+    --ink-faint: #6b7994;
+    --line: #253251;
+    --accent: #7ea2ff;
+    --accent-2: #5b8dff;
+    --accent-soft: #17223f;
+    --good: #34d399;
+    --good-soft: #0f2a22;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Manrope', 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 40px 20px 80px;
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent-2);
+    background: var(--accent-soft);
+    padding: 6px 12px;
+    border-radius: 20px;
+  }
+  h1 {
+    font-size: clamp(28px, 5vw, 38px);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin: 16px 0 8px;
+    text-wrap: balance;
+  }
+  .sub {
+    color: var(--ink-soft);
+    font-size: 15.5px;
+    max-width: 60ch;
+    margin: 0 0 28px;
+  }
+  .meta-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 36px;
+  }
+  .meta-chip {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 8px 14px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .meta-chip strong { color: var(--ink); }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px 24px;
+    margin-bottom: 24px;
+  }
+  .panel h2 {
+    font-size: 17px;
+    margin: 0 0 12px;
+    font-weight: 800;
+  }
+  .panel ul {
+    margin: 0;
+    padding-left: 20px;
+    color: var(--ink-soft);
+    font-size: 14.5px;
+  }
+  .panel li { margin-bottom: 6px; }
+
+  nav.toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 40px;
+  }
+  nav.toc a {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-soft);
+    text-decoration: none;
+    background: var(--surface-2);
+    padding: 7px 12px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+  }
+  nav.toc a:hover { border-color: var(--line); color: var(--ink); }
+
+  .section {
+    margin-bottom: 30px;
+    scroll-margin-top: 20px;
+  }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .section-num {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .section-title {
+    font-size: 19px;
+    font-weight: 800;
+    flex: 1;
+    min-width: 200px;
+  }
+  .timing {
+    font-size: 12.5px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 4px 10px;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .card-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .card.screen .card-label { color: var(--ink-soft); background: var(--surface-2); }
+  .card.voice .card-label { color: var(--good); background: var(--good-soft); }
+  .card-body { padding: 16px 18px; }
+  .card.screen .card-body { font-size: 14px; color: var(--ink-soft); }
+  .card.voice .card-body { font-size: 15.5px; color: var(--ink); }
+  .card.voice .card-body p { margin: 0 0 12px; }
+  .card.voice .card-body p:last-child { margin-bottom: 0; }
+  .card.voice blockquote {
+    margin: 0;
+    font-style: italic;
+  }
+
+  .checklist {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 22px 24px;
+    margin-top: 40px;
+  }
+  .checklist h2 { font-size: 17px; margin: 0 0 14px; font-weight: 800; }
+  .check-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 14.5px;
+    color: var(--ink-soft);
+    padding: 7px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  .check-item:last-child { border-bottom: none; }
+  .box {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--ink-faint);
+    margin-top: 2px;
+  }
+
+  footer {
+    text-align: center;
+    color: var(--ink-faint);
+    font-size: 12.5px;
+    margin-top: 50px;
+  }
+
+  @media (max-width: 480px) {
+    .wrap { padding: 28px 16px 60px; }
+    .panel, .checklist { padding: 18px; }
+  }
+</style>
+
+<div class="wrap">
+  <span class="eyebrow">● Préparation client — vendredi</span>
+  <h1>Vidéo publicitaire premium — SmartSchool</h1>
+  <p class="sub">Pas un tutoriel : une publicité. On révèle la douleur réelle des écoles avant de montrer la solution — quelques plans forts, pas une visite exhaustive.</p>
+
+  <div class="meta-row">
+    <span class="meta-chip">⏱️ <strong>~80-90 sec</strong> cible</span>
+    <span class="meta-chip">🎭 Ton <strong>premium, sobre</strong></span>
+    <span class="meta-chip">🗣️ Narration en <strong>français</strong></span>
+  </div>
+
+  <div class="panel" style="border-color:var(--accent-2);">
+    <h2>Pourquoi ce n'est plus le même exercice</h2>
+    <ul>
+      <li>Une pub qui marche montre la <strong>douleur avant la marque</strong> — pas une liste de fonctionnalités. Ici : la course du trimestre, les calculs à la main, l'erreur qui coûte cher, le parent sans réponse.</li>
+      <li>La partie « douleur » ne peut <strong>pas</strong> venir de captures d'écran de l'application — montrez plutôt des images d'illustration (banques gratuites, voir plus bas), ou restez sur du texte à l'écran sur fond sobre.</li>
+      <li>La partie « solution » se limite à <strong>4 plans</strong>, pas une visite guidée — chacun doit donner envie, pas expliquer.</li>
+      <li>Court, c'est voulu : une pub de 80-90 secondes retient l'attention ; un tutoriel de 20 minutes déguisé en pub la perd.</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">①</span>
+      <span class="section-title">La douleur — images d'illustration, pas l'app</span>
+      <span class="timing">0:00 – 0:15</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Visuel</div>
+      <div class="card-body">Plans d'illustration (banque gratuite) : une pile de cahiers et classeurs, une main qui feuillette des fiches papier, une horloge qui tourne tard le soir, un bureau encombré de reçus. Anonyme, pas de visage reconnaissable. Étalonnage sombre, un peu désaturé.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Narration — grave, posée, presque chuchotée au début</div>
+      <div class="card-body">
+        <p>« Chaque trimestre, c'est la même course. Les cahiers de notes. Les calculs à la main. Les reçus qu'on recherche. Les nuits à finir les bulletins avant la date limite. »</p>
+        <p><em>(silence bref)</em></p>
+        <p>« Une erreur de calcul. Une fiche égarée. Un parent qui appelle pour savoir où en est son enfant — et personne ne sait répondre tout de suite. »</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">②</span>
+      <span class="section-title">Le tournant — apparition de la marque</span>
+      <span class="timing">0:15 – 0:25</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Visuel</div>
+      <div class="card-body">Coupe franche vers un écran noir bref, puis le logo SmartSchool apparaît sur fond dégradé navy → bleu, épuré, centré. La musique bascule ici d'un ton grave vers quelque chose de plus confiant.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Narration</div>
+      <div class="card-body"><p>« Et si votre école n'avait plus jamais à choisir entre rigueur et sérénité ? »</p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">③</span>
+      <span class="section-title">La solution — 4 plans forts, captures réelles de l'app</span>
+      <span class="timing">0:25 – 1:05</span>
+    </div>
+    <p style="color:var(--ink-soft);font-size:13.5px;margin:-4px 0 14px;">Transitions rapides et nettes. Une phrase courte par plan, pas de narration continue.</p>
+    <div class="card voice">
+      <div class="card-label">Plan 1 — Tableau de bord (~10s)</div>
+      <div class="card-body"><p>Dashboard qui charge, indicateurs clairs à l'écran. <br><em>« Toute votre école, en un regard. »</em></p></div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Plan 2 — Bulletin officiel (~10s)</div>
+      <div class="card-body"><p>Un bulletin se génère (format officiel guinéen, photo, QR code). <br><em>« Le bulletin officiel, prêt en quelques secondes — pas en plusieurs heures. »</em></p></div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Plan 3 — Portail parent, mobile (~10s)</div>
+      <div class="card-body"><p>Un téléphone à la main, le portail parent affiché. <br><em>« Et les familles, informées, où qu'elles soient. »</em></p></div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Plan 4 — Mode hors-ligne (~10s)</div>
+      <div class="card-body"><p>L'icône de synchronisation, une action qui reste possible sans réseau. <br><em>« Même quand la connexion lâche, l'école, elle, continue. »</em></p></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="section-num">④</span>
+      <span class="section-title">La promesse — clôture</span>
+      <span class="timing">1:05 – 1:25</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Visuel</div>
+      <div class="card-body">Retour au logo, fond épuré, même dégradé qu'à l'ouverture de marque. Tagline à l'écran.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Narration — confiante, chaleureuse</div>
+      <div class="card-body">
+        <p>« SmartSchool. Parce que diriger une école ne devrait jamais ressembler à une course contre la montre. »</p>
+        <p style="color:var(--ink-faint);font-size:13px;">(optionnel, appel à l'action) « Découvrez comment, dès aujourd'hui. » + votre domaine.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="border-color:var(--accent-2);">
+    <h2>🎞️ Le déroulé complet, clic par clic</h2>
+    <p style="color:var(--ink-soft);font-size:14.5px;margin:0 0 6px;">3 blocs, dans cet ordre de <strong>production</strong> (pas l'ordre d'apparition à l'écran — voir l'encadré en bas). Bloc A et B se font entièrement dans Demosmith. Bloc C se fait après, chez vous, avec les 2 fichiers vidéo en main.</p>
+
+    <h3 style="font-size:15px;margin:22px 0 8px;color:var(--accent-2);">BLOC A — Dans Demosmith : régler les couleurs (une seule fois)</h3>
+    <p style="color:var(--ink-soft);font-size:13.5px;margin:0 0 10px;">Plan gratuit : pas d'upload de logo, et pas de champ intro/outro fiable — on ne s'en sert que pour les couleurs et les polices. Le logo et les 2 textes se feront dans Clipchamp au Bloc C, avec votre vrai fichier logo.</p>
+    <ol style="color:var(--ink-soft);font-size:14px;padding-left:22px;margin:0 0 14px;">
+      <li style="margin-bottom:6px;">Dans le menu de gauche, sous <strong>SETTINGS</strong>, cliquez <strong>« Brand Kit »</strong>.</li>
+      <li style="margin-bottom:6px;">Primary Color : <code>#2563eb</code> (bleu)</li>
+      <li style="margin-bottom:6px;">Secondary Color : <code>#10b981</code> (vert émeraude)</li>
+      <li style="margin-bottom:6px;">Accent Color : <code>#0f172a</code> (bleu nuit, pour le texte foncé)</li>
+      <li>Sauvegardez. Ignorez la partie logo/upload.</li>
+    </ol>
+    <p style="color:var(--ink-soft);font-size:12px;margin:0 0 14px;">Couleurs relevées directement sur votre page de connexion réelle (celle de la capture) — approximatives mais suffisantes pour un fond/accent vidéo, pas besoin d'exactitude au pixel près.</p>
+
+    <h3 style="font-size:15px;margin:22px 0 8px;color:var(--accent-2);">BLOC B — Dans Demosmith : créer la vidéo de l'app</h3>
+    <ol style="color:var(--ink-soft);font-size:14px;padding-left:22px;margin:0 0 10px;">
+      <li style="margin-bottom:6px;">Cliquez <strong>« + Create »</strong> (menu de gauche, sous MAIN → « Create Demo »).</li>
+      <li style="margin-bottom:6px;">Champ URL — collez : <code>https://trxsmartschool.com/login</code></li>
+      <li style="margin-bottom:6px;">Champ « Flow Description » — collez le texte ci-dessous, tel quel.</li>
+      <li style="margin-bottom:6px;">Champ « Credentials » (identifiants) — renseignez l'identifiant et le mot de passe ci-dessous.</li>
+      <li style="margin-bottom:6px;">Lancez la génération, attendez.</li>
+      <li>Une fois prêt : dans <strong>« My Demos »</strong>, ouvrez la démo et <strong>téléchargez le fichier vidéo</strong> (bouton export/download). C'est ce fichier qui sert au Bloc C.</li>
+    </ol>
+    <div class="card-label" style="border-radius:8px 8px 0 0;">Flow Description — à coller</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">Connecte-toi avec les identifiants fournis sur https://trxsmartschool.com/login. Réalise une vidéo PUBLICITAIRE courte et premium pour SmartSchool — pas un tutoriel, pas d'exploration de menu, reste bref et élégant. Dans l'ordre, un seul passage fluide : (1) le tableau de bord admin, montré posément quelques secondes ; (2) la page "Bulletins", ouvre l'aperçu d'un bulletin et montre sa mise en page officielle guinéenne (en-tête République de Guinée, photo, QR code). Rien d'autre, ne navigue nulle part ailleurs. Ton de la narration : confiant, chaleureux, orienté vers un directeur d'école qui découvre la solution — inspirant, pas explicatif.</div>
+    <p style="color:var(--ink-soft);font-size:12.5px;margin:8px 0 0;">Volontairement limité à 2 écrans : plus l'instruction est courte, plus Demosmith réussit du premier coup (voir l'historique des échecs plus bas). Avec le Brand Kit du Bloc A déjà réglé, ce fichier téléchargé contiendra déjà l'ouverture logo + les 2 écrans + la fermeture logo.</p>
+    <div class="card-label" style="border-radius:0 0 8px 8px;border-top:1px solid var(--line);margin-top:14px;">Identifiants</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:14.5px;display:flex;gap:28px;flex-wrap:wrap;font-variant-numeric:tabular-nums;">
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Identifiant</span><strong>620000000</strong></div>
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Mot de passe</span><strong>IYA2006</strong></div>
+    </div>
+
+    <h3 style="font-size:15px;margin:22px 0 8px;color:var(--accent-2);">BLOC C — Chez vous, APRÈS Demosmith : le clip douleur + les 2 cartons logo</h3>
+    <p style="color:var(--ink-soft);font-size:13.5px;margin:0 0 10px;">C'est ici que tout ce que Demosmith ne pouvait pas faire (logo, intro, outro) se rattrape — en une seule session de montage.</p>
+    <ol style="color:var(--ink-soft);font-size:14px;padding-left:22px;margin:0 0 4px;">
+      <li style="margin-bottom:6px;">Sur <strong>Pexels.com</strong>, cherchez <code>"paperwork desk night"</code>, téléchargez UN clip de 10-15 secondes.</li>
+      <li style="margin-bottom:6px;">Ouvrez <strong>Clipchamp</strong> (menu Démarrer Windows, déjà installé — pas besoin de l'installer).</li>
+      <li style="margin-bottom:6px;">Importez 3 fichiers : le clip Pexels, votre fichier logo (celui utilisé sur le vrai site), et le fichier vidéo téléchargé au Bloc B.</li>
+      <li style="margin-bottom:6px;">Créez un <strong>carton d'ouverture</strong> (5-8s, fond uni bleu nuit <code>#0f172a</code>, votre logo centré) avec le texte : <em>« Et si votre école n'avait plus jamais à choisir entre rigueur et sérénité ? »</em></li>
+      <li style="margin-bottom:6px;">Créez un <strong>carton de fermeture</strong> (5-8s, même fond, même logo) avec le texte : <em>« SmartSchool. Parce que diriger une école ne devrait jamais ressembler à une course contre la montre. »</em></li>
+      <li style="margin-bottom:6px;">Sur la timeline, dans l'ordre : clip Pexels → carton d'ouverture → fichier Demosmith (Bloc B) → carton de fermeture.</li>
+      <li style="margin-bottom:6px;">Sur le clip Pexels, ajoutez la narration du §① (« Chaque trimestre... ») — via la voix IA intégrée de Clipchamp, ou votre propre voix. Faites de même pour les 2 cartons avec leurs textes respectifs.</li>
+      <li>Exportez le tout en un seul fichier MP4. C'est la vidéo finale.</li>
+    </ol>
+    <div style="background:var(--accent-soft);border-radius:10px;padding:14px 18px;font-size:13px;color:var(--ink);margin-top:14px;">
+      <strong>Ordre final à l'écran :</strong> Pexels (douleur, 0:00-0:15) → carton logo « tournant » (0:15-0:23) → Demosmith, 2 écrans (0:23-1:03) → carton logo « promesse » (1:03-1:11). Vous produisez ces morceaux dans un ordre différent (Demosmith d'abord, montage ensuite) — seul l'assemblage final respecte cet ordre à l'écran.
+    </div>
+  </div>
+
+  <hr style="border:none;border-top:1px solid var(--line);margin:50px 0;">
+  <h2 style="font-size:20px;margin-bottom:6px;">Ressources complémentaires — vidéo de formation (usage interne)</h2>
+  <p class="sub" style="margin-bottom:24px;">Ce qui suit est le matériel préparé avant le changement de cap vers la pub — gardé au cas où une vidéo de formation, plus longue et exhaustive, serait utile séparément (nouvel employé, support).</p>
+
+  <div class="meta-row">
+    <span class="meta-chip">🎬 <strong>7 générations</strong> Demosmith séparées</span>
+    <span class="meta-chip">🗣️ Narration en <strong>français</strong></span>
+    <span class="meta-chip">🖥️ Capture <strong>1920×1080</strong></span>
+  </div>
+  <p style="color:var(--ink-soft);font-size:13.5px;margin:-20px 0 30px;">①a Admin (dashboard→bulletins) · ①b Cartes · ①c Vie scolaire+Communication · ② Comptabilité · ③a Enseignant · ③b Parent · ③c Élève — à assembler ensuite en une seule vidéo, ou à garder comme clips séparés. Plus court chacun = plus fiable.</p>
+
+  <div class="panel" style="border-color:var(--accent-2);">
+    <h2>🤖 Option retenue — Demosmith (demosmith.ai), en 3 générations séparées</h2>
+    <p style="color:var(--ink-soft);font-size:14.5px;margin:0 0 14px;">Un agent IA qui navigue lui-même dans l'application et génère la voix off automatiquement. Trois zones de l'app ont chacune leur propre espace de navigation, sans lien de sortie évident vers les autres — plutôt que de risquer qu'un agent se bloque en essayant de sauter de l'une à l'autre, on lance <strong>3 générations Demosmith indépendantes</strong> et on assemble les 3 vidéos au montage (ou on les garde comme 3 clips séparés).</p>
+    <ul style="margin-bottom:16px;">
+      <li><strong>⚠️ Ne jamais donner le compte SUPER_ADMIN</strong> — il peut basculer sur de vraies écoles.</li>
+      <li>Réinitialisez chaque mot de passe (nouveau, jetable) juste avant de le transmettre, et changez-le à nouveau une fois la vidéo générée.</li>
+      <li>Chaque bloc ci-dessous est une génération Demosmith séparée : cliquez « + Create » à chaque fois.</li>
+    </ul>
+
+    <h3 style="font-size:15px;margin:22px 0 10px;">①a Administration — dashboard → élèves → enseignants → notes → bulletins</h3>
+    <div class="card-label" style="border-radius:8px 8px 0 0;">Lien</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:14px 18px;font-size:14px;">https://trxsmartschool.com/login</div>
+    <div class="card-label" style="border-radius:0;">Flow Description</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:16px 18px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">Fais une démonstration produit de SmartSchool, une plateforme de gestion scolaire pour les écoles en Guinée. Connecte-toi directement avec les identifiants fournis (un compte Administrateur rattaché à l'établissement "gotcha", l'école de démonstration). Puis, dans cet ordre, SANS jamais entrer dans "Comptabilité", "Paramètres", "Vie scolaire" ou "Communication" : (1) montre le tableau de bord admin avec ses indicateurs clés ; (2) ouvre la liste des élèves et la fiche détaillée d'un élève ; (3) ouvre la liste des enseignants ; (4) va dans "Centralisation des notes" et montre le suivi des évaluations ; (5) va dans "Bulletins", sélectionne une classe et un trimestre, ouvre l'aperçu d'un bulletin — insiste sur le fait que ce document respecte le format officiel guinéen (en-tête République de Guinée, photo, QR code, décision du conseil). Ton souhaité : professionnel, confiant, orienté vers un directeur d'établissement qui découvre l'outil. Mets en avant que l'application est installable comme une app mobile (PWA) et pensée pour fonctionner même avec une connexion internet instable.</div>
+    <div class="card-label" style="border-radius:0 0 8px 8px;border-top:1px solid var(--line);">Identifiants — Administrateur « gotcha »</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:14.5px;display:flex;gap:28px;flex-wrap:wrap;font-variant-numeric:tabular-nums;margin-bottom:24px;">
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Identifiant</span><strong>620000000</strong></div>
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Mot de passe</span><strong>IYA2006</strong></div>
+    </div>
+
+    <h3 style="font-size:15px;margin:22px 0 10px;">①b Paramètres — Cartes scolaires (seule, simplifiée)</h3>
+    <p style="color:var(--ink-soft);font-size:13.5px;margin:0 0 10px;">Retiré : le passage rapide par les 6 autres onglets (Identité, Apparence...) — trop de manipulations liées, c'est ce qui a fait échouer la tentative précédente. On va directement à l'essentiel.</p>
+    <div class="card-label" style="border-radius:8px 8px 0 0;">Lien</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:14px 18px;font-size:14px;">https://trxsmartschool.com/login</div>
+    <div class="card-label" style="border-radius:0;">Flow Description</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:16px 18px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">Connecte-toi avec les identifiants fournis sur https://trxsmartschool.com/login. Va directement dans Paramètres, puis dans la section "Cartes". Montre l'aperçu de la carte scolaire généré en direct, puis clique une seule fois pour basculer cet aperçu du modèle "Élève" vers le modèle "Enseignant". Rien d'autre. Ton professionnel, insiste sur la personnalisation possible de ces cartes (logo, couleurs, champs visibles).</div>
+    <div class="card-label" style="border-radius:0 0 8px 8px;border-top:1px solid var(--line);">Identifiants — mêmes que ①a</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:14.5px;display:flex;gap:28px;flex-wrap:wrap;font-variant-numeric:tabular-nums;margin-bottom:24px;">
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Identifiant</span><strong>620000000</strong></div>
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Mot de passe</span><strong>IYA2006</strong></div>
+    </div>
+
+    <h3 style="font-size:15px;margin:22px 0 10px;">①c Vie scolaire + Communication (seules, simplifiées)</h3>
+    <div class="card-label" style="border-radius:8px 8px 0 0;">Lien</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:14px 18px;font-size:14px;">https://trxsmartschool.com/login</div>
+    <div class="card-label" style="border-radius:0;">Flow Description</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:16px 18px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">Connecte-toi avec les identifiants fournis sur https://trxsmartschool.com/login. Va dans "Vie scolaire", montre le suivi des séances/appels. Puis va directement vers l'URL https://trxsmartschool.com/communication et montre l'envoi d'un message aux familles. Rien d'autre. Ton professionnel et direct.</div>
+    <div class="card-label" style="border-radius:0 0 8px 8px;border-top:1px solid var(--line);">Identifiants — mêmes que ①a</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:14.5px;display:flex;gap:28px;flex-wrap:wrap;font-variant-numeric:tabular-nums;margin-bottom:24px;">
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Identifiant</span><strong>620000000</strong></div>
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Mot de passe</span><strong>IYA2006</strong></div>
+    </div>
+
+    <h3 style="font-size:15px;margin:22px 0 10px;">② Comptabilité — espace isolé, en dernier</h3>
+    <div class="card-label" style="border-radius:8px 8px 0 0;">Lien</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:14px 18px;font-size:14px;">https://trxsmartschool.com/login</div>
+    <div class="card-label" style="border-radius:0;">Flow Description</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:16px 18px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">Fais une démonstration produit du module Comptabilité de SmartSchool. Connecte-toi avec les identifiants fournis (compte Administrateur de l'établissement "gotcha"), puis navigue directement vers l'URL https://trxsmartschool.com/comptabilite/paiements — c'est un espace de navigation séparé du reste de l'application, n'essaie pas d'y accéder par un menu et n'essaie pas de revenir au tableau de bord principal ensuite. Montre l'enregistrement d'un paiement de frais de scolarité et le suivi des impayés par classe. Ton professionnel, met en avant la clarté du suivi financier.</div>
+    <div class="card-label" style="border-radius:0 0 8px 8px;border-top:1px solid var(--line);">Identifiants — mêmes que ①</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:14.5px;display:flex;gap:28px;flex-wrap:wrap;font-variant-numeric:tabular-nums;margin-bottom:24px;">
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Identifiant</span><strong>620000000</strong></div>
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Mot de passe</span><strong>IYA2006</strong></div>
+    </div>
+
+    <h3 style="font-size:15px;margin:22px 0 10px;">③a Portail Enseignant</h3>
+    <div class="card-label" style="border-radius:8px 8px 0 0;">Lien</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:14px 18px;font-size:14px;">https://trxsmartschool.com/login</div>
+    <div class="card-label" style="border-radius:0;">Flow Description</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:16px 18px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">Fais une démonstration produit du portail Enseignant de SmartSchool. Connecte-toi avec les identifiants fournis sur https://trxsmartschool.com/login. Explore les fonctions principales visibles sur ce portail : les classes et matières affectées, la saisie de notes pour une évaluation, l'emploi du temps, et l'appel/les présences si visible. Ton chaleureux, montre à quel point c'est simple pour un enseignant au quotidien.</div>
+    <div class="card-label" style="border-radius:0 0 8px 8px;border-top:1px solid var(--line);">Identifiants — compte Enseignant</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:14.5px;display:flex;gap:28px;flex-wrap:wrap;font-variant-numeric:tabular-nums;margin-bottom:24px;">
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Identifiant</span><strong>64398030</strong></div>
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Mot de passe</span><strong>IYA2006</strong></div>
+    </div>
+
+    <h3 style="font-size:15px;margin:22px 0 10px;">③b Portail Parent</h3>
+    <div class="card-label" style="border-radius:8px 8px 0 0;">Lien</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:14px 18px;font-size:14px;">https://trxsmartschool.com/login</div>
+    <div class="card-label" style="border-radius:0;">Flow Description</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:16px 18px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">Fais une démonstration produit du portail Parent de SmartSchool. Connecte-toi avec les identifiants fournis sur https://trxsmartschool.com/login. Explore les fonctions principales visibles sur ce portail : le suivi scolaire de l'enfant (notes, bulletins), les présences/absences, la situation des paiements, et la messagerie avec l'école si visible. Ton chaleureux, rassurant, montre à quel point un parent reste informé facilement.</div>
+    <div class="card-label" style="border-radius:0 0 8px 8px;border-top:1px solid var(--line);">Identifiants — compte Parent</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:14.5px;display:flex;gap:28px;flex-wrap:wrap;font-variant-numeric:tabular-nums;margin-bottom:24px;">
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Identifiant</span><strong>610935524</strong></div>
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Mot de passe</span><strong>IYA2006</strong></div>
+    </div>
+
+    <h3 style="font-size:15px;margin:22px 0 10px;">③c Portail Élève</h3>
+    <div class="card-label" style="border-radius:8px 8px 0 0;">Lien</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:14px 18px;font-size:14px;">https://trxsmartschool.com/login</div>
+    <div class="card-label" style="border-radius:0;">Flow Description</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;padding:16px 18px;font-size:13.5px;line-height:1.6;white-space:pre-wrap;">Fais une démonstration produit du portail Élève de SmartSchool. Connecte-toi avec les identifiants fournis sur https://trxsmartschool.com/login. Explore les fonctions principales visibles sur ce portail : les notes et bulletins, l'emploi du temps, et les messages/annonces si visible. Ton simple et direct, montre ce qu'un élève voit au quotidien.</div>
+    <div class="card-label" style="border-radius:0 0 8px 8px;border-top:1px solid var(--line);">Identifiants — compte Élève</div>
+    <div style="background:var(--surface-2);border:1px solid var(--line);border-top:none;border-radius:0 0 8px 8px;padding:16px 18px;font-size:14.5px;display:flex;gap:28px;flex-wrap:wrap;font-variant-numeric:tabular-nums;">
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Identifiant</span><strong>ELV-GOTCHA-02009</strong></div>
+      <div><span style="color:var(--ink-faint);font-size:12px;display:block;">Mot de passe</span><strong>IYA2006</strong></div>
+    </div>
+    <p style="color:var(--ink-soft);font-size:12.5px;margin:10px 0 0;">Les 4 comptes (admin, enseignant, parent, élève) partagent le même mot de passe jetable — changez-les tous une fois les 5 vidéos générées.</p>
+  </div>
+
+  <div class="panel" style="border-color:var(--accent-2);">
+    <h2>🔁 Plan B — Guidde (guidde.com), un outil fondamentalement différent</h2>
+    <p style="color:var(--ink-soft);font-size:14.5px;margin:0 0 12px;">Demosmith fait naviguer un agent IA <em>seul</em> dans l'app — c'est ce qui coince (comptabilité sans lien de sortie). Guidde inverse le principe : <strong>c'est vous qui cliquez</strong> à travers l'application normalement (extension de navigateur qui enregistre), et l'IA ajoute ensuite automatiquement la voix off, les sous-titres et les mises en valeur. Zéro risque de blocage de navigation, puisque c'est vous qui naviguez.</p>
+    <ul>
+      <li>Inscription sans carte bancaire, extension navigateur à installer.</li>
+      <li>Cliquez simplement à travers les 9 sections du script ci-dessous, dans l'ordre, en respectant à peu près le rythme indiqué.</li>
+      <li>L'IA génère le script de narration automatiquement à partir de vos actions — vous pouvez ensuite le corriger avec les textes déjà rédigés plus bas si besoin.</li>
+      <li>Choix parmi 200+ voix et langues, dont le français.</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>Plan C — enregistrement 100% manuel</h2>
+    <p style="color:var(--ink-soft);font-size:14.5px;margin:0 0 10px;">Si aucun outil IA ne convient, ou pour une démo en direct devant le client.</p>
+    <ul>
+      <li><strong>Capture d'écran :</strong> OBS Studio (gratuit) ou l'enregistreur Windows intégré (Win+Alt+R).</li>
+      <li><strong>Voix :</strong> lisez le script détaillé ci-dessous vous-même, ou collez-le dans une voix IA (Edge → « Lire à voix haute », ou ElevenLabs/Murf.ai) puis synchronisez au montage.</li>
+      <li><strong>Données :</strong> même établissement de démo, mêmes précautions.</li>
+      <li><strong>Réglages :</strong> navigateur plein écran, zoom à 100%.</li>
+    </ul>
+  </div>
+
+  <nav class="toc">
+    <a href="#s1">1. Accroche</a>
+    <a href="#s2">2. Connexion &amp; PWA</a>
+    <a href="#s3">3. Tableau de bord</a>
+    <a href="#s4">4. Élèves &amp; enseignants</a>
+    <a href="#s5">5. Notes &amp; bulletins</a>
+    <a href="#s6">6. Finances</a>
+    <a href="#s7">7. Communication</a>
+    <a href="#s8">8. Mode hors-ligne</a>
+    <a href="#s9">9. Conclusion</a>
+  </nav>
+
+  <div class="section" id="s1">
+    <div class="section-head">
+      <span class="section-num">01</span>
+      <span class="section-title">Accroche</span>
+      <span class="timing">0:00 – 1:30</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran</div>
+      <div class="card-body">Page vitrine (avant le login, thème sombre — « Votre école mérite mieux que des cahiers et des tableurs »).</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>Dans la plupart des écoles guinéennes aujourd'hui, la gestion se fait encore à la main : cahiers de notes, reçus papier, classeurs de dossiers élèves, calculs de moyennes au stylo. Chaque bulletin prend des heures. Chaque erreur de calcul coûte du temps — et de la crédibilité.</p>
+        <p>SmartSchool est une plateforme de gestion scolaire complète, pensée pour le contexte guinéen : elle centralise les élèves, les enseignants, les notes, les finances et la communication avec les familles — dans un seul espace, accessible même avec une connexion instable.</p>
+        <p>Je vais vous montrer, en quelques minutes, comment ça fonctionne concrètement.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="s2">
+    <div class="section-head">
+      <span class="section-num">02</span>
+      <span class="section-title">Connexion et installation</span>
+      <span class="timing">1:30 – 3:00</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran</div>
+      <div class="card-body">Cliquer sur « Démarrer », arriver sur la page de connexion, se connecter avec un compte administrateur de démonstration.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>La connexion se fait par identifiant, email ou téléphone — chaque établissement a son propre espace, totalement isolé des autres écoles qui utilisent la plateforme.</p>
+        <p>Autre point important : SmartSchool est une application installable. <em>(Montrer le bouton d'installation PWA ou le menu du navigateur.)</em> On peut l'installer comme une vraie application, sur ordinateur comme sur téléphone — sans passer par un store, en quelques secondes. Une fois installée, elle démarre comme n'importe quelle application native.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="s3">
+    <div class="section-head">
+      <span class="section-num">03</span>
+      <span class="section-title">Tableau de bord</span>
+      <span class="timing">3:00 – 5:00</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran</div>
+      <div class="card-body"><code>/dashboard</code> — KPI, section raccourcis stratégiques, graphique de répartition.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>Dès la connexion, le directeur retrouve une vue d'ensemble de son établissement : effectif total, taux de présence du jour, situation financière, activité récente. Tout ce qui compte pour piloter l'école au quotidien, en un coup d'œil, sans avoir à ouvrir dix fichiers Excel différents.</p>
+        <p>Les raccourcis stratégiques donnent un accès direct aux fonctions les plus utilisées : communication, paiements, agenda, centre de contrôle.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="s4">
+    <div class="section-head">
+      <span class="section-num">04</span>
+      <span class="section-title">Élèves et enseignants</span>
+      <span class="timing">5:00 – 7:30</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran</div>
+      <div class="card-body"><code>/eleves</code> — liste, ouvrir une fiche élève (photo, dossier, historique). Puis <code>/enseignants</code> rapidement.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>Chaque élève a un dossier complet : informations personnelles, classe, historique scolaire, situation financière, bulletins précédents. La recherche fonctionne même avec des fautes de frappe ou des accents mal saisis — pensée pour un usage réel, pas un usage idéal.</p>
+        <p><em>(Si disponible : montrer l'import Excel/CSV.)</em> Pour une école qui bascule depuis des fichiers Excel existants, l'import en masse permet de charger des centaines d'élèves en quelques minutes, avec une détection automatique des doublons.</p>
+        <p>Côté enseignants, chaque professeur est affecté à ses classes et matières, avec son propre espace de connexion pour saisir ses notes.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="s5">
+    <div class="section-head">
+      <span class="section-num">05</span>
+      <span class="section-title">Notes et bulletins — le cœur du système</span>
+      <span class="timing">7:30 – 13:00</span>
+    </div>
+    <p style="color:var(--ink-soft);font-size:13.5px;margin:-4px 0 14px;">La partie la plus importante — prenez le temps de bien la montrer.</p>
+    <div class="card screen">
+      <div class="card-label">Écran — 7:30 à 9:30</div>
+      <div class="card-body"><code>/notes</code> (Centralisation) — liste des évaluations et compositions, taux de centralisation.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>Les enseignants saisissent leurs notes depuis leur propre portail. L'administration suit ici la centralisation en temps réel : combien d'évaluations sont saisies, combien restent en attente, matière par matière, classe par classe. Le calcul des moyennes suit exactement les coefficients configurés par l'école — rien n'est codé en dur.</p>
+      </div>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran — 9:30 à 12:30</div>
+      <div class="card-body"><code>/bulletins</code> — sélectionner classe + trimestre, liste des bulletins, ouvrir l'aperçu d'un bulletin.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>Une fois les notes centralisées, les bulletins se génèrent automatiquement — moyennes, rang de classe, mention, tout est calculé instantanément pour toute une classe.</p>
+        <p>Et voici un point sur lequel nous avons été particulièrement exigeants : le format du bulletin respecte exactement le modèle officiel guinéen — en-tête République de Guinée, photo de l'élève, QR code de vérification, décision du conseil de classe, signatures. Ce n'est pas un bulletin générique : c'est le document que l'école utilise déjà, simplement généré en quelques secondes au lieu de plusieurs heures.</p>
+        <p><em>(Cliquer sur Imprimer pour montrer l'aperçu d'impression.)</em> Et il s'imprime directement, prêt à signer.</p>
+      </div>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran — 12:30 à 13:00</div>
+      <div class="card-body">Réduire la fenêtre ou basculer sur un émulateur mobile pour montrer le même aperçu de bulletin en version téléphone.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>Et parce que beaucoup de personnels consultent leurs dossiers depuis leur téléphone plutôt qu'un ordinateur, toute l'application — y compris les bulletins — est pensée pour le mobile en priorité.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="s6">
+    <div class="section-head">
+      <span class="section-num">06</span>
+      <span class="section-title">Finances et comptabilité</span>
+      <span class="timing">13:00 – 15:00</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran</div>
+      <div class="card-body"><code>/comptabilite/paiements</code> — enregistrement d'un paiement, situation des impayés.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>Côté finances, chaque paiement de frais de scolarité est enregistré avec reçu automatique. L'école a une vision immédiate des impayés, classe par classe, élève par élève — plus besoin de croiser des cahiers de caisse avec des listes d'élèves.</p>
+        <p>Les dépenses de l'établissement sont suivies de la même façon, avec un solde de caisse toujours à jour.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="s7">
+    <div class="section-head">
+      <span class="section-num">07</span>
+      <span class="section-title">Communication et vie scolaire</span>
+      <span class="timing">15:00 – 16:30</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran</div>
+      <div class="card-body"><code>/communication</code>, puis un aperçu de la gestion des présences/incidents.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>La communication avec les familles se fait directement dans l'application — messages, annonces, notifications — plutôt que par des canaux dispersés et difficiles à tracer.</p>
+        <p>Le suivi de la vie scolaire — présences, absences, incidents — est centralisé lui aussi, avec un historique complet consultable à tout moment.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="s8">
+    <div class="section-head">
+      <span class="section-num">08</span>
+      <span class="section-title">Le mode hors-ligne — le vrai différenciateur</span>
+      <span class="timing">16:30 – 18:00</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran</div>
+      <div class="card-body">Si possible, démonstration concrète (couper le Wi-Fi, montrer qu'une action reste possible et se synchronise au retour du réseau). Sinon, l'expliquer avec l'icône de synchronisation visible.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>Un point essentiel pour le contexte guinéen : la connexion internet n'est pas toujours fiable. SmartSchool a été conçu pour fonctionner même hors ligne — les données consultées récemment restent disponibles, et certaines actions peuvent être effectuées sans réseau : elles se synchronisent automatiquement dès que la connexion revient. L'école n'est jamais totalement bloquée par une coupure internet.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" id="s9">
+    <div class="section-head">
+      <span class="section-num">09</span>
+      <span class="section-title">Conclusion</span>
+      <span class="timing">18:00 – 19:00</span>
+    </div>
+    <div class="card screen">
+      <div class="card-label">Écran</div>
+      <div class="card-body">Retour au tableau de bord ou à la page vitrine.</div>
+    </div>
+    <div class="card voice">
+      <div class="card-label">Texte à dire</div>
+      <div class="card-body">
+        <p>En résumé : SmartSchool remplace les cahiers, les fichiers Excel dispersés et les calculs manuels par une plateforme unique, pensée pour la réalité du terrain guinéen — connexion instable, usage mobile, et un format de bulletin qui respecte les standards officiels.</p>
+        <p>Nous serions ravis d'en discuter plus en détail et de vous montrer l'application en direct sur vos propres besoins.</p>
+        <p>Merci de votre attention.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="checklist">
+    <h2>Checklist avant envoi au client</h2>
+    <div class="check-item"><span class="box"></span>Données de démonstration réalistes et propres (pas de « test123 »)</div>
+    <div class="check-item"><span class="box"></span>Aucune donnée réelle d'élève affichée (confidentialité)</div>
+    <div class="check-item"><span class="box"></span>Audio synchronisé, pas de blanc long ni de coupure</div>
+    <div class="check-item"><span class="box"></span>Export en MP4, résolution 1080p minimum</div>
+    <div class="check-item"><span class="box"></span>Durée finale vérifiée (viser 18-20 min, pas plus de 25)</div>
+    <div class="check-item"><span class="box"></span>Relecture du script à voix haute avant l'enregistrement final</div>
+  </div>
+
+  <footer>SmartSchool — préparé pour la présentation client</footer>
+</div>

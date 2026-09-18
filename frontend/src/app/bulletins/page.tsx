@@ -64,7 +64,7 @@ function BulletinsContent() {
             try {
                 const [clsRes, triRes, paramRes, notationRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
-                    api.get('/api/portail-enseignant/referentiels/trimestres'),
+                    api.get(`/api/portail-enseignant/referentiels/trimestres?annee_id=${anneeId}`),
                     api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=DOCUMENTS`).catch(() => ({ data: [] })),
                     api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&categorie=NOTATION`).catch(() => ({ data: [] })),
                 ]);
@@ -422,11 +422,11 @@ function BulletinsContent() {
                         ))}
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 16px', flexWrap: 'wrap', gap: '12px' }}>
                         <h2 style={{ fontSize: '18px', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <ClipboardList size={20} color="#059669" /> {bulletinsTotal} bulletin(s) — {selectedClasseInfo?.libelle} — {selectedTrimestreInfo?.libelle || `Trimestre ${selectedTrimestre}`}
                         </h2>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                             <span style={{ background: '#f0fdf4', color: '#166534', padding: '6px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 <CheckCircle2 size={14} /> {filteredBulletins.filter(b => b.statut === 'PUBLIE').length} publiés (page)
                             </span>
@@ -445,7 +445,7 @@ function BulletinsContent() {
                     </div>
 
                     {/* Cards Grid */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(340px, 100%), 1fr))', gap: '16px' }}>
                         {filteredBulletins.map((b, idx) => {
                             const ms = getMentionStyle(b.mention);
                             return (
@@ -512,14 +512,14 @@ function BulletinsContent() {
                             onClick={e => e.stopPropagation()}>
 
                             {/* Modal Toolbar */}
-                            <div style={{ padding: '12px 20px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ padding: '12px 20px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                                     <span style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>Aperçu du bulletin</span>
                                     <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: 700, background: selectedBulletin.statut === 'PUBLIE' ? '#dcfce7' : '#fef3c7', color: selectedBulletin.statut === 'PUBLIE' ? '#16a34a' : '#d97706', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                                         {selectedBulletin.statut === 'PUBLIE' ? <><CheckCircle2 size={14} /> Publié</> : <><Clock size={14} /> Brouillon</>}
                                     </span>
                                 </div>
-                                <div style={{ display: 'flex', gap: '8px' }}>
+                                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                     {selectedBulletin.statut === 'PUBLIE' ? (
                                         <button onClick={() => unpublishBulletin(selectedBulletin.bulletin_id)}
                                             style={{ padding: '8px 18px', borderRadius: '8px', background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', fontSize: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -543,8 +543,9 @@ function BulletinsContent() {
                             </div>
 
                             {/* ═══ BULLETIN CONTENT (PRINTABLE) ═══ */}
-                            <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-                                <div ref={printRef} style={{ position: 'relative' }}>
+                            <div className="document-preview-scroll" style={{ flex: 1, padding: '20px' }}>
+                                <div className="document-preview-frame">
+                                <div ref={printRef} className="document-preview" style={{ position: 'relative' }}>
                                     {docSettings.filigrane_actif && docSettings.filigrane_bulletins && (
                                         <div style={{
                                             position: 'absolute',
@@ -865,6 +866,7 @@ function BulletinsContent() {
                                             <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.7)' }}>Conakry, Guinée • {new Date().toLocaleDateString('fr-FR')}</div>
                                         </div>
                                     </div>
+                                </div>
                                 </div>
                             </div>
                         </motion.div>

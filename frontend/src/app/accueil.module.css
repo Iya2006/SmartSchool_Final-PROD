@@ -52,7 +52,8 @@
     display: grid;
     place-items: center;
     flex-shrink: 0;
-    background: linear-gradient(140deg, #2563eb, #10b981);
+    background: #ffffff;
+    overflow: hidden;  /* le logo porte son propre fond blanc */
     box-shadow: 0 8px 20px -8px rgba(37, 99, 235, 0.9);
 }
 

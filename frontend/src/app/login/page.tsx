@@ -22,7 +22,7 @@ import {
     LayoutGrid, Loader2, Lock, Mail, Sparkles, Users, X,
 } from 'lucide-react';
 import api from '@/lib/api';
-import SmartSchoolMark from '@/components/SmartSchoolMark';
+import Image from 'next/image';
 import styles from './login.module.css';
 
 const ATOUTS = [
@@ -110,7 +110,7 @@ export default function LoginPage() {
                 <section className={styles.presentation}>
                     <div className={styles.marque}>
                         <div className={styles.marqueSigle}>
-                            <SmartSchoolMark size={27} color="#ffffff" />
+                            <Image src="/brand/logo-mark.png" alt="SmartSchool" width={54} height={54} priority />
                         </div>
                         <div>
                             <p className={styles.marqueNom}>SMARTSCHOOL</p>
