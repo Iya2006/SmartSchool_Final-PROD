@@ -5,6 +5,7 @@ import { AuthProvider } from '@/context/AuthContext';
 import QueryProvider from '@/components/QueryProvider';
 import { Toaster } from 'react-hot-toast';
 import PostLoginSplash from '@/components/PostLoginSplash';
+import WhatsNewModal from '@/components/WhatsNewModal';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
     // QueryProvider englobe tout le reste : c'est une couche d'infrastructure
@@ -17,9 +18,13 @@ export default function Providers({ children }: { children: React.ReactNode }) {
                 <AppProvider>
                     {children}
                     <Toaster position="top-right" toastOptions={{ style: { background: '#1e293b', color: '#fff', borderRadius: '12px' } }} />
-                    {/* Doit être sous AuthProvider (useAuth) — écran affiché juste
-                        après une connexion réussie, voir AuthContext.login(). */}
+                    {/* Doivent être sous AuthProvider (useAuth). PostLoginSplash :
+                        écran affiché juste après une connexion réussie, voir
+                        AuthContext.login(). WhatsNewModal : se gate elle-même
+                        sur !showPostLoginSplash pour ne jamais s'empiler avec
+                        cet écran — apparaît juste après, pas en même temps. */}
                     <PostLoginSplash />
+                    <WhatsNewModal />
                 </AppProvider>
             </AuthProvider>
         </QueryProvider>
