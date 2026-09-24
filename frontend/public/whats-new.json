@@ -1,8 +1,9 @@
 {
-    "version": "2026-09-24-1",
-    "titre": "Nouveautés du 24 septembre 2026",
+    "version": "2026-09-26-1",
+    "titre": "Nouveautés du 26 septembre 2026",
     "points": [
         "Nouveau logo SmartSchool sur toute l'application — visible dès la page de connexion et sur l'icône de l'app installée.",
-        "Impression groupée des cartes élèves, classe par classe, en une seule confirmation d'impression — rendez-vous dans Élèves > Récupération des cartes."
+        "Impression groupée des cartes élèves, classe par classe, en une seule confirmation d'impression — rendez-vous dans Élèves > Récupération des cartes.",
+        "Ce message : vous serez désormais prévenu directement ici à chaque mise à jour de l'application."
     ]
 }
