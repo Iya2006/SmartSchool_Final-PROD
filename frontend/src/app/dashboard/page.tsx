@@ -248,24 +248,35 @@ export default function DashboardPage() {
     return filteredImpayes.slice(start, start + IMPAYES_PER_PAGE);
   }, [filteredImpayes, impayesPage]);
 
+  // On sort la liste du useMemo AVANT de l'utiliser.
+  //
+  // POURQUOI : en lisant `data.paiements_recents` à l'intérieur du useMemo, le
+  // React Compiler déduisait la dépendance `data` TOUT ENTIER, alors que le
+  // tableau déclaré ne citait que `data?.paiements_recents`. Dépendance
+  // déclarée plus étroite que celle réellement lue : le compilateur refusait
+  // alors d'optimiser le composant (« existing memoization could not be
+  // preserved »). En isolant la valeur ici, la dépendance déclarée correspond
+  // exactement à ce que lit le corps. Comportement identique.
+  const paiementsRecents = data?.paiements_recents;
+
   const groupedRecentPayments = useMemo(() => {
-    if (!data?.paiements_recents) return [];
-    
-    const groups = new Map<string, typeof data.paiements_recents>();
-    
-    data.paiements_recents.forEach(payment => {
+    if (!paiementsRecents) return [];
+
+    const groups = new Map<string, NonNullable<typeof paiementsRecents>>();
+
+    paiementsRecents.forEach(payment => {
       if (!groups.has(payment.eleve)) {
         groups.set(payment.eleve, []);
       }
       groups.get(payment.eleve)!.push(payment);
     });
-    
+
     return Array.from(groups.entries()).slice(0, 6).map(([eleve, payments]) => ({
       eleve,
       classe: payments[0].classe,
       payments
     }));
-  }, [data?.paiements_recents]);
+  }, [paiementsRecents]);
 
   const financeSeries = useMemo(() => {
     if (!data) return [];

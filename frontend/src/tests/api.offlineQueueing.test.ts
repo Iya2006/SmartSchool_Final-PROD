@@ -112,21 +112,45 @@ describe('lib/api — mise en file hors-ligne', () => {
     });
 });
 
+/** Force l'état de connexion vu par le navigateur (jsdom le dit « en ligne »). */
+function simulerConnexion(enLigne: boolean) {
+    Object.defineProperty(navigator, 'onLine', { value: enLigne, configurable: true });
+}
+
+/** Erreur porteuse d'une réponse du serveur (ou de l'hébergeur). */
+function erreurAvecStatut(status: number, data: unknown = {}) {
+    return Object.assign(new Error(`Request failed with status code ${status}`), {
+        config: { method: 'get', url: '/api/eleves' },
+        response: { status, data },
+    });
+}
+
+/** Message rendu par l'intercepteur pour une erreur donnée. */
+async function messageRendu(erreur: unknown): Promise<string> {
+    const rejected = getRejectedHandler();
+    try {
+        await rejected(erreur);
+        throw new Error('aurait dû rejeter');
+    } catch (err) {
+        return (err as Error).message;
+    }
+}
+
 describe("lib/api — message hors-ligne (page/route jamais chargée en cache)", () => {
     beforeEach(() => {
         memoryStore.clear();
         localStorage.clear();
+        simulerConnexion(true);
+        // L'intercepteur journalise le message d'origine avant de le remplacer :
+        // on l'étouffe pour garder la sortie des tests lisible.
+        vi.spyOn(console, 'error').mockImplementation(() => {});
     });
 
     it("une vraie coupure réseau sur une route non queueable reçoit un message clair (pas \"Network Error\")", async () => {
-        const rejected = getRejectedHandler();
-        try {
-            await rejected(networkError({ method: 'get', url: '/api/eleves' }));
-            throw new Error('aurait dû rejeter');
-        } catch (err) {
-            expect((err as Error).message).toMatch(/hors-ligne/i);
-            expect((err as Error).message).not.toBe('net');
-        }
+        simulerConnexion(false);
+        const message = await messageRendu(networkError({ method: 'get', url: '/api/eleves' }));
+        expect(message).toMatch(/hors-ligne/i);
+        expect(message).not.toBe('net');
     });
 
     it("un vrai refus serveur (403) garde son message d'origine, jamais réécrit en message hors-ligne", async () => {
@@ -150,6 +174,68 @@ describe("lib/api — message hors-ligne (page/route jamais chargée en cache)",
             throw new Error('aurait dû rejeter');
         } catch (err) {
             expect((err as any).response).toBeUndefined();
+        }
+    });
+});
+
+/*
+ * Aucun jargon d'outil de développement ne doit atteindre l'écran d'une école.
+ * Ces cas-là arrivaient tels quels — adresse de l'API, code HTTP, phrases
+ * anglaises d'axios — pendant que le serveur redémarrait ou sortait de veille.
+ */
+describe('lib/api — pannes serveur dites en français', () => {
+    beforeEach(() => {
+        memoryStore.clear();
+        localStorage.clear();
+        simulerConnexion(true);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    it("serveur injoignable alors que l'appareil est connecté : « indisponible », pas « hors-ligne »", async () => {
+        const message = await messageRendu(networkError({ method: 'get', url: '/api/eleves' }));
+        expect(message).toMatch(/indisponible/i);
+        expect(message).not.toMatch(/hors-ligne/i);
+    });
+
+    it('dépassement de délai : on invite à réessayer, sans « timeout of 30000ms exceeded »', async () => {
+        const erreur = Object.assign(new Error('timeout of 30000ms exceeded'), {
+            code: 'ECONNABORTED',
+            config: { method: 'get', url: '/api/eleves' },
+        });
+        expect(await messageRendu(erreur)).toMatch(/trop de temps/i);
+    });
+
+    it.each([502, 503, 504])('%i (serveur en train de redémarrer) : « indisponible », jamais le code', async (statut) => {
+        const message = await messageRendu(erreurAvecStatut(statut));
+        expect(message).toMatch(/indisponible/i);
+        expect(message).not.toMatch(new RegExp(String(statut)));
+    });
+
+    it('500 : panne annoncée comme telle, sans texte anglais', async () => {
+        const message = await messageRendu(erreurAvecStatut(500));
+        expect(message).toMatch(/rencontré un problème/i);
+        expect(message).not.toMatch(/status code/i);
+    });
+
+    it("une erreur métier (4xx) garde son message d'origine — c'est lui qui aide l'utilisateur", async () => {
+        const erreur = Object.assign(new Error('forbidden'), {
+            config: { method: 'get', url: '/api/eleves' },
+            response: { status: 403, data: { detail: 'Refusé' } },
+        });
+        expect(await messageRendu(erreur)).toBe('forbidden');
+    });
+
+    it("aucun message de panne ne contient d'adresse d'API ni de jargon", async () => {
+        const cas = [
+            networkError({ method: 'get', url: '/api/eleves' }),
+            erreurAvecStatut(502),
+            erreurAvecStatut(500),
+        ];
+        for (const c of cas) {
+            const message = await messageRendu(c);
+            expect(message).not.toMatch(/https?:\/\//);
+            expect(message).not.toMatch(/localhost|onrender|api\./i);
+            expect(message).not.toMatch(/status code|Network Error|timeout of/i);
         }
     });
 });

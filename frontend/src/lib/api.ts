@@ -181,8 +181,59 @@ const MESSAGE_HORS_LIGNE =
     "Vous êtes hors-ligne et cette donnée n'a pas encore été chargée sur cet appareil. " +
     'Reconnectez-vous pour y accéder.';
 
+// Pannes côté serveur, dites en français et sans rien de technique.
+//
+// L'utilisateur d'une école n'a que faire d'une adresse d'API, d'un code HTTP
+// ou d'un texte d'outil de développement (« Request failed with status code
+// 502 », « timeout of 30000ms exceeded »). Il a besoin de deux choses : savoir
+// que la panne ne vient pas de lui, et savoir s'il doit réessayer. Le détail
+// technique n'est pas perdu pour autant — il part en console (voir plus bas).
+const MESSAGE_INDISPONIBLE = 'Serveur indisponible. Réessayez dans un instant.';
+const MESSAGE_TROP_LENT = 'Le serveur met trop de temps à répondre. Réessayez dans un instant.';
+const MESSAGE_PANNE_SERVEUR = 'Le serveur a rencontré un problème. Réessayez dans un instant.';
+
 function estErreurReseau(error: any): boolean {
     return error?.code === 'ERR_NETWORK' && !error?.response;
+}
+
+/**
+ * L'appareil se sait-il sans connexion ?
+ *
+ * Sert à distinguer « c'est vous qui êtes hors-ligne » de « c'est le serveur
+ * qui ne répond pas » : les deux remontent la MÊME erreur réseau, mais
+ * n'appellent pas le même geste. Dire « vous êtes hors-ligne » à quelqu'un
+ * dont la connexion marche très bien pendant que le serveur redémarre, c'est
+ * l'envoyer chercher la panne du mauvais côté.
+ *
+ * Hors navigateur (tests, rendu serveur), on suppose la connexion présente :
+ * l'hypothèse prudente est que la panne vient du serveur.
+ */
+function appareilHorsLigne(): boolean {
+    return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+/**
+ * Traduit une panne en phrase compréhensible.
+ *
+ * Rend `undefined` quand l'erreur porte un vrai sens métier (4xx) : ce
+ * message-là vient du serveur, il aide l'utilisateur, on ne l'écrase jamais.
+ */
+function messageDePanne(error: any): string | undefined {
+    // Le dépassement de délai arrive sans réponse : à tester avant le cas
+    // général « pas de réponse », sinon il serait annoncé comme une panne.
+    if (error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT') return MESSAGE_TROP_LENT;
+    if (estErreurReseau(error)) return appareilHorsLigne() ? MESSAGE_HORS_LIGNE : MESSAGE_INDISPONIBLE;
+    // Aucune annulation de requête dans l'application (ni AbortController ni
+    // CancelToken) : ici, « pas de réponse » veut bien dire « le serveur n'a
+    // rien répondu », jamais « on a coupé la requête volontairement ».
+    if (!error?.response) return MESSAGE_INDISPONIBLE;
+    const statut = error.response.status;
+    // 502/503/504 : l'hébergeur répond à la place du serveur, typiquement
+    // pendant un redémarrage ou une sortie de veille. Ce n'est pas une panne
+    // durable, d'où « réessayez » plutôt qu'un message d'échec définitif.
+    if (statut === 502 || statut === 503 || statut === 504) return MESSAGE_INDISPONIBLE;
+    if (statut >= 500) return MESSAGE_PANNE_SERVEUR;
+    return undefined;
 }
 
 // ── Intercepteur de réponse : gère les erreurs 401 (token expiré) et 403 (accès interdit) ──
@@ -199,8 +250,18 @@ api.interceptors.response.use(
         // l'app à distinguer "le serveur a répondu" de "pas de réponse du
         // tout" (ex: le bloc juste en dessous). En fabriquer un faux
         // casserait cette distinction pour du code qui ne s'y attend pas.
-        if (estErreurReseau(error)) {
-            error.message = MESSAGE_HORS_LIGNE;
+        const panne = messageDePanne(error);
+        if (panne) {
+            // Le message d'origine est écrit en console AVANT d'être remplacé :
+            // on retire le jargon de l'écran, pas du diagnostic.
+            console.error(
+                '[api]',
+                error?.config?.method?.toUpperCase(),
+                error?.config?.url,
+                error?.response?.status ?? error?.code,
+                error?.message,
+            );
+            error.message = panne;
         }
 
         if (typeof window !== 'undefined' && error.response) {
