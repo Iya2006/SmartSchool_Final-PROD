@@ -113,6 +113,39 @@ def _texte_enseignant(db: Session, ens: Enseignant, etablissement_id: int) -> st
     return "\n".join(lignes)
 
 
+@router.get("/contenu-qr-lot")
+def contenu_qr_lot(
+    matricules: str,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Texte QR pour plusieurs élèves/enseignants en un seul appel —
+    évite N requêtes réseau lors de l'impression groupée des cartes
+    d'une classe. `matricules` : liste séparée par des virgules.
+
+    Un matricule introuvable ou hors établissement est simplement absent
+    du résultat (pas d'erreur qui bloquerait tout le lot).
+    """
+    liste = [m.strip() for m in (matricules or "").split(",") if m.strip()]
+    resultats: dict[str, str] = {}
+
+    for matricule in liste:
+        eleve = db.query(Eleve).filter(
+            Eleve.matricule == matricule, Eleve.etablissement_id == etablissement_id
+        ).first()
+        if eleve:
+            resultats[matricule] = _texte_eleve(db, eleve, etablissement_id)
+            continue
+
+        ens = db.query(Enseignant).filter(
+            Enseignant.matricule == matricule, Enseignant.etablissement_id == etablissement_id
+        ).first()
+        if ens:
+            resultats[matricule] = _texte_enseignant(db, ens, etablissement_id)
+
+    return {"resultats": resultats}
+
+
 @router.get("/contenu-qr/{matricule}")
 def contenu_qr(
     matricule: str,

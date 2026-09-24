@@ -130,3 +130,57 @@ def test_qr_isolation_inter_ecoles(client: TestClient, db: Session):
     headers_b = _login(client, admin_b.nom_utilisateur)
     r = client.get(f"/api/cartes/contenu-qr/{eleve_a.matricule}", headers=headers_b)
     assert r.status_code == 404
+
+
+def test_qr_lot_renvoie_le_texte_de_chaque_matricule(client: TestClient, db: Session):
+    etab, annee, classe, admin = _ecole(db)
+    uid1, uid2 = _uid(), _uid()
+    e1 = Eleve(etablissement_id=etab.etablissement_id, matricule=f"ELV-{etab.etablissement_id}-{uid1}",
+              nom="Sylla", prenom="Aissatou", sexe="F", mot_de_passe=None, statut="ACTIF")
+    e2 = Eleve(etablissement_id=etab.etablissement_id, matricule=f"ELV-{etab.etablissement_id}-{uid2}",
+              nom="Barry", prenom="Ibrahima", sexe="M", mot_de_passe=None, statut="ACTIF")
+    db.add_all([e1, e2]); db.commit()
+    db.add_all([
+        Inscription(eleve_id=e1.eleve_id, classe_id=classe.classe_id, annee_id=annee.annee_id,
+                    statut="ACTIVE", type_inscription="NOUVELLE"),
+        Inscription(eleve_id=e2.eleve_id, classe_id=classe.classe_id, annee_id=annee.annee_id,
+                    statut="ACTIVE", type_inscription="NOUVELLE"),
+    ])
+    db.commit()
+    headers = _login(client, admin.nom_utilisateur)
+
+    r = client.get("/api/cartes/contenu-qr-lot", params={"matricules": f"{e1.matricule},{e2.matricule}"}, headers=headers)
+    assert r.status_code == 200, r.text
+    resultats = r.json()["resultats"]
+    assert set(resultats.keys()) == {e1.matricule, e2.matricule}
+    assert "Aissatou Sylla" in resultats[e1.matricule]
+    assert "Ibrahima Barry" in resultats[e2.matricule]
+
+
+def test_qr_lot_ignore_silencieusement_matricule_dune_autre_ecole_ou_inconnu(client: TestClient, db: Session):
+    etab_a, annee_a, classe_a, admin_a = _ecole(db)
+    uid = _uid()
+    eleve_a = Eleve(etablissement_id=etab_a.etablissement_id, matricule=f"ELV-A-{uid}",
+                    nom="Conde", prenom="Mariam", sexe="F", mot_de_passe=None, statut="ACTIF")
+    db.add(eleve_a); db.commit()
+
+    etab_b, annee_b, classe_b, admin_b = _ecole(db)
+    uid_b = _uid()
+    eleve_b = Eleve(etablissement_id=etab_b.etablissement_id, matricule=f"ELV-B-{uid_b}",
+                    nom="Toure", prenom="Sekou", sexe="M", mot_de_passe=None, statut="ACTIF")
+    db.add(eleve_b); db.commit()
+    db.add(Inscription(eleve_id=eleve_b.eleve_id, classe_id=classe_b.classe_id, annee_id=annee_b.annee_id,
+                       statut="ACTIVE", type_inscription="NOUVELLE"))
+    db.commit()
+
+    headers_b = _login(client, admin_b.nom_utilisateur)
+    r = client.get(
+        "/api/cartes/contenu-qr-lot",
+        params={"matricules": f"{eleve_a.matricule},{eleve_b.matricule},MATRICULE-INCONNU"},
+        headers=headers_b,
+    )
+    assert r.status_code == 200, r.text
+    resultats = r.json()["resultats"]
+    # Seul l'élève de l'école appelante apparaît — pas d'erreur, pas de fuite inter-école.
+    assert set(resultats.keys()) == {eleve_b.matricule}
+    assert "Sekou Toure" in resultats[eleve_b.matricule]

@@ -14,7 +14,7 @@ import { useApp } from '@/context/AppContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Search, Plus, Users, UserCheck, UserX, Clock,
-    Loader2, ChevronRight, ChevronLeft, Eye, Edit, Trash2, Camera, X, ArrowLeft, AlertTriangle
+    Loader2, ChevronRight, ChevronLeft, Eye, Edit, Trash2, Camera, X, ArrowLeft, AlertTriangle, IdCard
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -338,6 +338,9 @@ export default function ElevesPage() {
                     <button onClick={() => setViewMode('grid')} className="btn btn-outline btn-sm" style={{ color: '#10b981', borderColor: '#10b981' }}>
                         <Users size={16} /> Toutes les Cartes
                     </button>
+                    <Link href="/eleves/cartes-classe" className="btn btn-outline btn-sm" style={{ color: '#4f46e5', borderColor: '#4f46e5' }}>
+                        <IdCard size={16} /> Récupération des cartes
+                    </Link>
                     <Link href="/galerie" className="btn btn-outline btn-sm"><Camera size={16} /> Galerie Photos</Link>
                     <Link href="/eleves/nouveau" className="btn btn-primary"><Plus size={18} /> Ajouter Élève</Link>
                 </div>

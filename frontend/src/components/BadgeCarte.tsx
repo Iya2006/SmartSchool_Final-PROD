@@ -41,9 +41,12 @@ interface BadgeCarteProps {
     };
     id?: string;
     carteConfig?: CarteConfig;
+    /** Texte QR déjà résolu (impression groupée par classe, par ex.) —
+     * saute l'appel réseau individuel du useEffect ci-dessous. */
+    qrTexteOverride?: string;
 }
 
-export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: BadgeCarteProps) {
+export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrTexteOverride }: BadgeCarteProps) {
     const { etablissementNom, etablissementLogo, carteConfigEleve, carteConfigEnseignant, annees, anneeCouranteId, anneeLibelle } = useApp();
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     
@@ -56,13 +59,14 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: B
     const [qrTexte, setQrTexte] = useState<string>('');
 
     useEffect(() => {
+        if (qrTexteOverride) { setQrTexte(qrTexteOverride); return; }
         if (!agent.matricule) return;
         let annule = false;
         api.get(`/api/cartes/contenu-qr/${encodeURIComponent(agent.matricule)}`)
             .then(res => { if (!annule && res.data?.texte) setQrTexte(res.data.texte); })
             .catch(() => { /* fallback matricule */ });
         return () => { annule = true; };
-    }, [agent.matricule]);
+    }, [agent.matricule, qrTexteOverride]);
 
     const isEnseignant = 
         agent.role === 'ENSEIGNANT' || 
@@ -316,6 +320,12 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: B
                     <div style={{
                         width: '180px',
                         background: bgGradient,
+                        // Variable CSS en plus du fond direct : globals.css a une
+                        // règle d'impression globale (économie d'encre) qui aplatit
+                        // tout `[style*="linear-gradient"]` — cette variable permet
+                        // à une page qui a besoin de garder la couleur (cartes) de
+                        // la restaurer localement sans toucher à la règle globale.
+                        ['--bg-gradient-carte' as string]: bgGradient,
                         color: 'white',
                         display: 'flex',
                         flexDirection: 'column',
@@ -532,8 +542,9 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig }: B
                     )}
 
                     {/* Header */}
-                    <div style={{ 
+                    <div style={{
                         background: bgGradient,
+                        ['--bg-gradient-carte' as string]: bgGradient,
                         color: 'white',
                         padding: format === 'compact' ? (isCrowded ? '12px 12px 24px 12px' : '16px 16px 40px 16px') : (isCrowded ? '16px 16px 36px 16px' : '24px 20px 60px 20px'),
                         textAlign: 'center',
