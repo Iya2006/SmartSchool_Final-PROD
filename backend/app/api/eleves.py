@@ -317,24 +317,47 @@ async def importer_eleves(
     fichier: UploadFile = File(...),
     dry_run: bool = False,
     annee_id: Optional[int] = None,
+    type_inscription: str = "REINSCRIPTION",
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
-    """Importe une liste d'élèves DÉJÀ de l'école (Excel/CSV).
+    """Importe une liste d'élèves (Excel/CSV).
 
     Chaque élève est créé (matricule auto-incrémenté, mot de passe par défaut
-    12345678), inscrit en RÉINSCRIPTION dans la classe de la colonne « Classe »
-    (par code ou libellé) de l'année en cours, et ses frais (scolarité +
-    réinscription de sa classe) sont générés. Aucun parent — le directeur les
-    ajoute ensuite. `dry_run=true` analyse sans rien écrire (même rapport)."""
+    12345678), inscrit dans la classe de la colonne « Classe » (par code ou
+    libellé) de l'année en cours, et ses frais obligatoires sont générés.
+
+    `type_inscription` décide des frais d'ENTRÉE facturés :
+    - `REINSCRIPTION` (défaut) — élèves déjà de l'école : frais de
+      réinscription, jamais le frais d'inscription ;
+    - `NOUVELLE` — élèves qui arrivent : frais d'inscription, jamais le frais
+      de réinscription.
+    La scolarité et les autres frais obligatoires s'appliquent dans les deux
+    cas. Le défaut reste `REINSCRIPTION`, qui était le seul comportement
+    possible auparavant.
+
+    Aucun parent — le directeur les ajoute ensuite. `dry_run=true` analyse sans
+    rien écrire (même rapport)."""
     from collections import Counter
     from app.services.import_tabulaire import FichierIllisible, lire_lignes, valeur, normaliser_entete
-    from app.api.reinscription import _est_frais_inscription
+    from app.api.reinscription import _est_frais_inscription, _est_frais_reinscription
     from app.core.numerotation import (
         PREFIXE_FACTURE, _LARGEUR as _LARGEUR_FAC, annee_civile, _plus_haut_numero_existant,
     )
     from app.core.matricules import _LARGEUR as _LARGEUR_MAT
     from app.models.academique import SequenceMatricule
+
+    # Valeur fermée : une faute de frappe ferait silencieusement basculer sur
+    # « nouvel élève » et facturerait les mauvais frais d'entrée à toute une
+    # classe. Mieux vaut refuser l'import que le passer à côté.
+    type_inscription = (type_inscription or "REINSCRIPTION").upper()
+    if type_inscription not in ("NOUVELLE", "REINSCRIPTION"):
+        raise HTTPException(
+            400,
+            "type_inscription doit valoir NOUVELLE (nouveaux élèves) ou REINSCRIPTION "
+            "(élèves déjà de l'école).",
+        )
+    est_reinscription = type_inscription == "REINSCRIPTION"
 
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
     if annee_id is None:
@@ -488,12 +511,12 @@ async def importer_eleves(
     seq_mat.dernier_numero = num_mat
     db.flush()
 
-    # 3) Inscriptions en bloc (réinscription : élève déjà de l'école).
+    # 3) Inscriptions en bloc, du type choisi à l'importation.
     inscriptions = []
     for (eleve, classe) in eleves_classe:
         insc = Inscription(
             eleve_id=eleve.eleve_id, classe_id=classe.classe_id, annee_id=annee_id,
-            statut="ACTIVE", type_inscription="REINSCRIPTION",
+            statut="ACTIVE", type_inscription=type_inscription,
         )
         db.add(insc)
         inscriptions.append((insc, classe))
@@ -506,8 +529,15 @@ async def importer_eleves(
         if n:
             classe.effectif_actuel = (classe.effectif_actuel or 0) + n
 
-    # 5) Frais obligatoires (scolarité + réinscription, PAS le frais d'entrée) —
-    #    tarifs préchargés par classe, numéros de facture incrémentés en mémoire.
+    # 5) Frais obligatoires de la classe — tarifs préchargés par classe, numéros
+    #    de facture incrémentés en mémoire.
+    #
+    #    Le frais d'ENTRÉE suit le type d'importation choisi : un élève importé
+    #    comme NOUVELLE paie l'inscription et pas la réinscription, un élève
+    #    importé comme RÉINSCRIPTION l'inverse. L'import facturait auparavant
+    #    toujours la réinscription, sans possibilité de dire le contraire —
+    #    importer une promotion de nouveaux élèves leur posait donc d'office un
+    #    frais de réinscription qu'ils ne devaient pas.
     classe_ids = [c.classe_id for c in classes]
     tarifs_par_classe: dict = {}
     vus_tarif = set()  # (classe_id, type_frais_id) : jamais deux fois le même frais
@@ -519,8 +549,10 @@ async def importer_eleves(
             TypeFrais.est_obligatoire == "O",
             TypeFrais.statut == "ACTIF",
         ).all():
-            if _est_frais_inscription(tf.categorie):
-                continue  # réinscription : on n'ajoute jamais le frais d'entrée
+            if est_reinscription and _est_frais_inscription(tf.categorie):
+                continue  # réinscription : jamais le frais d'inscription
+            if not est_reinscription and _est_frais_reinscription(tf.categorie):
+                continue  # nouvel élève : jamais le frais de réinscription
             marque = (tarif.classe_id, tf.type_frais_id)
             if marque in vus_tarif:
                 continue  # grille en double : une seule facture par type de frais
@@ -683,6 +715,39 @@ def create_eleve(data: EleveCreate, db: Session = Depends(get_db), etablissement
     return eleve
 
 
+def valider_matricule_saisi(db: Session, matricule: str, eleve_id: Optional[int] = None) -> str:
+    """
+    Contrôle un matricule saisi à la main et le renvoie nettoyé.
+
+    Le matricule n'est pas une simple référence : c'est l'IDENTIFIANT DE
+    CONNEXION de l'élève à son espace (avec son mot de passe). Deux élèves
+    partageant le même matricule, c'est l'un qui entre dans l'espace de
+    l'autre — d'où l'unicité globale, déjà garantie par un index en base. On
+    la vérifie ici pour répondre une phrase claire plutôt que de laisser
+    remonter une violation de contrainte en erreur 500.
+
+    `eleve_id` exclut l'élève en cours de modification : réenregistrer sa
+    fiche sans changer son matricule ne doit pas se heurter à lui-même.
+    """
+    propre = (matricule or "").strip()
+    if not propre:
+        raise HTTPException(400, "Le matricule ne peut pas être vide : c'est l'identifiant de connexion de l'élève.")
+    if len(propre) > 30:
+        raise HTTPException(400, "Le matricule ne peut pas dépasser 30 caractères.")
+
+    conflit = db.query(Eleve.eleve_id, Eleve.nom, Eleve.prenom).filter(Eleve.matricule == propre)
+    if eleve_id is not None:
+        conflit = conflit.filter(Eleve.eleve_id != eleve_id)
+    trouve = conflit.first()
+    if trouve:
+        raise HTTPException(
+            409,
+            f"Le matricule « {propre} » est déjà celui de {trouve[2]} {trouve[1]}. "
+            "Un matricule sert à se connecter : il ne peut appartenir qu'à un seul élève.",
+        )
+    return propre
+
+
 @router.put("/{eleve_id}", response_model=EleveOut)
 def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     eleve = db.query(Eleve).filter(
@@ -700,6 +765,14 @@ def update_eleve(eleve_id: int, data: EleveUpdate, db: Session = Depends(get_db)
     mot_de_passe = update_data.pop("mot_de_passe", None)
     if mot_de_passe and mot_de_passe.strip():
         eleve.mot_de_passe = hash_password(mot_de_passe.strip())
+
+    # Matricule : modifiable à la main. Champ absent du corps = inchangé. Il
+    # ne peut pas être effacé — c'est l'identifiant de connexion de l'élève,
+    # un élève sans matricule ne peut plus entrer dans son espace ; pour le
+    # retirer d'usage, on change son matricule ou on désactive son compte.
+    matricule = update_data.pop("matricule", None)
+    if matricule is not None:
+        eleve.matricule = valider_matricule_saisi(db, matricule, eleve_id=eleve.eleve_id)
 
     # La classe cible doit appartenir au même établissement — sans cette
     # vérification, un élève pouvait être déplacé dans la classe d'une autre
@@ -800,6 +873,11 @@ class InscriptionCompleteData(BaseModel):
     # Élève
     nom: str
     prenom: str
+    # Matricule : laissé vide = généré automatiquement comme avant ; renseigné
+    # = l'école impose le sien (elle a souvent déjà sa propre numérotation, sur
+    # des cartes ou des registres antérieurs au logiciel). Dans les deux cas
+    # c'est ce matricule, avec le mot de passe, qui ouvre l'espace de l'élève.
+    matricule: Optional[str] = None
     date_naissance: Optional[str] = None
     sexe: str = "M"
     lieu_naissance: Optional[str] = None
@@ -866,8 +944,11 @@ def inscription_complete(data: InscriptionCompleteData, db: Session = Depends(ge
             raise HTTPException(400, "date_naissance invalide (format attendu : AAAA-MM-JJ)")
 
     try:
-        # 1. Créer l'élève
-        matricule = generer_matricule(db, Eleve, PREFIXE_ELEVE, etablissement_id)
+        # 1. Créer l'élève — matricule saisi par l'école, sinon généré.
+        if data.matricule and data.matricule.strip():
+            matricule = valider_matricule_saisi(db, data.matricule)
+        else:
+            matricule = generer_matricule(db, Eleve, PREFIXE_ELEVE, etablissement_id)
 
         eleve = Eleve(
             nom=data.nom,

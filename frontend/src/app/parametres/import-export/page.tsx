@@ -83,6 +83,10 @@ export default function ImportExportPage() {
     const [rapport, setRapport] = useState<{ crees: number; total_lignes: number; ignorees: { ligne: number; eleve?: string; raison: string }[] } | null>(null);
     const [resultatImport, setResultatImport] = useState<{ message: string } | null>(null);
     const [importEnCours, setImportEnCours] = useState(false);
+    // Décide du frais d'entrée facturé (inscription ou réinscription). Défaut
+    // REINSCRIPTION : c'était le seul comportement possible auparavant, le
+    // conserver évite de changer le résultat d'un import fait sans y penser.
+    const [typeInscription, setTypeInscription] = useState<'REINSCRIPTION' | 'NOUVELLE'>('REINSCRIPTION');
     const fichierRef = useRef<HTMLInputElement>(null);
 
     const telechargerModele = async () => {
@@ -115,7 +119,7 @@ export default function ImportExportPage() {
         setFichierImport(f); setRapport(null); setResultatImport(null); setErreur(null); setImportEnCours(true);
         try {
             const fd = new FormData(); fd.append('fichier', f);
-            const res = await api.post(`/api/eleves/import?dry_run=true&annee_id=${anneeId}`, fd);
+            const res = await api.post(`/api/eleves/import?dry_run=true&annee_id=${anneeId}&type_inscription=${typeInscription}`, fd);
             setRapport(res.data);
         } catch (e: unknown) {
             setErreur(messageErreur(e, "Analyse du fichier impossible."));
@@ -127,7 +131,7 @@ export default function ImportExportPage() {
         setImportEnCours(true); setErreur(null);
         try {
             const fd = new FormData(); fd.append('fichier', fichierImport);
-            const res = await api.post(`/api/eleves/import?annee_id=${anneeId}`, fd);
+            const res = await api.post(`/api/eleves/import?annee_id=${anneeId}&type_inscription=${typeInscription}`, fd);
             setResultatImport(res.data); setRapport(null); setFichierImport(null);
             if (fichierRef.current) fichierRef.current.value = '';
             charger();
@@ -223,12 +227,50 @@ export default function ImportExportPage() {
                         <FileSpreadsheet size={18} style={{ color: '#4d7c0f' }} /> Importer des élèves
                     </h3>
                     <p style={{ margin: '5px 0 0', fontSize: '12.5px', color: '#64748b', lineHeight: 1.6 }}>
-                        Pour les élèves <strong>déjà de l&apos;école</strong>. Le matricule est attribué automatiquement, le mot de
-                        passe par défaut est <strong>12345678</strong>, chaque élève est placé dans sa classe (colonne
-                        « Classe ») de l&apos;année en cours et facturé <strong>scolarité + réinscription</strong> selon les tarifs
-                        de sa classe. Aucun parent (à ajouter ensuite).
+                        Le matricule est attribué automatiquement, le mot de passe par défaut est
+                        <strong> 12345678</strong>, et chaque élève est placé dans sa classe (colonne « Classe ») de
+                        l&apos;année en cours. Aucun parent (à ajouter ensuite).
                     </p>
                 </div>
+
+                {/* Le type décide du frais d'entrée facturé. Il se choisit AVANT le
+                    fichier : l'analyse comme l'import partent avec cette valeur. */}
+                <div>
+                    <p style={{ margin: '0 0 7px', fontSize: '12.5px', fontWeight: 700, color: '#334155' }}>
+                        Ces élèves sont en :
+                    </p>
+                    <div style={{ display: 'flex', gap: '9px', flexWrap: 'wrap' }}>
+                        {([
+                            { cle: 'REINSCRIPTION', titre: 'Réinscription', sous: 'Élèves déjà de l’école' },
+                            { cle: 'NOUVELLE', titre: 'Inscription', sous: 'Élèves qui arrivent' },
+                        ] as const).map(opt => {
+                            const actif = typeInscription === opt.cle;
+                            return (
+                                <button key={opt.cle} type="button" onClick={() => setTypeInscription(opt.cle)}
+                                    disabled={importEnCours}
+                                    style={{
+                                        flex: '1 1 190px', textAlign: 'left', padding: '11px 13px', borderRadius: '11px',
+                                        border: actif ? '2px solid #4d7c0f' : '1.5px solid #e2e8f0',
+                                        background: actif ? '#f7fee7' : '#fff',
+                                        cursor: importEnCours ? 'not-allowed' : 'pointer',
+                                    }}>
+                                    <span style={{ display: 'block', fontSize: '13px', fontWeight: 800, color: actif ? '#3f6212' : '#0f172a' }}>
+                                        {opt.titre}
+                                    </span>
+                                    <span style={{ display: 'block', fontSize: '11.5px', color: '#64748b', marginTop: '2px' }}>
+                                        {opt.sous}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <p style={{ margin: '7px 0 0', fontSize: '12px', color: '#64748b', lineHeight: 1.6 }}>
+                        Les tarifs suivent ce choix : scolarité et autres frais obligatoires dans les deux cas, plus le
+                        frais de <strong>{typeInscription === 'REINSCRIPTION' ? 'réinscription' : 'inscription'}</strong> de
+                        la classe — jamais l&apos;autre.
+                    </p>
+                </div>
+
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                     <button onClick={telechargerModele}
                         style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '9px 15px', borderRadius: '10px', border: '1px solid #cbd5e1', background: '#fff', color: '#334155', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer' }}>

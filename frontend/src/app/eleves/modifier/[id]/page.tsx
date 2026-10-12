@@ -38,6 +38,7 @@ export default function ModifierEleve() {
         classe_id: '',
         adresse: '',
         groupe_sanguin: '',
+        matricule: '',
         mot_de_passe: ''
     });
 
@@ -64,6 +65,7 @@ export default function ModifierEleve() {
                     classe_id: e.classe_id || '',
                     adresse: e.adresse || '',
                     groupe_sanguin: e.groupe_sanguin || '',
+                    matricule: e.matricule || '',
                     mot_de_passe: ''
                 });
             } catch (err) {
@@ -95,6 +97,12 @@ export default function ModifierEleve() {
             // ne doit PAS effacer le mot de passe existant de l'élève.
             if (!payload.mot_de_passe || !payload.mot_de_passe.trim()) {
                 delete payload.mot_de_passe;
+            }
+            // Matricule : même principe. Un champ vidé par mégarde ne doit pas
+            // priver l'élève de son identifiant de connexion — on n'envoie le
+            // champ que s'il porte une valeur.
+            if (!payload.matricule || !payload.matricule.trim()) {
+                delete payload.matricule;
             }
 
             await api.put(`/api/eleves/${id}`, payload);
@@ -303,6 +311,22 @@ export default function ModifierEleve() {
                                     <option value="O+">O+</option>
                                     <option value="O-">O-</option>
                                 </select>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>Matricule</label>
+                                <input
+                                    type="text"
+                                    name="matricule"
+                                    value={formData.matricule}
+                                    onChange={handleChange}
+                                    placeholder="Laisser vide pour ne pas changer"
+                                    style={{ padding: '12px 14px', borderRadius: '8px', border: '1px solid var(--border-light)', fontSize: '14px', background: 'var(--bg-surface)' }}
+                                />
+                                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                    Identifiant de connexion de l&apos;élève, avec son mot de passe. Il doit rester unique.
+                                    Vide = inchangé.
+                                </span>
                             </div>
 
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

@@ -66,6 +66,10 @@ export default function NouveauEleve() {
         nom: '', prenom: '', date_naissance: '', sexe: 'M',
         lieu_naissance: '', telephone: '', email: '', statut: 'ACTIF',
         classe_id: '',
+        // Matricule : vide = généré automatiquement par le logiciel ; rempli =
+        // l'école impose le sien. C'est, avec le mot de passe, ce qui ouvre
+        // l'espace de l'élève.
+        matricule: '',
         // NOUVELLE = nouvel élève de l'école (paie l'inscription) ;
         // REINSCRIPTION = élève qui continue (paie la réinscription).
         type_inscription: 'NOUVELLE',
@@ -215,6 +219,8 @@ export default function NouveauEleve() {
                 classe_id: formData.classe_id ? parseInt(formData.classe_id) : null,
                 eleve_mot_de_passe: formData.eleve_mot_de_passe.trim() || null,
                 type_inscription: formData.type_inscription,
+                // Vide = le serveur génère le matricule, comme avant.
+                matricule: formData.matricule.trim() || null,
             };
 
             // Parent : soit on rattache un parent EXISTANT (choisi dans la
@@ -497,6 +503,27 @@ export default function NouveauEleve() {
                             <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#1e3a8a' }}>
                                 Pas de champ à remplir : le matricule (ex&nbsp;: <code style={{ background: '#fff', padding: '1px 6px', borderRadius: '5px', fontFamily: 'monospace' }}>ELV-10-00001</code>) est
                                 généré automatiquement à la création et affiché à la fin. Vous n&apos;avez qu&apos;à définir le mot de passe ci-dessous.
+                            </p>
+                        </div>
+                        {/* Matricule — posé juste avant le mot de passe : les deux
+                            forment les identifiants de connexion de l'élève. */}
+                        <div style={{ maxWidth: '420px', marginBottom: '18px' }}>
+                            <label style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
+                                Matricule
+                            </label>
+                            <input
+                                type="text"
+                                name="matricule"
+                                value={formData.matricule}
+                                onChange={handleChange}
+                                placeholder="Laisser vide pour une génération automatique"
+                                style={{ ...FIELD }}
+                            />
+                            <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#64748b', lineHeight: 1.6 }}>
+                                Vide, le logiciel attribue un matricule automatiquement. Renseigné, c&apos;est le vôtre qui
+                                est retenu — utile si votre école a déjà sa propre numérotation. Il devra être
+                                <strong> unique</strong> : c&apos;est lui qui, avec le mot de passe, ouvre l&apos;espace de l&apos;élève.
+                                Il reste modifiable plus tard via <strong>Modifier</strong>.
                             </p>
                         </div>
                         <div style={{ padding: '14px 18px', borderRadius: '12px', background: '#eff6ff', border: '1px solid #bfdbfe', marginBottom: '18px' }}>
