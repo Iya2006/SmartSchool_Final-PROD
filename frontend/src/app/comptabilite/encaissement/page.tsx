@@ -679,23 +679,34 @@ function EncaissementContent() {
                                     const echeanceSelectionnee = payEcheanceId
                                         ? selectedFacture.echeances.find(ec => ec.echeance_id === parseInt(payEcheanceId))
                                         : null;
-                                    const maxMontant = echeanceSelectionnee
+                                    // Reste dû, à titre indicatif seulement : le champ n'est PAS
+                                    // plafonné. Une école encaisse ce que la famille lui remet —
+                                    // 310 000 GNF sur une scolarité de 300 000, une avance, un
+                                    // arrondi. Un `max` ici renvoyait le caissier au guichet pour
+                                    // de l'argent qu'il avait déjà en main.
+                                    const resteDu = echeanceSelectionnee
                                         ? echeanceSelectionnee.montant_attendu - echeanceSelectionnee.montant_paye
                                         : selectedFacture.montant_restant;
+                                    const saisi = parseFloat(payMontant);
                                     return (
                                         <div>
                                             <label style={{ display: 'block', fontSize: 13, color: '#475569', marginBottom: 6, fontWeight: 600 }}>Montant reçu (GNF) *</label>
                                             <input type="number" value={payMontant} onChange={e => setPayMontant(e.target.value)}
-                                                required min="1" max={maxMontant}
+                                                required min="1"
                                                 style={{ width: '100%', padding: '14px 16px', borderRadius: 10, border: '2px solid #10b981', fontSize: 20, fontWeight: 800, color: '#059669', boxSizing: 'border-box', textAlign: 'center', outline: 'none' }} />
                                             {echeanceSelectionnee && (
                                                 <p style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
-                                                    Plafonné au reste dû sur l'échéance sélectionnée : {fmt(maxMontant)} GNF
+                                                    Reste dû sur l&apos;échéance sélectionnée : {fmt(resteDu)} GNF
                                                 </p>
                                             )}
-                                            {parseFloat(payMontant) < maxMontant && parseFloat(payMontant) > 0 && (
+                                            {saisi > 0 && saisi < resteDu && (
                                                 <p style={{ fontSize: 12, color: '#f59e0b', marginTop: 6, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                    <AlertTriangle size={14} color="#f59e0b" /> Paiement partiel — Reliquat après paiement : {fmt(maxMontant - parseFloat(payMontant))} GNF
+                                                    <AlertTriangle size={14} color="#f59e0b" /> Paiement partiel — Reliquat après paiement : {fmt(resteDu - saisi)} GNF
+                                                </p>
+                                            )}
+                                            {saisi > resteDu && (
+                                                <p style={{ fontSize: 12, color: '#0ea371', marginTop: 6, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                    <AlertTriangle size={14} color="#0ea371" /> Montant supérieur au reste dû — {fmt(saisi - resteDu)} GNF seront enregistrés en avance sur le compte de l&apos;élève.
                                                 </p>
                                             )}
                                         </div>

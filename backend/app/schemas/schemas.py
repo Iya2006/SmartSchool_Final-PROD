@@ -318,6 +318,10 @@ class EleveCreate(EleveBase): pass
 class EleveUpdate(BaseModel):
     nom: Optional[str] = None
     prenom: Optional[str] = None
+    # Matricule saisi à la main. Absent = inchangé (il reste celui généré
+    # automatiquement). C'est l'identifiant de connexion de l'élève : unique,
+    # et jamais vide — voir `valider_matricule_saisi`.
+    matricule: Optional[str] = None
     date_naissance: Optional[date] = None
     sexe: Optional[str] = None
     lieu_naissance: Optional[str] = None

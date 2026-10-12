@@ -97,6 +97,7 @@ def _get_solde_caisse(db: Session, etablissement_id: int, annee_id: int) -> floa
 # continuent de fonctionner sans modification.
 from app.core.annee_lock import verifier_annee_modifiable as _verifier_annee_modifiable
 from app.core.annee_lock import get_active_annee_id as _get_active_annee_id
+from app.core.annee_lock import ANNEE_VERROUILLEE
 
 
 UPLOAD_DIR_DEPENSES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "depenses")
@@ -700,6 +701,128 @@ def _repercuter_tarif_sur_factures(db: Session, type_frais_id: int, classe_id: i
     return len(factures)
 
 
+def _facturer_tarif_aux_eleves(
+    db: Session,
+    type_frais: TypeFrais,
+    classe_id: int,
+    montant: float,
+    etablissement_id: int,
+    annee_id: Optional[int],
+) -> int:
+    """
+    Facture un tarif à TOUS les élèves actuellement inscrits dans la classe.
+
+    POURQUOI
+    Un tarif de classe ne produisait de facture qu'au moment où l'élève
+    arrivait : import, inscription, réinscription. Créer « Frais de badge »
+    en novembre ne le facturait donc à personne — la grille affichait bien le
+    nouveau tarif, mais aucun élève ne le voyait dans sa scolarité, et la
+    seule issue était de réimporter la classe. Le tarif est désormais la
+    source de vérité : dès qu'il existe, il est dû par tous les inscrits de
+    la classe, quelle que soit la date à laquelle ils sont arrivés.
+
+    Idempotent : un élève déjà facturé pour ce type de frais est ignoré, donc
+    ré-enregistrer la grille ne crée jamais de doublon.
+
+    DEUX EXCLUSIONS, toutes deux reprises de règles déjà en place ailleurs :
+
+    - Un frais FACULTATIF (cantine, transport…) n'est jamais imposé d'office :
+      il n'est dû que par les familles qui y adhèrent. C'est exactement le
+      garde-fou `forcer_optionnel` de `generer_factures_classe`, et le
+      contourner ici reviendrait à facturer la cantine à toute l'école par un
+      simple enregistrement de grille.
+    - Un frais d'ENTRÉE ne concerne que les élèves du bon type : un nouvel
+      élève paie l'inscription, un élève qui continue paie la réinscription.
+      Même règle que `_generer_frais_reinscription`. Les frais de scolarité et
+      les autres frais obligatoires, eux, s'appliquent à tout le monde.
+    """
+    from app.api.reinscription import _est_frais_inscription, _est_frais_reinscription
+
+    if type_frais.est_obligatoire != "O" or type_frais.statut != "ACTIF":
+        return 0
+
+    inscriptions = (
+        db.query(Inscription)
+        .filter(
+            Inscription.classe_id == classe_id,
+            Inscription.annee_id == annee_id,
+            Inscription.statut == "ACTIVE",
+        )
+        .all()
+    )
+    if not inscriptions:
+        return 0
+
+    deja_facture = {
+        f.inscription_id
+        for f in db.query(Facture.inscription_id)
+        .filter(
+            Facture.inscription_id.in_([i.inscription_id for i in inscriptions]),
+            Facture.type_frais_id == type_frais.type_frais_id,
+        )
+        .all()
+    }
+
+    est_frais_entree_inscription = _est_frais_inscription(type_frais.categorie)
+    est_frais_entree_reinscription = _est_frais_reinscription(type_frais.categorie)
+
+    created = 0
+    for inscription in inscriptions:
+        if inscription.inscription_id in deja_facture:
+            continue
+
+        est_reinscrit = (inscription.type_inscription or "NOUVELLE").upper() == "REINSCRIPTION"
+        if est_frais_entree_inscription and est_reinscrit:
+            continue
+        if est_frais_entree_reinscription and not est_reinscrit:
+            continue
+
+        numero_facture = generer_numero_facture(db, etablissement_id, inscription.annee_id)
+        facture = Facture(
+            inscription_id=inscription.inscription_id,
+            annee_id=inscription.annee_id,
+            type_frais_id=type_frais.type_frais_id,
+            numero_facture=numero_facture,
+            montant_total=montant,
+            montant_remise=0,
+            montant_net=montant,
+            montant_paye=0,
+            montant_restant=montant,
+            statut="EN_ATTENTE",
+        )
+        db.add(facture)
+        db.flush()
+
+        db.add(EcheanceFacture(
+            facture_id=facture.facture_id,
+            libelle="Paiement unique",
+            date_limite=date_type.today(),
+            montant_attendu=montant,
+            montant_paye=0,
+            statut="EN_ATTENTE",
+        ))
+
+        # Sans cette écriture, la créance existerait dans la scolarité mais
+        # resterait invisible du Grand Livre et du compte élève — le défaut
+        # déjà corrigé sur `generer_factures_classe`.
+        generer_ecriture_auto(
+            db, date_ecriture=date_type.today(), journal_code="VE",
+            libelle=f"Facturation {type_frais.libelle} — {numero_facture}",
+            reference=numero_facture,
+            lignes=[
+                {"compte": COMPTE_ELEVES, "debit": float(montant), "credit": 0,
+                 "eleve_id": inscription.eleve_id, "classe_id": inscription.classe_id,
+                 "description": numero_facture},
+                {"compte": COMPTE_PRODUITS_SCOLARITE, "debit": 0, "credit": float(montant),
+                 "classe_id": inscription.classe_id, "description": numero_facture},
+            ],
+            etablissement_id=etablissement_id,
+        )
+        created += 1
+
+    return created
+
+
 @router.put("/tarifs-classe")
 def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Upsert en masse. Un montant <= 0 supprime le tarif existant pour ce
@@ -724,7 +847,22 @@ def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get
         if types_ok != types_ids:
             raise HTTPException(status_code=404, detail="Type de frais non trouvé")
 
-    upserted, deleted, factures_maj = 0, 0, 0
+    # Un tarif neuf doit être facturé aux élèves déjà en place (voir
+    # `_facturer_tarif_aux_eleves`). Cela crée des factures : on ne le fait donc
+    # jamais sur une année clôturée ou archivée. Le contrôle est SOUPLE — il
+    # coupe la facturation sans refuser l'enregistrement de la grille, qui lui
+    # n'a jamais été verrouillé par l'année et ne doit pas commencer à l'être
+    # au détour de cette évolution.
+    annee_id = resoudre_annee(db, etablissement_id, None)
+    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_id).first() if annee_id else None
+    annee_facturable = annee is not None and annee.statut not in ANNEE_VERROUILLEE
+
+    types_par_id = {
+        t.type_frais_id: t
+        for t in db.query(TypeFrais).filter(TypeFrais.type_frais_id.in_(types_ids)).all()
+    } if types_ids else {}
+
+    upserted, deleted, factures_maj, factures_creees = 0, 0, 0, 0
     for entry in entries:
         existing = db.query(TarifClasse).filter(
             TarifClasse.type_frais_id == entry.type_frais_id,
@@ -740,11 +878,24 @@ def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get
         else:
             db.add(TarifClasse(type_frais_id=entry.type_frais_id, classe_id=entry.classe_id, montant=entry.montant))
         upserted += 1
+        # Tarif modifié : on répercute sur ce qui reste dû.
         factures_maj += _repercuter_tarif_sur_factures(db, entry.type_frais_id, entry.classe_id, float(entry.montant))
+        # Tarif appliqué à la classe : on facture les élèves qui ne l'ont pas
+        # encore. Appelé que le tarif soit neuf ou non — la fonction est
+        # idempotente, et c'est ce qui rattrape aussi les élèves arrivés APRÈS
+        # la création du tarif sans être passés par un chemin qui facture.
+        type_frais = types_par_id.get(entry.type_frais_id)
+        if annee_facturable and type_frais is not None:
+            factures_creees += _facturer_tarif_aux_eleves(
+                db, type_frais, entry.classe_id, float(entry.montant), etablissement_id, annee_id
+            )
 
     db.commit()
     _invalidate_dashboard_cache(etablissement_id)
-    return {"message": f"{upserted} tarif(s) enregistré(s), {deleted} supprimé(s), {factures_maj} facture(s) impayée(s) mise(s) à jour"}
+    message = f"{upserted} tarif(s) enregistré(s), {deleted} supprimé(s), {factures_maj} facture(s) impayée(s) mise(s) à jour"
+    if factures_creees:
+        message += f", {factures_creees} facture(s) créée(s) pour les élèves déjà inscrits"
+    return {"message": message}
 
 
 @router.post("/tarifs/copier")
@@ -1307,17 +1458,22 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
 
     _verifier_annee_modifiable(db, facture.annee_id)
 
-    if float(facture.montant_restant or 0) <= 0:
-        raise HTTPException(status_code=400, detail="Cette facture est déjà entièrement payée")
-
     if data.montant <= 0:
         raise HTTPException(status_code=400, detail="Le montant doit être supérieur à 0")
 
-    if data.montant > float(facture.montant_restant or 0):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Le montant ({data.montant:,.0f}) dépasse le reste à payer ({float(facture.montant_restant):,.0f})"
-        )
+    # PAS de plafond sur le montant encaissé — c'était un refus pur et simple
+    # dès que la somme dépassait le reste à payer, et dès que la facture était
+    # soldée. Or une école encaisse ce que la famille lui remet : 310 000 GNF
+    # sur une scolarité de 300 000, un versement d'avance sur l'année suivante,
+    # un arrondi laissé à l'école. Le caissier se retrouvait à refuser de
+    # l'argent réellement reçu, ou à le saisir faux pour passer le contrôle.
+    #
+    # Le trop-perçu n'est pas perdu : `montant_paye` et le reçu portent la
+    # somme réelle, et l'écriture comptable crédite le compte de l'élève
+    # d'autant — son compte auxiliaire passe donc créditeur, ce qui est
+    # exactement la représentation comptable d'une avance. Seul
+    # `montant_restant` est borné à 0, pour que les états d'impayés ne
+    # comptent pas une dette négative.
 
     # Mettre à jour l'échéance si précisée
     if data.echeance_id:
@@ -1328,13 +1484,9 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         if not echeance:
             raise HTTPException(status_code=404, detail="Échéance non trouvée pour cette facture")
 
-        restant_echeance = float(echeance.montant_attendu or 0) - float(echeance.montant_paye or 0)
-        if data.montant > restant_echeance:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Le montant ({data.montant:,.0f}) dépasse le reste dû sur cette échéance ({restant_echeance:,.0f})"
-            )
-
+        # Même principe que sur la facture : une échéance n'est pas un plafond,
+        # c'est un calendrier. Une famille qui règle deux tranches d'un coup, ou
+        # qui arrondit au-dessus, ne doit pas être renvoyée au guichet.
         echeance.montant_paye = float(echeance.montant_paye or 0) + data.montant
         if echeance.montant_paye >= float(echeance.montant_attendu or 0):
             echeance.statut = "PAYEE"
