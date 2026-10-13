@@ -21,6 +21,11 @@ interface CarteConfig {
     showAdresse?: boolean;
     showGroupeSanguin?: boolean;
     bgImageUrl?: string;
+    /** Filigrane : intensité en % (défaut 12), taille en % (défaut 100),
+     * « cover » = remplit la zone, « contain » = image entière visible. */
+    bgOpacite?: number;
+    bgTaille?: number;
+    bgAjustement?: 'cover' | 'contain';
     showMatieres?: boolean;
 }
 
@@ -138,9 +143,37 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
     const showGroupeSanguin = !!config.showGroupeSanguin;
     const showMatieres = isEnseignant ? (config.showMatieres !== false) : false;
     const bgImageUrl = config.bgImageUrl;
+    // Valeur absente ou illisible (ancien cache, paramètre vide) = valeur par défaut.
+    const reglage = (v: unknown, defaut: number, min: number, max: number) => {
+        const n = typeof v === 'number' ? v : NaN;
+        return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : defaut;
+    };
+    const bgOpacite = reglage(config.bgOpacite, 12, 0, 100) / 100;
+    const bgTaille = reglage(config.bgTaille, 100, 20, 300) / 100;
+    const bgAjustement: 'cover' | 'contain' = config.bgAjustement === 'contain' ? 'contain' : 'cover';
+    // Dimensions réelles de l'image de fond : on calcule nous-mêmes sa taille
+    // et sa position, au lieu de `object-fit`, qu'html2canvas (export PDF)
+    // ignore — l'image y sortait étirée. Ainsi écran, impression et PDF
+    // rendent exactement la même chose.
+    const [bgNaturel, setBgNaturel] = useState<{ w: number; h: number } | null>(null);
 
     useEffect(() => { setLogoError(false); }, [etablissementLogo]);
-    useEffect(() => { setBgError(false); }, [bgImageUrl]);
+    useEffect(() => {
+        setBgError(false);
+        setBgNaturel(null);
+        if (!bgImageUrl) return;
+        let annule = false;
+        const im = new Image();
+        // Même mode que le <img crossOrigin> de la carte : sinon le navigateur
+        // peut resservir une copie en cache sans en-têtes CORS, et l'export
+        // PDF (canvas) échoue.
+        im.crossOrigin = 'anonymous';
+        im.onload = () => { if (!annule && im.naturalWidth && im.naturalHeight) setBgNaturel({ w: im.naturalWidth, h: im.naturalHeight }); };
+        im.onerror = () => { if (!annule) setBgError(true); };
+        im.src = getPhotoUrl(bgImageUrl);
+        return () => { annule = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [bgImageUrl]);
     useEffect(() => { setImgError(false); }, [photoSrc]);
 
     const displayClasses = agent.classe || fetchedClasses || '';
@@ -158,6 +191,24 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
         width = '280px';
         height = '400px';
     }
+
+    /** Style de l'image de fond dans une zone de `zoneL` × `zoneH` px :
+     * centrée, mise à l'échelle selon l'ajustement puis la taille choisis. */
+    const styleFiligrane = (zoneL: number, zoneH: number): React.CSSProperties => {
+        const base: React.CSSProperties = {
+            position: 'absolute', opacity: bgOpacite, pointerEvents: 'none', maxWidth: 'none',
+        };
+        if (!bgNaturel) {
+            // Dimensions pas encore connues : repli sur object-fit (écran).
+            return { ...base, top: 0, left: 0, width: '100%', height: '100%', objectFit: bgAjustement };
+        }
+        const echelle = (bgAjustement === 'cover'
+            ? Math.max(zoneL / bgNaturel.w, zoneH / bgNaturel.h)
+            : Math.min(zoneL / bgNaturel.w, zoneH / bgNaturel.h)) * bgTaille;
+        const l = bgNaturel.w * echelle;
+        const h = bgNaturel.h * echelle;
+        return { ...base, width: `${l}px`, height: `${h}px`, left: `${(zoneL - l) / 2}px`, top: `${(zoneH - h) / 2}px` };
+    };
 
     // Année scolaire EN COURS de l'école (base de données), pas une déduction à
     // partir du mois : le libellé réel (2026-2027) plutôt qu'une heuristique de
@@ -296,25 +347,19 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                         boxSizing: 'border-box'
                     }}
                 >
-                    {/* Background Image Layer (behind content, horizontal) */}
+                    {/* Background Image Layer (behind content, horizontal) —
+                        limitée à la zone blanche de droite (320 × 320 px) : agrandie,
+                        elle ne déborde pas sur la bande de couleur. */}
                     {bgImageUrl && !bgError && (
-                        <img 
-                            src={getPhotoUrl(bgImageUrl)!}
-                            alt="background"
-                            crossOrigin="anonymous"
-                            style={{
-                                position: 'absolute',
-                                top: 0,
-                                left: '180px',
-                                width: '320px',
-                                height: '100%',
-                                objectFit: 'cover',
-                                opacity: 0.12,
-                                zIndex: 0,
-                                pointerEvents: 'none'
-                            }}
-                            onError={() => setBgError(true)}
-                        />
+                        <div style={{ position: 'absolute', top: 0, left: '180px', width: '320px', height: '100%', overflow: 'hidden', zIndex: 0, pointerEvents: 'none' }}>
+                            <img
+                                src={getPhotoUrl(bgImageUrl)!}
+                                alt="background"
+                                crossOrigin="anonymous"
+                                style={styleFiligrane(320, 320)}
+                                onError={() => setBgError(true)}
+                            />
+                        </div>
                     )}
                     {/* Section Gauche: Dégradé + Logo + QR Code */}
                     <div style={{
@@ -515,23 +560,15 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                 >
                     {/* Background Image Layer (behind content, vertical/compact) */}
                     {bgImageUrl && !bgError && (
-                        <img 
-                            src={getPhotoUrl(bgImageUrl)!}
-                            alt="background"
-                            crossOrigin="anonymous"
-                            style={{
-                                position: 'absolute',
-                                top: 0,
-                                left: 0,
-                                width: '100%',
-                                height: '100%',
-                                objectFit: 'cover',
-                                opacity: 0.12,
-                                zIndex: 0,
-                                pointerEvents: 'none'
-                            }}
-                            onError={() => setBgError(true)}
-                        />
+                        <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', zIndex: 0, pointerEvents: 'none' }}>
+                            <img
+                                src={getPhotoUrl(bgImageUrl)!}
+                                alt="background"
+                                crossOrigin="anonymous"
+                                style={styleFiligrane(parseInt(width, 10), parseInt(height, 10))}
+                                onError={() => setBgError(true)}
+                            />
+                        </div>
                     )}
                     {/* Background Decorations */}
                     {!bgImageUrl && (
@@ -692,6 +729,10 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                              width: '100%',
                              background: '#ffffff',
                              marginBottom: '28px',
+                             // Au-dessus du filigrane : un fond plus marqué ne
+                             // doit jamais gêner la lecture du QR code.
+                             position: 'relative',
+                             zIndex: 2,
                          }}>
                              <div style={{ background: 'white', padding: '4px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
                                  <QRCodeSVG 
