@@ -7,7 +7,7 @@ import {
     Eye, Edit, Upload, AlertTriangle
 } from 'lucide-react';
 import api from '@/lib/api';
-import { preparerPhoto } from '@/lib/preparerPhoto';
+import { preparerPhoto, formatPhotoAccepte, MESSAGE_FORMAT_REFUSE } from '@/lib/preparerPhoto';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import Pagination from '@/components/Pagination';
@@ -137,11 +137,17 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted, pending
     const hasPhoto = !!photoSrc;
     const profileUrl = type === 'eleve' ? `/eleves/${id}` : type === 'enseignant' ? `/enseignants/${id}` : `/familles/${id}`;
 
+    const ouvrirChoixPhoto = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (!uploading) inputRef.current?.click();
+    };
+
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const brut = e.target.files?.[0]; if (!brut) return;
         setUploading(true);
         try {
             const file = await preparerPhoto(brut);
+            if (!formatPhotoAccepte(file)) { alert(MESSAGE_FORMAT_REFUSE); return; }
             const fd = new FormData(); fd.append('fichier', file);
             // Élève / parent : la direction pose la photo DIRECTEMENT (route
             // admin-upload), sans repasser par sa propre file de validation.
@@ -149,7 +155,18 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted, pending
             const route = type === 'enseignant' ? 'upload' : 'admin-upload';
             await api.post(`/api/photos/${route}/${type}/${id}`, fd,
                 { headers: { 'Content-Type': 'multipart/form-data' } });
-            setJustUploaded(true); setTimeout(() => setJustUploaded(false), 2000);
+            setJustUploaded(true);
+            setTimeout(() => {
+                setJustUploaded(false);
+                // Arrivé depuis l'annuaire pour attribuer cette photo : c'est
+                // fait, on quitte le mode surbrillance.
+                if (isHighlighted) {
+                    const params = new URLSearchParams(searchParams.toString());
+                    params.delete('highlight');
+                    params.delete('assign_id');
+                    router.push(`${pathname}?${params.toString()}`);
+                }
+            }, 1500);
             onUploaded();
         } catch (err: any) {
             alert(err?.response?.data?.detail || "La photo n'a pas pu être enregistrée.");
@@ -270,24 +287,14 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted, pending
                                 </>
                             ) : isHighlighted ? (
                                 <>
-                                    <button onClick={(e) => {
-                                        e.stopPropagation();
-                                        setJustUploaded(true);
-                                        setTimeout(() => {
-                                            setJustUploaded(false);
-                                            const params = new URLSearchParams(searchParams.toString());
-                                            params.delete('highlight');
-                                            params.delete('assign_id');
-                                            router.push(`${pathname}?${params.toString()}`);
-                                        }, 1500);
-                                    }}
+                                    <button onClick={ouvrirChoixPhoto} disabled={uploading}
                                         style={{
                                             padding: '8px 16px', borderRadius: '10px', border: 'none',
                                             background: '#ef4444', color: 'white', cursor: 'pointer',
                                             display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700,
                                             boxShadow: '0 4px 12px rgba(239, 68, 68, 0.4)',
                                         }}>
-                                        <CheckCircle size={16} /> Attribuer
+                                        {uploading ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Upload size={16} />} Attribuer une photo
                                     </button>
                                     <button onClick={(e) => { e.stopPropagation(); onPreview(); }}
                                         style={{
@@ -327,14 +334,28 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted, pending
                 </AnimatePresence>
             </div>
 
-            {/* Name */}
-            <div style={{ padding: '10px 14px' }}>
-                <p style={{ fontWeight: 700, fontSize: '13px', margin: '0 0 2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {person.prenom} {person.nom}
-                </p>
-                <p style={{ fontSize: '11px', color: '#94a3b8', margin: 0 }}>
-                    {person.matricule || person.specialite || person.profession || ''}
-                </p>
+            {/* Name + bouton photo, toujours visible : sur téléphone il n'y a
+                pas de survol pour faire apparaître une action. */}
+            <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                    <p style={{ fontWeight: 700, fontSize: '13px', margin: '0 0 2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {person.prenom} {person.nom}
+                    </p>
+                    <p style={{ fontSize: '11px', color: '#94a3b8', margin: 0 }}>
+                        {person.matricule || person.specialite || person.profession || ''}
+                    </p>
+                </div>
+                <button onClick={ouvrirChoixPhoto} disabled={uploading}
+                    title={hasValidatedPhoto ? 'Changer la photo' : 'Ajouter une photo'}
+                    aria-label={hasValidatedPhoto ? 'Changer la photo' : 'Ajouter une photo'}
+                    style={{
+                        flexShrink: 0, width: '32px', height: '32px', borderRadius: '50%',
+                        border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4338ca',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        cursor: uploading ? 'wait' : 'pointer',
+                    }}>
+                    {uploading ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : (hasValidatedPhoto ? <Edit size={15} /> : <Upload size={15} />)}
+                </button>
             </div>
         </motion.div>
     );

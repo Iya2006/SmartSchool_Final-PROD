@@ -8,7 +8,7 @@ import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phon
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
-import { preparerPhoto } from '@/lib/preparerPhoto';
+import { preparerPhoto, formatPhotoAccepte, MESSAGE_FORMAT_REFUSE } from '@/lib/preparerPhoto';
 
 interface Classe {
     classe_id: number;
@@ -107,6 +107,12 @@ export default function NouveauEleve() {
             return;
         }
         const fichier = await preparerPhoto(brut);
+        // Refuser maintenant ce que le serveur refusera : sinon l'élève est
+        // inscrit puis la photo rejetée, sans retour possible sur ce formulaire.
+        if (!formatPhotoAccepte(fichier)) {
+            setError(MESSAGE_FORMAT_REFUSE);
+            return;
+        }
         if (fichier.size > 5 * 1024 * 1024) {
             setError('La photo dépasse 5 Mo. Choisissez une image plus légère.');
             return;
