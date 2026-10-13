@@ -7,6 +7,7 @@ import {
     Eye, Edit, Upload, AlertTriangle
 } from 'lucide-react';
 import api from '@/lib/api';
+import { preparerPhoto } from '@/lib/preparerPhoto';
 import Link from 'next/link';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import Pagination from '@/components/Pagination';
@@ -137,15 +138,22 @@ function PhotoCard({ person, type, onUploaded, onPreview, isHighlighted, pending
     const profileUrl = type === 'eleve' ? `/eleves/${id}` : type === 'enseignant' ? `/enseignants/${id}` : `/familles/${id}`;
 
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0]; if (!file) return;
+        const brut = e.target.files?.[0]; if (!brut) return;
         setUploading(true);
         try {
+            const file = await preparerPhoto(brut);
             const fd = new FormData(); fd.append('fichier', file);
-            await api.post(`/api/photos/upload/${type}/${id}`, fd,
+            // Élève / parent : la direction pose la photo DIRECTEMENT (route
+            // admin-upload), sans repasser par sa propre file de validation.
+            // Enseignant : la route classique écrit déjà en direct.
+            const route = type === 'enseignant' ? 'upload' : 'admin-upload';
+            await api.post(`/api/photos/${route}/${type}/${id}`, fd,
                 { headers: { 'Content-Type': 'multipart/form-data' } });
             setJustUploaded(true); setTimeout(() => setJustUploaded(false), 2000);
             onUploaded();
-        } catch { }
+        } catch (err: any) {
+            alert(err?.response?.data?.detail || "La photo n'a pas pu être enregistrée.");
+        }
         finally { setUploading(false); if (inputRef.current) inputRef.current.value = ''; }
     };
 
