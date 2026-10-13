@@ -11,7 +11,7 @@ import {
     Plus, Eye, Printer, XCircle, ChevronDown, Filter, Calendar,
     Briefcase, PieChart, BarChart3, Receipt, Wallet, HandCoins,
     Coins, Landmark, Percent, Award, Ban, Clock, ChevronRight, CheckCircle,
-    Store, Package, Wrench, Monitor, Bus, Signal, ClipboardList
+    Store, Package, Wrench, Monitor, Bus, Signal, ClipboardList, Loader2
 } from 'lucide-react';
 import Pagination from '@/components/Pagination';
 import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
@@ -352,8 +352,16 @@ function GestionPaiements() {
         } finally { setCancelLoading(false); }
     };
 
-    /* ═══ TELECHARGER RECU PDF ═══ */
+    /* ═══ TELECHARGER RECU PDF ═══
+       Le PDF est fabriqué par le serveur : il y a un délai, et sans rien à
+       l'écran l'utilisateur reclique. Chaque clic relançait une génération
+       complète — du travail serveur payé pour un seul reçu. On montre donc
+       l'attente ET on refuse les clics suivants tant qu'elle dure. */
+    const [recuEnCours, setRecuEnCours] = useState<number | null>(null);
+
     const downloadRecuPDF = async (paiementId: number, numeroRecu: string) => {
+        if (recuEnCours !== null) return;
+        setRecuEnCours(paiementId);
         try {
             const res = await api.get(`/api/finance/paiements/${paiementId}/recu-pdf`, { responseType: 'blob' });
             const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
@@ -364,6 +372,8 @@ function GestionPaiements() {
             URL.revokeObjectURL(url);
         } catch {
             setPayResult({ type: 'error', msg: 'Erreur lors du telechargement du recu' });
+        } finally {
+            setRecuEnCours(null);
         }
     };
 
@@ -410,6 +420,8 @@ function GestionPaiements() {
 
     /* ═══ IMPRIMER RECU PDF ═══ */
     const printRecuPDF = async (paiementId: number) => {
+        if (recuEnCours !== null) return;
+        setRecuEnCours(paiementId);
         try {
             const res = await api.get(`/api/finance/paiements/${paiementId}/recu-pdf`, { responseType: 'blob' });
             const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
@@ -421,6 +433,8 @@ function GestionPaiements() {
             }
         } catch {
             setPayResult({ type: 'error', msg: 'Erreur lors de l\'impression du recu' });
+        } finally {
+            setRecuEnCours(null);
         }
     };
 
@@ -900,11 +914,15 @@ function GestionPaiements() {
                                                 <div style={{ display: 'flex', gap: '6px' }} onClick={e => e.stopPropagation()}>
                                                     <button title="Telecharger Recu PDF" onClick={() => downloadRecuPDF(group.latest_paiement.paiement_id, group.latest_paiement.numero_recu)}
                                                         style={{ background: '#eff6ff', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
-                                                        <Download size={14} color="#3b82f6" />
+                                                        {recuEnCours === group.latest_paiement.paiement_id
+                                                            ? <Loader2 size={14} color="#3b82f6" style={{ animation: 'spin 1s linear infinite' }} />
+                                                            : <Download size={14} color="#3b82f6" />}
                                                     </button>
                                                     <button title="Imprimer Recu" onClick={() => printRecuPDF(group.latest_paiement.paiement_id)}
                                                         style={{ background: '#f0fdf4', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
-                                                        <Printer size={14} color="#10b981" />
+                                                        {recuEnCours === group.latest_paiement.paiement_id
+                                                            ? <Loader2 size={14} color="#10b981" style={{ animation: 'spin 1s linear infinite' }} />
+                                                            : <Printer size={14} color="#10b981" />}
                                                     </button>
                                                     {group.latest_paiement.statut === 'VALIDE' && (
                                                         <button title="Annuler ce paiement"
@@ -935,11 +953,15 @@ function GestionPaiements() {
                                                                             <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
                                                                                 <button title="Telecharger Recu PDF" onClick={() => downloadRecuPDF(hp.paiement_id, hp.numero_recu)}
                                                                                     style={{ background: '#eff6ff', border: 'none', borderRadius: '6px', padding: '4px', cursor: 'pointer' }}>
-                                                                                    <Download size={12} color="#3b82f6" />
+                                                                                    {recuEnCours === hp.paiement_id
+                                                                                        ? <Loader2 size={12} color="#3b82f6" style={{ animation: 'spin 1s linear infinite' }} />
+                                                                                        : <Download size={12} color="#3b82f6" />}
                                                                                 </button>
                                                                                 <button title="Imprimer Recu" onClick={() => printRecuPDF(hp.paiement_id)}
                                                                                     style={{ background: '#f0fdf4', border: 'none', borderRadius: '6px', padding: '4px', cursor: 'pointer' }}>
-                                                                                    <Printer size={12} color="#10b981" />
+                                                                                    {recuEnCours === hp.paiement_id
+                                                                                        ? <Loader2 size={12} color="#10b981" style={{ animation: 'spin 1s linear infinite' }} />
+                                                                                        : <Printer size={12} color="#10b981" />}
                                                                                 </button>
                                                                                 {hp.statut === 'VALIDE' && (
                                                                                     <button title="Annuler ce paiement"
@@ -1060,7 +1082,9 @@ function GestionPaiements() {
                                                 <span style={{ fontSize: '14px', fontWeight: 700, color: '#059669' }}>{formatMoney(latestPaiement.montant)}</span>
                                                 <button onClick={() => downloadRecuPDF(latestPaiement.paiement_id, latestPaiement.numero_recu)}
                                                     style={{ ...btnSecondary, padding: '6px 12px', fontSize: '12px' }}>
-                                                    <Download size={14} /> PDF
+                                                    {recuEnCours === latestPaiement.paiement_id
+                                                        ? <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> En cours…</>
+                                                        : <><Download size={14} /> PDF</>}
                                                 </button>
                                             </div>
                                         </div>
@@ -1076,7 +1100,9 @@ function GestionPaiements() {
                                                             <span style={{ fontSize: '13px', fontWeight: 700, color: '#059669' }}>{formatMoney(payment.montant)}</span>
                                                             <button onClick={() => downloadRecuPDF(payment.paiement_id, payment.numero_recu)}
                                                                 style={{ background: 'none', border: 'none', padding: '4px', cursor: 'pointer' }}>
-                                                                <Download size={14} color="#3b82f6" />
+                                                                {recuEnCours === payment.paiement_id
+                                                                    ? <Loader2 size={14} color="#3b82f6" style={{ animation: 'spin 1s linear infinite' }} />
+                                                                    : <Download size={14} color="#3b82f6" />}
                                                             </button>
                                                         </div>
                                                     </div>

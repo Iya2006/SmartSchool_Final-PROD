@@ -336,7 +336,10 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                                 width: '320px',
                                 height: '92%',
                                 objectFit: 'contain',
-                                opacity: 0.1,
+                                // Assez franc pour qu'on reconnaisse l'école d'un
+                                // coup d'œil, assez discret pour que le nom, la
+                                // photo et le matricule restent lisibles par-dessus.
+                                opacity: 0.22,
                                 zIndex: 0,
                                 pointerEvents: 'none',
                             }}
@@ -577,7 +580,10 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                                 width: '96%',
                                 height: '74%',
                                 objectFit: 'contain',
-                                opacity: 0.1,
+                                // Assez franc pour qu'on reconnaisse l'école d'un
+                                // coup d'œil, assez discret pour que le nom, la
+                                // photo et le matricule restent lisibles par-dessus.
+                                opacity: 0.22,
                                 zIndex: 0,
                                 pointerEvents: 'none',
                             }}

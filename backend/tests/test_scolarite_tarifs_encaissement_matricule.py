@@ -61,8 +61,11 @@ def ecole(db: Session):
     db.add(scolarite); db.commit(); db.refresh(scolarite)
     db.add(TarifClasse(classe_id=classe.classe_id, type_frais_id=scolarite.type_frais_id, montant=SCOLARITE))
 
+    # Préfixe propre à ce fichier : `nom_utilisateur` est unique pour TOUTE la
+    # plateforme, et un simple `dir.{n}` entrait en collision avec le compteur,
+    # reparti de 1, d'un autre fichier de tests joué dans la même session.
     admin = Utilisateur(
-        nom="Dir", prenom="Ecole", nom_utilisateur=f"dir.{uid}",
+        nom="Dir", prenom="Ecole", nom_utilisateur=f"dir.stm.{uid}",
         mot_de_passe=hash_password("motdepasse123"), role="ADMIN", statut="ACTIF",
         etablissement_id=eid,
     )
@@ -237,6 +240,54 @@ class TestNouveauTarifFactureToutLeMonde:
         ])
         assert r.status_code == 200, r.text
         assert self._factures_du_type(db, ecole, cantine.type_frais_id) == []
+
+    def test_quand_rien_n_est_facture_le_message_dit_pourquoi(self, client, db, ecole):
+        """
+        « Tarif enregistré » sans facture laissait l'école chercher le frais
+        chez ses élèves sans comprendre. Le motif doit remonter à l'écran.
+        """
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        cantine = self._creer_type(db, ecole, "Cantine", obligatoire="N")
+
+        r = client.put("/api/finance/tarifs-classe", headers=h, json=[
+            {"classe_id": ecole["classe"].classe_id,
+             "type_frais_id": cantine.type_frais_id, "montant": 50_000},
+        ])
+        assert r.status_code == 200, r.text
+        message = r.json()["message"]
+        assert "aucune facture créée" in message, message
+        assert "facultatif" in message, message
+
+    def test_l_annee_vient_de_la_classe_pas_de_l_ecole(self, client, db, ecole):
+        """
+        L'année était prise sur « l'année en cours de l'école ». Dès qu'elle
+        différait de celle de la classe, plus aucune inscription ne
+        correspondait et la facturation ne faisait rien, en silence.
+        Ici l'école bascule son année courante ailleurs : la classe et ses
+        élèves restent sur la leur, et doivent quand même être facturés.
+        """
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        badge = self._creer_type(db, ecole, "Frais de badge")
+
+        # L'école ouvre une NOUVELLE année courante ; la classe testée reste
+        # sur l'ancienne, comme une classe encore en cours de clôture.
+        ecole["annee"].est_courante = "N"
+        autre = AnneeScolaire(
+            etablissement_id=ecole["eid"], code=f"AN{_uid()}", libelle="2026-2027",
+            date_debut=date(2026, 10, 1), date_fin=date(2027, 6, 30),
+            est_courante="O", statut="EN_COURS",
+        )
+        db.add(autre); db.commit()
+
+        r = client.put("/api/finance/tarifs-classe", headers=h, json=[
+            {"classe_id": ecole["classe"].classe_id,
+             "type_frais_id": badge.type_frais_id, "montant": 25_000},
+        ])
+        assert r.status_code == 200, r.text
+        factures = self._factures_du_type(db, ecole, badge.type_frais_id)
+        assert len(factures) == len(ecole["eleves"]), (
+            "la classe garde son année : ses élèves doivent être facturés"
+        )
 
 
 class TestMatricule:

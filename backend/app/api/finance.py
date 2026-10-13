@@ -704,11 +704,10 @@ def _repercuter_tarif_sur_factures(db: Session, type_frais_id: int, classe_id: i
 def _facturer_tarif_aux_eleves(
     db: Session,
     type_frais: TypeFrais,
-    classe_id: int,
+    classe: Classe,
     montant: float,
     etablissement_id: int,
-    annee_id: Optional[int],
-) -> int:
+) -> tuple:
     """
     Facture un tarif à TOUS les élèves actuellement inscrits dans la classe.
 
@@ -735,23 +734,40 @@ def _facturer_tarif_aux_eleves(
       élève paie l'inscription, un élève qui continue paie la réinscription.
       Même règle que `_generer_frais_reinscription`. Les frais de scolarité et
       les autres frais obligatoires, eux, s'appliquent à tout le monde.
+
+    L'ANNÉE VIENT DE LA CLASSE, PAS DE L'ÉCOLE
+    Elle était prise sur « l'année en cours de l'établissement ». Or un tarif
+    porte sur UNE classe, et une classe appartient à UNE année : dès que les
+    deux divergent (année en cours mal positionnée, classe d'une autre année
+    encore ouverte), plus aucune inscription ne correspondait et la
+    facturation ne faisait rien — en silence. `classe.annee_id` est la seule
+    valeur qui ne peut pas se désaligner.
+
+    Renvoie `(nombre_cree, motif_si_rien)` : le motif remonte jusqu'au message
+    de l'écran, pour qu'« il ne s'est rien passé » ne reste jamais inexpliqué.
     """
     from app.api.reinscription import _est_frais_inscription, _est_frais_reinscription
 
-    if type_frais.est_obligatoire != "O" or type_frais.statut != "ACTIF":
-        return 0
+    if type_frais.statut != "ACTIF":
+        return 0, f"« {type_frais.libelle} » est inactif"
+    if type_frais.est_obligatoire != "O":
+        return 0, (
+            f"« {type_frais.libelle} » est un frais facultatif : il n'est pas facturé "
+            "d'office à toute la classe. Facturez-le aux familles concernées depuis "
+            "« Facturer une classe » ou la fiche de l'élève."
+        )
 
     inscriptions = (
         db.query(Inscription)
         .filter(
-            Inscription.classe_id == classe_id,
-            Inscription.annee_id == annee_id,
+            Inscription.classe_id == classe.classe_id,
+            Inscription.annee_id == classe.annee_id,
             Inscription.statut == "ACTIVE",
         )
         .all()
     )
     if not inscriptions:
-        return 0
+        return 0, f"aucun élève actif dans {classe.libelle}"
 
     deja_facture = {
         f.inscription_id
@@ -820,7 +836,9 @@ def _facturer_tarif_aux_eleves(
         )
         created += 1
 
-    return created
+    if created == 0:
+        return 0, f"« {type_frais.libelle} » était déjà facturé à tous les élèves concernés"
+    return created, None
 
 
 @router.put("/tarifs-classe")
@@ -853,9 +871,20 @@ def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get
     # coupe la facturation sans refuser l'enregistrement de la grille, qui lui
     # n'a jamais été verrouillé par l'année et ne doit pas commencer à l'être
     # au détour de cette évolution.
-    annee_id = resoudre_annee(db, etablissement_id, None)
-    annee = db.query(AnneeScolaire).filter(AnneeScolaire.annee_id == annee_id).first() if annee_id else None
-    annee_facturable = annee is not None and annee.statut not in ANNEE_VERROUILLEE
+    # L'année vient de CHAQUE classe (voir `_facturer_tarif_aux_eleves`), pas de
+    # « l'année en cours de l'école » : les deux peuvent diverger, et la
+    # facturation ne faisait alors rien, sans rien dire.
+    classes_par_id = {
+        c.classe_id: c
+        for c in db.query(Classe).filter(Classe.classe_id.in_(classe_ids)).all()
+    } if classe_ids else {}
+    annees_verrouillees = {
+        a.annee_id
+        for a in db.query(AnneeScolaire).filter(
+            AnneeScolaire.annee_id.in_({c.annee_id for c in classes_par_id.values() if c.annee_id})
+        ).all()
+        if a.statut in ANNEE_VERROUILLEE
+    } if classes_par_id else set()
 
     types_par_id = {
         t.type_frais_id: t
@@ -863,6 +892,7 @@ def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get
     } if types_ids else {}
 
     upserted, deleted, factures_maj, factures_creees = 0, 0, 0, 0
+    motifs = []
     for entry in entries:
         existing = db.query(TarifClasse).filter(
             TarifClasse.type_frais_id == entry.type_frais_id,
@@ -885,16 +915,29 @@ def set_tarifs_classe(entries: List[TarifClasseEntry], db: Session = Depends(get
         # idempotente, et c'est ce qui rattrape aussi les élèves arrivés APRÈS
         # la création du tarif sans être passés par un chemin qui facture.
         type_frais = types_par_id.get(entry.type_frais_id)
-        if annee_facturable and type_frais is not None:
-            factures_creees += _facturer_tarif_aux_eleves(
-                db, type_frais, entry.classe_id, float(entry.montant), etablissement_id, annee_id
-            )
+        classe = classes_par_id.get(entry.classe_id)
+        if type_frais is None or classe is None:
+            continue
+        if classe.annee_id in annees_verrouillees:
+            motifs.append(f"l'année de {classe.libelle} est clôturée")
+            continue
+        cree, motif = _facturer_tarif_aux_eleves(
+            db, type_frais, classe, float(entry.montant), etablissement_id
+        )
+        factures_creees += cree
+        if motif:
+            motifs.append(motif)
 
     db.commit()
     _invalidate_dashboard_cache(etablissement_id)
     message = f"{upserted} tarif(s) enregistré(s), {deleted} supprimé(s), {factures_maj} facture(s) impayée(s) mise(s) à jour"
     if factures_creees:
         message += f", {factures_creees} facture(s) créée(s) pour les élèves déjà inscrits"
+    # Aucune facture créée : on dit POURQUOI. Sans ça, l'écran annonçait
+    # « tarif enregistré » et l'école cherchait en vain le frais chez ses élèves.
+    elif motifs:
+        uniques = list(dict.fromkeys(motifs))
+        message += " — aucune facture créée : " + " ; ".join(uniques[:3])
     return {"message": message}
 
 
