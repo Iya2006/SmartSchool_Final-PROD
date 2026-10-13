@@ -18,6 +18,7 @@ import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@
 import { useApp } from '@/context/AppContext';
 import AnneeFilter from '@/components/AnneeFilter';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { ouvrirRecuPdf, telechargerRecuPdf } from '@/lib/recuPdf';
 
 /* ═══════════════════════════════════════════════════════════════════════
    TYPES
@@ -363,13 +364,10 @@ function GestionPaiements() {
         if (recuEnCours !== null) return;
         setRecuEnCours(paiementId);
         try {
-            const res = await api.get(`/api/finance/paiements/${paiementId}/recu-pdf`, { responseType: 'blob' });
-            const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `${numeroRecu}.pdf`;
-            link.click();
-            URL.revokeObjectURL(url);
+            // Même chemin que l'écran d'encaissement (lib/recuPdf.ts) : l'URL
+            // n'est plus révoquée dans la foulée du clic, ce qui annulait
+            // parfois le téléchargement avant qu'il ne démarre.
+            await telechargerRecuPdf(`/api/finance/paiements/${paiementId}/recu-pdf`, `${numeroRecu}.pdf`);
         } catch {
             setPayResult({ type: 'error', msg: 'Erreur lors du telechargement du recu' });
         } finally {
@@ -419,18 +417,15 @@ function GestionPaiements() {
     }, []);
 
     /* ═══ IMPRIMER RECU PDF ═══ */
-    const printRecuPDF = async (paiementId: number) => {
+    const printRecuPDF = async (paiementId: number, numeroRecu: string) => {
         if (recuEnCours !== null) return;
         setRecuEnCours(paiementId);
         try {
-            const res = await api.get(`/api/finance/paiements/${paiementId}/recu-pdf`, { responseType: 'blob' });
-            const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-            const printWindow = window.open(url, '_blank');
-            if (printWindow) {
-                printWindow.onload = () => {
-                    printWindow.print();
-                };
-            }
+            // ouvrirRecuPdf ouvre l'onglet AU CLIC puis y charge le PDF : le
+            // `window.open` lancé après l'attente réseau était bloqué par
+            // Safari iOS, et rien ne s'ouvrait. On imprime depuis la
+            // visionneuse ; si l'onglet est refusé, le reçu est téléchargé.
+            await ouvrirRecuPdf(`/api/finance/paiements/${paiementId}/recu-pdf`, `${numeroRecu}.pdf`);
         } catch {
             setPayResult({ type: 'error', msg: 'Erreur lors de l\'impression du recu' });
         } finally {
@@ -918,7 +913,7 @@ function GestionPaiements() {
                                                             ? <Loader2 size={14} color="#3b82f6" style={{ animation: 'spin 1s linear infinite' }} />
                                                             : <Download size={14} color="#3b82f6" />}
                                                     </button>
-                                                    <button title="Imprimer Recu" onClick={() => printRecuPDF(group.latest_paiement.paiement_id)}
+                                                    <button title="Imprimer Recu" onClick={() => printRecuPDF(group.latest_paiement.paiement_id, group.latest_paiement.numero_recu)}
                                                         style={{ background: '#f0fdf4', border: 'none', borderRadius: '8px', padding: '6px', cursor: 'pointer' }}>
                                                         {recuEnCours === group.latest_paiement.paiement_id
                                                             ? <Loader2 size={14} color="#10b981" style={{ animation: 'spin 1s linear infinite' }} />
@@ -957,7 +952,7 @@ function GestionPaiements() {
                                                                                         ? <Loader2 size={12} color="#3b82f6" style={{ animation: 'spin 1s linear infinite' }} />
                                                                                         : <Download size={12} color="#3b82f6" />}
                                                                                 </button>
-                                                                                <button title="Imprimer Recu" onClick={() => printRecuPDF(hp.paiement_id)}
+                                                                                <button title="Imprimer Recu" onClick={() => printRecuPDF(hp.paiement_id, hp.numero_recu)}
                                                                                     style={{ background: '#f0fdf4', border: 'none', borderRadius: '6px', padding: '4px', cursor: 'pointer' }}>
                                                                                     {recuEnCours === hp.paiement_id
                                                                                         ? <Loader2 size={12} color="#10b981" style={{ animation: 'spin 1s linear infinite' }} />

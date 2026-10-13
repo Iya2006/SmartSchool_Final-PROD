@@ -1231,8 +1231,63 @@ def fournitures_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db: 
 # ── Téléchargement du reçu PDF pour un parent ─────────────────────────────
 # Le router /api/finance est protégé par FINANCE_ROLES : un token parent ne
 # peut pas l'appeler. On expose donc le même reçu ici, dans un endpoint dont
-# le seul prérequis est d'être authentifié comme parent (ou admin) ET que le
-# paiement concerne un enfant de ce parent.
+# le seul prérequis est d'être authentifié comme parent (ou personnel de la
+# caisse) ET que le paiement concerne un enfant de ce parent.
+#
+# Mêmes rôles que FINANCE_ROLES (main.py) — recopiés ici parce que main.py
+# importe ce module (import circulaire) ; un test vérifie qu'ils restent
+# identiques.
+ROLES_RECU_PERSONNEL = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "COMPTABLE"}
+
+
+def _exiger_compte_documents(current_user: dict) -> bool:
+    """Premier filtre des documents de paiement (reçu, facture), AVANT toute
+    lecture : seuls un parent ou le personnel de la caisse passent — liste
+    BLANCHE, comme _parent_auth. « Tout ce qui n'est pas du personnel est un
+    parent » laissait passer n'importe quel jeton (élève, enseignant) dont le
+    `sub` valait par hasard l'identifiant d'un parent de l'élève. Renvoie
+    True pour un parent."""
+    from app.core.auth import roles_du_compte
+
+    est_parent = current_user.get("type") == "parent"
+    if not est_parent and not (roles_du_compte(current_user) & ROLES_RECU_PERSONNEL):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    return est_parent
+
+
+def _exiger_acces_document_eleve(db: Session, current_user: dict, est_parent: bool, eleve_id: int, etablissement_id: int, introuvable: str) -> None:
+    """Second filtre, une fois l'élève connu : le parent seulement pour un de
+    SES enfants ; le personnel seulement dans son école."""
+    from app.core.auth import roles_du_compte
+
+    if est_parent:
+        try:
+            parent_id = int(current_user.get("sub"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=403, detail="Accès refusé")
+        lien = db.query(EleveParent).filter(
+            EleveParent.eleve_id == eleve_id,
+            EleveParent.parent_id == parent_id,
+        ).first()
+        if not lien:
+            raise HTTPException(status_code=403, detail="Accès refusé")
+        return
+    etab_compte = current_user.get("etablissement_id")
+    if etab_compte is None:
+        # Super-admin plateforme : il choisit d'abord l'école.
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    if int(etab_compte) != etablissement_id:
+        # 404 : le document d'une autre école n'existe pas pour ce compte
+        # (cloisonnement multi-écoles) — y compris pour la direction.
+        raise HTTPException(status_code=404, detail=introuvable)
+    # Le DG à qui le fondateur a fermé la comptabilité n'a pas plus accès ici
+    # que sous /api/finance (exige_acces_finance).
+    roles = roles_du_compte(current_user)
+    if "DG" in roles and not (roles & (ROLES_RECU_PERSONNEL - {"DG"})):
+        if (current_user.get("acces_comptabilite") or "O") != "O":
+            raise HTTPException(status_code=403, detail="Accès refusé")
+
+
 @router.get("/paiements/{paiement_id}/recu-pdf")
 def recu_pdf_parent(
     paiement_id: int,
@@ -1240,12 +1295,13 @@ def recu_pdf_parent(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Génère et retourne le reçu PDF d'un paiement. Accessible au parent concerné et aux admins."""
+    """Génère et retourne le reçu PDF d'un paiement. Accessible au parent
+    concerné et au personnel de la caisse de l'école de l'élève."""
     from fastapi.responses import Response
     from app.core.documents_settings import get_documents_settings
-    from app.core.recu_paiement import (
-        base_url_publique, charger_donnees_recu, generer_pdf_recu, url_verification,
-    )
+    from app.core.recu_paiement import charger_donnees_recu, generer_pdf_recu
+
+    est_parent = _exiger_compte_documents(current_user)
 
     # Récupérer le paiement + facture + inscription + élève + classe
     result = (
@@ -1262,30 +1318,11 @@ def recu_pdf_parent(
 
     paiement, facture, inscription, eleve, classe = result
 
-    # Vérification ownership : si le rôle est PARENT, s'assurer que cet élève
-    # est bien rattaché au parent connecté. Les admins/comptables passent librement.
-    role = current_user.get("role", "")
-    if role not in ("ADMIN", "DIRECTEUR", "COMPTABLE", "SECRETAIRE"):
-        parent_id = current_user.get("id") or current_user.get("sub")
-        if not parent_id:
-            raise HTTPException(status_code=403, detail="Accès refusé")
-        lien = db.query(EleveParent).filter(
-            EleveParent.eleve_id == eleve.eleve_id,
-            EleveParent.parent_id == int(parent_id),
-        ).first()
-        if not lien:
-            raise HTTPException(status_code=403, detail="Accès refusé")
-
-    # Le reçu d'une autre école n'existe pas pour ce compte (cloisonnement
-    # multi-écoles) — y compris pour un compte de direction.
-    etab_compte = current_user.get("etablissement_id")
-    if etab_compte is not None and int(etab_compte) != classe.etablissement_id:
-        raise HTTPException(status_code=404, detail="Paiement non trouvé")
+    _exiger_acces_document_eleve(db, current_user, est_parent, eleve.eleve_id, classe.etablissement_id, "Paiement non trouvé")
 
     # Même reçu que celui de la comptabilité (app/core/recu_paiement.py).
-    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe)
-    url = url_verification(base_url_publique(request), d["numero_recu"], d["code_verification"])
-    contenu = generer_pdf_recu(d, url, get_documents_settings(db, classe.etablissement_id))
+    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe, request)
+    contenu = generer_pdf_recu(d, d["url_verification"], get_documents_settings(db, classe.etablissement_id))
     filename = f"recu_{paiement.numero_recu}.pdf"
     return Response(
         content=contenu,
@@ -1307,6 +1344,8 @@ def facture_pdf_parent(
     from fastapi.responses import StreamingResponse
     import io
 
+    est_parent = _exiger_compte_documents(current_user)
+
     # Récupérer la facture + inscription + élève + classe
     result = (
         db.query(Facture, Inscription, Eleve, Classe, TypeFrais)
@@ -1323,18 +1362,8 @@ def facture_pdf_parent(
 
     facture, inscription, eleve, classe, type_frais = result
 
-    # Vérification ownership
-    role = current_user.get("role", "")
-    if role not in ("ADMIN", "DIRECTEUR", "COMPTABLE", "SECRETAIRE"):
-        parent_id = current_user.get("id") or current_user.get("sub")
-        if not parent_id:
-            raise HTTPException(status_code=403, detail="Accès refusé")
-        lien = db.query(EleveParent).filter(
-            EleveParent.eleve_id == eleve.eleve_id,
-            EleveParent.parent_id == int(parent_id),
-        ).first()
-        if not lien:
-            raise HTTPException(status_code=403, detail="Accès refusé")
+    # Mêmes règles d'accès que le reçu (voir _exiger_acces_document_eleve).
+    _exiger_acces_document_eleve(db, current_user, est_parent, eleve.eleve_id, classe.etablissement_id, "Facture non trouvée")
 
     # Récupérer l'établissement
     from app.models.academique import Etablissement

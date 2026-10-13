@@ -126,6 +126,13 @@ function EncaissementContent() {
     // Receipt state
     const [recuData, setRecuData] = useState<RecuData | null>(null);
     const [recuLoading, setRecuLoading] = useState(false);
+    // Paiement que l'écran « reçu » concerne, tel que renvoyé par
+    // POST /api/finance/paiements. Le PDF est construit avec lui et non avec
+    // recuData : si GET /recu échoue, le reçu reste imprimable, et jamais
+    // celui du paiement précédent. Le ref écarte une réponse GET /recu
+    // arrivée après qu'on est passé à un autre paiement.
+    const [recuPaiement, setRecuPaiement] = useState<{ id: number; numero: string | null } | null>(null);
+    const recuPaiementRef = useRef<number | null>(null);
     const recuRef = useRef<HTMLDivElement>(null);
     const queryClient = useQueryClient();
 
@@ -260,15 +267,24 @@ function EncaissementContent() {
 
             // Load receipt
             if (res.data.paiement_id) {
+                const paiementId: number = res.data.paiement_id;
+                recuPaiementRef.current = paiementId;
+                setRecuPaiement({ id: paiementId, numero: res.data.numero_recu || null });
+                // Vider AVANT d'afficher l'étape : sinon, pendant le chargement
+                // (ou pour de bon si GET /recu échoue), l'écran gardait le reçu
+                // du paiement précédent.
+                setRecuData(null);
                 setRecuLoading(true);
                 setStep('recu');
                 try {
-                    const recuRes = await api.get(`/api/finance/recu/${res.data.paiement_id}`);
-                    setRecuData(recuRes.data);
+                    const recuRes = await api.get(`/api/finance/recu/${paiementId}`);
+                    if (recuPaiementRef.current === paiementId) setRecuData(recuRes.data);
                 } catch {
-                    showMsg('Paiement enregistré mais erreur lors du chargement du reçu', 'error');
+                    if (recuPaiementRef.current === paiementId) {
+                        showMsg('Paiement enregistré mais erreur lors du chargement du reçu', 'error');
+                    }
                 }
-                setRecuLoading(false);
+                if (recuPaiementRef.current === paiementId) setRecuLoading(false);
             }
 
             // Rafraîchir toutes les vues qui dépendent de ce paiement (pas seulement
@@ -293,10 +309,10 @@ function EncaissementContent() {
     // page coupait le reçu sur téléphone (montants et signature hors page).
     const [pdfEnCours, setPdfEnCours] = useState<'imprimer' | 'telecharger' | null>(null);
     const actionRecuPdf = async (action: 'imprimer' | 'telecharger') => {
-        if (!recuData || pdfEnCours) return;
+        if (!recuPaiement || recuLoading || pdfEnCours) return;
         setPdfEnCours(action);
-        const endpoint = `/api/finance/paiements/${recuData.paiement_id}/recu-pdf`;
-        const nom = `recu_${recuData.numero_recu}.pdf`;
+        const endpoint = `/api/finance/paiements/${recuPaiement.id}/recu-pdf`;
+        const nom = `recu_${recuData?.numero_recu || recuPaiement.numero || recuPaiement.id}.pdf`;
         try {
             if (action === 'imprimer') await ouvrirRecuPdf(endpoint, nom);
             else await telechargerRecuPdf(endpoint, nom);
@@ -310,6 +326,12 @@ function EncaissementContent() {
     // ─── Back navigation ───
     const goBack = () => {
         if (step === 'recu') {
+            // Le reçu affiché ne doit pas survivre à l'étape : le prochain
+            // encaissement repartirait de lui le temps de charger le sien.
+            recuPaiementRef.current = null;
+            setRecuPaiement(null);
+            setRecuData(null);
+            setRecuLoading(false);
             // After receipt, go back to student balance
             if (selectedEleve) {
                 selectEleve(selectedEleve);
@@ -786,15 +808,15 @@ function EncaissementContent() {
                             style={{ padding: '10px 20px', borderRadius: 10, background: '#f1f5f9', color: '#475569', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                             <ArrowLeft size={16} /> Retour au solde
                         </button>
-                        <button onClick={() => actionRecuPdf('imprimer')} disabled={!recuData || !!pdfEnCours}
-                            style={{ padding: '10px 24px', borderRadius: 10, background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff', border: 'none', fontSize: 14, fontWeight: 700, cursor: pdfEnCours ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, opacity: !recuData ? 0.6 : 1 }}>
+                        <button onClick={() => actionRecuPdf('imprimer')} disabled={!recuPaiement || recuLoading || !!pdfEnCours}
+                            style={{ padding: '10px 24px', borderRadius: 10, background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff', border: 'none', fontSize: 14, fontWeight: 700, cursor: pdfEnCours || recuLoading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, opacity: !recuPaiement || recuLoading ? 0.6 : 1 }}>
                             {pdfEnCours === 'imprimer' ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />} Imprimer le reçu
                         </button>
-                        <button onClick={() => actionRecuPdf('telecharger')} disabled={!recuData || !!pdfEnCours}
-                            style={{ padding: '10px 20px', borderRadius: 10, background: '#fff', color: '#1e293b', border: '1px solid #cbd5e1', fontSize: 13, fontWeight: 700, cursor: pdfEnCours ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, opacity: !recuData ? 0.6 : 1 }}>
+                        <button onClick={() => actionRecuPdf('telecharger')} disabled={!recuPaiement || recuLoading || !!pdfEnCours}
+                            style={{ padding: '10px 20px', borderRadius: 10, background: '#fff', color: '#1e293b', border: '1px solid #cbd5e1', fontSize: 13, fontWeight: 700, cursor: pdfEnCours || recuLoading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, opacity: !recuPaiement || recuLoading ? 0.6 : 1 }}>
                             {pdfEnCours === 'telecharger' ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} Télécharger (PDF)
                         </button>
-                        <button onClick={() => { setStep('search'); setSelectedEleve(null); setSoldeData(null); setRecuData(null); }}
+                        <button onClick={() => { recuPaiementRef.current = null; setRecuPaiement(null); setStep('search'); setSelectedEleve(null); setSoldeData(null); setRecuData(null); setRecuLoading(false); }}
                             style={{ padding: '10px 20px', borderRadius: 10, background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                             <Banknote size={16} /> Nouvel encaissement
                         </button>

@@ -22,12 +22,20 @@ export async function ouvrirRecuPdf(endpoint: string, nomFichier: string): Promi
         const res = await api.get(endpoint, { responseType: 'blob' });
         const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
         if (onglet && !onglet.closed) {
+            // URL volontairement JAMAIS révoquée ici : la visionneuse PDF de
+            // l'onglet la relit après le chargement (Enregistrer, Imprimer,
+            // Partager, ou Safari iOS qui recharge l'onglet quand on y
+            // revient). Révoquée au bout d'une minute, elle y donnait une page
+            // blanche ou un fichier introuvable. Le navigateur la libère de
+            // lui-même avec cette page ; le coût est un PDF de quelques
+            // centaines de Ko par reçu ouvert.
             onglet.location.href = url;
         } else {
             telecharger(url, nomFichier);
+            // Téléchargement : le fichier est copié sur l'appareil dès le
+            // clic, l'URL peut être libérée une fois le transfert démarré.
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
         }
-        // Laisser le temps à l'onglet de charger le PDF avant de libérer l'URL.
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (e) {
         if (onglet && !onglet.closed) onglet.close();
         throw e;

@@ -14,14 +14,20 @@ export type RecuDonnees = {
     numero_recu: string;
     statut: string;
     date_paiement: string | null;
+    /** null pour un paiement antidaté : l'heure de saisie n'est pas celle du versement. */
     heure: string | null;
     montant: number;
     montant_en_lettres: string;
+    /** Phrase complète déjà accordée par le serveur (« Deux millions de francs
+     * guinéens »), sans point final. Absente d'un serveur plus ancien. */
+    somme_en_lettres?: string;
     devise: string;
     mode_paiement_libelle: string;
     reference_externe: string | null;
     tranche: { numero: number; total: number; libelle: string } | null;
     code_verification: string;
+    /** Adresse complète du QR, calculée par le serveur : la MÊME que sur le PDF. */
+    url_verification?: string;
     facture: {
         numero_facture: string; motif: string; montant_total: number;
         deja_paye: number; paye_a_date: number; reste_a_date: number;
@@ -44,8 +50,21 @@ const VERT = '#059669';
 const AMBRE = '#d97706';
 const ROUGE = '#dc2626';
 
-export const formaterMontant = (n: number | null | undefined) =>
-    Math.round(n || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+/** « 2 000 000 », ou « 1 250,50 » quand le montant a des centimes (dollars,
+ * euros) : arrondi à l'entier, un reçu de 1 250,50 USD affichait 1 251. */
+export const formaterMontant = (n: number | null | undefined) => {
+    const v = Math.round((n || 0) * 100) / 100;
+    const [entier, decimales] = Math.abs(v).toFixed(Number.isInteger(v) ? 0 : 2).split('.');
+    return `${v < 0 ? '-' : ''}${entier.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}${decimales ? `,${decimales}` : ''}`;
+};
+
+const COULEUR_DEFAUT = '#1e3a8a';
+
+/** Couleur de l'école, seulement si c'est un hexadécimal valide : elle est
+ * injectée telle quelle dans des dégradés et `color-mix`, où une valeur
+ * inattendue fait disparaître le bandeau au lieu de retomber sur le bleu. */
+export const couleurEcole = (c: string | null | undefined): string =>
+    c && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(c) ? c : COULEUR_DEFAUT;
 
 const dateFr = (iso: string | null) => {
     if (!iso) return '—';
@@ -100,25 +119,37 @@ function Carte({ titre, lignes, couleur, couleurFoncee }: { titre: string; ligne
 export default function RecuPaiement({ recu }: { recu: RecuDonnees }) {
     const etab = recu.etablissement;
     const fac = recu.facture;
-    const P = etab.couleur || '#1e3a8a';
+    const P = couleurEcole(etab.couleur);
     const PF = assombrir(P, 0.72);
     const annule = (recu.statut || '').toUpperCase() === 'ANNULE';
     const reste = fac.reste_a_date || 0;
     const ratio = fac.montant_total > 0 ? Math.max(0, Math.min(1, fac.paye_a_date / fac.montant_total)) : 0;
+    // Jamais « 100 % » tant qu'il reste quelque chose à payer : arrondi,
+    // 99,6 % s'affichait « PAYÉ À 100 % » à côté d'un reste non nul.
+    const pourcentage = reste > 0 ? Math.min(99, Math.floor(ratio * 100)) : 100;
     const devise = recu.devise || 'GNF';
     const [logoOk, setLogoOk] = useState(true);
-    const [urlQr, setUrlQr] = useState('');
-    useEffect(() => { setUrlQr(urlVerificationRecu(recu.numero_recu, recu.code_verification)); }, [recu.numero_recu, recu.code_verification]);
+    const [urlQrLocale, setUrlQrLocale] = useState('');
+    useEffect(() => { setUrlQrLocale(urlVerificationRecu(recu.numero_recu, recu.code_verification)); }, [recu.numero_recu, recu.code_verification]);
+    // L'adresse du serveur prime : c'est celle du QR imprimé sur le PDF.
+    // window.location.origin n'est qu'un repli pour un serveur plus ancien —
+    // derrière un autre domaine (ou en local), il donnait un QR différent.
+    const urlQr = recu.url_verification || urlQrLocale;
     useEffect(() => { setLogoOk(true); }, [etab.logo_url]);
 
     const initiales = useMemo(() => (etab.nom || '')
         .replace(/-/g, ' ').split(/\s+/).filter(m => /^[\p{L}\p{N}]/u.test(m)).slice(0, 3)
         .map(m => m[0]).join('').toUpperCase() || 'S', [etab.nom]);
 
-    const lettres = (() => {
-        const s = `Arrêté le présent reçu à la somme de : ${recu.montant_en_lettres} ${devise.toUpperCase() === 'GNF' ? 'francs guinéens' : `(${devise})`}.`;
-        return s.charAt(0).toUpperCase() + s.slice(1);
-    })();
+    // Phrase du serveur quand il la fournit : elle est accordée (« un franc
+    // guinéen », « dollars US et cinquante cents »), ce que le repli ci-dessous
+    // ne sait pas faire.
+    const lettres = recu.somme_en_lettres
+        ? `Arrêté le présent reçu à la somme de : ${recu.somme_en_lettres.charAt(0).toLowerCase()}${recu.somme_en_lettres.slice(1)}.`
+        : (() => {
+            const s = `Arrêté le présent reçu à la somme de : ${recu.montant_en_lettres} ${devise.toUpperCase() === 'GNF' ? 'francs guinéens' : `(${devise})`}.`;
+            return s.charAt(0).toUpperCase() + s.slice(1);
+        })();
 
     const contacts = [etab.adresse, etab.telephone ? `Tél : ${etab.telephone}` : '', etab.email].filter(Boolean).join('  •  ');
     const lignesEleve: [string, string][] = [
@@ -126,7 +157,10 @@ export default function RecuPaiement({ recu }: { recu: RecuDonnees }) {
         ['Matricule', recu.eleve.matricule || '—'],
         ['Classe', recu.eleve.classe || '—'],
     ];
-    if (recu.parent?.nom) lignesEleve.push(['Parent / tuteur', recu.parent.nom + (recu.parent.telephone ? ` — ${recu.parent.telephone}` : '')]);
+    // Téléphone sur sa propre ligne, comme sur le PDF : accolé au nom, il
+    // allongeait la ligne au point de la couper au milieu du numéro.
+    if (recu.parent?.nom) lignesEleve.push(['Parent / tuteur', recu.parent.nom]);
+    if (recu.parent?.telephone) lignesEleve.push(['Téléphone parent', recu.parent.telephone]);
     const lignesPaiement: [string, string][] = [['Motif', fac.motif || '—']];
     if (recu.tranche) lignesPaiement.push(['Tranche', `${recu.tranche.numero} sur ${recu.tranche.total}${recu.tranche.numero === recu.tranche.total ? ' (dernière)' : ''}`]);
     lignesPaiement.push(['Mode de paiement', recu.mode_paiement_libelle || '—']);
@@ -203,10 +237,10 @@ export default function RecuPaiement({ recu }: { recu: RecuDonnees }) {
                     ))}
                 </div>
                 <div style={{ marginTop: 10, height: 7, borderRadius: 99, background: BORD, overflow: 'hidden' }}>
-                    <div style={{ width: `${Math.round(ratio * 100)}%`, height: '100%', borderRadius: 99, background: reste <= 0 ? VERT : P }} />
+                    <div style={{ width: `${pourcentage}%`, height: '100%', borderRadius: 99, background: reste <= 0 ? VERT : P }} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginTop: 6, fontSize: 11 }}>
-                    <span style={{ fontWeight: 800, color: reste <= 0 ? VERT : PF }}>{reste <= 0 ? 'FACTURE SOLDÉE' : `PAYÉ À ${Math.round(ratio * 100)} %`}</span>
+                    <span style={{ fontWeight: 800, color: reste <= 0 ? VERT : PF }}>{reste <= 0 ? 'FACTURE SOLDÉE' : `PAYÉ À ${pourcentage} %`}</span>
                     {recu.anterieurs.length > 0 && <span style={{ color: GRIS }}>Dont {formaterMontant(fac.deja_paye)} {devise} versés auparavant</span>}
                 </div>
 

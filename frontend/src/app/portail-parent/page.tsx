@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
+import { telechargerRecuPdf } from '@/lib/recuPdf';
 import ClassementEpreuves from '@/components/ClassementEpreuves';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
@@ -387,13 +388,10 @@ export default function PortailParent() {
         try {
             // L'endpoint /api/finance/paiements/{id}/recu-pdf est protégé par FINANCE_ROLES
             // et inaccessible au token parent. On utilise l'endpoint dédié du portail parent.
-            const res = await api.get(`/api/portail-parent/paiements/${paiementId}/recu-pdf`, { responseType: 'blob' });
-            const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `recu_${numeroRecu}.pdf`;
-            link.click();
-            URL.revokeObjectURL(url);
+            // Même téléchargement que les écrans de comptabilité (lib/recuPdf.ts) :
+            // l'URL n'est plus révoquée dans la foulée du clic, ce qui pouvait
+            // annuler le téléchargement sur téléphone.
+            await telechargerRecuPdf(`/api/portail-parent/paiements/${paiementId}/recu-pdf`, `recu_${numeroRecu}.pdf`);
         } catch {
             toast.error('Erreur lors du téléchargement du reçu');
         }

@@ -3089,13 +3089,16 @@ def _paiement_de_l_ecole(db: Session, paiement_id: int, etablissement_id: int):
 
 
 @router.get("/recu/{paiement_id}")
-def get_recu(paiement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+def get_recu(paiement_id: int, request: Request = None, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Détail complet d'un reçu pour l'affichage écran. Mêmes données que le
-    PDF (app/core/recu_paiement.py) : l'écran et le papier ne divergent plus."""
-    from app.core.recu_paiement import charger_donnees_recu
+    PDF (app/core/recu_paiement.py) : l'écran et le papier ne divergent plus
+    — jusqu'à l'URL du QR code (`url_verification`), calculée ici avec la
+    même requête que pour le PDF. (`request` reste facultatif pour les
+    appels directs, hors HTTP : FastAPI l'injecte toujours.)"""
+    from app.core.recu_paiement import arrondir_montant, charger_donnees_recu
 
     paiement, facture, inscription, eleve, classe = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
-    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe)
+    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe, request)
     historique = (
         db.query(Paiement)
         .filter(Paiement.facture_id == facture.facture_id, Paiement.statut == "VALIDE")
@@ -3117,7 +3120,7 @@ def get_recu(paiement_id: int, db: Session = Depends(get_db), etablissement_id: 
         {
             "numero_recu": p.numero_recu,
             "date_paiement": str(p.date_paiement) if p.date_paiement else None,
-            "montant": float(p.montant),
+            "montant": arrondir_montant(p.montant),
             "mode_paiement": p.mode_paiement,
         }
         for p in historique
@@ -3134,14 +3137,11 @@ def generer_recu_pdf(paiement_id: int, request: Request, db: Session = Depends(g
     """Reçu de paiement PDF — le modèle unique de app/core/recu_paiement.py
     (le même que celui du portail parent et de l'écran d'encaissement)."""
     from app.core.documents_settings import get_documents_settings
-    from app.core.recu_paiement import (
-        base_url_publique, charger_donnees_recu, generer_pdf_recu, url_verification,
-    )
+    from app.core.recu_paiement import charger_donnees_recu, generer_pdf_recu
 
     paiement, facture, inscription, eleve, classe = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
-    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe)
-    url = url_verification(base_url_publique(request), d["numero_recu"], d["code_verification"])
-    contenu = generer_pdf_recu(d, url, get_documents_settings(db, classe.etablissement_id))
+    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe, request)
+    contenu = generer_pdf_recu(d, d["url_verification"], get_documents_settings(db, classe.etablissement_id))
     filename = f"recu_{paiement.numero_recu}.pdf"
     return Response(
         content=contenu,

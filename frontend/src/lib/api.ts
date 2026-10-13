@@ -4,6 +4,7 @@
  * Intercepteur automatique pour le token JWT admin.
  */
 import axios from 'axios';
+import { estPageOuverteATous } from './pagesOuvertes';
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
 
@@ -267,6 +268,11 @@ api.interceptors.response.use(
         if (typeof window !== 'undefined' && error.response) {
             const status = error.response.status;
             const currentPath = window.location.pathname;
+            // Page ouverte à tous (vérification d'un reçu par QR code) : on n'en
+            // chasse jamais le visiteur. Un jeton expiré, ou un compte parent
+            // dont les écrans d'administration répondent 403, l'envoyaient vers
+            // /login ou son portail avant même d'avoir vu le résultat.
+            const pageOuverte = estPageOuverteATous(currentPath);
 
             if (status === 401) {
                 // Le module Comptabilité n'a plus de session parallèle : un 401
@@ -281,9 +287,11 @@ api.interceptors.response.use(
                     // la même purge (lib/sessionCleanup.ts).
                     const { purgeLocalSessionData } = await import('./sessionCleanup');
                     await purgeLocalSessionData();
-                    window.location.href = '/login';
+                    // La session morte est purgée partout ; seule la
+                    // redirection est épargnée à une page ouverte à tous.
+                    if (!pageOuverte) window.location.href = '/login';
                 }
-            } else if (status === 403) {
+            } else if (status === 403 && !pageOuverte) {
                 // Erreur de rôle / permission → rediriger selon le rôle sauvegardé
                 const savedUser = localStorage.getItem('smartschool_user');
                 if (savedUser) {
