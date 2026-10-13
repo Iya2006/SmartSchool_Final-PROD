@@ -1226,8 +1226,20 @@ def delete_eleve(eleve_id: int, db: Session = Depends(get_db), etablissement_id:
     # obsolète de savoir que cet élève a disparu — voir GET /delta et
     # SyncTombstone. Même transaction que le DELETE, avant le commit.
     db.add(SyncTombstone(entity_type="eleve", entity_id=eleve_id, etablissement_id=eleve.etablissement_id))
-    db.delete(eleve)
+
+    # `db.delete(eleve)` seul se heurtait aux clés étrangères : inscriptions,
+    # factures, bulletins, notes, présences… La suppression échouait donc sur
+    # tout élève ayant la moindre trace dans l'école, c'est-à-dire sur presque
+    # tous. Le démontage ordonné vit dans `services/suppression.py`, qui dit
+    # aussi ce qui survit — les écritures comptables ne sont jamais effacées,
+    # seulement détachées, sous peine de déséquilibrer les journaux.
+    from app.services.suppression import supprimer_eleve as _supprimer
+
+    etab = eleve.etablissement_id
+    db.expunge(eleve)  # l'ORM ne doit pas réécrire une ligne qu'on vient d'effacer
+    _supprimer(db, eleve_id)
     db.commit()
+    _ = etab
     return {"message": "Élève supprimé"}
 
 
@@ -1754,3 +1766,41 @@ def detacher_parent_eleve(
     db.delete(lien)
     db.commit()
     return {"message": "Parent détaché de cet élève. Sa fiche et ses autres enfants sont conservés."}
+
+
+@router.delete("/parents/{parent_id}")
+def supprimer_fiche_parent(
+    parent_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Supprime la FICHE d'un parent, et tous ses rattachements aux élèves.
+
+    À ne pas confondre avec `DELETE /{eleve_id}/parents/{lien_id}`, qui ne
+    détache qu'un seul enfant. Ici le parent disparaît de l'école : il perd son
+    accès au portail, pour tous ses enfants d'un coup. Les élèves, eux, restent.
+
+    Le parent doit avoir au moins un enfant dans l'école appelante — sans quoi
+    n'importe quel identifiant deviné permettrait d'effacer le parent d'une
+    autre école.
+    """
+    parent = db.query(Parent).filter(Parent.parent_id == parent_id).first()
+    if not parent:
+        raise HTTPException(404, "Parent non trouvé")
+
+    rattache = db.query(EleveParent.eleve_parent_id).join(
+        Eleve, Eleve.eleve_id == EleveParent.eleve_id
+    ).filter(
+        EleveParent.parent_id == parent_id,
+        Eleve.etablissement_id == etablissement_id,
+    ).first()
+    if not rattache:
+        raise HTTPException(404, "Parent non trouvé")
+
+    from app.services.suppression import supprimer_parent as _supprimer
+
+    nom = f"{parent.prenom or ''} {parent.nom or ''}".strip()
+    db.expunge(parent)
+    _supprimer(db, parent_id)
+    db.commit()
+    return {"message": f"Fiche de {nom or 'ce parent'} supprimée, ainsi que ses rattachements."}

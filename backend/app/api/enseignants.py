@@ -571,7 +571,16 @@ def update_enseignant(enseignant_id: int, data: EnseignantUpdate, db: Session = 
 @router.delete("/{enseignant_id}")
 def delete_enseignant(enseignant_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     ens = _enseignant_ou_404(db, enseignant_id, etablissement_id)
-    db.delete(ens)
+
+    # Même défaut que pour les élèves : `db.delete` seul butait sur les clés
+    # étrangères (affectations, séances, évaluations…). Voir
+    # `services/suppression.py` — les séances et les notes déjà saisies ne sont
+    # pas effacées, seulement détachées : le cours a eu lieu, et les notes
+    # appartiennent aux élèves, pas au professeur qui s'en va.
+    from app.services.suppression import supprimer_enseignant as _supprimer
+
+    db.expunge(ens)
+    _supprimer(db, enseignant_id)
     db.commit()
     return {"message": "Enseignant supprimé"}
 
