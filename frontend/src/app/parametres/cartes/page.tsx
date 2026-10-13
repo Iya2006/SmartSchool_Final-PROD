@@ -38,6 +38,10 @@ interface CarteConfig {
     showAdresse: boolean;
     showGroupeSanguin: boolean;
     bgImageUrl: string;
+    // Réglages du filigrane (voir BadgeCarte) : intensité %, taille %, ajustement.
+    bgOpacite: number;
+    bgTaille: number;
+    bgAjustement: 'cover' | 'contain';
     showMatieres?: boolean;
 }
 
@@ -79,14 +83,22 @@ const DEFAULT_CONFIG: CarteConfig = {
     format: 'vertical', colorStart: '#1e293b', colorEnd: '#0f172a', gradientAngle: 135,
     logoPosition: 'center', footerText: 'SmartSchool — Excellence Éducative',
     template: 'classique', showQrCode: true, showDateNaissance: false, showClasse: true,
-    showMatricule: true, showAdresse: false, showGroupeSanguin: false, bgImageUrl: '', showMatieres: false
+    showMatricule: true, showAdresse: false, showGroupeSanguin: false, bgImageUrl: '', showMatieres: false,
+    bgOpacite: 12, bgTaille: 100, bgAjustement: 'cover',
 };
 
 const DEFAULT_CONFIG_ENSEIGNANT: CarteConfig = {
     format: 'vertical', colorStart: '#581c87', colorEnd: '#3b0764', gradientAngle: 135,
     logoPosition: 'center', footerText: 'SmartSchool — Personnel Enseignant',
     template: 'royal', showQrCode: true, showDateNaissance: false, showClasse: true,
-    showMatricule: true, showAdresse: true, showGroupeSanguin: false, bgImageUrl: '', showMatieres: true
+    showMatricule: true, showAdresse: true, showGroupeSanguin: false, bgImageUrl: '', showMatieres: true,
+    bgOpacite: 12, bgTaille: 100, bgAjustement: 'cover',
+};
+
+/** Entier lu dans un paramètre, avec repli si vide ou illisible. */
+const entier = (valeur: string, defaut: number): number => {
+    const n = parseInt(valeur, 10);
+    return Number.isFinite(n) ? n : defaut;
 };
 
 const MOCK_AGENT = {
@@ -167,6 +179,9 @@ export default function CartesPage() {
                 // seule. Lue en second, l'image venait d'arriver sur les cartes
                 // mais pas ici, et le prochain Enregistrer l'effaçait.
                 bgImageUrl: get('carte.eleve.bg_image_url', get('carte.bg_image_url', DEFAULT_CONFIG.bgImageUrl)),
+                bgOpacite: entier(get('carte.eleve.bg_opacite', ''), DEFAULT_CONFIG.bgOpacite),
+                bgTaille: entier(get('carte.eleve.bg_taille', ''), DEFAULT_CONFIG.bgTaille),
+                bgAjustement: get('carte.eleve.bg_ajustement', 'cover') === 'contain' ? 'contain' : 'cover',
                 showMatieres: false
             };
 
@@ -185,6 +200,9 @@ export default function CartesPage() {
                 showAdresse: get('carte.prof.show_adresse', 'true') === 'true',
                 showGroupeSanguin: get('carte.prof.show_groupe_sanguin', get('carte.prof.show_groupeSanguin', 'false')) === 'true',
                 bgImageUrl: get('carte.prof.bg_image_url', DEFAULT_CONFIG_ENSEIGNANT.bgImageUrl),
+                bgOpacite: entier(get('carte.prof.bg_opacite', ''), DEFAULT_CONFIG_ENSEIGNANT.bgOpacite),
+                bgTaille: entier(get('carte.prof.bg_taille', ''), DEFAULT_CONFIG_ENSEIGNANT.bgTaille),
+                bgAjustement: get('carte.prof.bg_ajustement', 'cover') === 'contain' ? 'contain' : 'cover',
                 showMatieres: get('carte.prof.show_matieres', 'true') === 'true',
             };
 
@@ -253,6 +271,9 @@ export default function CartesPage() {
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.eleve.show_groupe_sanguin', valeur: String(currentEleve.showGroupeSanguin), type_valeur: 'BOOLEAN' },
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.bg_image_url', valeur: currentEleve.bgImageUrl, type_valeur: 'TEXT' },
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.eleve.bg_image_url', valeur: currentEleve.bgImageUrl, type_valeur: 'TEXT' },
+                { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.eleve.bg_opacite', valeur: String(currentEleve.bgOpacite), type_valeur: 'TEXT' },
+                { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.eleve.bg_taille', valeur: String(currentEleve.bgTaille), type_valeur: 'TEXT' },
+                { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.eleve.bg_ajustement', valeur: currentEleve.bgAjustement, type_valeur: 'TEXT' },
 
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.format', valeur: currentEnseignant.format, type_valeur: 'TEXT' },
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.color_start', valeur: currentEnseignant.colorStart, type_valeur: 'COLOR' },
@@ -269,6 +290,9 @@ export default function CartesPage() {
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.show_groupeSanguin', valeur: String(currentEnseignant.showGroupeSanguin), type_valeur: 'BOOLEAN' },
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.show_groupe_sanguin', valeur: String(currentEnseignant.showGroupeSanguin), type_valeur: 'BOOLEAN' },
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.bg_image_url', valeur: currentEnseignant.bgImageUrl, type_valeur: 'TEXT' },
+                { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.bg_opacite', valeur: String(currentEnseignant.bgOpacite), type_valeur: 'TEXT' },
+                { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.bg_taille', valeur: String(currentEnseignant.bgTaille), type_valeur: 'TEXT' },
+                { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.bg_ajustement', valeur: currentEnseignant.bgAjustement, type_valeur: 'TEXT' },
                 { etablissement_id: etablissementId, categorie: 'CARTE', cle: 'carte.prof.show_matieres', valeur: String(currentEnseignant.showMatieres), type_valeur: 'BOOLEAN' },
             ];
 
@@ -543,6 +567,66 @@ export default function CartesPage() {
                                         </label>
                                     )}
                                 </div>
+
+                                {/* Réglages du filigrane : visibles dès qu'une image est active.
+                                    L'aperçu de droite se met à jour en direct. */}
+                                {config.bgImageUrl && (
+                                    <div className={styles.sliderSection} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                                        <div>
+                                            <div className={styles.sliderLabelRow}>
+                                                <label>Affichage de l&apos;image</label>
+                                            </div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                                                {([
+                                                    { val: 'cover', titre: 'Remplir la carte', sous: "Couvre tout le fond (bords coupés si besoin)" },
+                                                    { val: 'contain', titre: 'Image entière', sous: "Toute l'image reste visible" },
+                                                ] as const).map(opt => {
+                                                    const actif = config.bgAjustement === opt.val;
+                                                    return (
+                                                        <button key={opt.val} type="button" onClick={() => updateConfig('bgAjustement', opt.val)}
+                                                            style={{
+                                                                textAlign: 'left', padding: '8px 10px', borderRadius: '10px', cursor: 'pointer',
+                                                                border: `2px solid ${actif ? '#6366f1' : 'var(--border-light, #e2e8f0)'}`,
+                                                                background: actif ? '#eef2ff' : 'transparent',
+                                                            }}>
+                                                            <span style={{ display: 'block', fontSize: '12.5px', fontWeight: 700, color: actif ? '#4338ca' : 'inherit' }}>{opt.titre}</span>
+                                                            <span style={{ display: 'block', fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>{opt.sous}</span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className={styles.sliderLabelRow}>
+                                                <label>Intensité du filigrane ({config.bgOpacite} %)</label>
+                                            </div>
+                                            <input
+                                                type="range" min="3" max="60" step="1" value={config.bgOpacite}
+                                                onChange={e => updateConfig('bgOpacite', parseInt(e.target.value, 10))}
+                                                className={styles.rangeSlider}
+                                                aria-label="Intensité du filigrane"
+                                            />
+                                        </div>
+                                        <div>
+                                            <div className={styles.sliderLabelRow}>
+                                                <label>Taille de l&apos;image ({config.bgTaille} %)</label>
+                                            </div>
+                                            <input
+                                                type="range" min="30" max="200" step="5" value={config.bgTaille}
+                                                onChange={e => updateConfig('bgTaille', parseInt(e.target.value, 10))}
+                                                className={styles.rangeSlider}
+                                                aria-label="Taille de l'image de fond"
+                                            />
+                                        </div>
+                                        {(config.bgOpacite !== 12 || config.bgTaille !== 100 || config.bgAjustement !== 'cover') && (
+                                            <button type="button"
+                                                onClick={() => setConfig(prev => ({ ...prev, bgOpacite: 12, bgTaille: 100, bgAjustement: 'cover' }))}
+                                                style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, color: '#6366f1', fontSize: '12px', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}>
+                                                Revenir aux réglages par défaut
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
 

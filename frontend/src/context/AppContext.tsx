@@ -48,6 +48,10 @@ interface CarteConfig {
     showAdresse: boolean;
     showGroupeSanguin: boolean;
     bgImageUrl: string;
+    // Filigrane : intensité (%), taille (%) et ajustement (remplir / entier).
+    bgOpacite?: number;
+    bgTaille?: number;
+    bgAjustement?: 'cover' | 'contain';
     showMatieres?: boolean;
 }
 
@@ -352,6 +356,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     showAdresse: get('carte.eleve.show_adresse', get('carte.show_adresse', 'false')) === 'true',
                     showGroupeSanguin: get('carte.eleve.show_groupe_sanguin', get('carte.show_groupe_sanguin', 'false')) === 'true',
                     bgImageUrl: get('carte.eleve.bg_image_url', get('carte.bg_image_url', DEFAULT_CARTE_CONFIG.bgImageUrl)),
+                    bgOpacite: parseInt(get('carte.eleve.bg_opacite', '12'), 10),
+                    bgTaille: parseInt(get('carte.eleve.bg_taille', '100'), 10),
+                    bgAjustement: get('carte.eleve.bg_ajustement', 'cover') === 'contain' ? 'contain' : 'cover',
                 };
                 setCarteConfigEleve(loadedCarteConfigEleve);
                 setCarteConfig(loadedCarteConfigEleve);
@@ -376,6 +383,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                     showAdresse: get('carte.prof.show_adresse', 'true') === 'true',
                     showGroupeSanguin: get('carte.prof.show_groupe_sanguin', 'false') === 'true',
                     bgImageUrl: get('carte.prof.bg_image_url', DEFAULT_CARTE_CONFIG_ENSEIGNANT.bgImageUrl),
+                    bgOpacite: parseInt(get('carte.prof.bg_opacite', '12'), 10),
+                    bgTaille: parseInt(get('carte.prof.bg_taille', '100'), 10),
+                    bgAjustement: get('carte.prof.bg_ajustement', 'cover') === 'contain' ? 'contain' : 'cover',
                     showMatieres: get('carte.prof.show_matieres', 'true') === 'true', // Matières enseignées
                 };
                 setCarteConfigEnseignant(loadedCarteConfigEnseignant);
