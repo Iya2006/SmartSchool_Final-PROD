@@ -4,7 +4,7 @@ SMARTSCHOOL API — Routes Finance (TypesFrais, Factures, Échéanciers, Paiemen
 import os
 import uuid
 import shutil
-from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from typing import Dict, List, Optional
@@ -3072,11 +3072,8 @@ def notifier_impayes(
 # /paiements/{id}/recu-pdf ci-dessous pour le téléchargement PDF)
 # ============================================================================
 
-@router.get("/recu/{paiement_id}")
-def get_recu(paiement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Détail complet d'un reçu de paiement pour affichage/impression écran."""
-    from app.models.academique import Etablissement, Parent, EleveParent
-
+def _paiement_de_l_ecole(db: Session, paiement_id: int, etablissement_id: int):
+    """Paiement + facture + inscription + élève + classe, limité à l'école du compte."""
     result = (
         db.query(Paiement, Facture, Inscription, Eleve, Classe)
         .join(Facture, Paiement.facture_id == Facture.facture_id)
@@ -3088,75 +3085,44 @@ def get_recu(paiement_id: int, db: Session = Depends(get_db), etablissement_id: 
     )
     if not result:
         raise HTTPException(status_code=404, detail="Paiement non trouvé")
+    return result
 
-    paiement, facture, inscription, eleve, classe = result
 
-    type_frais = None
-    if facture.type_frais_id:
-        type_frais = db.query(TypeFrais).filter(TypeFrais.type_frais_id == facture.type_frais_id).first()
+@router.get("/recu/{paiement_id}")
+def get_recu(paiement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Détail complet d'un reçu pour l'affichage écran. Mêmes données que le
+    PDF (app/core/recu_paiement.py) : l'écran et le papier ne divergent plus."""
+    from app.core.recu_paiement import charger_donnees_recu
 
-    etablissement = db.query(Etablissement).filter(Etablissement.etablissement_id == classe.etablissement_id).first()
-
-    lien_parent = (
-        db.query(Parent)
-        .join(EleveParent, EleveParent.parent_id == Parent.parent_id)
-        .filter(EleveParent.eleve_id == eleve.eleve_id)
-        .first()
-    )
-
+    paiement, facture, inscription, eleve, classe = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe)
     historique = (
         db.query(Paiement)
         .filter(Paiement.facture_id == facture.facture_id, Paiement.statut == "VALIDE")
         .order_by(Paiement.date_paiement.desc())
         .all()
     )
-
-    return {
-        "recu": {
-            "numero_recu": paiement.numero_recu,
-            "date_paiement": str(paiement.date_paiement) if paiement.date_paiement else None,
-            "montant": float(paiement.montant),
-            "mode_paiement": paiement.mode_paiement,
-            "reference_externe": paiement.reference_externe,
-            "devise": paiement.devise or "GNF",
-        },
-        "facture": {
-            "facture_id": facture.facture_id,
-            "numero_facture": facture.numero_facture,
-            "montant_total": float(facture.montant_net or 0),
-            "montant_paye": float(facture.montant_paye or 0),
-            "montant_restant": float(facture.montant_restant or 0),
-            "statut": facture.statut,
-            "type_frais": type_frais.libelle if type_frais else "Frais Scolaires (Standard)",
-        },
-        "eleve": {
-            "eleve_id": eleve.eleve_id,
-            "nom": eleve.nom,
-            "prenom": eleve.prenom,
-            "matricule": eleve.matricule,
-            "classe": classe.libelle,
-        },
-        "etablissement": {
-            "nom": etablissement.nom if etablissement else "SmartSchool",
-            "adresse": (etablissement.adresse if etablissement else "") or "",
-            "telephone": (etablissement.telephone if etablissement else "") or "",
-            "email": (etablissement.email if etablissement else "") or "",
-            "directeur": (etablissement.directeur if etablissement else "") or "",
-        },
-        "parent": {
-            "nom": f"{lien_parent.prenom} {lien_parent.nom}" if lien_parent else None,
-            "telephone": lien_parent.telephone_1 if lien_parent else None,
-        },
-        "historique_paiements": [
-            {
-                "numero_recu": p.numero_recu,
-                "date_paiement": str(p.date_paiement) if p.date_paiement else None,
-                "montant": float(p.montant),
-                "mode_paiement": p.mode_paiement,
-            }
-            for p in historique
-        ],
+    # Clés historiques conservées (recu, facture.type_frais, historique_paiements)
+    # pour les écrans qui les lisent encore.
+    d["recu"] = {
+        "numero_recu": d["numero_recu"],
+        "date_paiement": d["date_paiement"],
+        "montant": d["montant"],
+        "mode_paiement": d["mode_paiement"],
+        "reference_externe": d["reference_externe"],
+        "devise": d["devise"],
     }
+    d["facture"]["type_frais"] = d["facture"]["motif"]
+    d["historique_paiements"] = [
+        {
+            "numero_recu": p.numero_recu,
+            "date_paiement": str(p.date_paiement) if p.date_paiement else None,
+            "montant": float(p.montant),
+            "mode_paiement": p.mode_paiement,
+        }
+        for p in historique
+    ]
+    return d
 
 
 # ============================================================================
@@ -3164,263 +3130,24 @@ def get_recu(paiement_id: int, db: Session = Depends(get_db), etablissement_id: 
 # ============================================================================
 
 @router.get("/paiements/{paiement_id}/recu-pdf")
-def generer_recu_pdf(paiement_id: int, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Génère un reçu de paiement au format PDF et le retourne en téléchargement."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.units import cm, mm
-    from fastapi.responses import StreamingResponse
-    from app.models.academique import Etablissement
-    import io
-    from datetime import date as today_type
-
-    # Récupérer le paiement avec toutes les jointures nécessaires
-    result = (
-        db.query(Paiement, Facture, Inscription, Eleve, Classe)
-        .join(Facture, Paiement.facture_id == Facture.facture_id)
-        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
-        .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
-        .join(Classe, Inscription.classe_id == Classe.classe_id)
-        .filter(Paiement.paiement_id == paiement_id, Classe.etablissement_id == etablissement_id)
-        .first()
+def generer_recu_pdf(paiement_id: int, request: Request, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Reçu de paiement PDF — le modèle unique de app/core/recu_paiement.py
+    (le même que celui du portail parent et de l'écran d'encaissement)."""
+    from app.core.documents_settings import get_documents_settings
+    from app.core.recu_paiement import (
+        base_url_publique, charger_donnees_recu, generer_pdf_recu, url_verification,
     )
 
-    if not result:
-        raise HTTPException(status_code=404, detail="Paiement non trouvé")
-
-    paiement, facture, inscription, eleve, classe = result
-
-    # Récupérer l'établissement
-    etablissement = db.query(Etablissement).filter(
-        Etablissement.etablissement_id == classe.etablissement_id
-    ).first()
-
-    nom_ecole = etablissement.nom if etablissement else "SmartSchool"
-    adresse_ecole = getattr(etablissement, "adresse", "") or ""
-    tel_ecole = getattr(etablissement, "telephone", "") or ""
-    email_ecole = getattr(etablissement, "email", "") or ""
-
-    # Type de frais concerné par ce paiement — sans ça, le reçu affiche un
-    # montant sans jamais préciser à quoi il correspond (scolarité, cantine...).
-    type_frais_recu = None
-    if facture.type_frais_id:
-        type_frais_recu = db.query(TypeFrais).filter(TypeFrais.type_frais_id == facture.type_frais_id).first()
-    libelle_type_frais = type_frais_recu.libelle if type_frais_recu else "Frais Scolaires (Standard)"
-
-    # Numéro de tranche : position de l'échéance réglée par CE paiement parmi
-    # toutes les échéances de la facture (permet d'indiquer "Tranche 2 sur 3",
-    # utile pour les parents qui paient en plusieurs fois).
-    tranche_info = None
-    if paiement.echeance_id:
-        echeances_facture = (
-            db.query(EcheanceFacture)
-            .filter(EcheanceFacture.facture_id == facture.facture_id)
-            .order_by(EcheanceFacture.date_limite.asc(), EcheanceFacture.echeance_id.asc())
-            .all()
-        )
-        for idx, ech in enumerate(echeances_facture, start=1):
-            if ech.echeance_id == paiement.echeance_id:
-                tranche_info = (idx, len(echeances_facture), ech.libelle)
-                break
-
-    # Historique des règlements déjà effectués sur cette facture AVANT ce
-    # paiement-ci — affiché en récapitulatif quand ce n'est pas le tout premier
-    # versement, pour que le reçu de la dernière tranche retrace bien toutes
-    # les tranches précédentes (dates + montants), pas seulement la dernière.
-    historique_anterieur = (
-        db.query(Paiement)
-        .filter(
-            Paiement.facture_id == facture.facture_id,
-            Paiement.statut == "VALIDE",
-            Paiement.paiement_id != paiement.paiement_id,
-        )
-        .order_by(Paiement.date_paiement.asc(), Paiement.paiement_id.asc())
-        .all()
-    )
-
-    # Créer le buffer PDF
-    buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    largeur, hauteur = A4
-
-    # === En-tête : informations de l'établissement ===
-    y = hauteur - 4.0 * cm
-
-    # Logo de l'école — lit le même réglage que les bulletins
-    # (documents.entete_logo) et le fichier réellement uploadé
-    # (Etablissement.logo_url), au lieu d'un rectangle "LOGO" statique.
-    from app.core.documents_settings import get_documents_settings, dessiner_filigrane, _bool
-    doc_settings = get_documents_settings(db, classe.etablissement_id)
-    logo_dessine = False
-    if _bool(doc_settings.get("documents.entete_logo", "true")) and etablissement and getattr(etablissement, "logo_url", None):
-        backend_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        logo_path = os.path.join(backend_root, etablissement.logo_url.lstrip("/").replace("/", os.sep))
-        if os.path.isfile(logo_path):
-            try:
-                from reportlab.lib.utils import ImageReader
-                pdf.drawImage(
-                    ImageReader(logo_path), 2 * cm, y - 1.7 * cm, width=2.5 * cm, height=2.2 * cm,
-                    preserveAspectRatio=True, mask='auto', anchor='c'
-                )
-                logo_dessine = True
-            except Exception:
-                logo_dessine = False
-    if not logo_dessine:
-        pdf.setStrokeColorRGB(0.7, 0.7, 0.7)
-        pdf.rect(2 * cm, y - 1.5 * cm, 2.5 * cm, 2 * cm)
-        pdf.setFont("Helvetica", 8)
-        pdf.drawCentredString(3.25 * cm, y - 0.7 * cm, "LOGO")
-
-    # Nom de l'école
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawCentredString(largeur / 2, y, nom_ecole)
-    y -= 0.6 * cm
-    pdf.setFont("Helvetica", 9)
-    if adresse_ecole:
-        pdf.drawCentredString(largeur / 2, y, adresse_ecole)
-        y -= 0.4 * cm
-    if tel_ecole or email_ecole:
-        contact = f"Tél: {tel_ecole}" if tel_ecole else ""
-        if email_ecole:
-            contact += f"  |  Email: {email_ecole}" if contact else f"Email: {email_ecole}"
-        pdf.drawCentredString(largeur / 2, y, contact)
-        y -= 0.4 * cm
-
-    # Ligne de séparation
-    y -= 0.3 * cm
-    pdf.setLineWidth(1.5)
-    pdf.setStrokeColorRGB(0.2, 0.4, 0.8)
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-
-    # === Titre du reçu ===
-    y -= 0.8 * cm
-    pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawCentredString(largeur / 2, y, "REÇU DE PAIEMENT")
-
-    # Numéro de reçu
-    y -= 0.5 * cm
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawCentredString(largeur / 2, y, f"N° {paiement.numero_recu}")
-
-    # === Informations de l'élève ===
-    y -= 1.0 * cm
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "INFORMATIONS DE L'ÉLÈVE")
-    y -= 0.15 * cm
-    pdf.setLineWidth(0.5)
-    pdf.setStrokeColorRGB(0.5, 0.5, 0.5)
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-
-    y -= 0.45 * cm
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(2.5 * cm, y, f"Nom complet :  {eleve.prenom} {eleve.nom}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Matricule :  {eleve.matricule or 'N/A'}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Classe :  {classe.libelle}")
-
-    # === Détails du paiement ===
-    y -= 0.8 * cm
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "DÉTAILS DU PAIEMENT")
-    y -= 0.15 * cm
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-
-    y -= 0.45 * cm
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(2.5 * cm, y, f"Motif :  {libelle_type_frais}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Montant payé :  {float(paiement.montant):,.0f} GNF")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Mode de paiement :  {paiement.mode_paiement or 'N/A'}")
-    y -= 0.5 * cm
-    date_str = str(paiement.date_paiement) if paiement.date_paiement else str(today_type.today())
-    pdf.drawString(2.5 * cm, y, f"Date du paiement :  {date_str}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Référence :  {paiement.reference_externe or 'N/A'}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Devise :  {paiement.devise or 'GNF'}")
-    if tranche_info:
-        idx, total, libelle_echeance = tranche_info
-        y -= 0.5 * cm
-        suffixe = " — dernière tranche" if idx == total else ""
-        pdf.drawString(2.5 * cm, y, f"Tranche :  {idx} sur {total} ({libelle_echeance}){suffixe}")
-
-    # === Informations de la facture ===
-    y -= 0.8 * cm
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "INFORMATIONS DE LA FACTURE")
-    y -= 0.15 * cm
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-
-    y -= 0.45 * cm
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(2.5 * cm, y, f"N° Facture :  {facture.numero_facture}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Montant total :  {float(facture.montant_total or 0):,.0f} GNF")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Total payé :  {float(facture.montant_paye or 0):,.0f} GNF")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Reste à payer :  {float(facture.montant_restant or 0):,.0f} GNF")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Statut facture :  {facture.statut}")
-
-    # === Historique des règlements antérieurs sur cette facture ===
-    # Affiché dès que ce n'est pas le tout premier versement — utile en
-    # particulier pour le reçu de la dernière tranche, qui doit retracer
-    # toutes les tranches déjà réglées (dates + montants), pas seulement
-    # celle-ci.
-    if historique_anterieur:
-        y -= 0.8 * cm
-        pdf.setFont("Helvetica-Bold", 11)
-        pdf.drawString(2 * cm, y, "RÈGLEMENTS ANTÉRIEURS SUR CETTE FACTURE")
-        y -= 0.15 * cm
-        pdf.line(2 * cm, y, largeur - 2 * cm, y)
-
-        y -= 0.45 * cm
-        pdf.setFont("Helvetica", 9)
-        # Limité aux 6 derniers pour rester sur une page (reçu simple, pas de pagination).
-        entries = historique_anterieur[-6:]
-        if len(historique_anterieur) > len(entries):
-            pdf.drawString(2.5 * cm, y, f"({len(historique_anterieur) - len(entries)} règlement(s) antérieur(s) supplémentaire(s) non affiché(s) ici)")
-            y -= 0.45 * cm
-        for h in entries:
-            h_date = str(h.date_paiement) if h.date_paiement else ""
-            pdf.drawString(2.5 * cm, y, f"{h_date}  —  {float(h.montant):,.0f} GNF  ({h.mode_paiement or 'N/A'}, reçu N° {h.numero_recu})")
-            y -= 0.45 * cm
-
-    # === Pied de page : date et signature ===
-    y -= 1.2 * cm
-    pdf.setLineWidth(1)
-    pdf.setStrokeColorRGB(0.2, 0.4, 0.8)
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-
-    y -= 0.6 * cm
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(2 * cm, y, f"Date d'émission : {today_type.today().strftime('%d/%m/%Y')}")
-    pdf.drawRightString(largeur - 2 * cm, y, "Signature et cachet")
-
-    y -= 1.0 * cm
-    pdf.setFont("Helvetica-Oblique", 8)
-    pdf.drawCentredString(largeur / 2, y, "Ce reçu est généré automatiquement. Conservez-le pour vos archives.")
-
-    # === Filigrane ===
-    if _bool(doc_settings.get("documents.filigrane_recus", "false")):
-        dessiner_filigrane(pdf, largeur, hauteur, doc_settings)
-
-    # Finaliser le PDF
-    pdf.showPage()
-    pdf.save()
-    buffer.seek(0)
-
-    # Retourner le PDF en téléchargement
+    paiement, facture, inscription, eleve, classe = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe)
+    url = url_verification(base_url_publique(request), d["numero_recu"], d["code_verification"])
+    contenu = generer_pdf_recu(d, url, get_documents_settings(db, classe.etablissement_id))
     filename = f"recu_{paiement.numero_recu}.pdf"
-    return StreamingResponse(
-        buffer,
+    return Response(
+        content=contenu,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
-
 
 # ============================================================================
 # FOURNISSEURS — Liste des fournisseurs avec totaux

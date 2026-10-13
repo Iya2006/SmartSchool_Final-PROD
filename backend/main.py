@@ -24,6 +24,7 @@ from app.api.finance import router as finance_router
 from app.api.vie_scolaire import router as vie_scolaire_router
 from app.api.parametrage import router as parametrage_router
 from app.api.parametrage import public_router as parametrage_public_router
+from app.api.recus_publics import router as recus_publics_router
 from app.api.matieres import router as matieres_router
 from app.api.emploi_du_temps import router as emploi_router
 from app.api.communication import router as comm_router
@@ -453,6 +454,9 @@ app.include_router(sync_router)           # Sync offline-first — auth via _ens
 app.include_router(seances_teacher_router) # Séances (portail enseignant) — auth via _enseignant_auth par route
 app.include_router(eleve_portal_router)   # Login élève → son propre JWT
 app.include_router(parametrage_public_router) # GET établissement + settings (sans JWT)
+# Vérification d'un reçu par son QR code : ouverte à tous, mais n'accepte que
+# numéro + code signé (app/api/recus_publics.py), avec limitation de débit.
+app.include_router(recus_publics_router)
 
 # Servir les fichiers uploadés avec support CORS pour permettre l'exportation PDF/canvas côté client
 from fastapi.staticfiles import StaticFiles

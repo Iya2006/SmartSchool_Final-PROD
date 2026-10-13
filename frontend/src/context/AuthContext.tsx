@@ -72,6 +72,11 @@ export const getRedirectPath = (
 // renvoie vers l'espace de son role.
 const PUBLIC_PATHS = ['/', '/login', '/login/ecole', '/inscription'];
 
+/** Pages ouvertes à TOUS, connectés ou non, sans redirection : la
+ * vérification d'un reçu (ouverte par son QR code) doit marcher aussi bien
+ * pour un visiteur que pour un comptable connecté qui scanne un reçu. */
+const PAGES_OUVERTES_A_TOUS = ['/verifier-recu'];
+
 /** Écran où un administrateur plateforme choisit l'école dans laquelle il
  * travaille. Il n'appartient à aucune école : sans ce passage, toutes les
  * routes métier lui répondent 403 et l'application paraît cassée. */
@@ -117,6 +122,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!checked) return;
+        if (PAGES_OUVERTES_A_TOUS.some(p => pathname === p || pathname.startsWith(`${p}/`))) return;
 
         const isPublicPath = PUBLIC_PATHS.includes(pathname);
 

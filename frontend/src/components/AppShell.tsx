@@ -20,6 +20,7 @@ const FULLSCREEN_PATHS = [
     '/comptabilite',
     '/personnel/portail',
     '/hors-ligne',
+    '/verifier-recu',
 ];
 
 function AppShellInner({ children }: { children: React.ReactNode }) {
