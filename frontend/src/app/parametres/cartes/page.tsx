@@ -119,7 +119,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 /* ─── Main Page ─── */
 export default function CartesPage() {
-    const { setCarteConfig, setCarteConfigEleve, setCarteConfigEnseignant, refreshTheme } = useApp();
+    const { etablissementId, setCarteConfig, setCarteConfigEleve, setCarteConfigEnseignant, refreshTheme } = useApp();
 
     const [activeRole, setActiveRole] = useState<'eleve' | 'enseignant'>('eleve');
     const [configEleve, setConfigEleve] = useState<CarteConfig>(DEFAULT_CONFIG);
@@ -133,7 +133,9 @@ export default function CartesPage() {
     const [toast, setToast] = useState<ToastState>(null);
     const [uploadingBg, setUploadingBg] = useState(false);
     const [previewOpen, setPreviewOpen] = useState(true);
-    const etablissementId = 1;
+    // L'école de l'utilisateur connecté — jamais « 1 » en dur : depuis le
+    // cloisonnement multi-écoles, le serveur refuse (404) tout téléversement
+    // vers un autre établissement que le sien, et le filigrane ne s'ajoutait plus.
 
     const showToast = (msg: string, type: 'success' | 'error') => {
         setToast({ msg, type });
