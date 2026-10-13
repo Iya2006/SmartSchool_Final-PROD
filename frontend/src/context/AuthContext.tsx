@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { useRouter, usePathname } from 'next/navigation';
 import { canAccessPathForRole, getRedirectPathForRole } from '@/lib/roleAccess';
 import { purgeLocalSessionData } from '@/lib/sessionCleanup';
+import { estPageOuverteATous } from '@/lib/pagesOuvertes';
 
 export interface UserInfo {
     id: number;
@@ -117,6 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!checked) return;
+        // Pages ouvertes à tous (vérification d'un reçu) : voir lib/pagesOuvertes.ts.
+        if (estPageOuverteATous(pathname)) return;
 
         const isPublicPath = PUBLIC_PATHS.includes(pathname);
 

@@ -7,13 +7,15 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Search, Loader2, ChevronRight, Users, X, Printer,
     CheckCircle2, AlertTriangle, CreditCard, Banknote, Smartphone,
-    FileText, Receipt, ArrowLeft, TrendingUp, Eye
+    FileText, Receipt, ArrowLeft, TrendingUp, Eye, Download
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
 import { useApp } from '@/context/AppContext';
 import AnneeFilter from '@/components/AnneeFilter';
+import RecuPaiement, { RecuDonnees } from '@/components/RecuPaiement';
+import { ouvrirRecuPdf, telechargerRecuPdf } from '@/lib/recuPdf';
 import Pagination from '@/components/Pagination';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -38,14 +40,8 @@ type SoldeData = {
     factures: FactureDetail[];
 };
 
-type RecuData = {
-    recu: { numero_recu: string; date_paiement: string; montant: number; mode_paiement: string; reference_externe: string | null; devise: string; };
-    facture: { facture_id: number; numero_facture: string; montant_total: number; montant_paye: number; montant_restant: number; statut: string; type_frais: string; };
-    eleve: { eleve_id: number; nom: string; prenom: string; matricule: string; classe: string; };
-    etablissement: { nom: string; adresse: string; telephone: string; email: string; directeur: string; };
-    parent: { nom?: string; telephone?: string; };
-    historique_paiements: { numero_recu: string; date_paiement: string; montant: number; mode_paiement: string; }[];
-};
+// Le reçu : même modèle que le PDF du serveur (voir components/RecuPaiement).
+type RecuData = RecuDonnees;
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 // Icônes pour les modes de paiement CONNUS — la liste réellement proposée
@@ -130,6 +126,13 @@ function EncaissementContent() {
     // Receipt state
     const [recuData, setRecuData] = useState<RecuData | null>(null);
     const [recuLoading, setRecuLoading] = useState(false);
+    // Paiement que l'écran « reçu » concerne, tel que renvoyé par
+    // POST /api/finance/paiements. Le PDF est construit avec lui et non avec
+    // recuData : si GET /recu échoue, le reçu reste imprimable, et jamais
+    // celui du paiement précédent. Le ref écarte une réponse GET /recu
+    // arrivée après qu'on est passé à un autre paiement.
+    const [recuPaiement, setRecuPaiement] = useState<{ id: number; numero: string | null } | null>(null);
+    const recuPaiementRef = useRef<number | null>(null);
     const recuRef = useRef<HTMLDivElement>(null);
     const queryClient = useQueryClient();
 
@@ -264,15 +267,24 @@ function EncaissementContent() {
 
             // Load receipt
             if (res.data.paiement_id) {
+                const paiementId: number = res.data.paiement_id;
+                recuPaiementRef.current = paiementId;
+                setRecuPaiement({ id: paiementId, numero: res.data.numero_recu || null });
+                // Vider AVANT d'afficher l'étape : sinon, pendant le chargement
+                // (ou pour de bon si GET /recu échoue), l'écran gardait le reçu
+                // du paiement précédent.
+                setRecuData(null);
                 setRecuLoading(true);
                 setStep('recu');
                 try {
-                    const recuRes = await api.get(`/api/finance/recu/${res.data.paiement_id}`);
-                    setRecuData(recuRes.data);
+                    const recuRes = await api.get(`/api/finance/recu/${paiementId}`);
+                    if (recuPaiementRef.current === paiementId) setRecuData(recuRes.data);
                 } catch {
-                    showMsg('Paiement enregistré mais erreur lors du chargement du reçu', 'error');
+                    if (recuPaiementRef.current === paiementId) {
+                        showMsg('Paiement enregistré mais erreur lors du chargement du reçu', 'error');
+                    }
                 }
-                setRecuLoading(false);
+                if (recuPaiementRef.current === paiementId) setRecuLoading(false);
             }
 
             // Rafraîchir toutes les vues qui dépendent de ce paiement (pas seulement
@@ -291,14 +303,35 @@ function EncaissementContent() {
         setPayLoading(false);
     };
 
-    // ─── Print receipt ───
-    const printRecu = () => {
-        window.print();
+    // ─── Imprimer / télécharger le reçu ───
+    // Toujours le PDF du serveur : c'est LE reçu officiel, identique à celui
+    // de l'historique et du portail parent. L'ancien `window.print()` de la
+    // page coupait le reçu sur téléphone (montants et signature hors page).
+    const [pdfEnCours, setPdfEnCours] = useState<'imprimer' | 'telecharger' | null>(null);
+    const actionRecuPdf = async (action: 'imprimer' | 'telecharger') => {
+        if (!recuPaiement || recuLoading || pdfEnCours) return;
+        setPdfEnCours(action);
+        const endpoint = `/api/finance/paiements/${recuPaiement.id}/recu-pdf`;
+        const nom = `recu_${recuData?.numero_recu || recuPaiement.numero || recuPaiement.id}.pdf`;
+        try {
+            if (action === 'imprimer') await ouvrirRecuPdf(endpoint, nom);
+            else await telechargerRecuPdf(endpoint, nom);
+        } catch {
+            showMsg('Impossible de générer le reçu PDF. Réessayez.', 'error');
+        } finally {
+            setPdfEnCours(null);
+        }
     };
 
     // ─── Back navigation ───
     const goBack = () => {
         if (step === 'recu') {
+            // Le reçu affiché ne doit pas survivre à l'étape : le prochain
+            // encaissement repartirait de lui le temps de charger le sien.
+            recuPaiementRef.current = null;
+            setRecuPaiement(null);
+            setRecuData(null);
+            setRecuLoading(false);
             // After receipt, go back to student balance
             if (selectedEleve) {
                 selectEleve(selectedEleve);
@@ -775,11 +808,15 @@ function EncaissementContent() {
                             style={{ padding: '10px 20px', borderRadius: 10, background: '#f1f5f9', color: '#475569', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                             <ArrowLeft size={16} /> Retour au solde
                         </button>
-                        <button onClick={printRecu}
-                            style={{ padding: '10px 24px', borderRadius: 10, background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff', border: 'none', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <Printer size={16} /> Imprimer le reçu (PDF)
+                        <button onClick={() => actionRecuPdf('imprimer')} disabled={!recuPaiement || recuLoading || !!pdfEnCours}
+                            style={{ padding: '10px 24px', borderRadius: 10, background: 'linear-gradient(135deg, #3b82f6, #2563eb)', color: '#fff', border: 'none', fontSize: 14, fontWeight: 700, cursor: pdfEnCours || recuLoading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 8, opacity: !recuPaiement || recuLoading ? 0.6 : 1 }}>
+                            {pdfEnCours === 'imprimer' ? <Loader2 size={16} className="animate-spin" /> : <Printer size={16} />} Imprimer le reçu
                         </button>
-                        <button onClick={() => { setStep('search'); setSelectedEleve(null); setSoldeData(null); setRecuData(null); }}
+                        <button onClick={() => actionRecuPdf('telecharger')} disabled={!recuPaiement || recuLoading || !!pdfEnCours}
+                            style={{ padding: '10px 20px', borderRadius: 10, background: '#fff', color: '#1e293b', border: '1px solid #cbd5e1', fontSize: 13, fontWeight: 700, cursor: pdfEnCours || recuLoading ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: 6, opacity: !recuPaiement || recuLoading ? 0.6 : 1 }}>
+                            {pdfEnCours === 'telecharger' ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} Télécharger (PDF)
+                        </button>
+                        <button onClick={() => { recuPaiementRef.current = null; setRecuPaiement(null); setStep('search'); setSelectedEleve(null); setSoldeData(null); setRecuData(null); setRecuLoading(false); }}
                             style={{ padding: '10px 20px', borderRadius: 10, background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
                             <Banknote size={16} /> Nouvel encaissement
                         </button>
@@ -790,143 +827,8 @@ function EncaissementContent() {
                             <Loader2 size={32} className="animate-spin" color="#10b981" />
                         </div>
                     ) : recuData ? (
-                        <div id="print-area" ref={recuRef} style={{ maxWidth: 650, margin: '0 auto', width: '100%' }}>
-                            <div style={{ background: '#fff', borderRadius: 16, boxShadow: '0 4px 20px rgba(0,0,0,0.08)', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
-                                {/* Receipt Header */}
-                                <div style={{ background: 'linear-gradient(135deg, #059669, #10b981)', padding: '28px 32px', color: '#fff', textAlign: 'center' }}>
-                                    <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, letterSpacing: 1 }}>{recuData.etablissement.nom}</h2>
-                                    <p style={{ margin: '6px 0 0', fontSize: 12, opacity: 0.9 }}>
-                                        {recuData.etablissement.adresse} {recuData.etablissement.telephone ? `• Tél: ${recuData.etablissement.telephone}` : ''}
-                                    </p>
-                                    <div style={{ marginTop: 16, background: 'rgba(255,255,255,0.2)', borderRadius: 8, padding: '8px 16px', display: 'inline-block' }}>
-                                        <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: 2 }}>REÇU DE PAIEMENT</span>
-                                    </div>
-                                </div>
-
-                                {/* Receipt number + date */}
-                                <div style={{ padding: '18px 32px', borderBottom: '2px dashed #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <div>
-                                        <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textTransform: 'uppercase', fontWeight: 600 }}>N° Reçu</p>
-                                        <p style={{ fontSize: 20, fontWeight: 800, color: '#10b981', margin: '2px 0 0', fontFamily: 'monospace' }}>{recuData.recu.numero_recu}</p>
-                                    </div>
-                                    <div style={{ textAlign: 'right' }}>
-                                        <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textTransform: 'uppercase', fontWeight: 600 }}>Date</p>
-                                        <p style={{ fontSize: 16, fontWeight: 700, color: '#1e293b', margin: '2px 0 0' }}>
-                                            {recuData.recu.date_paiement ? new Date(recuData.recu.date_paiement).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }) : '-'}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                {/* Student & Parent info */}
-                                <div style={{ padding: '18px 32px', borderBottom: '1px solid #e2e8f0' }}>
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                                        <div>
-                                            <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textTransform: 'uppercase', fontWeight: 600 }}>Élève</p>
-                                            <p style={{ fontSize: 16, fontWeight: 700, color: '#1e293b', margin: '4px 0 0' }}>{recuData.eleve.prenom} {recuData.eleve.nom}</p>
-                                            <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 0' }}>Matricule : {recuData.eleve.matricule}</p>
-                                            <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 0' }}>Classe : {recuData.eleve.classe}</p>
-                                        </div>
-                                        {recuData.parent.nom && (
-                                            <div>
-                                                <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textTransform: 'uppercase', fontWeight: 600 }}>Parent / Responsable</p>
-                                                <p style={{ fontSize: 16, fontWeight: 700, color: '#1e293b', margin: '4px 0 0' }}>{recuData.parent.nom}</p>
-                                                {recuData.parent.telephone && <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 0' }}>Tél : {recuData.parent.telephone}</p>}
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Payment details */}
-                                <div style={{ padding: '22px 32px', borderBottom: '2px dashed #e2e8f0' }}>
-                                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                        <thead>
-                                            <tr style={{ borderBottom: '2px solid #e2e8f0' }}>
-                                                <th style={{ textAlign: 'left', padding: '8px 0', fontSize: 12, color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Désignation</th>
-                                                <th style={{ textAlign: 'right', padding: '8px 0', fontSize: 12, color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Montant</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                                <td style={{ padding: '12px 0', fontSize: 14, color: '#1e293b' }}>{recuData.facture.type_frais}</td>
-                                                <td style={{ padding: '12px 0', fontSize: 14, color: '#1e293b', textAlign: 'right' }}>{fmt(recuData.facture.montant_total)} GNF</td>
-                                            </tr>
-                                            <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                                <td style={{ padding: '10px 0', fontSize: 13, color: '#64748b' }}>Montants précédemment payés</td>
-                                                <td style={{ padding: '10px 0', fontSize: 13, color: '#64748b', textAlign: 'right' }}>{fmt(recuData.facture.montant_paye - recuData.recu.montant)} GNF</td>
-                                            </tr>
-                                        </tbody>
-                                        <tfoot>
-                                            <tr style={{ borderTop: '2px solid #10b981' }}>
-                                                <td style={{ padding: '14px 0', fontSize: 18, fontWeight: 800, color: '#059669' }}>MONTANT REÇU</td>
-                                                <td style={{ padding: '14px 0', fontSize: 22, fontWeight: 800, color: '#059669', textAlign: 'right' }}>{fmt(recuData.recu.montant)} GNF</td>
-                                            </tr>
-                                            {recuData.facture.montant_restant > 0 && (
-                                                <tr>
-                                                    <td style={{ padding: '8px 0', fontSize: 14, fontWeight: 600, color: '#ef4444' }}>Reste à payer</td>
-                                                    <td style={{ padding: '8px 0', fontSize: 16, fontWeight: 700, color: '#ef4444', textAlign: 'right' }}>{fmt(recuData.facture.montant_restant)} GNF</td>
-                                                </tr>
-                                            )}
-                                        </tfoot>
-                                    </table>
-                                </div>
-
-                                {/* Mode de paiement */}
-                                <div style={{ padding: '16px 32px', borderBottom: '1px solid #e2e8f0' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <div>
-                                            <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textTransform: 'uppercase', fontWeight: 600 }}>Mode de paiement</p>
-                                            <p style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', margin: '4px 0 0' }}>
-                                                {modePaiementLabel(recuData.recu.mode_paiement)}
-                                            </p>
-                                        </div>
-                                        {recuData.recu.reference_externe && (
-                                            <div style={{ textAlign: 'right' }}>
-                                                <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textTransform: 'uppercase', fontWeight: 600 }}>Référence</p>
-                                                <p style={{ fontSize: 14, fontWeight: 600, color: '#1e293b', margin: '4px 0 0' }}>{recuData.recu.reference_externe}</p>
-                                            </div>
-                                        )}
-                                        <div style={{ textAlign: 'right' }}>
-                                            <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textTransform: 'uppercase', fontWeight: 600 }}>Statut facture</p>
-                                            <Badge statut={recuData.facture.statut} />
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Règlements antérieurs sur cette même facture — sans ça, un reçu de
-                                    dernière tranche n'indiquait jamais que des tranches précédentes
-                                    avaient déjà été réglées. */}
-                                {recuData.historique_paiements.filter(h => h.numero_recu !== recuData.recu.numero_recu).length > 0 && (
-                                    <div style={{ padding: '16px 32px', borderBottom: '1px solid #e2e8f0' }}>
-                                        <p style={{ fontSize: 11, color: '#94a3b8', margin: '0 0 8px', textTransform: 'uppercase', fontWeight: 600 }}>Règlements antérieurs sur cette facture</p>
-                                        {recuData.historique_paiements
-                                            .filter(h => h.numero_recu !== recuData.recu.numero_recu)
-                                            .map(h => (
-                                                <div key={h.numero_recu} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#475569', padding: '4px 0' }}>
-                                                    <span>{h.date_paiement ? new Date(h.date_paiement).toLocaleDateString('fr-FR') : '-'} — {modePaiementLabel(h.mode_paiement)} (reçu {h.numero_recu})</span>
-                                                    <span style={{ fontWeight: 600 }}>{fmt(h.montant)} GNF</span>
-                                                </div>
-                                            ))}
-                                    </div>
-                                )}
-
-                                {/* Footer */}
-                                <div style={{ padding: '14px 32px 18px', textAlign: 'center', background: '#f8fafc' }}>
-                                    <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
-                                        Ce reçu fait foi de paiement. Conservez-le précieusement.
-                                    </p>
-                                    <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-end', padding: '0 10px' }}>
-                                        <div style={{ textAlign: 'center', minWidth: 180 }}>
-                                            <p style={{ fontSize: 13, fontWeight: 700, color: '#1e293b', margin: '0 0 28px 0' }}>Le Comptable</p>
-                                            <div style={{ borderTop: '1.5px solid #94a3b8', paddingTop: 6, fontSize: 11, fontWeight: 600, color: '#64748b' }}>
-                                                Signature &amp; Date
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <p style={{ fontSize: 10, color: '#cbd5e1', marginTop: 12 }}>
-                                        {recuData.etablissement.nom} — Document généré le {new Date().toLocaleDateString('fr-FR')} à {new Date().toLocaleTimeString('fr-FR')}
-                                    </p>
-                                </div>
-                            </div>
+                        <div ref={recuRef} style={{ width: '100%' }}>
+                            <RecuPaiement recu={recuData} />
                         </div>
                     ) : (
                         <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>Reçu non disponible</div>
@@ -940,75 +842,6 @@ function EncaissementContent() {
                 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
                 @media print {
-                    @page {
-                        size: A4 portrait;
-                        margin: 10mm 12mm;
-                    }
-
-                    html, body {
-                        margin: 0 !important;
-                        padding: 0 !important;
-                        height: auto !important;
-                        overflow: visible !important;
-                    }
-
-                    body * {
-                        visibility: hidden !important;
-                    }
-
-                    #print-area,
-                    #print-area * {
-                        visibility: visible !important;
-                    }
-
-                    #print-area {
-                        position: fixed !important;
-                        top: 0 !important;
-                        left: 0 !important;
-                        right: 0 !important;
-                        margin: 0 auto !important;
-                        padding: 0 !important;
-                        width: 186mm !important;
-                        max-width: 186mm !important;
-                        box-shadow: none !important;
-                        border: none !important;
-                        page-break-inside: avoid !important;
-                    }
-
-                    /* Compact the receipt for single-page fit */
-                    #print-area > div {
-                        border-radius: 0 !important;
-                        box-shadow: none !important;
-                        border: none !important;
-                    }
-
-                    /* Reduce header padding */
-                    #print-area [style*="padding: '28px 32px'"] {
-                        padding: 14px 24px !important;
-                    }
-
-                    /* Reduce section padding */
-                    #print-area [style*="padding: '18px 32px'"],
-                    #print-area [style*="padding: '22px 32px'"],
-                    #print-area [style*="padding: '16px 32px'"],
-                    #print-area [style*="padding: '20px 32px'"] {
-                        padding: 10px 24px !important;
-                    }
-
-                    /* Reduce font sizes slightly */
-                    #print-area h2 { font-size: 18px !important; }
-                    #print-area [style*="font-size: 22"] { font-size: 18px !important; }
-                    #print-area [style*="font-size: 20"] { font-size: 16px !important; }
-                    #print-area [style*="font-size: 18"] { font-size: 15px !important; }
-
-                    /* Compress footer signature space */
-                    #print-area [style*="margin: '0 0 65px'"] {
-                        margin-bottom: 30px !important;
-                    }
-
-                    /* Hide the blank stamp box */
-                    #print-area [style*="width: 150"] { display: none !important; }
-
                     .no-print { display: none !important; }
                 }
             `}</style>

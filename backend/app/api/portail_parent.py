@@ -1231,20 +1231,77 @@ def fournitures_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db: 
 # ── Téléchargement du reçu PDF pour un parent ─────────────────────────────
 # Le router /api/finance est protégé par FINANCE_ROLES : un token parent ne
 # peut pas l'appeler. On expose donc le même reçu ici, dans un endpoint dont
-# le seul prérequis est d'être authentifié comme parent (ou admin) ET que le
-# paiement concerne un enfant de ce parent.
+# le seul prérequis est d'être authentifié comme parent (ou personnel de la
+# caisse) ET que le paiement concerne un enfant de ce parent.
+#
+# Mêmes rôles que FINANCE_ROLES (main.py) — recopiés ici parce que main.py
+# importe ce module (import circulaire) ; un test vérifie qu'ils restent
+# identiques.
+ROLES_RECU_PERSONNEL = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "COMPTABLE"}
+
+
+def _exiger_compte_documents(current_user: dict) -> bool:
+    """Premier filtre des documents de paiement (reçu, facture), AVANT toute
+    lecture : seuls un parent ou le personnel de la caisse passent — liste
+    BLANCHE, comme _parent_auth. « Tout ce qui n'est pas du personnel est un
+    parent » laissait passer n'importe quel jeton (élève, enseignant) dont le
+    `sub` valait par hasard l'identifiant d'un parent de l'élève. Renvoie
+    True pour un parent."""
+    from app.core.auth import roles_du_compte
+
+    est_parent = current_user.get("type") == "parent"
+    if not est_parent and not (roles_du_compte(current_user) & ROLES_RECU_PERSONNEL):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    return est_parent
+
+
+def _exiger_acces_document_eleve(db: Session, current_user: dict, est_parent: bool, eleve_id: int, etablissement_id: int, introuvable: str) -> None:
+    """Second filtre, une fois l'élève connu : le parent seulement pour un de
+    SES enfants ; le personnel seulement dans son école."""
+    from app.core.auth import roles_du_compte
+
+    if est_parent:
+        try:
+            parent_id = int(current_user.get("sub"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=403, detail="Accès refusé")
+        lien = db.query(EleveParent).filter(
+            EleveParent.eleve_id == eleve_id,
+            EleveParent.parent_id == parent_id,
+        ).first()
+        if not lien:
+            raise HTTPException(status_code=403, detail="Accès refusé")
+        return
+    etab_compte = current_user.get("etablissement_id")
+    if etab_compte is None:
+        # Super-admin plateforme : il choisit d'abord l'école.
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    if int(etab_compte) != etablissement_id:
+        # 404 : le document d'une autre école n'existe pas pour ce compte
+        # (cloisonnement multi-écoles) — y compris pour la direction.
+        raise HTTPException(status_code=404, detail=introuvable)
+    # Le DG à qui le fondateur a fermé la comptabilité n'a pas plus accès ici
+    # que sous /api/finance (exige_acces_finance).
+    roles = roles_du_compte(current_user)
+    if "DG" in roles and not (roles & (ROLES_RECU_PERSONNEL - {"DG"})):
+        if (current_user.get("acces_comptabilite") or "O") != "O":
+            raise HTTPException(status_code=403, detail="Accès refusé")
+
+
 @router.get("/paiements/{paiement_id}/recu-pdf")
 def recu_pdf_parent(
     paiement_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Génère et retourne le reçu PDF d'un paiement. Accessible au parent concerné et aux admins."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas as pdf_canvas
-    from reportlab.lib.units import cm
-    from fastapi.responses import StreamingResponse
-    import io
+    """Génère et retourne le reçu PDF d'un paiement. Accessible au parent
+    concerné et au personnel de la caisse de l'école de l'élève."""
+    from fastapi.responses import Response
+    from app.core.documents_settings import get_documents_settings
+    from app.core.recu_paiement import charger_donnees_recu, generer_pdf_recu
+
+    est_parent = _exiger_compte_documents(current_user)
 
     # Récupérer le paiement + facture + inscription + élève + classe
     result = (
@@ -1261,143 +1318,16 @@ def recu_pdf_parent(
 
     paiement, facture, inscription, eleve, classe = result
 
-    # Vérification ownership : si le rôle est PARENT, s'assurer que cet élève
-    # est bien rattaché au parent connecté. Les admins/comptables passent librement.
-    role = current_user.get("role", "")
-    if role not in ("ADMIN", "DIRECTEUR", "COMPTABLE", "SECRETAIRE"):
-        parent_id = current_user.get("id") or current_user.get("sub")
-        if not parent_id:
-            raise HTTPException(status_code=403, detail="Accès refusé")
-        lien = db.query(EleveParent).filter(
-            EleveParent.eleve_id == eleve.eleve_id,
-            EleveParent.parent_id == int(parent_id),
-        ).first()
-        if not lien:
-            raise HTTPException(status_code=403, detail="Accès refusé")
+    _exiger_acces_document_eleve(db, current_user, est_parent, eleve.eleve_id, classe.etablissement_id, "Paiement non trouvé")
 
-    # Récupérer l'établissement
-    from app.models.academique import Etablissement
-    etablissement = db.query(Etablissement).filter(
-        Etablissement.etablissement_id == classe.etablissement_id
-    ).first()
-    nom_ecole = etablissement.nom if etablissement else "SmartSchool"
-    adresse_ecole = getattr(etablissement, "adresse", "") or ""
-    tel_ecole = getattr(etablissement, "telephone", "") or ""
-
-    # Type de frais
-    type_frais_obj = None
-    if facture.type_frais_id:
-        type_frais_obj = db.query(TypeFrais).filter(TypeFrais.type_frais_id == facture.type_frais_id).first()
-    libelle_type_frais = type_frais_obj.libelle if type_frais_obj else "Frais Scolaires"
-
-    # Date du paiement formatée
-    date_str = "—"
-    if paiement.date_paiement:
-        try:
-            date_str = paiement.date_paiement.strftime("%d/%m/%Y")
-        except Exception:
-            date_str = str(paiement.date_paiement)
-
-    # Générer le PDF
-    buffer = io.BytesIO()
-    largeur, hauteur = A4
-    pdf = pdf_canvas.Canvas(buffer, pagesize=A4)
-    y = hauteur - 4.0 * cm
-
-    # En-tête école
-    pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawCentredString(largeur / 2, y, nom_ecole)
-    y -= 0.6 * cm
-    if adresse_ecole:
-        pdf.setFont("Helvetica", 9)
-        pdf.drawCentredString(largeur / 2, y, adresse_ecole)
-        y -= 0.5 * cm
-    if tel_ecole:
-        pdf.setFont("Helvetica", 9)
-        pdf.drawCentredString(largeur / 2, y, f"Tél : {tel_ecole}")
-        y -= 0.5 * cm
-
-    # Ligne de séparation
-    pdf.setLineWidth(1.5)
-    pdf.setStrokeColorRGB(0.2, 0.4, 0.8)
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-    y -= 0.6 * cm
-
-    # Titre
-    pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawCentredString(largeur / 2, y, "REÇU DE PAIEMENT")
-    y -= 0.5 * cm
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawCentredString(largeur / 2, y, f"N° {paiement.numero_recu}")
-    y -= 0.8 * cm
-
-    # Section Élève
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "INFORMATIONS DE L'ÉLÈVE")
-    y -= 0.15 * cm
-    pdf.setLineWidth(0.5)
-    pdf.setStrokeColorRGB(0.5, 0.5, 0.5)
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-    y -= 0.45 * cm
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(2.5 * cm, y, f"Nom complet :  {eleve.prenom} {eleve.nom}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Matricule :  {eleve.matricule or 'N/A'}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Classe :  {classe.libelle}")
-    y -= 0.8 * cm
-
-    # Section Paiement
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "DÉTAILS DU PAIEMENT")
-    y -= 0.15 * cm
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-    y -= 0.45 * cm
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(2.5 * cm, y, f"Motif :  {libelle_type_frais}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Montant payé :  {float(paiement.montant):,.0f} GNF")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Mode de paiement :  {paiement.mode_paiement or 'N/A'}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Date du paiement :  {date_str}")
-    y -= 0.5 * cm
-    if paiement.reference_externe:
-        pdf.drawString(2.5 * cm, y, f"Référence :  {paiement.reference_externe}")
-        y -= 0.5 * cm
-    y -= 0.3 * cm
-
-    # Section Facture
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawString(2 * cm, y, "RÉCAPITULATIF")
-    y -= 0.15 * cm
-    pdf.line(2 * cm, y, largeur - 2 * cm, y)
-    y -= 0.45 * cm
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(2.5 * cm, y, f"N° Facture :  {facture.numero_facture}")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Total facturé :  {float(facture.montant_total):,.0f} GNF")
-    y -= 0.5 * cm
-    pdf.drawString(2.5 * cm, y, f"Total payé :  {float(facture.montant_paye):,.0f} GNF")
-    y -= 0.5 * cm
-    restant = float(facture.montant_restant or 0)
-    pdf.drawString(2.5 * cm, y, f"Reste à payer :  {restant:,.0f} GNF")
-    y -= 1.0 * cm
-
-    # Pied de page
-    pdf.setFont("Helvetica-Oblique", 8)
-    pdf.setFillColorRGB(0.5, 0.5, 0.5)
-    pdf.drawCentredString(largeur / 2, 1.5 * cm, "Ce reçu est un document officiel émis par le système de gestion SmartSchool.")
-
-    pdf.showPage()
-    pdf.save()
-    buffer.seek(0)
-
+    # Même reçu que celui de la comptabilité (app/core/recu_paiement.py).
+    d = charger_donnees_recu(db, paiement, facture, inscription, eleve, classe, request)
+    contenu = generer_pdf_recu(d, d["url_verification"], get_documents_settings(db, classe.etablissement_id))
     filename = f"recu_{paiement.numero_recu}.pdf"
-    return StreamingResponse(
-        buffer,
+    return Response(
+        content=contenu,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 # ── Téléchargement de la Facture PDF pour un parent ───────────────────────
@@ -1413,6 +1343,8 @@ def facture_pdf_parent(
     from reportlab.lib.units import cm
     from fastapi.responses import StreamingResponse
     import io
+
+    est_parent = _exiger_compte_documents(current_user)
 
     # Récupérer la facture + inscription + élève + classe
     result = (
@@ -1430,18 +1362,8 @@ def facture_pdf_parent(
 
     facture, inscription, eleve, classe, type_frais = result
 
-    # Vérification ownership
-    role = current_user.get("role", "")
-    if role not in ("ADMIN", "DIRECTEUR", "COMPTABLE", "SECRETAIRE"):
-        parent_id = current_user.get("id") or current_user.get("sub")
-        if not parent_id:
-            raise HTTPException(status_code=403, detail="Accès refusé")
-        lien = db.query(EleveParent).filter(
-            EleveParent.eleve_id == eleve.eleve_id,
-            EleveParent.parent_id == int(parent_id),
-        ).first()
-        if not lien:
-            raise HTTPException(status_code=403, detail="Accès refusé")
+    # Mêmes règles d'accès que le reçu (voir _exiger_acces_document_eleve).
+    _exiger_acces_document_eleve(db, current_user, est_parent, eleve.eleve_id, classe.etablissement_id, "Facture non trouvée")
 
     # Récupérer l'établissement
     from app.models.academique import Etablissement
