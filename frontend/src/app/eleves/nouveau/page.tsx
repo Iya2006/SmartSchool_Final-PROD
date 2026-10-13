@@ -1,13 +1,14 @@
 'use client';
 
 import { useApp } from '@/context/AppContext';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock, Info, X, Search, UserCheck } from 'lucide-react';
+import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock, Info, X, Search, UserCheck, Camera, ImagePlus } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
+import { preparerPhoto, formatPhotoAccepte, MESSAGE_FORMAT_REFUSE } from '@/lib/preparerPhoto';
 
 interface Classe {
     classe_id: number;
@@ -83,6 +84,45 @@ export default function NouveauEleve() {
         parent_adresse: '', parent_quartier: '',
         parent_lien: 'PERE', parent_mot_de_passe: '',
     });
+
+    // ── Photo de l'élève (optionnelle) ──────────────────────────────────────
+    // La direction peut la poser dès l'inscription : prise sur le moment
+    // (appareil photo) ou choisie dans les fichiers / la galerie du téléphone.
+    // Sinon, le circuit habituel reste : le parent l'envoie depuis son portail
+    // et l'administration la valide dans la page Galerie.
+    const [photoFile, setPhotoFile] = useState<File | null>(null);
+    const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+    const [photoAvertissement, setPhotoAvertissement] = useState<string | null>(null);
+    const cameraInputRef = useRef<HTMLInputElement>(null);
+    const fichierInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => () => { if (photoPreview) URL.revokeObjectURL(photoPreview); }, [photoPreview]);
+
+    const handlePhotoChoisie = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const brut = e.target.files?.[0];
+        e.target.value = '';
+        if (!brut) return;
+        if (brut.type && !brut.type.startsWith('image/')) {
+            setError('Choisissez une image (photo JPG, PNG ou WEBP).');
+            return;
+        }
+        const fichier = await preparerPhoto(brut);
+        // Refuser maintenant ce que le serveur refusera : sinon l'élève est
+        // inscrit puis la photo rejetée, sans retour possible sur ce formulaire.
+        if (!formatPhotoAccepte(fichier)) {
+            setError(MESSAGE_FORMAT_REFUSE);
+            return;
+        }
+        if (fichier.size > 5 * 1024 * 1024) {
+            setError('La photo dépasse 5 Mo. Choisissez une image plus légère.');
+            return;
+        }
+        setError(null);
+        setPhotoFile(fichier);
+        setPhotoPreview(URL.createObjectURL(fichier));
+    };
+
+    const retirerPhoto = () => { setPhotoFile(null); setPhotoPreview(null); };
 
     const [fraisFacturation, setFraisFacturation] = useState<Record<number, { selectionne: boolean, montant: number }>>({});
     // Ce que coûte VRAIMENT la classe choisie. L'écran chargeait les montants
@@ -259,7 +299,26 @@ export default function NouveauEleve() {
                 }));
 
             const res = await api.post('/api/eleves/inscription-complete', payload);
-            setResultData(res.data);
+            const resultat = res.data;
+            setPhotoAvertissement(null);
+            // L'élève existe maintenant : on lui pose sa photo. Un échec ici
+            // n'annule pas l'inscription — on le signale simplement.
+            if (photoFile && resultat?.eleve_id) {
+                try {
+                    const fd = new FormData();
+                    fd.append('fichier', photoFile);
+                    const up = await api.post(`/api/photos/admin-upload/eleve/${resultat.eleve_id}`, fd,
+                        { headers: { 'Content-Type': 'multipart/form-data' } });
+                    resultat.eleve = { ...resultat.eleve, photo_url: up.data?.photo_url };
+                } catch (errPhoto: any) {
+                    console.error(errPhoto);
+                    setPhotoAvertissement(
+                        (errPhoto.response?.data?.detail ? `${errPhoto.response.data.detail} — ` : '')
+                        + "L'élève est bien inscrit, mais sa photo n'a pas pu être enregistrée. Ajoutez-la depuis la page Galerie."
+                    );
+                }
+            }
+            setResultData(resultat);
             setSuccess(true);
         } catch (err: any) {
             console.error(err);
@@ -287,9 +346,15 @@ export default function NouveauEleve() {
                 </motion.div>
                 
                 <p style={{ color: '#64748b', fontSize: '15px', maxWidth: '500px', textAlign: 'center' }}>
-                    Le dossier de l'élève a été créé avec succès. Voici sa carte scolaire provisoire (sans photo). 
+                    Le dossier de l'élève a été créé avec succès. Voici sa carte scolaire{resultData?.eleve?.photo_url ? '' : ' provisoire (sans photo)'}.
                     Vous pouvez la télécharger ou l'imprimer en survolant la carte.
                 </p>
+
+                {photoAvertissement && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 16px', background: '#fef3c7', color: '#92400e', borderRadius: '12px', fontSize: '13.5px', fontWeight: 500, border: '1px solid #fde68a', maxWidth: '500px' }}>
+                        <AlertTriangle size={16} style={{ flexShrink: 0 }} /> {photoAvertissement}
+                    </div>
+                )}
 
                 {resultData && (
                     <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: 0.2 }}>
@@ -298,6 +363,7 @@ export default function NouveauEleve() {
                                 nom: resultData.eleve.nom,
                                 prenom: resultData.eleve.prenom,
                                 matricule: resultData.eleve.matricule,
+                                photo_url: resultData.eleve.photo_url || null,
                                 role: "ÉLÈVE",
                                 classe: selectedClasse ? selectedClasse.libelle : undefined,
                                 date_naissance: resultData.eleve.date_naissance,
@@ -341,6 +407,8 @@ export default function NouveauEleve() {
                 <div style={{ display: 'flex', gap: '16px', marginTop: '24px' }}>
                     <button onClick={() => {
                         setSuccess(false);
+                        retirerPhoto();
+                        setPhotoAvertissement(null);
                         setFormData({ ...formData, nom: '', prenom: '', date_naissance: '', lieu_naissance: '', telephone: '', email: '', eleve_mot_de_passe: '', parent_nom: '', parent_prenom: '', parent_telephone: '', parent_telephone_2: '', parent_email: '', parent_profession: '', parent_adresse: '', parent_quartier: '', parent_mot_de_passe: '' });
                     }} style={{ padding: '12px 24px', background: 'white', border: '1px solid #e2e8f0', borderRadius: '12px', fontWeight: 600, color: '#334155', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
                         <UserPlus size={18} /> Inscrire un autre élève
@@ -416,6 +484,43 @@ export default function NouveauEleve() {
                     </div>
 
                     <div style={{ padding: '28px' }}>
+                        {/* Photo de l'élève — optionnelle */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '18px', flexWrap: 'wrap', marginBottom: '24px', paddingBottom: '22px', borderBottom: '1px dashed var(--border-light)' }}>
+                            <div style={{ width: '96px', height: '96px', borderRadius: '16px', overflow: 'hidden', flexShrink: 0, background: 'var(--bg-body)', border: '2px dashed var(--border-focus)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                {photoPreview
+                                    ? <img src={photoPreview} alt="Photo de l'élève" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                    : <Camera size={30} color="#94a3b8" />}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: '1 1 240px' }}>
+                                <div>
+                                    <p style={{ ...LABEL, margin: 0 }}><Camera size={14} /> Photo de l&apos;élève (optionnelle)</p>
+                                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                                        Prenez-la maintenant ou choisissez-la dans vos fichiers. Sinon, le parent pourra l&apos;envoyer depuis son portail et vous la validerez dans la Galerie.
+                                    </p>
+                                </div>
+                                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                    {/* `capture` ouvre directement l'appareil photo sur téléphone/tablette ;
+                                        sur ordinateur, il se comporte comme un simple choix de fichier. */}
+                                    <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" hidden onChange={handlePhotoChoisie} />
+                                    <input ref={fichierInputRef} type="file" accept="image/*" hidden onChange={handlePhotoChoisie} />
+                                    <button type="button" onClick={() => cameraInputRef.current?.click()}
+                                        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '9px 14px', borderRadius: '10px', border: '1px solid #c7d2fe', background: '#eef2ff', color: '#4338ca', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}>
+                                        <Camera size={15} /> Prendre une photo
+                                    </button>
+                                    <button type="button" onClick={() => fichierInputRef.current?.click()}
+                                        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '9px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', background: 'white', color: 'var(--text-primary)', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}>
+                                        <ImagePlus size={15} /> Choisir une image
+                                    </button>
+                                    {photoFile && (
+                                        <button type="button" onClick={retirerPhoto}
+                                            style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '9px 14px', borderRadius: '10px', border: '1px solid #fecaca', background: '#fff1f2', color: '#b91c1c', fontWeight: 600, fontSize: '13px', cursor: 'pointer' }}>
+                                            <X size={15} /> Retirer
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
                         <div className="form-grid-2">
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                 <label style={LABEL}>Nom de famille *</label>

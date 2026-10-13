@@ -4,6 +4,7 @@ Routes:
   GET  /api/photos/galerie/meta                        → Gallery stats + classes
   GET  /api/photos/galerie/{tab}                        → Gallery page (eleves|enseignants|parents), paginee
   POST /api/photos/upload/{entity_type}/{entity_id}   → Upload photo
+  POST /api/photos/admin-upload/{entity_type}/{entity_id} → Photo posée directement par la direction
   GET  /api/photos/{entity_type}/{entity_id}           → Get photo URL
   DELETE /api/photos/{entity_type}/{entity_id}         → Delete photo
 """
@@ -12,7 +13,7 @@ from sqlalchemy import text, or_, func, case
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.core.database import get_db
-from app.core.auth import require_etablissement
+from app.core.auth import ADMIN_TIER_ROLES, require_etablissement, require_roles
 import os, shutil, uuid
 
 router = APIRouter(prefix="/api/photos", tags=["Photos"])
@@ -330,6 +331,82 @@ async def upload_photo(
 
     db.commit()
     return {"photo_url": photo_url, "message": "Photo envoyée et en attente de validation par l'administration."}
+
+
+@router.post(
+    "/admin-upload/{entity_type}/{entity_id}",
+    dependencies=[Depends(require_roles(*ADMIN_TIER_ROLES))],
+)
+async def admin_upload_photo(
+    entity_type: str, entity_id: int, fichier: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Photo posée DIRECTEMENT par la direction (à l'inscription, depuis la
+    galerie...), sans file de validation : c'est elle qui valide d'habitude,
+    lui faire valider sa propre photo n'aurait aucun sens. Le circuit parent
+    (portail -> galerie -> validation) reste inchangé à côté."""
+    if entity_type not in ("eleve", "parent"):
+        raise HTTPException(400, "Type invalide. Utilisez: ['eleve', 'parent']")
+
+    _exiger_entite_de_letablissement(db, entity_type, entity_id, etablissement_id)
+
+    cfg = ENTITY_MAP[entity_type]
+    ext = _valider_fichier_image(fichier)
+
+    MAX_SIZE = 5 * 1024 * 1024
+    contents = await fichier.read()
+    if len(contents) > MAX_SIZE:
+        raise HTTPException(400, "Fichier trop volumineux. Maximum: 5 Mo")
+
+    folder = os.path.join(UPLOAD_BASE, cfg["folder"])
+    os.makedirs(folder, exist_ok=True)
+
+    # Suffixe unique : même raison que dans validate_photo() (cache navigateur).
+    filename = f"{entity_type}_{entity_id}_{uuid.uuid4().hex[:8]}{ext}"
+    nouveau_chemin = os.path.join(folder, filename)
+    with open(nouveau_chemin, "wb") as f:
+        f.write(contents)
+    photo_url = f"/uploads/photos/{cfg['folder']}/{filename}"
+
+    from app.models.academique import Eleve, Parent, PhotoEnAttente
+    try:
+        if entity_type == "eleve":
+            entity = db.query(Eleve).filter_by(eleve_id=entity_id).first()
+        else:
+            entity = db.query(Parent).filter_by(parent_id=entity_id).first()
+        if entity:
+            entity.photo_url = photo_url
+        # Une photo envoyée par le parent et encore en attente est remplacée
+        # par celle de la direction : si on la laissait, la valider plus tard
+        # effacerait la photo que la direction vient de poser.
+        en_attente = db.query(PhotoEnAttente).filter_by(
+            entity_type=entity_type, entity_id=entity_id, statut="EN_ATTENTE"
+        ).all()
+        fichiers_en_attente = [_chemin_absolu(p.file_path) for p in en_attente]
+        for p in en_attente:
+            db.delete(p)
+        db.commit()
+    except Exception:
+        db.rollback()
+        if os.path.exists(nouveau_chemin):
+            os.remove(nouveau_chemin)
+        raise
+
+    # Nettoyage APRÈS le commit : en cas d'échec plus haut, l'ancienne photo
+    # est toujours là et photo_url ne pointe jamais vers un fichier effacé.
+    anciens = [
+        os.path.join(folder, old) for old in os.listdir(folder)
+        if old != filename and (
+            old.startswith(f"{entity_type}_{entity_id}.") or old.startswith(f"{entity_type}_{entity_id}_")
+        )
+    ]
+    for chemin in anciens + fichiers_en_attente:
+        try:
+            os.remove(chemin)
+        except FileNotFoundError:
+            pass
+    return {"photo_url": photo_url, "message": "Photo enregistrée"}
 
 
 @router.post("/parent-upload/{entity_type}/{entity_id}")

@@ -119,7 +119,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 
 /* ─── Main Page ─── */
 export default function CartesPage() {
-    const { setCarteConfig, setCarteConfigEleve, setCarteConfigEnseignant, refreshTheme } = useApp();
+    const { etablissementId, setCarteConfig, setCarteConfigEleve, setCarteConfigEnseignant, refreshTheme } = useApp();
 
     const [activeRole, setActiveRole] = useState<'eleve' | 'enseignant'>('eleve');
     const [configEleve, setConfigEleve] = useState<CarteConfig>(DEFAULT_CONFIG);
@@ -133,7 +133,9 @@ export default function CartesPage() {
     const [toast, setToast] = useState<ToastState>(null);
     const [uploadingBg, setUploadingBg] = useState(false);
     const [previewOpen, setPreviewOpen] = useState(true);
-    const etablissementId = 1;
+    // L'école de l'utilisateur connecté — jamais « 1 » en dur : depuis le
+    // cloisonnement multi-écoles, le serveur refuse (404) tout téléversement
+    // vers un autre établissement que le sien, et le filigrane ne s'ajoutait plus.
 
     const showToast = (msg: string, type: 'success' | 'error') => {
         setToast({ msg, type });
@@ -161,7 +163,10 @@ export default function CartesPage() {
                 showMatricule: get('carte.show_matricule', get('carte.eleve.show_matricule', 'true')) === 'true',
                 showAdresse: get('carte.show_adresse', get('carte.eleve.show_adresse', 'false')) === 'true',
                 showGroupeSanguin: get('carte.show_groupe_sanguin', get('carte.show_groupeSanguin', get('carte.eleve.show_groupe_sanguin', 'false'))) === 'true',
-                bgImageUrl: get('carte.bg_image_url', get('carte.eleve.bg_image_url', DEFAULT_CONFIG.bgImageUrl)),
+                // Clé ÉLÈVE d'abord, comme AppContext : le téléversement l'écrit
+                // seule. Lue en second, l'image venait d'arriver sur les cartes
+                // mais pas ici, et le prochain Enregistrer l'effaçait.
+                bgImageUrl: get('carte.eleve.bg_image_url', get('carte.bg_image_url', DEFAULT_CONFIG.bgImageUrl)),
                 showMatieres: false
             };
 

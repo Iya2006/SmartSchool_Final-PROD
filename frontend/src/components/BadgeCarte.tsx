@@ -316,37 +316,7 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                             onError={() => setBgError(true)}
                         />
                     )}
-                    {/* Logo en filigrane dans la zone blanche — même principe que
-                        la carte verticale, calé sur la zone de droite (la bande
-                        dégradée de gauche fait 180 px). */}
-                    {!bgImageUrl && etablissementLogo && !logoError && (
-                        <img
-                            src={getPhotoUrl(etablissementLogo)!}
-                            alt=""
-                            aria-hidden="true"
-                            crossOrigin="anonymous"
-                            style={{
-                                position: 'absolute',
-                                top: '50%',
-                                left: '180px',
-                                transform: 'translateY(-50%)',
-                                // Toute la largeur de la zone blanche (la bande
-                                // dégradée de gauche fait 180 px) et presque toute
-                                // sa hauteur.
-                                width: '320px',
-                                height: '92%',
-                                objectFit: 'contain',
-                                // Assez franc pour qu'on reconnaisse l'école d'un
-                                // coup d'œil, assez discret pour que le nom, la
-                                // photo et le matricule restent lisibles par-dessus.
-                                opacity: 0.22,
-                                zIndex: 0,
-                                pointerEvents: 'none',
-                            }}
-                            onError={() => setLogoError(true)}
-                        />
-                    )}
-                    {/* Section Gauche: Dégradé + QR Code */}
+                    {/* Section Gauche: Dégradé + Logo + QR Code */}
                     <div style={{
                         width: '180px',
                         background: bgGradient,
@@ -373,9 +343,17 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                             justifyContent: 'center',
                             gap: '8px', 
                             width: '100%',
-                            textAlign: 'center'
+                            textAlign: 'center' 
                         }}>
-                            {/* Logo déplacé en filigrane dans la zone blanche. */}
+                            {etablissementLogo && !logoError && (
+                                <img 
+                                    src={getPhotoUrl(etablissementLogo)!} 
+                                    alt="Logo" 
+                                    crossOrigin="anonymous"
+                                    style={{ height: '28px', width: '28px', objectFit: 'contain' }} 
+                                    onError={() => setLogoError(true)}
+                                />
+                            )}
                             <h1 style={{ fontSize: '11px', fontWeight: 800, margin: 0, letterSpacing: '0.5px', textTransform: 'uppercase', color: 'white' }}>
                                 {etablissementNom || "SMART SCHOOL"}
                             </h1>
@@ -555,43 +533,8 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                             onError={() => setBgError(true)}
                         />
                     )}
-                    {/* Logo de l'école en filigrane, dans la grande zone blanche.
-                        Il occupait l'en-tête, où il se battait pour 22 à 28 px avec
-                        le nom de l'établissement ; au centre du corps il tient la
-                        place qu'il mérite sans gêner la lecture. `contain` et non
-                        `cover` : un logo se rogne encore moins bien qu'une photo.
-                        Une école qui a configuré sa propre image de fond garde la
-                        sienne — elle a déjà fait ce choix. */}
-                    {!bgImageUrl && etablissementLogo && !logoError && (
-                        <img
-                            src={getPhotoUrl(etablissementLogo)!}
-                            alt=""
-                            aria-hidden="true"
-                            crossOrigin="anonymous"
-                            style={{
-                                position: 'absolute',
-                                top: '50%',
-                                left: '50%',
-                                // Le logo occupe toute la zone blanche : c'est le
-                                // fond de la carte, pas une vignette. `contain` le
-                                // met à l'échelle sans jamais le déformer ni le
-                                // rogner, quelles que soient ses proportions.
-                                transform: 'translate(-50%, -38%)',
-                                width: '96%',
-                                height: '74%',
-                                objectFit: 'contain',
-                                // Assez franc pour qu'on reconnaisse l'école d'un
-                                // coup d'œil, assez discret pour que le nom, la
-                                // photo et le matricule restent lisibles par-dessus.
-                                opacity: 0.22,
-                                zIndex: 0,
-                                pointerEvents: 'none',
-                            }}
-                            onError={() => setLogoError(true)}
-                        />
-                    )}
-                    {/* Background Decorations — seulement si aucun fond, aucun logo. */}
-                    {!bgImageUrl && (!etablissementLogo || logoError) && (
+                    {/* Background Decorations */}
+                    {!bgImageUrl && (
                         <>
                             <div style={{ position: 'absolute', top: '-50px', left: '-50px', width: '200px', height: '200px', background: 'rgba(59, 130, 246, 0.03)', boxShadow: '0 0 80px 40px rgba(59, 130, 246, 0.03)', borderRadius: '50%' }}></div>
                             <div style={{ position: 'absolute', bottom: '-50px', right: '-50px', width: '250px', height: '250px', background: 'rgba(16, 185, 129, 0.02)', boxShadow: '0 0 100px 50px rgba(16, 185, 129, 0.02)', borderRadius: '50%' }}></div>
@@ -615,11 +558,17 @@ export default function BadgeCarte({ agent, id = "badge-carte", carteConfig, qrT
                             alignItems: 'center', 
                             justifyContent: 'center', 
                             gap: '8px', 
-                            marginBottom: '2px'
+                            marginBottom: '2px' 
                         }}>
-                            {/* Le logo n'est plus ici : il est passé en filigrane
-                                dans la zone blanche (voir plus haut). L'en-tête ne
-                                porte plus que le nom de l'établissement. */}
+                            {etablissementLogo && !logoError && (
+                                <img 
+                                    src={getPhotoUrl(etablissementLogo)!} 
+                                    alt="Logo" 
+                                    crossOrigin="anonymous"
+                                    style={{ height: format === 'compact' ? '22px' : '28px', width: format === 'compact' ? '22px' : '28px', objectFit: 'contain' }} 
+                                    onError={() => setLogoError(true)}
+                                />
+                            )}
                             <h1 style={{ fontSize: format === 'compact' ? '11px' : '15px', fontWeight: 800, margin: 0, letterSpacing: '0.5px', textTransform: 'uppercase', color: 'white' }}>
                                 {etablissementNom || "SMART SCHOOL"}
                             </h1>
