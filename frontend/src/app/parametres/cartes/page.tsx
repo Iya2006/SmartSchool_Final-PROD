@@ -163,7 +163,10 @@ export default function CartesPage() {
                 showMatricule: get('carte.show_matricule', get('carte.eleve.show_matricule', 'true')) === 'true',
                 showAdresse: get('carte.show_adresse', get('carte.eleve.show_adresse', 'false')) === 'true',
                 showGroupeSanguin: get('carte.show_groupe_sanguin', get('carte.show_groupeSanguin', get('carte.eleve.show_groupe_sanguin', 'false'))) === 'true',
-                bgImageUrl: get('carte.bg_image_url', get('carte.eleve.bg_image_url', DEFAULT_CONFIG.bgImageUrl)),
+                // Clé ÉLÈVE d'abord, comme AppContext : le téléversement l'écrit
+                // seule. Lue en second, l'image venait d'arriver sur les cartes
+                // mais pas ici, et le prochain Enregistrer l'effaçait.
+                bgImageUrl: get('carte.eleve.bg_image_url', get('carte.bg_image_url', DEFAULT_CONFIG.bgImageUrl)),
                 showMatieres: false
             };
 
