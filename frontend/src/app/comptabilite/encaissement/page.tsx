@@ -14,7 +14,8 @@ import Link from 'next/link';
 import { fetchModesPaiement, modePaiementLabel, DEFAULT_MODES_PAIEMENT } from '@/lib/modesPaiement';
 import { useApp } from '@/context/AppContext';
 import AnneeFilter from '@/components/AnneeFilter';
-import RecuPaiement, { RecuDonnees } from '@/components/RecuPaiement';
+import RecuPaiement, { RecuDonnees, normaliserRecu } from '@/components/RecuPaiement';
+import LimiteErreur from '@/components/LimiteErreur';
 import { ouvrirRecuPdf, telechargerRecuPdf } from '@/lib/recuPdf';
 import Pagination from '@/components/Pagination';
 
@@ -278,7 +279,9 @@ function EncaissementContent() {
                 setStep('recu');
                 try {
                     const recuRes = await api.get(`/api/finance/recu/${paiementId}`);
-                    if (recuPaiementRef.current === paiementId) setRecuData(recuRes.data);
+                    // normaliserRecu : accepte aussi l'ancien format d'un serveur pas
+                    // encore redéployé (le site et le serveur se déploient séparément).
+                    if (recuPaiementRef.current === paiementId) setRecuData(normaliserRecu(recuRes.data));
                 } catch {
                     if (recuPaiementRef.current === paiementId) {
                         showMsg('Paiement enregistré mais erreur lors du chargement du reçu', 'error');
@@ -828,7 +831,17 @@ function EncaissementContent() {
                         </div>
                     ) : recuData ? (
                         <div ref={recuRef} style={{ width: '100%' }}>
-                            <RecuPaiement recu={recuData} />
+                            {/* Un reçu qui ne s'affiche pas ne doit jamais faire tomber
+                                la page : le paiement est enregistré et le PDF reste
+                                disponible via « Imprimer le reçu ». */}
+                            <LimiteErreur key={recuData.numero_recu} repli={
+                                <div style={{ maxWidth: 560, margin: '0 auto', padding: 20, borderRadius: 14, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', fontSize: 14, textAlign: 'center' }}>
+                                    Le paiement est bien enregistré, mais l&apos;aperçu du reçu n&apos;a pas pu s&apos;afficher ici.
+                                    Utilisez « Imprimer le reçu » pour l&apos;obtenir en PDF.
+                                </div>
+                            }>
+                                <RecuPaiement recu={recuData} />
+                            </LimiteErreur>
                         </div>
                     ) : (
                         <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>Reçu non disponible</div>
