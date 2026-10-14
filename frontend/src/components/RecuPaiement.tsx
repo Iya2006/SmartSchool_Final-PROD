@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { API_BASE_URL } from '@/lib/api';
+import { modePaiementLabel } from '@/lib/modesPaiement';
 
 export type RecuDonnees = {
     paiement_id: number;
@@ -41,6 +42,75 @@ export type RecuDonnees = {
         logo_url: string | null; cachet_url: string | null; signature_url: string | null; couleur: string;
     };
 };
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/**
+ * Accepte la réponse de GET /api/finance/recu/{id} telle qu'elle arrive —
+ * y compris d'un serveur PAS ENCORE redéployé, qui renvoie l'ancien format
+ * ({ recu, facture.type_frais, historique_paiements }, sans `anterieurs` ni
+ * code de vérification). Le site et le serveur se déploient séparément :
+ * sans cette passerelle, `recu.anterieurs.length` faisait planter toute la
+ * page (écran « This page couldn't load ») dès que le site était en avance.
+ * Renvoie null si la réponse est inexploitable.
+ */
+export function normaliserRecu(brut: any): RecuDonnees | null {
+    if (!brut || typeof brut !== 'object') return null;
+    const ancien = brut.recu && typeof brut.recu === 'object' ? brut.recu : {};
+    const f = brut.facture || {};
+    const e = brut.eleve || {};
+    const et = brut.etablissement || {};
+    const nombre = (v: any, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : d));
+    const numero = brut.numero_recu ?? ancien.numero_recu;
+    if (!numero) return null;
+    const montant = nombre(brut.montant ?? ancien.montant);
+    const total = nombre(f.montant_total);
+    const payeADate = nombre(f.paye_a_date ?? f.montant_paye);
+    const anterieurs = Array.isArray(brut.anterieurs)
+        ? brut.anterieurs
+        : (Array.isArray(brut.historique_paiements) ? brut.historique_paiements : [])
+            .filter((h: any) => h && h.numero_recu !== numero);
+    return {
+        paiement_id: nombre(brut.paiement_id),
+        numero_recu: String(numero),
+        statut: brut.statut || 'VALIDE',
+        date_paiement: brut.date_paiement ?? ancien.date_paiement ?? null,
+        heure: brut.heure ?? null,
+        montant,
+        montant_en_lettres: brut.montant_en_lettres || '',
+        somme_en_lettres: brut.somme_en_lettres,
+        devise: brut.devise || ancien.devise || 'GNF',
+        mode_paiement_libelle: brut.mode_paiement_libelle
+            || ((brut.mode_paiement || ancien.mode_paiement) ? modePaiementLabel(brut.mode_paiement || ancien.mode_paiement) : '—'),
+        reference_externe: brut.reference_externe ?? ancien.reference_externe ?? null,
+        tranche: brut.tranche && typeof brut.tranche === 'object' ? brut.tranche : null,
+        code_verification: brut.code_verification || '',
+        url_verification: brut.url_verification,
+        facture: {
+            numero_facture: f.numero_facture || '',
+            motif: f.motif || f.type_frais || 'Frais scolaires',
+            montant_total: total,
+            deja_paye: nombre(f.deja_paye, Math.max(0, payeADate - montant)),
+            paye_a_date: payeADate,
+            reste_a_date: nombre(f.reste_a_date ?? f.montant_restant, Math.max(0, total - payeADate)),
+        },
+        anterieurs: anterieurs.map((a: any) => ({
+            numero_recu: String(a.numero_recu ?? ''),
+            date_paiement: a.date_paiement ?? null,
+            montant: nombre(a.montant),
+            mode_paiement: a.mode_paiement || '—',
+        })),
+        eleve: { nom: e.nom || '', prenom: e.prenom || '', matricule: e.matricule || '', classe: e.classe || '' },
+        annee_libelle: brut.annee_libelle ?? null,
+        parent: { nom: brut.parent?.nom ?? null, telephone: brut.parent?.telephone ?? null },
+        etablissement: {
+            nom: et.nom || 'Établissement', slogan: et.slogan || '', adresse: et.adresse || '',
+            telephone: et.telephone || '', email: et.email || '',
+            logo_url: et.logo_url ?? null, cachet_url: et.cachet_url ?? null, signature_url: et.signature_url ?? null,
+            couleur: et.couleur || '',
+        },
+    };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 const ENCRE = '#0f172a';
 const GRIS = '#64748b';
@@ -130,7 +200,9 @@ export default function RecuPaiement({ recu }: { recu: RecuDonnees }) {
     const devise = recu.devise || 'GNF';
     const [logoOk, setLogoOk] = useState(true);
     const [urlQrLocale, setUrlQrLocale] = useState('');
-    useEffect(() => { setUrlQrLocale(urlVerificationRecu(recu.numero_recu, recu.code_verification)); }, [recu.numero_recu, recu.code_verification]);
+    useEffect(() => {
+        setUrlQrLocale(recu.code_verification ? urlVerificationRecu(recu.numero_recu, recu.code_verification) : '');
+    }, [recu.numero_recu, recu.code_verification]);
     // L'adresse du serveur prime : c'est celle du QR imprimé sur le PDF.
     // window.location.origin n'est qu'un repli pour un serveur plus ancien —
     // derrière un autre domaine (ou en local), il donnait un QR différent.
@@ -146,10 +218,9 @@ export default function RecuPaiement({ recu }: { recu: RecuDonnees }) {
     // ne sait pas faire.
     const lettres = recu.somme_en_lettres
         ? `Arrêté le présent reçu à la somme de : ${recu.somme_en_lettres.charAt(0).toLowerCase()}${recu.somme_en_lettres.slice(1)}.`
-        : (() => {
-            const s = `Arrêté le présent reçu à la somme de : ${recu.montant_en_lettres} ${devise.toUpperCase() === 'GNF' ? 'francs guinéens' : `(${devise})`}.`;
-            return s.charAt(0).toUpperCase() + s.slice(1);
-        })();
+        : recu.montant_en_lettres
+            ? `Arrêté le présent reçu à la somme de : ${recu.montant_en_lettres} ${devise.toUpperCase() === 'GNF' ? 'francs guinéens' : `(${devise})`}.`
+            : ''; // ancien serveur : pas de montant en lettres, pas de phrase tronquée
 
     const contacts = [etab.adresse, etab.telephone ? `Tél : ${etab.telephone}` : '', etab.email].filter(Boolean).join('  •  ');
     const lignesEleve: [string, string][] = [
@@ -217,7 +288,7 @@ export default function RecuPaiement({ recu }: { recu: RecuDonnees }) {
                             {formaterMontant(recu.montant)} {devise}
                         </p>
                     </div>
-                    <p style={{ margin: '6px 0 0', fontSize: 11.5, fontStyle: 'italic', color: ENCRE }}>{lettres}</p>
+                    {lettres && <p style={{ margin: '6px 0 0', fontSize: 11.5, fontStyle: 'italic', color: ENCRE }}>{lettres}</p>}
                 </div>
 
                 {/* Situation */}
@@ -258,6 +329,9 @@ export default function RecuPaiement({ recu }: { recu: RecuDonnees }) {
 
                 {/* Vérification + signature */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
+                    {/* Sans code (serveur pas encore à jour), pas de QR : un QR
+                        sans code mènerait à « Reçu non reconnu ». */}
+                    {recu.code_verification ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         <div style={{ padding: 5, border: `1px solid ${BORD}`, borderRadius: 10, background: '#fff', lineHeight: 0 }}>
                             {urlQr ? <QRCodeSVG value={urlQr} size={84} level="M" /> : <div style={{ width: 84, height: 84 }} />}
@@ -269,6 +343,7 @@ export default function RecuPaiement({ recu }: { recu: RecuDonnees }) {
                             <p style={{ margin: 0, fontFamily: 'ui-monospace, Menlo, monospace', fontWeight: 800, fontSize: 14, color: PF, letterSpacing: '0.04em' }}>{recu.code_verification}</p>
                         </div>
                     </div>
+                    ) : <div />}
                     <div style={{ textAlign: 'center', minWidth: 170, flex: '0 1 auto', marginLeft: 'auto' }}>
                         <p style={{ margin: 0, fontSize: 12, fontWeight: 800 }}>Le Comptable / La Direction</p>
                         <div style={{ height: 52, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6 }}>
