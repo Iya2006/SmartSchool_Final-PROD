@@ -2,6 +2,7 @@
 SMARTSCHOOL API — Routes Dashboard
 GET /api/dashboard → KPIs + stats réelles (taux de réussite par cycle & détail par classe, événements, activités)
 """
+from datetime import date as date_type
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
@@ -9,7 +10,8 @@ from app.core.database import get_db
 from app.core.auth import require_etablissement
 from app.models.academique import (
     AnneeScolaire, Eleve, Enseignant, Classe, Inscription, Facture, Paiement, Presence,
-    Depense, Incident, Evaluation, Bulletin, Cycle, Niveau, Evenement, Note, ActiviteJour
+    Depense, Incident, Evaluation, Bulletin, Cycle, Niveau, Evenement, Note, ActiviteJour,
+    Parent, EleveParent, Ouvrage, Exemplaire, Emprunt, EquipementInformatique, TicketInformatique, Message
 )
 from app.schemas.schemas import DashboardResponse, DashboardKPI
 
@@ -276,10 +278,72 @@ def get_dashboard(
     bulletins_generes = total_evaluations_bulletins
 
     # ==== COMMUNICATION ====
+    # Chiffres réels (avant : 3 valeurs fabriquées — voir historique) —
+    # reprend la même logique que communication.py:/parents/stats (Cas B :
+    # scopé aux parents ayant un enfant DANS CET établissement).
     conflits_edt_ia = 0
-    sms_relances_envoyes = round(nb_eleves * 0.4) if nb_eleves else 0
-    parents_inscrits_portail = round(nb_eleves * 0.8) if nb_eleves else 0
-    taux_ouverture_app = 65.4
+    eleve_ids_subq = db.query(Eleve.eleve_id).filter(Eleve.etablissement_id == etablissement_id).subquery()
+    parent_ids_ici = db.query(EleveParent.parent_id).filter(
+        EleveParent.eleve_id.in_(db.query(eleve_ids_subq))
+    ).distinct().subquery()
+    total_parents_ici = db.query(func.count(Parent.parent_id)).filter(
+        Parent.statut == "ACTIF", Parent.parent_id.in_(db.query(parent_ids_ici))
+    ).scalar() or 0
+    parents_inscrits_portail = db.query(func.count(Parent.parent_id)).filter(
+        Parent.statut == "ACTIF", Parent.mot_de_passe.isnot(None),
+        Parent.parent_id.in_(db.query(parent_ids_ici))
+    ).scalar() or 0
+    taux_inscription_portail = round((parents_inscrits_portail / total_parents_ici * 100), 1) if total_parents_ici > 0 else 0
+    # Pas de vraie passerelle SMS (voir finance.py:notifier_impayes) — seul
+    # canal réellement implémenté : le message SYSTEME créé à chaque relance.
+    relances_paiement_envoyees = db.query(func.count(Message.message_id)).filter(
+        Message.etablissement_id == etablissement_id,
+        Message.objet_type == "PAIEMENT",
+        Message.expediteur_type == "ADMIN",
+    ).scalar() or 0
+
+    # ==== BIBLIOTHÈQUE (bibliotheque.py:/stats) ====
+    emprunts_en_cours = db.query(Emprunt).join(Exemplaire).join(Ouvrage).filter(
+        Ouvrage.etablissement_id == etablissement_id, Emprunt.statut.in_(["EN_COURS", "EN_RETARD"])
+    ).count()
+    retards_bibliotheque = db.query(Emprunt).join(Exemplaire).join(Ouvrage).filter(
+        Ouvrage.etablissement_id == etablissement_id,
+        Emprunt.date_retour_effective.is_(None),
+        Emprunt.statut.in_(["EN_COURS", "EN_RETARD"]),
+        Emprunt.date_retour_prevue < date_type.today(),
+    ).count()
+
+    # ==== PARC INFORMATIQUE (informatique.py:/stats) ====
+    equipements_en_panne = db.query(func.count(EquipementInformatique.equipement_id)).filter(
+        EquipementInformatique.etablissement_id == etablissement_id,
+        EquipementInformatique.etat.in_(["PANNE", "A_REMPLACER"]),
+    ).scalar() or 0
+    tickets_ouverts = db.query(func.count(TicketInformatique.ticket_id)).filter(
+        TicketInformatique.etablissement_id == etablissement_id,
+        TicketInformatique.statut.in_(["OUVERT", "EN_COURS"]),
+    ).scalar() or 0
+    tickets_critiques = db.query(func.count(TicketInformatique.ticket_id)).filter(
+        TicketInformatique.etablissement_id == etablissement_id,
+        TicketInformatique.priorite == "URGENTE",
+        TicketInformatique.statut.in_(["OUVERT", "EN_COURS"]),
+    ).scalar() or 0
+
+    # ==== VIE SCOLAIRE / DISCIPLINE (vie_scolaire.py:/incidents/stats, 90j) ====
+    incidents_90j = db.query(Incident).filter(
+        Incident.etablissement_id == etablissement_id,
+        Incident.date_incident >= func.current_date() - 90
+    )
+    total_incidents_90j = incidents_90j.count()
+    incidents_graves = incidents_90j.filter(Incident.gravite == "GRAVE").count()
+
+    # ==== CENTRALISATION DES ÉVALUATIONS (evaluations.py:/centralisation/stats) ====
+    evals_annee = db.query(Evaluation).join(Classe, Classe.classe_id == Evaluation.classe_id).filter(
+        Classe.etablissement_id == etablissement_id, Classe.annee_id == annee_id
+    )
+    total_evals_annee = evals_annee.count()
+    centralisees_annee = evals_annee.filter(Evaluation.statut == "CENTRALISEE").count()
+    non_centralisees_annee = total_evals_annee - centralisees_annee
+    taux_centralisation = round((centralisees_annee / total_evals_annee * 100), 1) if total_evals_annee > 0 else 0
 
     # ==== INSCRIPTIONS PAR CLASSE ====
     inscriptions_par_classe = db.query(
@@ -466,9 +530,26 @@ def get_dashboard(
             "taux_reussite_par_cycle": taux_reussite_par_cycle,
         },
         communication_stats={
-            "sms_relances_envoyes": sms_relances_envoyes,
+            "relances_paiement_envoyees": relances_paiement_envoyees,
             "parents_inscrits_portail": parents_inscrits_portail,
-            "taux_ouverture_app": taux_ouverture_app
+            "taux_inscription_portail": taux_inscription_portail
+        },
+        bibliotheque_stats={
+            "emprunts_en_cours": emprunts_en_cours,
+            "retards": retards_bibliotheque
+        },
+        informatique_stats={
+            "equipements_en_panne": equipements_en_panne,
+            "tickets_ouverts": tickets_ouverts,
+            "tickets_critiques": tickets_critiques
+        },
+        discipline_stats={
+            "total_incidents": total_incidents_90j,
+            "incidents_graves": incidents_graves
+        },
+        centralisation_stats={
+            "taux_centralisation": taux_centralisation,
+            "non_centralisees": non_centralisees_annee
         },
         inscriptions_par_classe=[
             {"classe": r[0], "effectif": r[1]} for r in inscriptions_par_classe

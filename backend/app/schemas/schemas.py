@@ -830,15 +830,36 @@ class PedagogieStats(BaseModel):
     taux_reussite_par_cycle: List[dict] = []
 
 class CommunicationStats(BaseModel):
-    sms_relances_envoyes: int = 0
+    relances_paiement_envoyees: int = 0
     parents_inscrits_portail: int = 0
-    taux_ouverture_app: float = 0
+    taux_inscription_portail: float = 0
+
+class BibliothequeStats(BaseModel):
+    emprunts_en_cours: int = 0
+    retards: int = 0
+
+class InformatiqueStats(BaseModel):
+    equipements_en_panne: int = 0
+    tickets_ouverts: int = 0
+    tickets_critiques: int = 0
+
+class DisciplineStats(BaseModel):
+    total_incidents: int = 0
+    incidents_graves: int = 0
+
+class CentralisationStats(BaseModel):
+    taux_centralisation: float = 0
+    non_centralisees: int = 0
 
 class DashboardResponse(BaseModel):
     kpi: DashboardKPI
     finance_stats: FinanceStats
     pedagogie_stats: PedagogieStats
     communication_stats: CommunicationStats
+    bibliotheque_stats: BibliothequeStats
+    informatique_stats: InformatiqueStats
+    discipline_stats: DisciplineStats
+    centralisation_stats: CentralisationStats
     inscriptions_par_classe: List[dict] = []
     paiements_recents: List[dict] = []
     impayes_en_attente: List[dict] = []

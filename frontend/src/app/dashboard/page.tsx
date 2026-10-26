@@ -21,13 +21,16 @@ import {
   ChevronDown,
   ChevronRight,
 
+  ClipboardCheck,
   CreditCard,
   GraduationCap,
   Layers3,
   Loader2,
   Megaphone,
+  Monitor,
   Radio,
   Search,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   TrendingUp,
@@ -36,8 +39,6 @@ import {
   X,
 } from 'lucide-react';
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -91,9 +92,26 @@ interface DashboardData {
     }[];
   };
   communication_stats: {
-    sms_relances_envoyes: number;
+    relances_paiement_envoyees: number;
     parents_inscrits_portail: number;
-    taux_ouverture_app: number;
+    taux_inscription_portail: number;
+  };
+  bibliotheque_stats: {
+    emprunts_en_cours: number;
+    retards: number;
+  };
+  informatique_stats: {
+    equipements_en_panne: number;
+    tickets_ouverts: number;
+    tickets_critiques: number;
+  };
+  discipline_stats: {
+    total_incidents: number;
+    incidents_graves: number;
+  };
+  centralisation_stats: {
+    taux_centralisation: number;
+    non_centralisees: number;
   };
   inscriptions_par_classe: { classe: string; effectif: number }[];
   paiements_recents: {
@@ -278,18 +296,16 @@ export default function DashboardPage() {
     }));
   }, [paiementsRecents]);
 
-  const financeSeries = useMemo(() => {
+  // Anciennement une répartition par classe INVENTÉE (le backend ne renvoie
+  // aucun total par classe) — remplacée par les 3 vrais totaux école déjà
+  // renvoyés par l'API (recettes, dépenses, impayés), sans rien estimer.
+  const financeSnapshot = useMemo(() => {
     if (!data) return [];
-    const classes = data.inscriptions_par_classe || [];
-    const baseRecette = data.kpi.total_recettes / Math.max(classes.length, 1);
-    const baseDepense = data.kpi.total_depenses / Math.max(classes.length, 1);
-
-    return classes.map((item, index) => ({
-      classe: item.classe,
-      recettes: Math.round(baseRecette * (1 + index * 0.11)),
-      depenses: Math.round(baseDepense * (0.7 + index * 0.06)),
-      objectif: Math.round(baseRecette * 1.22),
-    }));
+    return [
+      { poste: 'Recettes', montant: data.kpi.total_recettes, fill: '#2563eb' },
+      { poste: 'Dépenses', montant: data.kpi.total_depenses, fill: '#f97316' },
+      { poste: 'Impayés', montant: data.finance_stats.total_impayes, fill: '#ef4444' },
+    ];
   }, [data]);
 
   const controlAlerts = useMemo(() => {
@@ -314,7 +330,7 @@ export default function DashboardPage() {
 
     alerts.push({
       title: 'Suivi portail familles',
-      description: `${data.communication_stats.parents_inscrits_portail} parents estimés déjà connectés au portail, ouverture moyenne ${data.communication_stats.taux_ouverture_app}%.`,
+      description: `${data.communication_stats.parents_inscrits_portail} parent(s) inscrit(s) sur le portail, soit ${data.communication_stats.taux_inscription_portail ?? 0}% des familles de l'établissement.`,
       tone: 'info',
     });
 
@@ -339,9 +355,9 @@ export default function DashboardPage() {
     if (!data) return [];
     return [
       {
-        title: 'Communication active',
-        value: `${data.communication_stats.sms_relances_envoyes}`,
-        subtitle: 'relances SMS estimées',
+        title: 'Relances envoyées',
+        value: `${data.communication_stats.relances_paiement_envoyees ?? 0}`,
+        subtitle: 'relances de paiement notifiées aux parents',
         icon: Megaphone,
         color: '#2563eb',
       },
@@ -434,6 +450,46 @@ export default function DashboardPage() {
     { label: 'Enseignants actifs', value: data.kpi.nb_enseignants.toLocaleString('fr-FR'), helper: 'ressources humaines', icon: GraduationCap, color: '#10b981' },
     { label: 'Classes ouvertes', value: data.kpi.nb_classes.toLocaleString('fr-FR'), helper: 'unités académiques', icon: Building2, color: '#8b5cf6' },
     { label: 'Impayés', value: formatCompactMoney(data.finance_stats.total_impayes), helper: 'dossiers à relancer', icon: AlertTriangle, color: '#ef4444' },
+  ];
+
+  // 4 domaines réels jusque-là absents du dashboard — chacun réutilise une
+  // requête déjà écrite dans son propre module (bibliothèque, parc
+  // informatique, vie scolaire, évaluations), aucune n'est inventée ici.
+  // Accès défensifs (?., ?? 0) : le cache React Query est persisté 24h
+  // (voir QueryProvider.tsx) — un onglet déjà ouvert avant ce déploiement
+  // affiche d'abord l'ancienne forme de la réponse (ces 4 blocs absents)
+  // avant que le refetch en arrière-plan ne la remplace ; sans ce filet,
+  // la page plantait à l'affichage (TypeError sur une propriété d'un
+  // objet undefined) plutôt que d'attendre la donnée fraîche.
+  const secondaryKpis = [
+    {
+      label: 'Emprunts bibliothèque',
+      value: (data.bibliotheque_stats?.emprunts_en_cours ?? 0).toLocaleString('fr-FR'),
+      helper: `${data.bibliotheque_stats?.retards ?? 0} retard(s)`,
+      icon: BookOpen,
+      color: '#0d9488',
+    },
+    {
+      label: 'Parc informatique',
+      value: (data.informatique_stats?.equipements_en_panne ?? 0).toLocaleString('fr-FR'),
+      helper: `${data.informatique_stats?.tickets_ouverts ?? 0} ticket(s) ouvert(s) dont ${data.informatique_stats?.tickets_critiques ?? 0} critique(s)`,
+      icon: Monitor,
+      color: '#0ea5e9',
+    },
+    {
+      label: 'Incidents (90 j)',
+      value: (data.discipline_stats?.total_incidents ?? 0).toLocaleString('fr-FR'),
+      helper: `${data.discipline_stats?.incidents_graves ?? 0} grave(s)`,
+      icon: ShieldAlert,
+      color: '#f43f5e',
+    },
+    {
+      label: 'Centralisation des notes',
+      value: `${data.centralisation_stats?.taux_centralisation ?? 0}%`,
+      helper: `${data.centralisation_stats?.non_centralisees ?? 0} évaluation(s) non centralisée(s)`,
+      icon: ClipboardCheck,
+      color: '#7c3aed',
+    },
   ];
 
   return (
@@ -663,6 +719,37 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <h5 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: 'var(--text-secondary)' }}>Autres domaines</h5>
+        <div className="kpi-grid">
+          {secondaryKpis.map((kpi, index) => (
+            <motion.div
+              key={kpi.label}
+              className="kpi-card"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.04 * index }}
+              style={{
+                background: '#fff',
+                border: '1px solid rgba(226,232,240,0.95)',
+                boxShadow: '0 18px 38px rgba(15, 23, 42, 0.06)',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+                <div>
+                  <p className="kpi-label">{kpi.label}</p>
+                  <p className="kpi-value" style={{ marginBottom: 6 }}>{kpi.value}</p>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>{kpi.helper}</span>
+                </div>
+                <div style={{ width: 48, height: 48, borderRadius: 14, background: `${kpi.color}15`, color: kpi.color, display: 'grid', placeItems: 'center' }}>
+                  <kpi.icon size={22} />
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1.5fr 1fr', gap: 24 }}>
         <motion.div
           initial={{ opacity: 0, y: 14 }}
@@ -673,32 +760,24 @@ export default function DashboardPage() {
           <div style={{ padding: '22px 24px 12px', borderBottom: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14 }}>
             <div>
               <h5 style={{ margin: 0, fontSize: 18 }}>Radar financier</h5>
-              <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>Lecture consolidée des recettes, objectifs et dépenses estimées par classe.</p>
+              <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>Lecture consolidée des recettes, dépenses et impayés de l’établissement.</p>
             </div>
             <span className="badge badge-success">Recouvrement {data.finance_stats.taux_recouvrement}%</span>
           </div>
           <div style={{ padding: '20px 24px 24px' }}>
             <div style={{ height: 290 }}>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={financeSeries}>
-                  <defs>
-                    <linearGradient id="radar-recettes" x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="5%" stopColor="#2563eb" stopOpacity={0.24} />
-                      <stop offset="95%" stopColor="#2563eb" stopOpacity={0.03} />
-                    </linearGradient>
-                    <linearGradient id="radar-depenses" x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="5%" stopColor="#f97316" stopOpacity={0.22} />
-                      <stop offset="95%" stopColor="#f97316" stopOpacity={0.03} />
-                    </linearGradient>
-                  </defs>
+                <BarChart data={financeSnapshot} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="classe" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                  <XAxis dataKey="poste" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 13, fontWeight: 700 }} />
                   <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} tickFormatter={(v) => `${Math.round(v / 1000000)}M`} />
                   <Tooltip formatter={formatTooltipMoney} contentStyle={{ borderRadius: 14, border: '1px solid #e2e8f0', boxShadow: '0 18px 40px rgba(15,23,42,0.08)' }} />
-                  <Area type="monotone" dataKey="recettes" stroke="#2563eb" fill="url(#radar-recettes)" strokeWidth={3} />
-                  <Area type="monotone" dataKey="depenses" stroke="#f97316" fill="url(#radar-depenses)" strokeWidth={2.4} />
-                  <Area type="monotone" dataKey="objectif" stroke="#10b981" fill="transparent" strokeDasharray="6 6" strokeWidth={2.2} />
-                </AreaChart>
+                  <Bar dataKey="montant" radius={[10, 10, 0, 0]} barSize={72}>
+                    {financeSnapshot.map((entry) => (
+                      <Cell key={entry.poste} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
