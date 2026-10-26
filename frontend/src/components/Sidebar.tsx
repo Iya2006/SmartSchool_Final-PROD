@@ -340,7 +340,9 @@ export default function Sidebar() {
                                 position: 'absolute', bottom: '-2px', right: '-2px',
                                 width: '11px', height: '11px', borderRadius: '50%',
                                 background: online ? '#22c55e' : '#94a3b8',
-                                border: '2px solid var(--bg-elevated, #ffffff)',
+                                /* Anneau assorti au fond sombre de la carte (etait blanc,
+                                   pense pour un fond clair). */
+                                border: '2px solid var(--brand-navy-900)',
                             }}
                         />
                     </div>
@@ -348,7 +350,7 @@ export default function Sidebar() {
                     <div className={styles.userCardInfo}>
                         <p className={styles.userCardName}>{displayName}</p>
                         <p className={styles.userCardRole}>{displayRole}</p>
-                        <p style={{ margin: '2px 0 0', fontSize: '11px', fontWeight: 700, color: online ? '#059669' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <p style={{ margin: '2px 0 0', fontSize: '11px', fontWeight: 700, color: online ? '#34d399' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '5px' }}>
                             <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: online ? '#22c55e' : '#94a3b8', display: 'inline-block' }} />
                             {online ? 'En ligne' : 'Hors ligne'}
                         </p>

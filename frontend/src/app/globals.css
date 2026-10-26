@@ -11,6 +11,14 @@
   --brand-accent: #f59e0b;
   --brand-orange: #e8861c;
 
+  /* Bleu nuit — identite deja utilisee ailleurs (connexion, logo, ecrans
+     de demarrage) mais jamais centralisee ; valeurs reprises telles
+     quelles de login.module.css pour que le menu lateral matche
+     vraiment, pas une 4e variante de navy. */
+  --brand-navy-900: #0f172a;
+  --brand-navy-800: #111827;
+  --brand-navy-700: #1e3a8a;
+
   /* Status Colors */
   --success: #10b981;
   --danger: #ef4444;
