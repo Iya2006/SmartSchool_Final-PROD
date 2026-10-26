@@ -34,28 +34,34 @@ describe('offlinePolicy — registre', () => {
         }
     });
 
-    it('finance/comptabilite/auth/securite sont exclus du Cache Storage du Service Worker, et jamais écrits offline', () => {
-        // finance/comptabilite restent lisibles offline (cache applicatif
-        // React Query + Redis serveur, préexistant — voir
-        // comptabilite/dashboard/page.tsx) mais JAMAIS via le Service
-        // Worker (deux mécanismes distincts, voir la doc du champ
-        // excludeFromServiceWorkerCache dans offlinePolicy.ts).
+    it("l'authentification n'est jamais en cache ; finance et sécurité se lisent hors-ligne mais ne s'écrivent jamais hors-ligne", () => {
+        // Depuis le 26/10/2026, la finance et la sécurité se consultent
+        // hors-ligne comme le reste du logiciel : le cache du Service Worker
+        // est cloisonné par compte (lib/offlineCacheKey.ts) et purgé à la
+        // déconnexion. Leurs écritures restent en ligne.
+        expect(MODULE_POLICY.auth.excludeFromServiceWorkerCache).toBe(true);
+        expect(MODULE_POLICY.auth.write).toBe('ONLINE_ONLY');
+
         expect(MODULE_POLICY.finance_comptabilite.read).toBe('READ_ONLY_OFFLINE');
-        expect(MODULE_POLICY.finance_comptabilite.excludeFromServiceWorkerCache).toBe(true);
+        expect(MODULE_POLICY.finance_comptabilite.excludeFromServiceWorkerCache).toBe(false);
         expect(MODULE_POLICY.finance_comptabilite.write).toBe('ONLINE_ONLY');
 
-        expect(MODULE_POLICY.auth.excludeFromServiceWorkerCache).toBe(true);
-        expect(MODULE_POLICY.securite_permissions.excludeFromServiceWorkerCache).toBe(true);
+        expect(MODULE_POLICY.securite_permissions.read).toBe('READ_ONLY_OFFLINE');
+        expect(MODULE_POLICY.securite_permissions.excludeFromServiceWorkerCache).toBe(false);
         expect(MODULE_POLICY.securite_permissions.write).toBe('ONLINE_ONLY');
     });
 
     it.each([
-        ['/api/finance/paiements', true],
-        ['/api/finance/salaires/1', true],
-        ['/api/comptabilite/grand-livre', true],
         ['/api/auth/login', true],
-        ['/api/securite/roles', true],
-        ['/api/securite/audit-log', true],
+        ['/api/auth/me', true],
+        ['/api/portail-parent/login', true],
+        ['/api/portail-eleve/login', true],
+        ['/api/portail-parent/enfants', false],
+        ['/api/finance/paiements', false],
+        ['/api/finance/salaires/1', false],
+        ['/api/comptabilite/grand-livre', false],
+        ['/api/securite/roles', false],
+        ['/api/securite/audit-log', false],
         ['/api/eleves', false],
         ['/api/classes/1/profil', false],
         ['/api/communication/messages', false],

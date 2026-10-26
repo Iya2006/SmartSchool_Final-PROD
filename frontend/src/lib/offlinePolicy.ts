@@ -115,20 +115,22 @@ export const MODULE_POLICY: Record<string, ModulePolicy> = {
         apiPrefixes: ['/api/finance', '/api/comptabilite'],
         read: 'READ_ONLY_OFFLINE',
         write: 'ONLINE_ONLY',
-        // Lecture offline réelle mais via un cache applicatif dédié
-        // uniquement (React Query + Redis serveur, TTL 60s côté backend,
-        // purgé au logout — voir AuthContext.logout) : le Service Worker,
-        // lui, ne doit JAMAIS voir passer ces réponses en cache — c'est la
-        // décision de l'Étape A (voir sw.ts), plus stricte que la simple
-        // classification produit ci-dessus.
-        excludeFromServiceWorkerCache: true,
+        // 26/10/2026 : lisible hors-ligne via le Service Worker, comme tout le
+        // reste (« tout le logiciel doit marcher sans connexion »). L'ancienne
+        // exclusion protégeait un cache indexé par URL seule ; il est
+        // désormais cloisonné par compte (lib/offlineCacheKey.ts) et purgé à
+        // la déconnexion (lib/sessionCleanup.ts). L'écriture reste en ligne
+        // jusqu'à la phase Finance (reçu provisoire, contrôle des doublons).
+        excludeFromServiceWorkerCache: false,
         justification:
-            "Décision actée dès la Phase 1 : opérations financières jamais résolues automatiquement en cas de " +
-            "conflit. Paiements/factures/salaires exclus du Cache Storage du Service Worker en plus d'être " +
-            "online-only en écriture — cohérent avec §6/§7 du cahier des charges fourni.",
+            "Lecture hors-ligne autorisée (cache cloisonné par compte, purgé à la déconnexion). Écriture en ligne " +
+            "jusqu'à la phase Finance : numéros de reçu/facture générés par le serveur (core/numerotation.py), " +
+            "jamais d'encaissement résolu automatiquement en cas de conflit (§7 du cahier des charges).",
     },
     auth: {
-        apiPrefixes: ['/api/auth'],
+        // Les connexions des portails passent aussi par leurs propres routes :
+        // leurs réponses portent un jeton, elles ne doivent jamais être en cache.
+        apiPrefixes: ['/api/auth', '/api/portail-parent/login', '/api/portail-eleve/login'],
         read: 'ONLINE_ONLY',
         write: 'ONLINE_ONLY',
         excludeFromServiceWorkerCache: true,
@@ -136,13 +138,15 @@ export const MODULE_POLICY: Record<string, ModulePolicy> = {
     },
     securite_permissions: {
         apiPrefixes: ['/api/securite'],
-        read: 'ONLINE_ONLY',
+        read: 'READ_ONLY_OFFLINE',
         write: 'ONLINE_ONLY',
-        excludeFromServiceWorkerCache: true,
+        // Consulter les rôles hors-ligne ne donne aucun droit : c'est le
+        // serveur qui les applique. Cache cloisonné par compte, comme ailleurs.
+        excludeFromServiceWorkerCache: false,
         justification:
-            'Rôles/permissions/audit-log (backend/app/api/securite.py) — modification de permission jamais offline ' +
-            "(§8 du cahier des charges fourni : une modification offline de permission ne doit être autorisée que si " +
-            "l'analyse démontre l'absence de risque de sécurité, non démontré ici).",
+            'Rôles/permissions/audit-log (backend/app/api/securite.py) : consultables hors-ligne (cache cloisonné ' +
+            "par compte). Modification jamais hors-ligne (§8 du cahier des charges : une modification offline de " +
+            "permission n'est autorisée que si l'absence de risque est démontrée, ce qui n'est pas le cas).",
     },
 };
 

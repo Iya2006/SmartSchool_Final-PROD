@@ -7,6 +7,10 @@ import { UIProvider, useUI } from '@/context/UIContext';
 import { isAdminSystemRole } from '@/lib/roleAccess';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { startAutoSync } from '@/lib/syncEngine';
+import { preparerSiNecessaire } from '@/lib/preparationHorsLigne';
+import { estFenetrePreparation } from '@/lib/fenetrePreparation';
+
+const UNE_HEURE = 60 * 60 * 1000;
 import Sidebar from '@/components/Sidebar';
 import Topbar from '@/components/Topbar';
 import LectureSeuleBanner from '@/components/LectureSeuleBanner';
@@ -38,8 +42,27 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     // point toujours monté pendant toute la session.
     useEffect(() => {
         if (!isAuthenticated) return;
+        // Fenêtre invisible de préparation : passive (voir lib/fenetrePreparation.ts).
+        // Un second moteur de rejeu y enverrait la même file en double.
+        if (estFenetrePreparation()) return;
         const stopAutoSync = startAutoSync();
-        return stopAutoSync;
+
+        // Préparation hors-ligne (lib/preparationHorsLigne.ts), en arrière-plan.
+        // Au démarrage, après un court délai pour laisser l'écran se charger ;
+        // au retour du réseau ; et quand le Service Worker prend la main (tout
+        // premier passage : sans lui, rien de préparé ne serait gardé).
+        const auDemarrage = setTimeout(() => preparerSiNecessaire(6 * UNE_HEURE), 5000);
+        const auRetourDuReseau = () => preparerSiNecessaire(UNE_HEURE);
+        const quandLeServiceWorkerPrendLaMain = () => preparerSiNecessaire(6 * UNE_HEURE);
+        window.addEventListener('online', auRetourDuReseau);
+        navigator.serviceWorker?.addEventListener('controllerchange', quandLeServiceWorkerPrendLaMain);
+
+        return () => {
+            stopAutoSync();
+            clearTimeout(auDemarrage);
+            window.removeEventListener('online', auRetourDuReseau);
+            navigator.serviceWorker?.removeEventListener('controllerchange', quandLeServiceWorkerPrendLaMain);
+        };
     }, [isAuthenticated]);
 
     const isFullscreen = FULLSCREEN_PATHS.some(p => pathname.startsWith(p));

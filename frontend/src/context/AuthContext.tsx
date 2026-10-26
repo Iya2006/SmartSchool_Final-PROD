@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { canAccessPathForRole, getRedirectPathForRole } from '@/lib/roleAccess';
-import { purgeLocalSessionData } from '@/lib/sessionCleanup';
+import { purgeLocalSessionData, preparerNouvelleSession } from '@/lib/sessionCleanup';
 import { estPageOuverteATous } from '@/lib/pagesOuvertes';
 
 export interface UserInfo {
@@ -157,6 +157,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, [checked, token, user, pathname, router]);
 
     const login = (newToken: string, newUser: UserInfo) => {
+        // Après une session expirée, les données locales ont été gardées pour
+        // le même compte ; si c'est un autre compte qui se connecte, on purge
+        // celles du précédent (voir lib/sessionCleanup.ts).
+        void preparerNouvelleSession(newToken);
+
         setToken(newToken);
         setUser(newUser);
 
@@ -181,7 +186,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // le cache delta (Étape C) ne doivent pas survivre à une
             // déconnexion, surtout sur un poste partagé. Logique commune avec
             // l'intercepteur 401 (lib/api.ts) — voir lib/sessionCleanup.ts.
-            localStorage.removeItem('smartschool-query-cache');
             await purgeLocalSessionData();
             sessionStorage.clear();
             window.location.href = '/login';

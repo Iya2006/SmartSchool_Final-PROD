@@ -101,6 +101,16 @@ describe('lib/api — mise en file hors-ligne', () => {
         expect(await listPending()).toHaveLength(0);
     });
 
+    it("note le compte qui a fait la saisie, pour ne la rejouer qu'avec sa session", async () => {
+        const b64url = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        localStorage.setItem('smartschool_token', `${b64url('{}')}.${b64url('{"sub":"7","type":"enseignant","etablissement_id":1}')}.sig`);
+        const rejected = getRejectedHandler();
+        await rejected(networkError({ method: 'post', url: '/api/sync/7/notes', data: '{}' }));
+
+        const pending = await listPending();
+        expect(pending[0].compte).toBe('enseignant:7:1');
+    });
+
     it("ne met PAS en file un vrai refus serveur (pas un problème réseau) — reste rejeté normalement", async () => {
         const rejected = getRejectedHandler();
         const err = Object.assign(new Error('forbidden'), {
@@ -167,6 +177,13 @@ describe("lib/api — message hors-ligne (page/route jamais chargée en cache)",
         }
     });
 
+    it("une écriture refusée hors-ligne dit clairement que rien n'a été enregistré", async () => {
+        simulerConnexion(false);
+        const message = await messageRendu(networkError({ method: 'post', url: '/api/eleves' }));
+        expect(message).toMatch(/hors-ligne/i);
+        expect(message).toMatch(/n'a pas été enregistrée/i);
+    });
+
     it("ne touche jamais error.response — reste absent pour une vraie coupure réseau (distinction utilisée ailleurs dans l'app)", async () => {
         const rejected = getRejectedHandler();
         try {
@@ -175,6 +192,33 @@ describe("lib/api — message hors-ligne (page/route jamais chargée en cache)",
         } catch (err) {
             expect((err as any).response).toBeUndefined();
         }
+    });
+});
+
+describe('lib/api — session expirée (401)', () => {
+    beforeEach(() => {
+        memoryStore.clear();
+        localStorage.clear();
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    it("retire le jeton mais garde les données locales (cache de démarrage, file offline)", async () => {
+        localStorage.setItem('smartschool_token', 'a.eyJzdWIiOiI1IiwidHlwZSI6ImFkbWluIn0.sig');
+        localStorage.setItem('smartschool_user', '{"id":5}');
+        localStorage.setItem('smartschool_memo_hors_ligne', '{"compte":"admin:5:-"}');
+        memoryStore.set('saisie-en-attente', { id: 'saisie-en-attente', statut: 'EN_ATTENTE', created_at: '2026-10-26T00:00:00Z' });
+
+        const rejected = getRejectedHandler();
+        const err = Object.assign(new Error('401'), {
+            config: { method: 'get', url: '/api/eleves' },
+            response: { status: 401, data: {} },
+        });
+        await expect(rejected(err)).rejects.toBeDefined();
+
+        expect(localStorage.getItem('smartschool_token')).toBeNull();
+        expect(localStorage.getItem('smartschool_user')).toBeNull();
+        expect(localStorage.getItem('smartschool_memo_hors_ligne')).not.toBeNull();
+        expect(memoryStore.has('saisie-en-attente')).toBe(true);
     });
 });
 

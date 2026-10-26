@@ -5,6 +5,9 @@
  */
 import axios from 'axios';
 import { estPageOuverteATous } from './pagesOuvertes';
+import { compteDuJeton } from './offlineCacheKey';
+import { retirerSessionExpiree } from './sessionCleanup';
+import { estFenetrePreparation } from './fenetrePreparation';
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
 
@@ -20,6 +23,12 @@ const api = axios.create({
 // ── Intercepteur de requête : ajoute le token JWT automatiquement ──
 api.interceptors.request.use(
     (config) => {
+        // Fenêtre invisible de préparation hors-ligne : lecture seule, quoi
+        // qu'en dise l'écran qu'elle affiche (voir lib/fenetrePreparation.ts).
+        if (estFenetrePreparation() && (config.method || 'get').toLowerCase() !== 'get') {
+            throw new axios.CanceledError('Préparation hors-ligne : aucune écriture.');
+        }
+
         // Ne pas ajouter le token pour les routes de login
         const isLoginRoute = config.url?.includes('/auth/login') ||
                              config.url?.includes('/portail-parent/login') ||
@@ -149,6 +158,7 @@ async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
         if (typeof payload === 'string') {
             try { payload = JSON.parse(payload); } catch { /* corps non-JSON, on le garde tel quel */ }
         }
+        const jeton = localStorage.getItem('smartschool_token');
         await enqueue({
             type: route.type,
             method: route.method,
@@ -156,6 +166,7 @@ async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
             payload,
             utilisateur_id: route.utilisateurId(match),
             etablissement_id: etablissementDeLaSession(),
+            compte: (jeton && compteDuJeton(`Bearer ${jeton}`)) || undefined,
         });
         return {
             data: { queued: true, message: 'Enregistré localement — sera synchronisé dès le retour de connexion.' },
@@ -181,6 +192,11 @@ async function mettreEnFileSiHorsLigne(error: any): Promise<any> {
 const MESSAGE_HORS_LIGNE =
     "Vous êtes hors-ligne et cette donnée n'a pas encore été chargée sur cet appareil. " +
     'Reconnectez-vous pour y accéder.';
+// Écriture d'un module pas encore ouvert à la saisie hors-ligne : rien n'a été
+// enregistré, l'utilisateur doit le savoir clairement.
+const MESSAGE_ECRITURE_HORS_LIGNE =
+    "Vous êtes hors-ligne : cette action n'a pas été enregistrée. " +
+    'Elle sera possible dès le retour de la connexion.';
 
 // Pannes côté serveur, dites en français et sans rien de technique.
 //
@@ -223,7 +239,11 @@ function messageDePanne(error: any): string | undefined {
     // Le dépassement de délai arrive sans réponse : à tester avant le cas
     // général « pas de réponse », sinon il serait annoncé comme une panne.
     if (error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT') return MESSAGE_TROP_LENT;
-    if (estErreurReseau(error)) return appareilHorsLigne() ? MESSAGE_HORS_LIGNE : MESSAGE_INDISPONIBLE;
+    if (estErreurReseau(error)) {
+        if (!appareilHorsLigne()) return MESSAGE_INDISPONIBLE;
+        const methode = (error?.config?.method || 'get').toLowerCase();
+        return methode === 'get' ? MESSAGE_HORS_LIGNE : MESSAGE_ECRITURE_HORS_LIGNE;
+    }
     // Aucune annulation de requête dans l'application (ni AbortController ni
     // CancelToken) : ici, « pas de réponse » veut bien dire « le serveur n'a
     // rien répondu », jamais « on a coupé la requête volontairement ».
@@ -237,9 +257,37 @@ function messageDePanne(error: any): string | undefined {
     return undefined;
 }
 
+/**
+ * Chemin relatif d'une lecture réussie (`/api/eleves?page=2`), sans le
+ * paramètre anti-cache `_t`, ou `null` si ce n'est pas une lecture JSON de
+ * l'API. Sert à la préparation hors-ligne (lib/preparationHorsLigne.ts), qui
+ * relit ces chemins pour garder leur copie à jour.
+ */
+function cheminDeLecture(config: any): string | null {
+    if (typeof window === 'undefined') return null;
+    if ((config?.method || 'get').toLowerCase() !== 'get') return null;
+    // Fichiers (PDF, sujets, exports) : lourds, inutile de les retélécharger.
+    if (config?.responseType === 'blob' || config?.responseType === 'arraybuffer') return null;
+    try {
+        const u = new URL(api.getUri(config), window.location.origin);
+        if (!u.pathname.startsWith('/api/')) return null;
+        u.searchParams.delete('_t');
+        return u.pathname + u.search;
+    } catch {
+        return null;
+    }
+}
+
 // ── Intercepteur de réponse : gère les erreurs 401 (token expiré) et 403 (accès interdit) ──
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        const chemin = cheminDeLecture(response.config);
+        if (chemin) {
+            // Import dynamique : preparationHorsLigne importe lui-même `api`.
+            void import('./preparationHorsLigne').then((m) => m.memoriserLecture(chemin)).catch(() => {});
+        }
+        return response;
+    },
     async (error) => {
         normaliserDetailErreur(error);
 
@@ -278,17 +326,12 @@ api.interceptors.response.use(
                 // Le module Comptabilité n'a plus de session parallèle : un 401
                 // se traite exactement comme partout ailleurs dans l'admin.
                 if (currentPath !== '/login') {
-                    localStorage.clear();
-                    sessionStorage.clear();
-                    // Étape C : ce chemin (session expirée) ne purgeait avant
-                    // ni Cache Storage ni la file offline/le cache delta,
-                    // contrairement au logout manuel (AuthContext.logout) —
-                    // incohérence trouvée par l'audit, corrigée en partageant
-                    // la même purge (lib/sessionCleanup.ts).
-                    const { purgeLocalSessionData } = await import('./sessionCleanup');
-                    await purgeLocalSessionData();
-                    // La session morte est purgée partout ; seule la
-                    // redirection est épargnée à une page ouverte à tous.
+                    // Session expirée : seul le jeton est retiré, les données
+                    // locales restent pour le même compte (voir
+                    // retirerSessionExpiree). Si un AUTRE compte se connecte
+                    // ensuite, AuthContext.login purge celles du précédent.
+                    retirerSessionExpiree();
+                    // Seule la redirection est épargnée à une page ouverte à tous.
                     if (!pageOuverte) window.location.href = '/login';
                 }
             } else if (status === 403 && !pageOuverte) {

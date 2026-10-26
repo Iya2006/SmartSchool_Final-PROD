@@ -14,13 +14,16 @@ import { QueryClient } from '@tanstack/react-query';
  *   connexion est disponible.
  */
 export const ONE_MINUTE = 60_000;
-export const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+// Durée de conservation des données hors-ligne : une école doit pouvoir
+// travailler plusieurs jours sans réseau. Le cache persisté (QueryProvider)
+// et celui du Service Worker (sw.ts) utilisent la même durée.
+export const TRENTE_JOURS = 30 * 24 * 60 * 60 * 1000;
 
 export const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
             staleTime: ONE_MINUTE,
-            gcTime: TWENTY_FOUR_HOURS,
+            gcTime: TRENTE_JOURS,
             retry: 2,
             refetchOnWindowFocus: false,
             networkMode: 'offlineFirst',

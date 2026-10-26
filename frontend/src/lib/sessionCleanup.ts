@@ -17,6 +17,40 @@
  * importé par `api.ts` — un import statique créerait un cycle. Même
  * pattern déjà utilisé dans lib/api.ts pour `offlineQueue`.
  */
+import { compteDuJeton } from './offlineCacheKey';
+
+/** Compte dont la session vient d'expirer (voir `retirerSessionExpiree`). */
+export const CLE_COMPTE_PRECEDENT = 'smartschool_compte_precedent';
+
+/**
+ * Session expirée (401) : on retire le jeton, rien d'autre.
+ *
+ * Avant le 26/10/2026, un 401 effaçait tout (caches, copie de démarrage). Or
+ * avec des sessions de 8 h, c'est exactement ce qui arrive à une école qui a
+ * travaillé toute une journée hors-ligne : en retrouvant le réseau, elle
+ * perdait ses données locales au moment même où elle allait synchroniser.
+ * Dans l'immense majorité des cas, c'est le même compte qui se reconnecte ;
+ * s'il s'agit d'un autre, `preparerNouvelleSession` purge alors les données
+ * du précédent. La file offline n'est jamais touchée ici.
+ */
+export function retirerSessionExpiree(): void {
+    const jeton = localStorage.getItem('smartschool_token');
+    const compte = jeton ? compteDuJeton(`Bearer ${jeton}`) : null;
+    if (compte) localStorage.setItem(CLE_COMPTE_PRECEDENT, compte);
+    localStorage.removeItem('smartschool_token');
+    localStorage.removeItem('smartschool_user');
+    sessionStorage.clear();
+}
+
+/** À appeler à chaque connexion réussie, avec le nouveau jeton. */
+export async function preparerNouvelleSession(nouveauJeton: string): Promise<void> {
+    const precedent = localStorage.getItem(CLE_COMPTE_PRECEDENT);
+    localStorage.removeItem(CLE_COMPTE_PRECEDENT);
+    if (precedent && precedent !== compteDuJeton(`Bearer ${nouveauJeton}`)) {
+        await purgeLocalSessionData();
+    }
+}
+
 export async function purgeLocalSessionData(): Promise<void> {
     if (typeof window === 'undefined') return;
 
@@ -50,6 +84,17 @@ export async function purgeLocalSessionData(): Promise<void> {
         // contrairement à la file offline ci-dessus.
         const { clearSyncCache } = await import('./deltaSync');
         await clearSyncCache();
+    } catch {
+        // idem — jamais bloquant.
+    }
+
+    try {
+        // Cache React Query persisté (IndexedDB) et dernières valeurs de
+        // démarrage hors-ligne (années, école, thème).
+        const { effacerCacheRequetes } = await import('./cacheRequetesLocal');
+        await effacerCacheRequetes();
+        const { effacerMemo } = await import('./memoHorsLigne');
+        effacerMemo();
     } catch {
         // idem — jamais bloquant.
     }

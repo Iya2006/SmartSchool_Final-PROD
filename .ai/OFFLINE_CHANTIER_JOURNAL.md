@@ -132,3 +132,36 @@ candidat déjà identifié (élèves — nécessite d'auditer `PUT /api/eleves/{
 en détail avant toute activation, voir `lib/offlinePolicy.ts`). Finance,
 authentification et sécurité restent hors-périmètre par décision actée,
 pas par oubli.
+
+> **Correction du 26/10/2026** : l'affirmation de cette entrée (« le Service
+> Worker met déjà en cache toutes les lectures de l'API ») était **fausse en
+> production**. La règle exigeait `sameOrigin`, or le frontend et l'API sont
+> sur deux domaines différents : aucune lecture n'était mise en cache. Voir
+> l'entrée du 26/10/2026 ci-dessous.
+
+---
+
+## 26/10/2026 — Phase 0 : tout le logiciel démarre et se consulte hors-ligne
+
+Nouvelle demande : « tout le logiciel doit être utilisable avec ou sans la
+connexion ». Le plan en 5 phases a été approuvé. La décision de rendre
+**lisibles** hors-ligne la finance et la sécurité est actée. Leur écriture
+reste en ligne jusqu'à leurs phases.
+
+Détail complet, fichiers touchés et vérifications : voir
+`.ai/CORRECTIFS_26_10_2026_RAPPORT.md`. En résumé :
+- Le cache API du Service Worker fonctionne enfin entre les deux origines. Il
+  est cloisonné par compte (`lib/offlineCacheKey.ts`).
+- Démarrage hors-ligne sur la bonne année (`lib/memoHorsLigne.ts`).
+- Cache React Query déplacé dans IndexedDB, en base64, conservé 30 jours.
+- Un 401 ne détruit plus les données locales : la purge n'a lieu que si un
+  autre compte se connecte.
+- File offline cloisonnée par compte, mise en pause sur 401.
+- Préparation du poste : écrans, lectures mémorisées et visite en coulisse
+  hebdomadaire de chaque écran (`lib/preparationHorsLigne.ts`).
+- `reloadOnOnline: false` : le rechargement automatique au retour du réseau
+  annulait les navigations.
+
+Prochaine étape (Phase 1) : pipeline d'écriture générique, avec
+idempotence serveur, identifiants provisoires et conflits, en commençant par
+l'appel par séances des enseignants.

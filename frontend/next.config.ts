@@ -15,7 +15,14 @@ const withSerwist = withSerwistInit({
   swSrc: "src/app/sw.ts",
   swDest: "public/sw.js",
   cacheOnNavigation: true,
-  reloadOnOnline: true,
+  // Pas de rechargement automatique au retour du réseau. Sur une connexion qui
+  // coupe et revient sans cesse, chaque événement `online` rechargeait la page :
+  // la navigation en cours était annulée (retour sur l'écran précédent, constaté
+  // hors-ligne le 26/10/2026) et un formulaire en cours de saisie était perdu.
+  // Le retour du réseau est déjà pris en charge sans recharger : rejeu de la
+  // file (lib/syncEngine.ts), préparation hors-ligne (AppShell.tsx) et
+  // rafraîchissement des données (React Query).
+  reloadOnOnline: false,
   disable: process.env.NODE_ENV === "development" && !pwaForcedInDev,
 });
 

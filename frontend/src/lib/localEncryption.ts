@@ -80,6 +80,60 @@ export async function encryptValue<T>(value: T): Promise<EncryptedPayload | null
     return { iv: Array.from(iv), data: Array.from(new Uint8Array(ciphertext)) };
 }
 
+function versBase64(octets: Uint8Array): string {
+    let binaire = '';
+    for (let i = 0; i < octets.length; i += 0x8000) {
+        binaire += String.fromCharCode(...octets.subarray(i, i + 0x8000));
+    }
+    return btoa(binaire);
+}
+
+function depuisBase64(texte: string): Uint8Array<ArrayBuffer> {
+    const binaire = atob(texte);
+    return Uint8Array.from(binaire, (c) => c.charCodeAt(0));
+}
+
+/**
+ * Comme `encryptValue`, mais produit une chaîne compacte (base64) : un tableau
+ * de nombres JSON coûte 3 à 4 caractères par octet, ce qui faisait déborder le
+ * cache React Query pour une école de quelques milliers d'élèves. Même clé,
+ * même AES-GCM, mêmes garanties.
+ */
+export async function chiffrerEnTexte<T>(value: T): Promise<string | null> {
+    const token = currentToken();
+    if (!token || !hasWebCrypto()) return null;
+
+    const key = await deriveKey(token);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plaintext = new TextEncoder().encode(JSON.stringify(value));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+
+    return JSON.stringify({ v: 2, iv: versBase64(iv), data: versBase64(new Uint8Array(ciphertext)) });
+}
+
+/** Inverse de `chiffrerEnTexte`. Même contrat que `decryptValue` : `null` en
+ * cas de doute (format inconnu, autre session, données abîmées), jamais
+ * d'exception. */
+export async function dechiffrerTexte<T>(texte: string | null | undefined): Promise<T | null> {
+    if (!texte) return null;
+    const token = currentToken();
+    if (!token || !hasWebCrypto()) return null;
+
+    try {
+        const payload = JSON.parse(texte);
+        if (payload?.v !== 2 || typeof payload.iv !== 'string' || typeof payload.data !== 'string') return null;
+        const key = await deriveKey(token);
+        const plaintext = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: depuisBase64(payload.iv) },
+            key,
+            depuisBase64(payload.data),
+        );
+        return JSON.parse(new TextDecoder().decode(plaintext)) as T;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Déchiffre `payload`. Renvoie `null` si absent, si aucune session active,
  * si Web Crypto est indisponible, OU si le déchiffrement échoue (mauvaise

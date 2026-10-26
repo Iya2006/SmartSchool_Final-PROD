@@ -45,6 +45,12 @@ export interface OfflineQueueItem {
      * car il n'est pas toujours connaissable côté client (compte plateforme,
      * parent multi-écoles) — on n'invente jamais un établissement par défaut. */
     etablissement_id?: number;
+    /** Compte qui a fait la saisie (`type:sub:etablissement`, voir
+     * lib/offlineCacheKey.ts). Le rejeu n'envoie un élément qu'avec la
+     * session de CE compte : sur un poste partagé, la saisie d'un enseignant
+     * ne part jamais sous le jeton d'un autre. Absent sur les éléments créés
+     * avant l'ajout du champ (rejoués comme avant). */
+    compte?: string;
     created_at: string; // ISO 8601
     statut: OfflineQueueStatut;
     tentatives: number;
