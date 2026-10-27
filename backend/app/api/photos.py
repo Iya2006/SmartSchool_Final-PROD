@@ -15,10 +15,11 @@ from typing import Optional
 from app.core.database import get_db
 from app.core.auth import ADMIN_TIER_ROLES, require_etablissement, require_roles
 import os, shutil, uuid
+from app.core.fichiers import dossier_fichiers
 
 router = APIRouter(prefix="/api/photos", tags=["Photos"])
 
-UPLOAD_BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "photos")
+UPLOAD_BASE = dossier_fichiers("photos")
 
 ENTITY_MAP = {
     "eleve": {"table": "ss_eleves", "pk": "eleve_id", "folder": "eleves"},

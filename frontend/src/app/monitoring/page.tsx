@@ -24,7 +24,8 @@ interface DatabaseStatus {
 }
 
 interface RedisStatus {
-    status: 'up' | 'down';
+    // 'non_utilise' : poste local (application installée), qui n'a pas de Redis.
+    status: 'up' | 'down' | 'non_utilise';
 }
 
 interface QueueInfo {
@@ -145,9 +146,13 @@ export default function MonitoringPage() {
 
                         <div className={styles.card}>
                             <h2><Server size={16} /> Redis</h2>
-                            <p className={data.redis.status === 'up' ? styles.up : styles.down}>
-                                {data.redis.status === 'up' ? 'Disponible' : 'Indisponible'}
-                            </p>
+                            {data.redis.status === 'non_utilise' ? (
+                                <p>Non utilisé sur ce poste (file de tâches intégrée au moteur)</p>
+                            ) : (
+                                <p className={data.redis.status === 'up' ? styles.up : styles.down}>
+                                    {data.redis.status === 'up' ? 'Disponible' : 'Indisponible'}
+                                </p>
+                            )}
                         </div>
 
                         <div className={styles.card}>

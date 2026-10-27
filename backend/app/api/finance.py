@@ -36,6 +36,7 @@ from app.schemas.schemas import (
 # facture/paiement/dépense/salaire réel génère une écriture équilibrée,
 # dans la même transaction, pour que Balance/Grand Livre/Auxiliaire soient
 # toujours synchronisés avec les opérations financières réelles.
+from app.core.fichiers import dossier_fichiers
 from app.api.comptabilite import (
     generer_ecriture_auto, compte_tresorerie_pour_mode, compte_charge_pour_categorie,
     COMPTE_ELEVES, COMPTE_PRODUITS_SCOLARITE, COMPTE_BANQUE,
@@ -100,8 +101,7 @@ from app.core.annee_lock import get_active_annee_id as _get_active_annee_id
 from app.core.annee_lock import ANNEE_VERROUILLEE
 
 
-UPLOAD_DIR_DEPENSES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "depenses")
-os.makedirs(UPLOAD_DIR_DEPENSES, exist_ok=True)
+UPLOAD_DIR_DEPENSES = dossier_fichiers("depenses")
 
 
 @router.post("/upload-justificatif")
@@ -5075,7 +5075,16 @@ def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db), eta
     if bulletin:
         employe_id = bulletin.employe_id
         primes = db.query(Prime).filter(Prime.employe_id == employe_id, Prime.mois_concerne == bulletin.mois_concerne).all()
-        absences = db.query(AbsencePersonnel).filter(AbsencePersonnel.employe_id == employe_id, func.to_char(AbsencePersonnel.date_absence, 'YYYY-MM') == bulletin.mois_concerne).all()
+        # Intervalle de dates plutôt que `to_char` (propre à PostgreSQL) : la
+        # même requête tourne sur la base locale SQLite d'un poste hors-ligne.
+        annee_mois, mois_mois = (int(x) for x in bulletin.mois_concerne.split("-")[:2])
+        debut_mois = date_type(annee_mois, mois_mois, 1)
+        fin_mois = date_type(annee_mois + (mois_mois == 12), mois_mois % 12 + 1, 1)
+        absences = db.query(AbsencePersonnel).filter(
+            AbsencePersonnel.employe_id == employe_id,
+            AbsencePersonnel.date_absence >= debut_mois,
+            AbsencePersonnel.date_absence < fin_mois,
+        ).all()
         
         return {
             "bulletin": {

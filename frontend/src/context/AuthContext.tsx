@@ -71,7 +71,9 @@ export const getRedirectPath = (
 // pouvoir la lire sans compte. Un visiteur DEJA connecte, lui, n'y reste pas :
 // aucun role n'a `/` dans ses prefixes autorises, donc le controle plus bas le
 // renvoie vers l'espace de son role.
-const PUBLIC_PATHS = ['/', '/login', '/login/ecole', '/inscription'];
+// `/installation` : application installée, avant que l'école ne soit
+// téléchargée sur l'ordinateur — aucun compte n'existe encore localement.
+const PUBLIC_PATHS = ['/', '/login', '/login/ecole', '/inscription', '/installation'];
 
 /** Écran où un administrateur plateforme choisit l'école dans laquelle il
  * travaille. Il n'appartient à aucune école : sans ce passage, toutes les

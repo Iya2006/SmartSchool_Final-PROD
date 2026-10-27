@@ -9,6 +9,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { startAutoSync } from '@/lib/syncEngine';
 import { preparerSiNecessaire } from '@/lib/preparationHorsLigne';
 import { estFenetrePreparation } from '@/lib/fenetrePreparation';
+import { EST_POSTE } from '@/lib/poste';
 
 const UNE_HEURE = 60 * 60 * 1000;
 import Sidebar from '@/components/Sidebar';
@@ -46,6 +47,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
         // Un second moteur de rejeu y enverrait la même file en double.
         if (estFenetrePreparation()) return;
         const stopAutoSync = startAutoSync();
+        // Poste local : les données sont déjà dans la base de l'ordinateur.
+        if (EST_POSTE) return stopAutoSync;
 
         // Préparation hors-ligne (lib/preparationHorsLigne.ts), en arrière-plan.
         // Au démarrage, après un court délai pour laisser l'écran se charger ;

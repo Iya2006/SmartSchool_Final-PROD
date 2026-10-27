@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
-from datetime import date as date_type, datetime
+from datetime import date as date_type, datetime, timedelta
 from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import get_current_user, require_etablissement
@@ -982,7 +982,7 @@ def traiter_incident(incident_id: int, decision: str, traite_par: str, db: Sessi
 def stats_incidents(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     query = db.query(Incident).filter(
         Incident.etablissement_id == etablissement_id,
-        Incident.date_incident >= func.current_date() - 90
+        Incident.date_incident >= (date_type.today() - timedelta(days=90))
     )
 
     total = query.count()

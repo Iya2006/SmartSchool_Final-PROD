@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react';
 import { Wifi, WifiOff, RefreshCw, AlertTriangle, ShieldAlert, HardDriveDownload } from 'lucide-react';
 import { subscribe, flushQueue, retryAllBlocked, SyncState } from '@/lib/syncEngine';
 import { isTokenLikelyExpired } from '@/lib/sessionExpiry';
+import { EST_POSTE } from '@/lib/poste';
 import {
     lireEtatPreparation,
     preparerPoste,
@@ -124,6 +125,10 @@ export default function SyncStatusIndicator() {
             </span>
         );
     }
+
+    // Poste local (application installée) : rien à préparer, les données sont
+    // déjà dans la base de l'ordinateur.
+    if (toutVaBien && EST_POSTE) return null;
 
     // Tout va bien : un simple bouton-icône, discret, qui dit si le poste est
     // prêt pour le hors-ligne et permet de mettre ses données à jour.

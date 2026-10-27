@@ -14,12 +14,17 @@ import logging
 import os
 from typing import Optional
 
+from app.core.mode import MODE_POSTE
+
 logger = logging.getLogger("smartschool.cache")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 _redis_client = None
-_redis_unavailable = False
+
+# Poste local : pas de Redis par conception, le cache est désactivé d'emblée
+# plutôt qu'après une tentative de connexion d'une seconde.
+_redis_unavailable = MODE_POSTE
 
 
 def get_redis_client():

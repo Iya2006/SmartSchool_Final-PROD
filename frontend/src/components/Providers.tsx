@@ -6,6 +6,7 @@ import QueryProvider from '@/components/QueryProvider';
 import { Toaster } from 'react-hot-toast';
 import PostLoginSplash from '@/components/PostLoginSplash';
 import WhatsNewModal from '@/components/WhatsNewModal';
+import GardeInstallationPoste from '@/components/GardeInstallationPoste';
 
 export default function Providers({ children }: { children: React.ReactNode }) {
     // QueryProvider englobe tout le reste : c'est une couche d'infrastructure
@@ -25,6 +26,7 @@ export default function Providers({ children }: { children: React.ReactNode }) {
                         cet écran — apparaît juste après, pas en même temps. */}
                     <PostLoginSplash />
                     <WhatsNewModal />
+                    <GardeInstallationPoste />
                 </AppProvider>
             </AuthProvider>
         </QueryProvider>

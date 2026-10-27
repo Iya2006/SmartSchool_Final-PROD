@@ -56,6 +56,7 @@ from app.api.annee_scolaire import router as annee_scolaire_router
 from app.api.reinscription import router as reinscription_router
 from app.api.tasks import router as tasks_router
 from app.api.monitoring import router as monitoring_router
+from app.api.poste import router as poste_router
 
 
 # Création des tables au démarrage
@@ -435,6 +436,16 @@ app.include_router(tasks_router, dependencies=[Depends(get_current_user)])
 # différence de /health, volontairement minimal et sans authentification
 # pour rester utilisable par le HEALTHCHECK Docker).
 app.include_router(monitoring_router, dependencies=[Depends(require_roles(*ADMIN_TIER_ROLES))])
+# Installation d'un poste local (offline-first) : chaque route exige la
+# direction via exige_installation_poste (app/api/poste.py).
+app.include_router(poste_router)
+
+# Sur le poste lui-même (application installée) : état et lancement de
+# l'installation, avant qu'aucun compte n'existe localement.
+from app.core.mode import MODE_POSTE
+if MODE_POSTE:
+    from app.api.poste_local import router as poste_local_router
+    app.include_router(poste_local_router)
 
 # ── Routes PUBLIQUES (gèrent leur propre authentification) ──
 app.include_router(auth_router)           # Login admin → retourne le JWT
@@ -470,11 +481,14 @@ class CORSStaticFiles(StaticFiles):
         response.headers["Access-Control-Allow-Headers"] = "*"
         return response
 
-uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
-os.makedirs(uploads_dir, exist_ok=True)
-os.makedirs(os.path.join(uploads_dir, "photos", "eleves"), exist_ok=True)
-os.makedirs(os.path.join(uploads_dir, "photos", "enseignants"), exist_ok=True)
-os.makedirs(os.path.join(uploads_dir, "photos", "parents"), exist_ok=True)
+from app.core.fichiers import dossier_fichiers
+
+# Même dossier que celui où les modules écrivent (app/core/fichiers.py) : en
+# ligne `backend/uploads`, sur un poste local le dossier de données indiqué
+# par l'application installée.
+uploads_dir = dossier_fichiers()
+for _sous in ("eleves", "enseignants", "parents"):
+    dossier_fichiers("photos", _sous)
 app.mount("/uploads", CORSStaticFiles(directory=uploads_dir), name="uploads")
 
 

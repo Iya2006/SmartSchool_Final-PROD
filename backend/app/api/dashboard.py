@@ -2,7 +2,7 @@
 SMARTSCHOOL API — Routes Dashboard
 GET /api/dashboard → KPIs + stats réelles (taux de réussite par cycle & détail par classe, événements, activités)
 """
-from datetime import date as date_type
+from datetime import date as date_type, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
@@ -93,7 +93,7 @@ def get_dashboard(
         .join(Classe, Inscription.classe_id == Classe.classe_id)
         .filter(
             Classe.etablissement_id == etablissement_id,
-            Presence.date_presence >= func.current_date() - 30,
+            Presence.date_presence >= (date_type.today() - timedelta(days=30)),
             Presence.seance_id.isnot(None),
         )
         .group_by(Presence.statut_presence)
@@ -122,7 +122,7 @@ def get_dashboard(
         Classe, Inscription.classe_id == Classe.classe_id
     ).filter(
         Classe.etablissement_id == etablissement_id,
-        Presence.date_presence >= func.current_date() - 30,
+        Presence.date_presence >= (date_type.today() - timedelta(days=30)),
         Presence.seance_id.isnot(None),
     ).first()
     nb_classes_couvertes = (couverture_row[0] or 0) if couverture_row else 0
@@ -131,7 +131,7 @@ def get_dashboard(
     # KPI 6: Incidents du mois
     incidents_mois = db.query(func.count(Incident.incident_id)).filter(
         Incident.etablissement_id == etablissement_id,
-        Incident.date_incident >= func.current_date() - 30
+        Incident.date_incident >= (date_type.today() - timedelta(days=30))
     ).scalar() or 0
 
     # KPI 7: Évaluations prévues
@@ -331,7 +331,7 @@ def get_dashboard(
     # ==== VIE SCOLAIRE / DISCIPLINE (vie_scolaire.py:/incidents/stats, 90j) ====
     incidents_90j = db.query(Incident).filter(
         Incident.etablissement_id == etablissement_id,
-        Incident.date_incident >= func.current_date() - 90
+        Incident.date_incident >= (date_type.today() - timedelta(days=90))
     )
     total_incidents_90j = incidents_90j.count()
     incidents_graves = incidents_90j.filter(Incident.gravite == "GRAVE").count()

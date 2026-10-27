@@ -165,3 +165,27 @@ Détail complet, fichiers touchés et vérifications : voir
 Prochaine étape (Phase 1) : pipeline d'écriture générique, avec
 idempotence serveur, identifiants provisoires et conflits, en commençant par
 l'appel par séances des enseignants.
+
+---
+
+## 26-27/10/2026 — Changement d'architecture : moteur local sur chaque poste (Phase A)
+
+Le cahier des charges du fondateur exige une application **identique en
+ligne et hors-ligne** (reçus définitifs, calculs, comptabilité), avec les
+données dans une **base locale**. Un simple cache de navigateur (Phase 0) ne
+peut pas exécuter la logique métier, qui vit dans le serveur Python.
+
+Décision : chaque appareil fait tourner le même moteur SmartSchool
+(`SMARTSCHOOL_MODE=poste`, base SQLite) dans une application installée
+(Electron, `desktop/`). La Phase 0 reste utile pour la version web.
+
+Phase A faite : périmètre d'un établissement, installation du poste
+(données et fichiers), mode poste sans Redis, application de bureau.
+Vérifié de bout en bout, y compris relancé avec un cloud injoignable.
+
+Détail, fichiers touchés et limites : `.ai/CORRECTIFS_27_10_2026_RAPPORT.md`.
+
+Prochaine étape (Phase B) : synchronisation multi-appareils. Elle couvre
+l'envoi et la réception des changements, les identifiants et numéros sans
+collision, la clé de signature des reçus par appareil, et les conflits
+signalés.

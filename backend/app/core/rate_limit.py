@@ -56,10 +56,14 @@ _REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # TOUJOURS truthy (`True`), le cast s'applique et slowapi convertit
 # correctement `"0"` en `False` — `_RATELIMIT_ENABLED` (calculé ci-dessus en
 # Python pur) reste utilisé pour `_DEFAULT_LIMIT`, non affecté par ce piège.
+from app.core.mode import MODE_POSTE
+
 limiter = Limiter(
     key_func=get_remote_address,
     enabled=True,
-    storage_uri=_REDIS_URL,
+    # Poste local : un seul processus et pas de Redis, la mémoire suffit et
+    # évite une tentative de connexion à chaque login.
+    storage_uri="memory://" if MODE_POSTE else _REDIS_URL,
     in_memory_fallback_enabled=True,
 )
 

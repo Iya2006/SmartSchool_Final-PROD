@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+    <title>SmartSchool</title>
+    <style>
+        html, body { margin: 0; height: 100%; }
+        body {
+            display: grid; place-items: center; background: linear-gradient(160deg, #0f172a, #111827 60%, #1e3a8a);
+            color: #f1f5f9; font-family: "Segoe UI", system-ui, sans-serif; -webkit-app-region: drag;
+        }
+        .bloc { text-align: center; }
+        .nom { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 6px; }
+        .texte { margin: 0; color: rgba(241, 245, 249, 0.7); font-size: 14px; }
+        .barre { width: 220px; height: 4px; margin: 22px auto 0; border-radius: 999px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+        .barre::after {
+            content: ""; display: block; width: 40%; height: 100%; border-radius: 999px;
+            background: linear-gradient(90deg, #3b82f6, #10b981); animation: va 1.2s ease-in-out infinite;
+        }
+        @keyframes va { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+        @media (prefers-reduced-motion: reduce) { .barre::after { animation: none; width: 100%; } }
+    </style>
+</head>
+<body>
+    <div class="bloc">
+        <p class="nom">SmartSchool</p>
+        <p class="texte">Démarrage sur cet ordinateur…</p>
+        <div class="barre" role="progressbar" aria-label="Démarrage"></div>
+    </div>
+</body>
+</html>

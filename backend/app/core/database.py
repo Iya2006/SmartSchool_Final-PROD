@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -93,7 +93,28 @@ if not SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
     # mieux le dire tout de suite que de laisser la file s'allonger.
     _pool_kwargs["pool_timeout"] = _entier_env("DB_POOL_TIMEOUT", 10)
 
+EST_SQLITE = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
+if EST_SQLITE:
+    # Poste local (offline-first) et tests. Les routes s'exécutent dans un pool
+    # de fils : la connexion doit pouvoir changer de fil, et une écriture
+    # attend son tour (30 s) au lieu d'échouer en « database is locked ».
+    _pool_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+
 engine = create_engine(SQLALCHEMY_DATABASE_URL, **_pool_kwargs)
+
+if EST_SQLITE:
+    @event.listens_for(engine, "connect")
+    def _reglages_sqlite(connexion_dbapi, _enregistrement):
+        curseur = connexion_dbapi.cursor()
+        # WAL : on peut lire pendant qu'une écriture est en cours.
+        curseur.execute("PRAGMA journal_mode=WAL")
+        curseur.execute("PRAGMA synchronous=NORMAL")
+        # SQLite n'applique pas les clés étrangères par défaut, PostgreSQL si :
+        # sans ce réglage, le poste accepterait hors-ligne une donnée que le
+        # cloud refuserait ensuite à la synchronisation.
+        curseur.execute("PRAGMA foreign_keys=ON")
+        curseur.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

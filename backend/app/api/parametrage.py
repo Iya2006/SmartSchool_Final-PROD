@@ -16,6 +16,7 @@ from app.models.academique import (
     Etablissement, AnneeScolaire, Trimestre, Cycle, Niveau, Salle, Matiere,
     ParametreEtablissement
 )
+from app.core.fichiers import dossier_fichiers
 from app.schemas.schemas import (
     EtablissementCreate, EtablissementUpdate, EtablissementOut,
     AnneeScolaireCreate, AnneeScolaireUpdate, AnneeScolaireOut,
@@ -193,8 +194,7 @@ def update_etablissement(
 # ============================================================================
 # UPLOAD FICHIERS ÉTABLISSEMENT
 # ============================================================================
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "etablissements")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = dossier_fichiers("etablissements")
 
 @router.post("/etablissements/{id}/upload/{field}", dependencies=[Depends(_require_admin)])
 async def upload_etablissement_file(

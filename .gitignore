@@ -37,6 +37,8 @@ smartschool.db
 # Node.js / Next.js
 node_modules/
 .next/
+# Interface compilée pour l'application installée (desktop/scripts/construire-interface.mjs)
+.next-poste/
 out/
 .nuxt/
 .output/

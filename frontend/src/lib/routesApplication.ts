@@ -90,6 +90,7 @@ export const ROUTES_PUBLIQUES: readonly string[] = [
     '/comptabilite/login',
     '/hors-ligne',
     '/inscription',
+    '/installation',
     '/login',
     '/login/ecole',
     '/selection-etablissement',

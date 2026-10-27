@@ -1,0 +1,15 @@
+{
+  "name": "smartschool-poste",
+  "productName": "SmartSchool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SmartSchool installé sur l'ordinateur de l'école : fonctionne avec ou sans internet, synchronisé avec le cloud.",
+  "main": "main.js",
+  "scripts": {
+    "interface": "node scripts/construire-interface.mjs",
+    "demarrer": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^45.0.0"
+  }
+}
