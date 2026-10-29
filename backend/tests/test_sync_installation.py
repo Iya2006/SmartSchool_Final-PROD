@@ -5,6 +5,7 @@ Le « cloud » est l'application de test elle-même (TestClient, qui est un
 httpx.Client) ; le poste est une base SQLite neuve.
 """
 import time
+from datetime import date
 
 import httpx
 import pytest
@@ -15,9 +16,10 @@ from sqlalchemy.pool import StaticPool
 
 import app.sync.installation as module_installation
 from app.core.database import Base
-from app.models.academique import Eleve, Utilisateur
+from app.models.academique import Appareil, Eleve, Evenement, Utilisateur
+from app.sync.identifiants import appareil_de
 from app.sync.installation import (
-    ErreurInstallation, Installateur, Progression, installer, lire_marqueur,
+    ErreurInstallation, Installateur, Progression, installer, lire_appareil, lire_marqueur,
 )
 from app.sync.instantane import manifeste
 from tests.test_isolation_multi_ecole import Ecole
@@ -121,6 +123,60 @@ def test_coupure_puis_reprise_sans_doublon(client: TestClient, db: Session, tmp_
         n = s.execute(select(func.count()).select_from(Eleve).where(
             Eleve.etablissement_id == a.etab.etablissement_id)).scalar_one()
     assert n == 3
+    # La reprise garde le numéro reçu à la première tentative : un seul poste
+    # enregistré, pas un par essai.
+    assert db.query(Appareil).filter(Appareil.etablissement_id == a.etab.etablissement_id).count() == 1
+
+
+def test_le_poste_installe_cree_dans_sa_propre_plage(client: TestClient, db: Session, tmp_path):
+    a = Ecole(db, "A")
+    poste = _poste_vierge()
+    installer(a.admin.nom_utilisateur, "motdepasse123", client=client, moteur_local=poste,
+              dossier_poste=str(tmp_path), progression=Progression())
+
+    appareil, marqueur = lire_appareil(str(tmp_path)), lire_marqueur(str(tmp_path))
+    assert marqueur["appareil_id"] == appareil["appareil_id"]
+    assert marqueur["rang"] == appareil["rang"] == 1
+    assert appareil["jeton"] and appareil["cle_signature"]
+    with Session(poste) as s:
+        evenement = Evenement(etablissement_id=a.etab.etablissement_id, titre="Hors-ligne",
+                              date_debut=date(2026, 6, 1), cible="TOUS", statut="BROUILLON")
+        s.add(evenement)
+        s.commit()
+        assert appareil_de(evenement.evenement_id) == appareil["appareil_id"]
+
+
+def test_un_poste_d_une_ecole_n_accueille_jamais_une_autre_ecole(client: TestClient, db: Session, tmp_path):
+    a, b = Ecole(db, "A"), Ecole(db, "B")
+    poste = _poste_vierge()
+    with pytest.raises(ErreurInstallation, match="Pas de connexion internet"):
+        installer(a.admin.nom_utilisateur, "motdepasse123", client=_ClientCoupe(client, "ss_inscriptions"),
+                  moteur_local=poste, dossier_poste=str(tmp_path), progression=Progression())
+    # La base locale contient déjà une partie de l'école A.
+    with pytest.raises(ErreurInstallation, match="autre école"):
+        installer(b.admin.nom_utilisateur, "motdepasse123", client=client, moteur_local=poste,
+                  dossier_poste=str(tmp_path), progression=Progression())
+    with Session(poste) as s:
+        assert s.execute(select(func.count()).select_from(Eleve).where(
+            Eleve.etablissement_id == b.etab.etablissement_id)).scalar_one() == 0
+
+
+def test_une_installation_sans_numero_de_poste_est_a_refaire(tmp_path):
+    """Un poste installé avant l'enregistrement des postes n'a pas de plage
+    d'identifiants : il ne doit pas passer pour installé."""
+    (tmp_path / "poste.json").write_text('{"etablissement_id": 1, "etablissement_nom": "École"}', encoding="utf-8")
+    assert lire_marqueur(str(tmp_path)) is None
+    assert Installateur(str(tmp_path), "http://testserver", _poste_vierge()).etat()["statut"] == "NON_INSTALLE"
+
+
+def _attendre_la_fin(inst: Installateur) -> dict:
+    """L'installation tourne dans un fil à part. Un test ne doit jamais se
+    terminer en la laissant tourner : elle écrirait dans la base de test
+    (connexion unique, StaticPool) pendant le test suivant."""
+    fin = time.time() + 30
+    while inst.progression.statut == "EN_COURS" and time.time() < fin:
+        time.sleep(0.05)
+    return inst.etat()
 
 
 def test_installateur_refuse_une_seconde_installation(client: TestClient, db: Session, tmp_path):
@@ -128,10 +184,7 @@ def test_installateur_refuse_une_seconde_installation(client: TestClient, db: Se
     inst = Installateur(str(tmp_path), "http://testserver", _poste_vierge())
     assert inst.demarrer(a.admin.nom_utilisateur, "motdepasse123", client=client)
 
-    fin = time.time() + 30
-    while inst.progression.statut == "EN_COURS" and time.time() < fin:
-        time.sleep(0.05)
-    assert inst.etat()["statut"] == "INSTALLE", inst.etat()
+    assert _attendre_la_fin(inst)["statut"] == "INSTALLE", inst.etat()
 
     assert inst.demarrer(a.admin.nom_utilisateur, "motdepasse123", client=client) is False
     # Au redémarrage du moteur, le marqueur suffit à savoir le poste installé.
@@ -142,14 +195,12 @@ def test_echec_affiche_un_message_sans_trace_technique(client: TestClient, db: S
     a = Ecole(db, "A")
     inst = Installateur(str(tmp_path), "http://testserver", _poste_vierge())
     assert inst.demarrer(a.admin.nom_utilisateur, "faux", client=client)
-    fin = time.time() + 30
-    while inst.progression.statut == "EN_COURS" and time.time() < fin:
-        time.sleep(0.05)
-    etat = inst.etat()
+    etat = _attendre_la_fin(inst)
     assert etat["statut"] == "ECHEC"
     assert etat["erreur"] == "Identifiant ou mot de passe incorrect."
     # Après un échec, on peut relancer.
     assert inst.demarrer(a.admin.nom_utilisateur, "motdepasse123", client=client)
+    assert _attendre_la_fin(inst)["statut"] == "INSTALLE"
 
 
 def test_les_fichiers_de_l_ecole_sont_copies_sur_le_poste(client: TestClient, db: Session, tmp_path):

@@ -112,6 +112,14 @@ def generer_matricule(db: Session, modele, prefixe: str, etablissement_id: int) 
     Au-delà de 99 999 fiches pour une même école le suffixe déborde de sa
     largeur : la séquence reste correcte et unique, seul l'alignement visuel
     est perdu (cas non atteint en pratique).
+
+    Sur un poste hors-ligne, le matricule porte le rang du poste
+    (``ELV-GOTCHA-P2-00042``) et son compteur lui est propre (clé ``ELV@P2``) :
+    deux postes qui inscrivent en même temps ne donnent jamais le même.
     """
-    numero = _numero_suivant(db, modele, prefixe, etablissement_id)
-    return f"{prefixe}-{code_ecole_matricule(db, etablissement_id)}-{numero:0{_LARGEUR}d}"
+    from app.sync.identifiants import segment_du_poste
+
+    segment = segment_du_poste(db)
+    cle = f"{prefixe}@{segment[:-1]}" if segment else prefixe
+    numero = _numero_suivant(db, modele, cle, etablissement_id)
+    return f"{prefixe}-{code_ecole_matricule(db, etablissement_id)}-{segment}{numero:0{_LARGEUR}d}"

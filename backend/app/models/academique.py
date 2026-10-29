@@ -4,12 +4,24 @@ Couvre TOUTES les tables du système : Structure, Académique, Évaluations, Fin
 Vérifiés contre le DDL Oracle original.
 """
 from sqlalchemy import (
-    Column, Integer, String, Date, Float, ForeignKey, DateTime, Text, Numeric, CheckConstraint, Time, JSON, Index,
-    UniqueConstraint
+    BigInteger, Column, Integer, String, Date, Float, ForeignKey, DateTime, Text, Numeric, CheckConstraint, Time,
+    JSON, Index, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
+
+
+# Identifiant de ligne, sur 64 bits. Chaque poste hors-ligne crée ses lignes
+# dans sa propre plage (numéro d'appareil × 2³² + compteur, voir
+# app/sync/identifiants.py) : deux postes ne peuvent jamais attribuer le même
+# identifiant, et un identifiant ne change jamais après coup (le QR d'un reçu
+# imprimé couvre paiement_id). Le cloud reste l'appareil 0 : ses identifiants
+# actuels ne bougent pas. Toute colonne qui contient un identifiant de ligne
+# (clé primaire, clé étrangère, ou référence sans clé étrangère comme
+# ss_messages.destinataire_id) doit être de ce type. Sous SQLite l'entier fait
+# déjà 64 bits, et « INTEGER PRIMARY KEY » y garde l'auto-incrément.
+Identifiant = BigInteger().with_variant(Integer(), "sqlite")
 
 
 # ============================================================================
@@ -19,8 +31,8 @@ from app.core.database import Base
 class Utilisateur(Base):
     """Compte administrateur du système et personnel non-enseignant."""
     __tablename__ = "ss_utilisateurs"
-    utilisateur_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
+    utilisateur_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
     # Facultatifs : un gardien, un agent d'entretien ou un chauffeur n'a aucun
     # écran à consulter, mais il doit exister en base — il faut le payer.
     # L'absence de mot de passe signifie exactement ce qu'elle dit : pas
@@ -69,7 +81,7 @@ class Utilisateur(Base):
 
 class Etablissement(Base):
     __tablename__ = "ss_etablissements"
-    etablissement_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
     code = Column(String(20), unique=True, nullable=False, index=True)
     nom = Column(String(200), nullable=False)
     type_etablissement = Column(String(30), nullable=False)
@@ -112,8 +124,8 @@ class AnneeScolaire(Base):
     __table_args__ = (
         Index("ix_annees_etab_courante", 'etablissement_id', 'est_courante'),
     )
-    annee_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    annee_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(20), nullable=False)
     libelle = Column(String(100), nullable=False)
     date_debut = Column(Date, nullable=False)
@@ -137,8 +149,8 @@ class ParametreEtablissement(Base):
     __table_args__ = (
         Index("ix_parametres_etab_categorie_cle", 'etablissement_id', 'categorie', 'cle'),
     )
-    parametre_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    parametre_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     categorie = Column(String(50), nullable=False)  # IDENTITE, THEME, NOTATION, FINANCE
     cle = Column(String(100), nullable=False)
     valeur = Column(Text, nullable=False)
@@ -155,8 +167,8 @@ class Trimestre(Base):
     __table_args__ = (
         Index("ix_trimestres_annee_numero", 'annee_id', 'numero'),
     )
-    trimestre_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    trimestre_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     code = Column(String(10), nullable=False)
     libelle = Column(String(100), nullable=False)
     numero = Column(Integer, nullable=False)
@@ -169,8 +181,8 @@ class Trimestre(Base):
 
 class Cycle(Base):
     __tablename__ = "ss_cycles"
-    cycle_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    cycle_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(20), nullable=False)
     libelle = Column(String(100), nullable=False)
     ordre = Column(Integer, nullable=False)
@@ -182,8 +194,8 @@ class Cycle(Base):
 
 class Niveau(Base):
     __tablename__ = "ss_niveaux"
-    niveau_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    cycle_id = Column(Integer, ForeignKey("ss_cycles.cycle_id"), nullable=False)
+    niveau_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    cycle_id = Column(Identifiant, ForeignKey("ss_cycles.cycle_id"), nullable=False)
     code = Column(String(20), nullable=False)
     libelle = Column(String(100), nullable=False)
     ordre = Column(Integer, nullable=False)
@@ -201,8 +213,8 @@ class Niveau(Base):
 
 class Salle(Base):
     __tablename__ = "ss_salles"
-    salle_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    salle_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(20), nullable=False)
     nom = Column(String(100), nullable=False)
     capacite = Column(Integer, default=0)
@@ -213,9 +225,9 @@ class Salle(Base):
 class EquipementInformatique(Base):
     """Inventaire du matériel informatique suivi par le responsable IT."""
     __tablename__ = "ss_equipements_informatiques"
-    equipement_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    salle_id = Column(Integer, ForeignKey("ss_salles.salle_id"), nullable=True)
+    equipement_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    salle_id = Column(Identifiant, ForeignKey("ss_salles.salle_id"), nullable=True)
     code = Column(String(50), nullable=False, index=True)
     nom = Column(String(150), nullable=False)
     type_equipement = Column(String(50), default="ORDINATEUR")
@@ -233,9 +245,9 @@ class EquipementInformatique(Base):
 class TicketInformatique(Base):
     """Signalement et suivi des pannes informatiques."""
     __tablename__ = "ss_tickets_informatiques"
-    ticket_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    equipement_id = Column(Integer, ForeignKey("ss_equipements_informatiques.equipement_id"), nullable=True)
+    ticket_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    equipement_id = Column(Identifiant, ForeignKey("ss_equipements_informatiques.equipement_id"), nullable=True)
     titre = Column(String(180), nullable=False)
     description = Column(Text, nullable=False)
     priorite = Column(String(20), default="NORMALE")
@@ -255,16 +267,16 @@ class Classe(Base):
     __table_args__ = (
         Index("ix_classes_etab_annee_statut", 'etablissement_id', 'annee_id', 'statut'),
     )
-    classe_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
-    niveau_id = Column(Integer, ForeignKey("ss_niveaux.niveau_id"), nullable=False)
-    salle_id = Column(Integer, ForeignKey("ss_salles.salle_id"))
+    classe_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    niveau_id = Column(Identifiant, ForeignKey("ss_niveaux.niveau_id"), nullable=False)
+    salle_id = Column(Identifiant, ForeignKey("ss_salles.salle_id"))
     code = Column(String(30), nullable=False)
     libelle = Column(String(150), nullable=False)
     capacite_max = Column(Integer, default=50)
     effectif_actuel = Column(Integer, default=0)
-    professeur_principal = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"))
+    professeur_principal = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"))
     statut = Column(String(20), default="ACTIVE", nullable=False)
 
     etablissement = relationship("Etablissement", back_populates="classes")
@@ -288,8 +300,8 @@ class Eleve(Base):
     __table_args__ = (
         Index("ix_eleves_etablissement", 'etablissement_id'),
     )
-    eleve_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    eleve_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     matricule = Column(String(30), unique=True, nullable=False, index=True)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
@@ -337,8 +349,8 @@ class Parent(Base):
     (index uq_parents_etab_*, migration 2026_08_multi_01).
     """
     __tablename__ = "ss_parents"
-    parent_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    parent_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
     sexe = Column(String(1))
@@ -357,9 +369,9 @@ class Parent(Base):
 
 class EleveParent(Base):
     __tablename__ = "ss_eleve_parent"
-    eleve_parent_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=False)
-    parent_id = Column(Integer, ForeignKey("ss_parents.parent_id"), nullable=False)
+    eleve_parent_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    eleve_id = Column(Identifiant, ForeignKey("ss_eleves.eleve_id"), nullable=False)
+    parent_id = Column(Identifiant, ForeignKey("ss_parents.parent_id"), nullable=False)
     lien_parente = Column(String(30), nullable=False)
     est_contact_principal = Column(String(1), default="N")
     est_responsable_financier = Column(String(1), default="N")
@@ -380,8 +392,8 @@ class Enseignant(Base):
     n'ajouterait rien.
     """
     __tablename__ = "ss_enseignants"
-    enseignant_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    enseignant_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     matricule = Column(String(30), unique=True, nullable=False, index=True)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
@@ -428,8 +440,8 @@ class Enseignant(Base):
 
 class Matiere(Base):
     __tablename__ = "ss_matieres"
-    matiere_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    cycle_id = Column(Integer, ForeignKey("ss_cycles.cycle_id"), nullable=False)
+    matiere_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    cycle_id = Column(Identifiant, ForeignKey("ss_cycles.cycle_id"), nullable=False)
     code = Column(String(20), nullable=False)
     libelle = Column(String(150), nullable=False)
     coefficient_defaut = Column(Numeric(3, 1), default=1, nullable=False)
@@ -449,9 +461,9 @@ class ClasseMatiere(Base):
         Index("ix_classe_matieres_classe_active", 'classe_id', 'est_active'),
         Index("ix_classe_matieres_matiere", 'matiere_id'),
     )
-    classe_matiere_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    classe_matiere_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     coefficient = Column(Numeric(3, 1), default=1, nullable=False)
     nb_heures_semaine = Column(Integer, default=2)
     est_active = Column(String(1), default="O")
@@ -462,10 +474,10 @@ class ClasseMatiere(Base):
 class CreneauEmploi(Base):
     """Créneau horaire dans l'emploi du temps d'une classe"""
     __tablename__ = "ss_creneaux_emploi"
-    creneau_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
-    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    creneau_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    enseignant_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
     # Un des sept jours. Les jours REELLEMENT ouverts sont propres a chaque
     # ecole (Parametres > Emploi du temps) : cf. `_jours_ouvres` dans
     # app/api/emploi_du_temps.py.
@@ -473,7 +485,7 @@ class CreneauEmploi(Base):
     heure_debut = Column(String(5), nullable=False)  # "08:00"
     heure_fin = Column(String(5), nullable=False)    # "09:00"
     salle = Column(String(50))
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), default=1)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), default=1)
     statut = Column(String(20), default="ACTIVE")
 
 
@@ -487,11 +499,11 @@ class Affectation(Base):
         Index("ix_affectations_classe_matiere_statut", 'classe_id', 'matiere_id', 'statut'),
         Index("ix_affectations_annee_statut", 'annee_id', 'statut'),
     )
-    affectation_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    affectation_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    enseignant_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     nb_heures_semaine = Column(Numeric(3, 1), default=0)
     # EXCEPTION de tarif pour cette affectation precise. Nullable : le taux
     # de l'enseignant s'applique partout, on ne renseigne ici que la ou il
@@ -513,16 +525,16 @@ class Seance(Base):
     docs/MULTI_ECOLES_REGLES_DEV.md §5) — pas de colonne etablissement_id
     propre."""
     __tablename__ = "ss_seances"
-    seance_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    creneau_id = Column(Integer, ForeignKey("ss_creneaux_emploi.creneau_id"), nullable=True)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    seance_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    creneau_id = Column(Identifiant, ForeignKey("ss_creneaux_emploi.creneau_id"), nullable=True)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     # Enseignant PRÉVU (snapshot à la génération depuis le créneau, jamais
     # réécrit après coup) vs RÉEL (posé à "Commencer" ; diffère du prévu
     # seulement si un remplaçant a été affecté via PUT /remplacer).
-    enseignant_prevu_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
-    enseignant_reel_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    enseignant_prevu_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    enseignant_reel_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
     date_seance = Column(Date, nullable=False)
     heure_debut_prevue = Column(String(5), nullable=False)  # "08:00"
     heure_fin_prevue = Column(String(5), nullable=False)
@@ -558,10 +570,10 @@ class Inscription(Base):
         Index("ix_inscriptions_eleve_statut", 'eleve_id', 'statut'),
         Index("ix_inscriptions_annee", 'annee_id'),
     )
-    inscription_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    inscription_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    eleve_id = Column(Identifiant, ForeignKey("ss_eleves.eleve_id"), nullable=False)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     date_inscription = Column(Date, server_default=func.current_date())
     type_inscription = Column(String(30), default="NOUVELLE")
     statut = Column(String(20), default="ACTIVE", nullable=False)
@@ -574,8 +586,8 @@ class Inscription(Base):
     # Promotion V2 (Phase 2) : la proposition pour l'année suivante vit sur
     # CETTE inscription (celle qui se termine) tant qu'elle n'est pas
     # matérialisée par la réinscription — voir statut_reinscription.
-    niveau_cible_id = Column(Integer, ForeignKey("ss_niveaux.niveau_id"), nullable=True)
-    classe_cible_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
+    niveau_cible_id = Column(Identifiant, ForeignKey("ss_niveaux.niveau_id"), nullable=True)
+    classe_cible_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=True)
     statut_promotion = Column(String(20), nullable=True)  # PROPOSE | VALIDE
 
     # Réinscription V2 (Phase 2) : indépendante de la promotion — ne devient
@@ -599,8 +611,8 @@ class ResultatOfficielExamen(Base):
     n'écrase jamais la saisie ministérielle.
     """
     __tablename__ = "ss_resultats_officiels_examen"
-    resultat_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False, unique=True)
+    resultat_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    inscription_id = Column(Identifiant, ForeignKey("ss_inscriptions.inscription_id"), nullable=False, unique=True)
     examen_national = Column(String(30), nullable=True)  # CEE | BEPC | BAC (copié de Niveau)
     resultat = Column(String(20), nullable=False)  # ADMIS | NON_ADMIS
     date_saisie = Column(Date, server_default=func.current_date())
@@ -626,8 +638,8 @@ class TypeEvaluation(Base):
     « COMPO ».
     """
     __tablename__ = "ss_types_evaluation"
-    type_eval_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    type_eval_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(20), nullable=False)
     libelle = Column(String(100), nullable=False)
     # Legacy : jamais lu par le moteur de notation, conservé pour compat (cf. MIGRATION_NOTES.md)
@@ -646,16 +658,16 @@ class EvaluationSession(Base):
     groupe, au lieu de le répéter matière par matière.
     """
     __tablename__ = "ss_evaluation_sessions"
-    session_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
-    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=False)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    session_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    trimestre_id = Column(Identifiant, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
+    type_eval_id = Column(Identifiant, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=False)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     libelle = Column(String(200), nullable=False)
     date_evaluation = Column(Date, nullable=False)
     note_sur = Column(Numeric(5, 2), default=20)
     est_coefficientee = Column(String(1), default="O", nullable=False)
-    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    enseignant_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
     statut = Column(String(20), default="PLANIFIEE", nullable=False)
 
 
@@ -670,19 +682,19 @@ class Evaluation(Base):
         Index("ix_evaluations_matiere", 'matiere_id'),
         Index("ix_evaluations_type_eval", 'type_eval_id'),
     )
-    evaluation_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
-    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=False)
-    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    evaluation_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    trimestre_id = Column(Identifiant, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
+    type_eval_id = Column(Identifiant, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=False)
+    enseignant_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
     libelle = Column(String(200), nullable=False)
     date_evaluation = Column(Date, nullable=False)
     note_sur = Column(Numeric(5, 2), default=20)
     coefficient = Column(Numeric(3, 1), default=1)
     statut = Column(String(20), default="PLANIFIEE")
     # NULL pour les évaluations mono-matière (création directe / portail enseignant)
-    session_id = Column(Integer, ForeignKey("ss_evaluation_sessions.session_id"), nullable=True)
+    session_id = Column(Identifiant, ForeignKey("ss_evaluation_sessions.session_id"), nullable=True)
     # Copié depuis la session : évite de joindre EvaluationSession dans le moteur de calcul
     est_coefficientee = Column(String(1), default="O", nullable=False)
     # NULL = utiliser le coefficient du type ; sinon surcharge ponctuelle
@@ -702,10 +714,10 @@ class PeriodeEpreuve(Base):
     table. Voir `epreuves_retenues_periode()` dans services/notation.py.
     """
     __tablename__ = "ss_periode_epreuves"
-    periode_epreuve_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
-    evaluation_id = Column(Integer, ForeignKey("ss_evaluations.evaluation_id"), nullable=False)
+    periode_epreuve_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    trimestre_id = Column(Identifiant, ForeignKey("ss_trimestres.trimestre_id"), nullable=False)
+    evaluation_id = Column(Identifiant, ForeignKey("ss_evaluations.evaluation_id"), nullable=False)
     created_date = Column(DateTime, server_default=func.now())
     created_by = Column(String(100), nullable=True)
 
@@ -719,9 +731,9 @@ class Note(Base):
         Index("ix_notes_evaluation_inscription", 'evaluation_id', 'inscription_id'),
         Index("ix_notes_inscription", 'inscription_id'),
     )
-    note_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    evaluation_id = Column(Integer, ForeignKey("ss_evaluations.evaluation_id"), nullable=False)
-    inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
+    note_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    evaluation_id = Column(Identifiant, ForeignKey("ss_evaluations.evaluation_id"), nullable=False)
+    inscription_id = Column(Identifiant, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
     valeur = Column(Numeric(5, 2))
     est_absent = Column(String(1), default="N")
     observation = Column(String(300))
@@ -739,9 +751,9 @@ class Bulletin(Base):
     __table_args__ = (
         Index("ix_bulletins_inscription_type", 'inscription_id', 'type_bulletin'),
     )
-    bulletin_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
-    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"))
+    bulletin_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    inscription_id = Column(Identifiant, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
+    trimestre_id = Column(Identifiant, ForeignKey("ss_trimestres.trimestre_id"))
     type_bulletin = Column(String(20), default="TRIMESTRIEL")
     moyenne_generale = Column(Numeric(5, 2))
     rang = Column(Integer)
@@ -763,9 +775,9 @@ class BulletinLigne(Base):
         Index("ix_bulletin_lignes_bulletin", 'bulletin_id'),
         Index("ix_bulletin_lignes_matiere", 'matiere_id'),
     )
-    ligne_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    bulletin_id = Column(Integer, ForeignKey("ss_bulletins.bulletin_id", ondelete="CASCADE"), nullable=False)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    ligne_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    bulletin_id = Column(Identifiant, ForeignKey("ss_bulletins.bulletin_id", ondelete="CASCADE"), nullable=False)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     moyenne_matiere = Column(Numeric(5, 2))
     moyenne_classe = Column(Numeric(5, 2))
     note_min = Column(Numeric(5, 2))
@@ -793,8 +805,8 @@ class TypeFrais(Base):
     (uq_types_frais_etab_code) : deux écoles ont chacune leur « SCOL ».
     """
     __tablename__ = "ss_types_frais"
-    type_frais_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    type_frais_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(20), nullable=False)
     libelle = Column(String(150), nullable=False)
     categorie = Column(String(50), nullable=False)
@@ -819,23 +831,23 @@ class TarifClasse(Base):
     deux écrans lisent/écrivent la même table, donc restent automatiquement synchronisés.
     """
     __tablename__ = "ss_tarifs_classe"
-    tarif_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    type_frais_id = Column(Integer, ForeignKey("ss_types_frais.type_frais_id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    tarif_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    type_frais_id = Column(Identifiant, ForeignKey("ss_types_frais.type_frais_id"), nullable=False)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
     montant = Column(Numeric(12, 2), nullable=False)
 
 
 class Facture(Base):
     __tablename__ = "ss_factures"
-    facture_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
-    type_frais_id = Column(Integer, ForeignKey("ss_types_frais.type_frais_id"), nullable=True)
+    facture_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    inscription_id = Column(Identifiant, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
+    type_frais_id = Column(Identifiant, ForeignKey("ss_types_frais.type_frais_id"), nullable=True)
     # Dénormalisé depuis Inscription.annee_id — avant, la seule façon de savoir
     # à quelle année une facture appartient était de remonter par la jointure
     # Inscription, ce qui rendait le verrouillage par année (clôture comptable)
     # coûteux à vérifier. Nullable : backfillé pour les lignes existantes par
     # script de migration, jamais recalculé après coup.
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=True)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=True)
     numero_facture = Column(String(30), unique=True, nullable=False)
     date_facture = Column(Date, server_default=func.current_date())
     montant_total = Column(Numeric(12, 2), default=0, nullable=False)
@@ -858,8 +870,8 @@ class Facture(Base):
 
 class EcheanceFacture(Base):
     __tablename__ = "ss_echeances_factures"
-    echeance_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    facture_id = Column(Integer, ForeignKey("ss_factures.facture_id"), nullable=False)
+    echeance_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    facture_id = Column(Identifiant, ForeignKey("ss_factures.facture_id"), nullable=False)
     libelle = Column(String(100), nullable=False)
     date_limite = Column(Date, nullable=False)
     montant_attendu = Column(Numeric(12, 2), nullable=False)
@@ -874,11 +886,11 @@ class EcheanceFacture(Base):
 
 class Paiement(Base):
     __tablename__ = "ss_paiements"
-    paiement_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    facture_id = Column(Integer, ForeignKey("ss_factures.facture_id"), nullable=False)
+    paiement_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    facture_id = Column(Identifiant, ForeignKey("ss_factures.facture_id"), nullable=False)
     # Dénormalisé depuis Facture.annee_id — même raison que Facture.annee_id.
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=True)
-    echeance_id = Column(Integer, ForeignKey("ss_echeances_factures.echeance_id"), nullable=True)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=True)
+    echeance_id = Column(Identifiant, ForeignKey("ss_echeances_factures.echeance_id"), nullable=True)
     numero_recu = Column(String(30), unique=True, nullable=False)
     date_paiement = Column(Date, server_default=func.current_date())
     montant = Column(Numeric(12, 2), nullable=False)
@@ -889,6 +901,10 @@ class Paiement(Base):
     motif_annulation = Column(String(500), nullable=True)
     created_by = Column(String(100))
     created_date = Column(DateTime, server_default=func.now())
+    # Code du QR, figé à l'émission avec la clé de l'appareil qui encaisse
+    # (app/core/recu_paiement.py). Un poste qui réimprime le reçu d'un autre
+    # appareil n'a pas sa clé : il relit ce code au lieu de le recalculer.
+    code_verification = Column(String(20), nullable=True)
 
     __table_args__ = (
         Index("ix_paiements_facture", 'facture_id'),
@@ -898,9 +914,9 @@ class Paiement(Base):
 
 class Depense(Base):
     __tablename__ = "ss_depenses"
-    depense_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    depense_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     categorie = Column(String(50), nullable=False)
     libelle = Column(String(300), nullable=False)
     montant = Column(Numeric(12, 2), nullable=False)
@@ -911,8 +927,8 @@ class Depense(Base):
     mode_paiement = Column(String(30), nullable=True)
     facture_url = Column(String(500), nullable=True)
     source_fonds = Column(String(30), nullable=True)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
-    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=True)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=True)
+    eleve_id = Column(Identifiant, ForeignKey("ss_eleves.eleve_id"), nullable=True)
     departement = Column(String(100), nullable=True)
 
     __table_args__ = (
@@ -926,8 +942,8 @@ class Depense(Base):
 
 class Presence(Base):
     __tablename__ = "ss_presences"
-    presence_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    inscription_id = Column(Integer, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
+    presence_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    inscription_id = Column(Identifiant, ForeignKey("ss_inscriptions.inscription_id"), nullable=False)
     date_presence = Column(Date, nullable=False)
     demi_journee = Column(String(10), nullable=False)
     statut_presence = Column(String(20), nullable=False)
@@ -936,7 +952,7 @@ class Presence(Base):
     # Séance pédagogique (matière + enseignant) dont cette présence relève —
     # NULL = ligne historique/legacy (appel de classe, saisie admin en
     # masse, sync offline) : jamais backfillée, jamais de matière inventée.
-    seance_id = Column(Integer, ForeignKey("ss_seances.seance_id"), nullable=True)
+    seance_id = Column(Identifiant, ForeignKey("ss_seances.seance_id"), nullable=True)
     # Module offline-first (sync.py) : détection de conflit à la resynchronisation
     # (Last-Write-Wins comparé à `base_updated_at` envoyé par le client).
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -949,9 +965,9 @@ class Presence(Base):
 
 class Incident(Base):
     __tablename__ = "ss_incidents"
-    incident_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=False)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    incident_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    eleve_id = Column(Identifiant, ForeignKey("ss_eleves.eleve_id"), nullable=False)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     date_incident = Column(Date, server_default=func.current_date())
     type_incident = Column(String(50), nullable=False)
     gravite = Column(String(20), nullable=False)
@@ -977,8 +993,8 @@ class DemandeEmploi(Base):
     NOT NULL car ajoutée sur une table vide (vérifié réellement sur
     Supabase avant migration, voir migrations/lot5_communication_etablissement.py)."""
     __tablename__ = "ss_demandes_emploi"
-    demande_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    demande_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     titre = Column(String(200), nullable=False)
     description = Column(Text)
     objet_type = Column(String(30), default="EMPLOI")  # EMPLOI, REUNION, GENERAL...
@@ -991,7 +1007,7 @@ class DemandeEmploi(Base):
     # Semestre » reçu deux fois en deux mois ne dit pas s'il s'agit de la même
     # épreuve. Nullable : une campagne peut viser toute la période.
     # Voir migrations/2026_08_examens_01_type_epreuve.py
-    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=True)
+    type_eval_id = Column(Identifiant, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=True)
     # « avant le 7 novembre » : sans échéance, une relance ne s'appuie sur rien.
     date_limite = Column(Date, nullable=True)
     date_creation = Column(DateTime, server_default=func.now())
@@ -1007,17 +1023,17 @@ class Message(Base):
     plateforme, pas seulement l'école concernée. NOT NULL car ajoutée sur
     une table vide (vérifié réellement sur Supabase avant migration)."""
     __tablename__ = "ss_messages"
-    message_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
+    message_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    demande_id = Column(Identifiant, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
     expediteur_type = Column(String(20), nullable=False)  # ADMIN, ENSEIGNANT, PARENT
-    expediteur_id = Column(Integer, nullable=True)  # enseignant_id or parent_id
+    expediteur_id = Column(Identifiant, nullable=True)  # enseignant_id or parent_id
     destinataire_type = Column(String(30), nullable=False)  # ADMIN, ENSEIGNANT, TOUS_ENSEIGNANTS, PARENT, TOUS_PARENTS, CLASSE_PARENTS
-    destinataire_id = Column(Integer, nullable=True)  # enseignant_id or parent_id or classe_id
+    destinataire_id = Column(Identifiant, nullable=True)  # enseignant_id or parent_id or classe_id
     objet_type = Column(String(30), default="GENERAL")  # EMPLOI, DISCIPLINE, GENERAL, REUNION, EXAMENS, PAIEMENT, BULLETIN
     sujet = Column(String(300), nullable=False)
     contenu = Column(Text)
-    parent_message_id = Column(Integer, ForeignKey("ss_messages.message_id"), nullable=True)
+    parent_message_id = Column(Identifiant, ForeignKey("ss_messages.message_id"), nullable=True)
     statut = Column(String(20), default="ENVOYE")  # ENVOYE, LU, REPONDU, ARCHIVE
     date_envoi = Column(DateTime, server_default=func.now())
     date_lecture = Column(DateTime, nullable=True)
@@ -1039,10 +1055,10 @@ class MessageMasque(Base):
       - ENSEIGNANT / PARENT / ELEVE : viewer_id = l'identifiant de la personne.
     """
     __tablename__ = "ss_messages_masques"
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    message_id = Column(Integer, ForeignKey("ss_messages.message_id"), nullable=False)
+    id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    message_id = Column(Identifiant, ForeignKey("ss_messages.message_id"), nullable=False)
     viewer_type = Column(String(20), nullable=False)  # ADMIN, ENSEIGNANT, PARENT, ELEVE
-    viewer_id = Column(Integer, nullable=False)
+    viewer_id = Column(Identifiant, nullable=False)
     date_masquage = Column(DateTime, server_default=func.now())
     __table_args__ = (
         UniqueConstraint("message_id", "viewer_type", "viewer_id", name="uq_message_masque"),
@@ -1052,10 +1068,10 @@ class MessageMasque(Base):
 class Disponibilite(Base):
     """Disponibilité soumise par un enseignant en réponse à une demande."""
     __tablename__ = "ss_disponibilites"
-    disponibilite_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=False)
-    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
+    disponibilite_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    demande_id = Column(Identifiant, ForeignKey("ss_demandes_emploi.demande_id"), nullable=False)
+    enseignant_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
     jour = Column(String(10), nullable=False)       # LUNDI..VENDREDI
     heure_debut = Column(String(5), nullable=False)  # "08:00"
     heure_fin = Column(String(5), nullable=False)    # "09:00"
@@ -1079,15 +1095,15 @@ class SujetExamen(Base):
         Index("ix_sujets_examen_trimestre", 'trimestre_id'),
         Index("ix_sujets_examen_demande", 'demande_id'),
     )
-    sujet_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
-    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
+    sujet_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    demande_id = Column(Identifiant, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
+    enseignant_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=True)
     # Période réelle de l'établissement. `trimestre` (numéro) est conservée en
     # miroir pour les clients existants, mais c'est `trimestre_id` qui fait foi :
     # une école peut avoir 2 semestres ou 3 trimestres, nommés librement.
-    trimestre_id = Column(Integer, ForeignKey("ss_trimestres.trimestre_id"), nullable=True)
+    trimestre_id = Column(Identifiant, ForeignKey("ss_trimestres.trimestre_id"), nullable=True)
     trimestre = Column(Integer, nullable=True)
     titre = Column(String(300), nullable=False)
     fichier_nom = Column(String(255), nullable=False)
@@ -1111,35 +1127,35 @@ class EmploiExamen(Base):
     car ajoutée sur une table vide (vérifié réellement sur Supabase avant
     migration, voir migrations/lot4_examens_etablissement.py)."""
     __tablename__ = "ss_emplois_examen"
-    emploi_examen_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    demande_id = Column(Integer, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
+    emploi_examen_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    demande_id = Column(Identifiant, ForeignKey("ss_demandes_emploi.demande_id"), nullable=True)
     trimestre = Column(Integer, nullable=False)
     # Le calendrier porte les dates d'UNE épreuve : la 2ᵉ évaluation, la
     # composition du 1er semestre. Deux calendriers du même semestre étaient
     # indiscernables sans lire leurs créneaux.
-    type_eval_id = Column(Integer, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=True)
+    type_eval_id = Column(Identifiant, ForeignKey("ss_types_evaluation.type_eval_id"), nullable=True)
     titre = Column(String(255), nullable=False)
     date_debut = Column(Date, nullable=False)
     date_fin = Column(Date, nullable=False)
     statut = Column(String(30), default="BROUILLON")  # BROUILLON, PUBLIE
-    annee_id = Column(Integer, default=1)
+    annee_id = Column(Identifiant, default=1)
     date_creation = Column(DateTime, server_default=func.now())
 
 
 class CreneauExamen(Base):
     """Créneau individuel dans un emploi d'examen."""
     __tablename__ = "ss_creneaux_examen"
-    creneau_examen_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    emploi_examen_id = Column(Integer, ForeignKey("ss_emplois_examen.emploi_examen_id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    creneau_examen_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    emploi_examen_id = Column(Identifiant, ForeignKey("ss_emplois_examen.emploi_examen_id"), nullable=False)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     date_examen = Column(Date, nullable=False)
     heure_debut = Column(String(5), nullable=False)
     heure_fin = Column(String(5), nullable=False)
     salle = Column(String(100), nullable=True)
     surveillant_type = Column(String(20), default="ENSEIGNANT")  # ENSEIGNANT, EXTERNE
-    surveillant_id = Column(Integer, nullable=True)  # enseignant_id si ENSEIGNANT
+    surveillant_id = Column(Identifiant, nullable=True)  # enseignant_id si ENSEIGNANT
     surveillant_nom = Column(String(200), nullable=True)  # nom complet si EXTERNE
     statut = Column(String(20), default="ACTIVE")
 
@@ -1151,10 +1167,10 @@ class CreneauExamen(Base):
 class Devoir(Base):
     """Devoir assigné par un enseignant à une classe."""
     __tablename__ = "ss_devoirs"
-    devoir_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=False)
-    matiere_id = Column(Integer, ForeignKey("ss_matieres.matiere_id"), nullable=False)
+    devoir_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    enseignant_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=False)
+    matiere_id = Column(Identifiant, ForeignKey("ss_matieres.matiere_id"), nullable=False)
     titre = Column(String(300), nullable=False)
     description = Column(Text, nullable=True)  # Contenu texte du devoir
     type_devoir = Column(String(30), default="EXERCICE")  # EXERCICE, RECHERCHE, LECTURE, PROJET
@@ -1173,19 +1189,19 @@ class Devoir(Base):
 class FournitureScolaire(Base):
     """Liste des fournitures scolaires requises par classe/niveau."""
     __tablename__ = "ss_fournitures_scolaires"
-    fourniture_id  = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    fourniture_id  = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
     # `default=1` retiré (chantier multi-écoles) : une création sans valeur
     # explicite rattachait la fourniture à l'établissement 1. La valeur provient
     # désormais toujours du compte authentifié, et la colonne est obligatoire.
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     nom            = Column(String(200), nullable=False)
     description    = Column(Text, nullable=True)
     categorie      = Column(String(50), default="MATERIEL")   # CAHIER, LIVRE, STYLO, UNIFORME, MATERIEL, AUTRE
     quantite       = Column(Integer, default=1)
     prix_unitaire  = Column(Numeric(10, 2), nullable=True)
     unite          = Column(String(30), default="unité")       # unité, paire, set, kg …
-    niveau_id      = Column(Integer, ForeignKey("ss_niveaux.niveau_id"), nullable=True)
-    classe_id      = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
+    niveau_id      = Column(Identifiant, ForeignKey("ss_niveaux.niveau_id"), nullable=True)
+    classe_id      = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=True)
     obligatoire    = Column(String(1), default="O")            # O / N
     statut         = Column(String(20), default="ACTIF")       # ACTIF / INACTIF
     annee_scolaire = Column(String(20), default="2025-2026")
@@ -1195,9 +1211,9 @@ class FournitureScolaire(Base):
 class RessourcePedagogique(Base):
     __tablename__ = "ss_ressources_pedagogiques"
     
-    ressource_id   = Column(Integer, primary_key=True, index=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    enseignant_id  = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
+    ressource_id   = Column(Identifiant, primary_key=True, index=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    enseignant_id  = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=False)
     titre          = Column(String(200), nullable=False)
     description    = Column(String(1000), nullable=True)
     url            = Column(String(500), nullable=False)
@@ -1212,11 +1228,11 @@ class RessourcePedagogique(Base):
 class PhotoEnAttente(Base):
     __tablename__ = "ss_photos_en_attente"
 
-    photo_id       = Column(Integer, primary_key=True, index=True)
+    photo_id       = Column(Identifiant, primary_key=True, index=True)
     entity_type    = Column(String(50), nullable=False) # 'eleve', 'parent'
-    entity_id      = Column(Integer, nullable=False)
+    entity_id      = Column(Identifiant, nullable=False)
     uploader_type  = Column(String(50), nullable=False) # 'eleve', 'parent'
-    uploader_id    = Column(Integer, nullable=False)
+    uploader_id    = Column(Identifiant, nullable=False)
     file_path      = Column(String(500), nullable=False)
     statut         = Column(String(50), default="EN_ATTENTE") # EN_ATTENTE, REJETEE
     date_upload    = Column(DateTime, server_default=func.now())
@@ -1230,11 +1246,11 @@ class Ouvrage(Base):
     """Catalogue central des ouvrages de la bibliothèque scolaire."""
     __tablename__ = "ss_ouvrages"
 
-    ouvrage_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    ouvrage_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
     # `default=1` retiré (chantier multi-écoles) : une création sans valeur
     # explicite rattachait l'ouvrage au catalogue de l'établissement 1. La
     # valeur provient désormais toujours du compte authentifié.
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     isbn = Column(String(20), nullable=True)
     code_interne = Column(String(30), nullable=False, index=True)
     titre = Column(String(300), nullable=False, index=True)
@@ -1264,8 +1280,8 @@ class Exemplaire(Base):
     """Exemplaire physique d'un ouvrage."""
     __tablename__ = "ss_exemplaires"
 
-    exemplaire_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    ouvrage_id = Column(Integer, ForeignKey("ss_ouvrages.ouvrage_id"), nullable=False)
+    exemplaire_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    ouvrage_id = Column(Identifiant, ForeignKey("ss_ouvrages.ouvrage_id"), nullable=False)
     code_exemplaire = Column(String(30), nullable=False, unique=True, index=True)
     etat = Column(String(20), default="BON", nullable=False)
     statut = Column(String(20), default="DISPONIBLE", nullable=False)
@@ -1282,10 +1298,10 @@ class Emprunt(Base):
     """Prêt d'un exemplaire à un élève ou à un enseignant."""
     __tablename__ = "ss_emprunts"
 
-    emprunt_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    exemplaire_id = Column(Integer, ForeignKey("ss_exemplaires.exemplaire_id"), nullable=False)
-    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=True)
-    enseignant_id = Column(Integer, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
+    emprunt_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    exemplaire_id = Column(Identifiant, ForeignKey("ss_exemplaires.exemplaire_id"), nullable=False)
+    eleve_id = Column(Identifiant, ForeignKey("ss_eleves.eleve_id"), nullable=True)
+    enseignant_id = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"), nullable=True)
     date_emprunt = Column(Date, server_default=func.current_date(), nullable=False)
     date_retour_prevue = Column(Date, nullable=False)
     date_retour_effective = Column(Date, nullable=True)
@@ -1310,8 +1326,8 @@ class Emprunt(Base):
 
 class Comptable(Base):
     __tablename__ = "ss_comptables"
-    comptable_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    comptable_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     nom_utilisateur = Column(String(100), unique=True, nullable=False, index=True)
     mot_de_passe = Column(String(255), nullable=False)
     nom = Column(String(100), nullable=False)
@@ -1333,8 +1349,8 @@ class ParametreComptabilite(Base):
     __table_args__ = (
         UniqueConstraint("etablissement_id", "cle", name="uq_parametre_etablissement_cle"),
     )
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     cle = Column(String(50), nullable=False) # ex: 'PIN_ACCESS'
     valeur = Column(String(255), nullable=False)
 
@@ -1348,8 +1364,8 @@ class ExerciceComptable(Base):
     __table_args__ = (
         UniqueConstraint("etablissement_id", "annee", name="uq_exercice_etablissement_annee"),
     )
-    exercice_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    exercice_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     annee = Column(String(10), nullable=False) # ex: '2026'
     date_debut = Column(Date, nullable=False)
     date_fin = Column(Date, nullable=False)
@@ -1357,14 +1373,14 @@ class ExerciceComptable(Base):
 
 class JournalComptable(Base):
     __tablename__ = "ss_journaux_comptables"
-    journal_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    journal_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
     code = Column(String(10), unique=True, nullable=False) # ex: 'AC', 'VE', 'BQ', 'OD'
     nom = Column(String(100), nullable=False)
     type_journal = Column(String(30), nullable=False) # ACHAT, VENTE, TRESORERIE, OD
 
 class CompteComptable(Base):
     __tablename__ = "ss_comptes_comptables"
-    compte_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    compte_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
     numero_compte = Column(String(20), unique=True, nullable=False, index=True)
     libelle = Column(String(200), nullable=False)
     type_compte = Column(String(30), nullable=False) # ACTIF, PASSIF, CHARGE, PRODUIT
@@ -1375,13 +1391,13 @@ class EcritureComptable(Base):
     Passé en NOT NULL (table vérifiée vide sur Supabase avant migration) pour
     empêcher structurellement toute future écriture sans établissement."""
     __tablename__ = "ss_ecritures_comptables"
-    ecriture_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    ecriture_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     date_ecriture = Column(Date, nullable=False)
-    journal_id = Column(Integer, ForeignKey("ss_journaux_comptables.journal_id"), nullable=False)
+    journal_id = Column(Identifiant, ForeignKey("ss_journaux_comptables.journal_id"), nullable=False)
     reference = Column(String(50))
     libelle = Column(String(255), nullable=False)
-    exercice_id = Column(Integer, ForeignKey("ss_exercices_comptables.exercice_id"), nullable=False)
+    exercice_id = Column(Identifiant, ForeignKey("ss_exercices_comptables.exercice_id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     
     etablissement = relationship("Etablissement")
@@ -1389,15 +1405,15 @@ class EcritureComptable(Base):
 
 class LigneEcriture(Base):
     __tablename__ = "ss_lignes_ecritures"
-    ligne_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    ecriture_id = Column(Integer, ForeignKey("ss_ecritures_comptables.ecriture_id"), nullable=False)
-    compte_id = Column(Integer, ForeignKey("ss_comptes_comptables.compte_id"), nullable=False)
+    ligne_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    ecriture_id = Column(Identifiant, ForeignKey("ss_ecritures_comptables.ecriture_id"), nullable=False)
+    compte_id = Column(Identifiant, ForeignKey("ss_comptes_comptables.compte_id"), nullable=False)
     debit = Column(Numeric(15, 2), default=0.00)
     credit = Column(Numeric(15, 2), default=0.00)
     description = Column(String(255))
-    classe_id = Column(Integer, ForeignKey("ss_classes.classe_id"), nullable=True)
-    eleve_id = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=True)
-    fournisseur_id = Column(Integer, ForeignKey("ss_fournisseurs.fournisseur_id"), nullable=True)
+    classe_id = Column(Identifiant, ForeignKey("ss_classes.classe_id"), nullable=True)
+    eleve_id = Column(Identifiant, ForeignKey("ss_eleves.eleve_id"), nullable=True)
+    fournisseur_id = Column(Identifiant, ForeignKey("ss_fournisseurs.fournisseur_id"), nullable=True)
     departement = Column(String(100), nullable=True)
     
     ecriture = relationship("EcritureComptable", back_populates="lignes")
@@ -1408,8 +1424,8 @@ class LigneEcriture(Base):
 
 class Fournisseur(Base):
     __tablename__ = "ss_fournisseurs"
-    fournisseur_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    fournisseur_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(50), unique=True, nullable=False, index=True)
     nom = Column(String(200), nullable=False)
     telephone = Column(String(50))
@@ -1420,9 +1436,9 @@ class Fournisseur(Base):
 
 class Budget(Base):
     __tablename__ = "ss_budgets"
-    budget_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    annee_id = Column(Integer, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
+    budget_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    annee_id = Column(Identifiant, ForeignKey("ss_annees_scolaires.annee_id"), nullable=False)
     code = Column(String(50), nullable=False, index=True)
     libelle = Column(String(200), nullable=False)
     montant_alloue = Column(Numeric(15, 2), nullable=False, default=0.00)
@@ -1431,8 +1447,8 @@ class Budget(Base):
 
 class Immobilisation(Base):
     __tablename__ = "ss_immobilisations"
-    immobilisation_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    immobilisation_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(50), nullable=False, index=True)
     libelle = Column(String(200), nullable=False)
     categorie = Column(String(50), nullable=False) # ex: 'MATERIEL_INFORMATIQUE', 'VEHICULE', 'BATIMENT', 'MOBILIER'
@@ -1446,8 +1462,8 @@ class Immobilisation(Base):
 
 class Employe(Base):
     __tablename__ = "ss_employes"
-    employe_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    employe_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     nom = Column(String(100), nullable=False)
     prenom = Column(String(150), nullable=False)
     poste = Column(String(100), nullable=False) # Enseignant / Directeur / Surveillant / Agent...
@@ -1463,8 +1479,8 @@ class Employe(Base):
 
 class Avance(Base):
     __tablename__ = "ss_avances"
-    avance_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
+    avance_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    employe_id = Column(Identifiant, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
     montant = Column(Numeric(15, 2), nullable=False)
     date_avance = Column(Date, server_default=func.current_date())
     mois_concerne = Column(String(7), nullable=False) # YYYY-MM
@@ -1479,8 +1495,8 @@ class AbsencePersonnel(Base):
     pouvait saisir une absence — et elle n'était pas dans la cour à 8 h.
     """
     __tablename__ = "ss_absences_personnel"
-    absence_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
+    absence_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    employe_id = Column(Identifiant, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
     date_absence = Column(Date, nullable=False)
     motif = Column(String(200), nullable=True)
     est_justifie = Column(String(1), default="N") # Y / N
@@ -1495,16 +1511,16 @@ class AbsencePersonnel(Base):
 
 class Prime(Base):
     __tablename__ = "ss_primes"
-    prime_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
+    prime_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    employe_id = Column(Identifiant, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
     montant = Column(Numeric(15, 2), nullable=False)
     motif = Column(String(200), nullable=False)
     mois_concerne = Column(String(7), nullable=False) # YYYY-MM
 
 class BulletinPaie(Base):
     __tablename__ = "ss_bulletins_paie"
-    bulletin_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    employe_id = Column(Integer, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
+    bulletin_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    employe_id = Column(Identifiant, ForeignKey("ss_employes.employe_id", ondelete="CASCADE"), nullable=False)
     mois_concerne = Column(String(7), nullable=False) # YYYY-MM
     salaire_base = Column(Numeric(15, 2), nullable=False)
     total_primes = Column(Numeric(15, 2), default=0.00)
@@ -1529,10 +1545,10 @@ class PresenceAgent(Base):
     Gestion des présences des agents (Personnel et Enseignants) via QR Code.
     """
     __tablename__ = "ss_presences_agents"
-    presence_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
+    presence_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
     type_agent = Column(String(20), nullable=False) # 'PERSONNEL' ou 'ENSEIGNANT'
-    agent_id = Column(Integer, nullable=False) # ID de l'utilisateur ou de l'enseignant
+    agent_id = Column(Identifiant, nullable=False) # ID de l'utilisateur ou de l'enseignant
     date_presence = Column(Date, nullable=False, server_default=func.current_date())
     heure_arrivee = Column(Time, nullable=False)
     heure_depart = Column(Time, nullable=True)
@@ -1541,8 +1557,8 @@ class PresenceAgent(Base):
 
 class Role(Base):
     __tablename__ = "ss_roles"
-    role_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    role_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     code = Column(String(50), nullable=False)
     libelle = Column(String(100), nullable=False)
     description = Column(String(255))
@@ -1567,17 +1583,17 @@ class Role(Base):
 
 class Permission(Base):
     __tablename__ = "ss_permissions"
-    permission_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    role_id = Column(Integer, ForeignKey("ss_roles.role_id", ondelete="CASCADE"))
+    permission_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    role_id = Column(Identifiant, ForeignKey("ss_roles.role_id", ondelete="CASCADE"))
     module = Column(String(50), nullable=False)
     action = Column(String(50), nullable=False)
     est_autorise = Column(String(1), default="O")
 
 class AuditLog(Base):
     __tablename__ = "ss_audit_log"
-    log_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
-    utilisateur_id = Column(Integer, nullable=True)
+    log_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    utilisateur_id = Column(Identifiant, nullable=True)
     nom_utilisateur = Column(String(100))
     module = Column(String(50))
     action = Column(String(50))
@@ -1600,11 +1616,38 @@ class SyncTombstone(Base):
     __table_args__ = (
         Index("ix_sync_tombstones_lookup", "entity_type", "etablissement_id", "deleted_at"),
     )
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Identifiant, primary_key=True, autoincrement=True)
     entity_type = Column(String(50), nullable=False)
-    entity_id = Column(Integer, nullable=False)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    entity_id = Column(Identifiant, nullable=False)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     deleted_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class Appareil(Base):
+    """Poste installé (application de bureau), enregistré auprès du cloud.
+
+    Son numéro (`appareil_id`) fixe sa plage d'identifiants : il crée ses
+    lignes à partir de appareil_id × 2³² (app/sync/identifiants.py), si bien
+    que deux postes hors-ligne ne produisent jamais le même identifiant. Son
+    rang dans l'école (P1, P2...) figure dans les numéros de pièces qu'il émet.
+
+    Le poste se synchronise avec un jeton qui lui est propre, sans utilisateur
+    connecté ; seule son empreinte est conservée ici. Table propre au cloud :
+    jamais copiée sur un poste (app/sync/perimetre.py, TABLES_HORS_SYNCHRO).
+    """
+    __tablename__ = "ss_appareils"
+    __table_args__ = (
+        UniqueConstraint("etablissement_id", "rang", name="uq_appareil_etablissement_rang"),
+    )
+    appareil_id = Column(Identifiant, primary_key=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False, index=True)
+    rang = Column(Integer, nullable=False)
+    nom = Column(String(100))
+    jeton_empreinte = Column(String(64), nullable=False, unique=True)
+    enregistre_par = Column(String(100))
+    enregistre_le = Column(DateTime, server_default=func.now())
+    dernier_contact = Column(DateTime)
+    revoque_le = Column(DateTime)
 
 
 class SequenceMatricule(Base):
@@ -1623,7 +1666,7 @@ class SequenceMatricule(Base):
     """
     __tablename__ = "ss_sequences_matricule"
     etablissement_id = Column(
-        Integer, ForeignKey("ss_etablissements.etablissement_id"), primary_key=True
+        Identifiant, ForeignKey("ss_etablissements.etablissement_id"), primary_key=True
     )
     type_entite = Column(String(20), primary_key=True)  # ELV, ENS
     dernier_numero = Column(Integer, nullable=False, default=0)
@@ -1636,8 +1679,8 @@ class SequenceMatricule(Base):
 class Evenement(Base):
     """Événements scolaires : réunions, examens, fêtes, congés, etc."""
     __tablename__ = "ss_evenements"
-    evenement_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    evenement_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     titre = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
     type_evenement = Column(String(30), default="AUTRE", nullable=False)
@@ -1663,8 +1706,8 @@ class Evenement(Base):
 class ActiviteJour(Base):
     """Activités quotidiennes / Programme de la journée ajoutés par l'administration."""
     __tablename__ = "ss_activites_jour"
-    activite_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
+    activite_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False)
     titre = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
     heure = Column(String(10), nullable=True)  # ex: 08:00, 10:30
@@ -1686,9 +1729,9 @@ class PointageEleve(Base):
     Distinct de Presence (appel en classe) : l'élève peut être pointé à l'entrée
     de l'école mais absent d'un cours spécifique, et vice-versa."""
     __tablename__ = "ss_pointage_eleves"
-    pointage_id      = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    eleve_id         = Column(Integer, ForeignKey("ss_eleves.eleve_id"), nullable=False)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
+    pointage_id      = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
+    eleve_id         = Column(Identifiant, ForeignKey("ss_eleves.eleve_id"), nullable=False)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
     date_pointage    = Column(Date, nullable=False, server_default=func.current_date())
     heure_arrivee    = Column(Time, nullable=True)
     heure_depart     = Column(Time, nullable=True)
@@ -1720,13 +1763,13 @@ class IncidentApplicatif(Base):
         Index("ix_incidents_resolu_date", "resolu", "date_incident"),
         Index("ix_incidents_groupe", "route", "type_erreur"),
     )
-    incident_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    incident_id = Column(Identifiant, primary_key=True, index=True, autoincrement=True)
     route = Column(String(300), nullable=False)
     methode = Column(String(10))
     type_erreur = Column(String(120), nullable=False)
     message = Column(String(800))
     trace = Column(Text, nullable=True)
-    etablissement_id = Column(Integer, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=True)
     role = Column(String(40), nullable=True)
     date_incident = Column(DateTime, server_default=func.now(), nullable=False)
     resolu = Column(String(1), default="N", nullable=False)

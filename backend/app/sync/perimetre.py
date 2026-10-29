@@ -36,6 +36,11 @@ import app.models.academique  # noqa: F401 — enregistre toutes les tables
 
 REFERENTIELS_COMMUNS = frozenset({"ss_comptes_comptables", "ss_journaux_comptables"})
 
+# La mécanique de synchronisation elle-même : propre à chaque base, jamais
+# copiée d'une base à l'autre. Le registre des postes et l'empreinte de leurs
+# jetons restent sur le cloud.
+TABLES_HORS_SYNCHRO = frozenset({"ss_appareils"})
+
 
 class TableHorsPerimetre(Exception):
     """Table qu'aucune règle ne rattache à un établissement."""
@@ -121,9 +126,12 @@ def requete_lignes(nom_table: str, etablissement_id: int) -> Select:
 
 @lru_cache(maxsize=1)
 def verifier_toutes_les_tables() -> tuple[str, ...]:
-    """Vérifie que chaque table a une règle. Rend leurs noms dans l'ordre d'import."""
+    """Vérifie que chaque table synchronisée a une règle. Rend leurs noms dans
+    l'ordre d'import."""
     noms = []
     for t in tables_ordonnees():
+        if t.name in TABLES_HORS_SYNCHRO:
+            continue
         requete_lignes(t.name, 0)
         noms.append(t.name)
     return tuple(noms)
@@ -131,6 +139,7 @@ def verifier_toutes_les_tables() -> tuple[str, ...]:
 
 __all__ = [
     "REFERENTIELS_COMMUNS",
+    "TABLES_HORS_SYNCHRO",
     "TableHorsPerimetre",
     "colonne_cle",
     "colonnes_cle",

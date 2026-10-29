@@ -6,6 +6,13 @@ et leurs mots de passe hachés font partie du téléchargement).
 
 Seule la direction peut installer un poste (voir app/api/poste.py, côté cloud).
 
+Avant tout téléchargement, le poste s'enregistre auprès du cloud : il reçoit
+son numéro (sa plage d'identifiants, app/sync/identifiants.py), son rang dans
+l'école, son jeton de synchronisation et la clé qui signe ses reçus. Ces
+informations sont gardées dans `appareil.json` dès leur réception : une
+installation reprise après une coupure garde le même numéro au lieu d'en
+consommer un nouveau.
+
 Le téléchargement se fait table par table, page par page. Une coupure réseau
 déclenche quelques nouvelles tentatives ; si elle dure, l'installation
 s'arrête avec un message clair et reprend plus tard là où elle s'était
@@ -16,6 +23,7 @@ dernier import : un téléchargement interrompu ne passe jamais pour complet.
 import json
 import logging
 import os
+import socket
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -26,12 +34,14 @@ import httpx
 from sqlalchemy import String, Text, select
 from sqlalchemy.engine import Engine
 
+from app.sync.identifiants import activer_le_poste, retirer_les_gardes
 from app.sync.instantane import importer_page
 from app.sync.perimetre import table, verifier_toutes_les_tables
 
 _journal = logging.getLogger("smartschool.poste")
 
 FICHIER_MARQUEUR = "poste.json"
+FICHIER_APPAREIL = "appareil.json"
 
 # Pause entre deux tentatives réseau (les tests la neutralisent).
 _pause = time.sleep
@@ -56,21 +66,59 @@ class Progression:
     erreur: Optional[str] = None
 
 
-def lire_marqueur(dossier_poste: str) -> Optional[dict]:
+def _lire_json(dossier_poste: str, nom: str) -> Optional[dict]:
     try:
-        with open(os.path.join(dossier_poste, FICHIER_MARQUEUR), encoding="utf-8") as f:
+        with open(os.path.join(dossier_poste, nom), encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return None
 
 
-def _ecrire_marqueur(dossier_poste: str, contenu: dict) -> None:
+def _ecrire_json(dossier_poste: str, nom: str, contenu: dict) -> None:
     os.makedirs(dossier_poste, exist_ok=True)
-    chemin = os.path.join(dossier_poste, FICHIER_MARQUEUR)
+    chemin = os.path.join(dossier_poste, nom)
     provisoire = chemin + ".tmp"
     with open(provisoire, "w", encoding="utf-8") as f:
         json.dump(contenu, f, ensure_ascii=False, indent=2)
     os.replace(provisoire, chemin)
+
+
+def lire_appareil(dossier_poste: str) -> Optional[dict]:
+    """Identité du poste auprès du cloud (numéro, rang, jeton, clé des reçus)."""
+    return _lire_json(dossier_poste, FICHIER_APPAREIL)
+
+
+def lire_marqueur(dossier_poste: str) -> Optional[dict]:
+    """Le marqueur d'installation, seulement si le poste est complet : une
+    installation antérieure à l'enregistrement des postes (sans numéro
+    d'appareil) est à refaire, ses lignes n'auraient pas de plage."""
+    marqueur = _lire_json(dossier_poste, FICHIER_MARQUEUR)
+    if not marqueur or not marqueur.get("appareil_id") or not lire_appareil(dossier_poste):
+        return None
+    return marqueur
+
+
+def _enregistrer_le_poste(client, entetes: dict, dossier_poste: str, etablissement_id: int) -> dict:
+    """Numéro du poste : celui d'une installation interrompue, sinon un nouveau."""
+    appareil = lire_appareil(dossier_poste)
+    if appareil:
+        if appareil.get("etablissement_id") != etablissement_id:
+            # La base locale contient déjà une autre école : on ne mélange jamais.
+            raise ErreurInstallation(
+                "Cet ordinateur a déjà été préparé pour une autre école. Pour y installer "
+                "celle-ci, désinstallez puis réinstallez SmartSchool."
+            )
+        return appareil
+
+    rep = _requete(client.post, "/api/poste/appareils", headers=entetes,
+                   json={"nom": socket.gethostname()[:100]})
+    if rep.status_code == 503:
+        raise ErreurInstallation(rep.json().get("detail") or "Le serveur SmartSchool n'est pas prêt. Réessayez plus tard.")
+    if rep.status_code >= 400:
+        raise ErreurInstallation("Impossible d'enregistrer cet ordinateur auprès du serveur. Réessayez dans un instant.")
+    appareil = rep.json()
+    _ecrire_json(dossier_poste, FICHIER_APPAREIL, appareil)
+    return appareil
 
 
 def _requete(appel, *args, **kwargs) -> httpx.Response:
@@ -166,10 +214,16 @@ def installer(
     if rep.status_code >= 400:
         raise ErreurInstallation("Impossible de préparer l'installation sur le serveur. Réessayez dans un instant.")
     manifeste = rep.json()
+    appareil = _enregistrer_le_poste(client, entetes, dossier_poste, manifeste["etablissement_id"])
     progression.etablissement_nom = manifeste["etablissement_nom"]
     progression.tables_total = len(manifeste["tables"])
     progression.lignes_total = sum(t["total"] for t in manifeste["tables"])
     progression.tables_faites = progression.lignes_faites = 0
+
+    # Les lignes du cloud ont des identifiants hors de la plage du poste : les
+    # gardes d'une installation précédente interrompue les refuseraient.
+    with moteur_local.begin() as cx:
+        retirer_les_gardes(cx)
 
     for entree in manifeste["tables"]:
         nom, apres = entree["table"], None
@@ -191,9 +245,13 @@ def installer(
     if dossier_fichiers:
         _telecharger_fichiers(client, moteur_local, dossier_fichiers, progression)
 
-    _ecrire_marqueur(dossier_poste, {
+    activer_le_poste(moteur_local, appareil["appareil_id"], appareil["rang"], appareil["cle_signature"])
+
+    _ecrire_json(dossier_poste, FICHIER_MARQUEUR, {
         "etablissement_id": manifeste["etablissement_id"],
         "etablissement_nom": manifeste["etablissement_nom"],
+        "appareil_id": appareil["appareil_id"],
+        "rang": appareil["rang"],
         "installe_le": datetime.now(timezone.utc).isoformat(),
         "instantane_du": manifeste["genere_le"],
     })

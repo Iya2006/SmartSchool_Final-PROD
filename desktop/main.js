@@ -87,6 +87,9 @@ async function demarrerServices() {
         SMARTSCHOOL_DOSSIER_FICHIERS: d.fichiers,
         SMARTSCHOOL_DOSSIER_POSTE: d.poste,
         SMARTSCHOOL_CLOUD_URL: process.env.SMARTSCHOOL_CLOUD_URL || 'https://api.trxsmartschool.com',
+        // Le QR des reçus mène au site public, où ils se vérifient ; jamais à
+        // l'interface locale de ce poste (127.0.0.1), injoignable du parent.
+        FRONTEND_PUBLIC_URL: process.env.SMARTSCHOOL_SITE_URL || 'https://trxsmartschool.com',
         JWT_SECRET_KEY: cleDeSession(d.poste),
         CORS_ORIGINS: `http://127.0.0.1:${PORT_INTERFACE},http://localhost:${PORT_INTERFACE}`,
         PYTHONIOENCODING: 'utf-8',

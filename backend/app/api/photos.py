@@ -325,10 +325,14 @@ async def upload_photo(
 
     # ss_messages.etablissement_id est NOT NULL depuis le Lot 5 : la
     # notification est rattachée à l'établissement du compte appelant.
-    db.execute(text("""
-        INSERT INTO ss_messages (etablissement_id, expediteur_type, expediteur_id, destinataire_type, destinataire_id, objet_type, sujet, contenu, statut)
-        VALUES (:etab, 'SYSTEME', NULL, 'ADMIN', NULL, 'GENERAL', :sujet, :contenu, 'ENVOYE')
-    """), {"etab": etablissement_id, "sujet": sujet, "contenu": contenu})
+    # Par l'ORM et non en SQL brut : sur un poste hors-ligne, l'identifiant
+    # du message doit venir de la plage du poste (app/sync/identifiants.py).
+    from app.models.academique import Message
+    db.add(Message(
+        etablissement_id=etablissement_id, expediteur_type="SYSTEME", expediteur_id=None,
+        destinataire_type="ADMIN", destinataire_id=None, objet_type="GENERAL",
+        sujet=sujet, contenu=contenu, statut="ENVOYE",
+    ))
 
     db.commit()
     return {"photo_url": photo_url, "message": "Photo envoyée et en attente de validation par l'administration."}
@@ -487,10 +491,13 @@ async def parent_upload_photo(
 
     contenu = f"{contenu_base}\n---PHOTO_META---\nentity_id={entity_id}\nentity_type={entity_type}\ntarget_name={target_name}"
 
-    db.execute(text("""
-        INSERT INTO ss_messages (etablissement_id, expediteur_type, expediteur_id, destinataire_type, destinataire_id, objet_type, sujet, contenu, statut)
-        VALUES (:etab, 'PARENT', :parent_id, 'ADMIN', NULL, 'GENERAL', :sujet, :contenu, 'ENVOYE')
-    """), {"etab": etablissement_id, "parent_id": parent_id, "sujet": sujet, "contenu": contenu})
+    # Par l'ORM, pas en SQL brut : voir la notification de l'upload élève.
+    from app.models.academique import Message
+    db.add(Message(
+        etablissement_id=etablissement_id, expediteur_type="PARENT", expediteur_id=parent_id,
+        destinataire_type="ADMIN", destinataire_id=None, objet_type="GENERAL",
+        sujet=sujet, contenu=contenu, statut="ENVOYE",
+    ))
 
     db.commit()
     return {"photo_url": photo_url, "message": "Photo envoyée et en attente de validation par l'administration."}

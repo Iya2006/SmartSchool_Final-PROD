@@ -18,7 +18,7 @@ from app.core.database import Base
 from app.core.security import hash_password
 from app.models.academique import CompteComptable, Eleve, EleveParent, Parent, Utilisateur
 from app.sync.instantane import exporter_page, importer_page, manifeste
-from app.sync.perimetre import table, verifier_toutes_les_tables
+from app.sync.perimetre import TABLES_HORS_SYNCHRO, table, verifier_toutes_les_tables
 from tests.test_isolation_multi_ecole import Ecole, _headers, _uid
 
 
@@ -49,7 +49,10 @@ def _export_complet(db: Session, etablissement_id: int, limite: int = 1000) -> d
 
 
 def test_chaque_table_a_une_regle_de_rattachement():
-    assert len(verifier_toutes_les_tables()) == len(Base.metadata.sorted_tables)
+    toutes = {t.name for t in Base.metadata.sorted_tables}
+    assert set(verifier_toutes_les_tables()) == toutes - TABLES_HORS_SYNCHRO
+    # Le registre des postes (empreintes de leurs jetons) ne quitte jamais le cloud.
+    assert "ss_appareils" in TABLES_HORS_SYNCHRO
 
 
 def test_aucune_ligne_d_une_autre_ecole(db: Session):
@@ -157,7 +160,9 @@ class TestRoutesInstallationPoste:
         assert manif.status_code == 200, manif.text
         corps = manif.json()
         assert corps["etablissement_id"] == a.etab.etablissement_id
-        assert len(corps["tables"]) == len(Base.metadata.sorted_tables)
+        assert len(corps["tables"]) == len(Base.metadata.sorted_tables) - len(TABLES_HORS_SYNCHRO)
+        assert "ss_appareils" not in {t["table"] for t in corps["tables"]}
+        assert client.get("/api/poste/instantane/ss_appareils", headers=headers).status_code == 404
 
         page = client.get("/api/poste/instantane/ss_eleves", headers=headers)
         assert page.status_code == 200, page.text

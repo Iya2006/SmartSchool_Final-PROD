@@ -48,9 +48,22 @@ def exporter_page(db: Session, etablissement_id: int, nom_table: str,
             requete = requete.where(cles[0] > apres)
         requete = requete.limit(limite)
 
-    lignes = [ligne_vers_json(t, l) for l in db.execute(requete).mappings().all()]
+    lignes = [ligne_pour_le_poste(t, l) for l in db.execute(requete).mappings().all()]
     suivant = lignes[-1][cles[0].name] if paginee and len(lignes) == limite else None
     return {"table": nom_table, "lignes": lignes, "suivant": suivant}
+
+
+def ligne_pour_le_poste(t, ligne) -> dict:
+    """Une ligne du cloud telle qu'un poste doit la recevoir.
+
+    Un reçu émis avant que le code du QR ne soit enregistré (colonne vide)
+    reçoit ici son code, calculé par le cloud : le poste n'a pas la clé du
+    cloud, il ne pourrait pas le réimprimer à l'identique."""
+    donnees = ligne_vers_json(t, ligne)
+    if t.name == "ss_paiements" and not donnees.get("code_verification"):
+        from app.core.recu_paiement import code_verification_cloud
+        donnees["code_verification"] = code_verification_cloud(ligne)
+    return donnees
 
 
 def importer_page(connexion: Connection, nom_table: str, lignes: list[dict]) -> int:

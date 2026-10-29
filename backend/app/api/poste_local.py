@@ -13,11 +13,19 @@ from pydantic import BaseModel
 from app.core.database import engine
 from app.core.fichiers import DOSSIER_FICHIERS
 from app.core.mode import CLOUD_URL, DOSSIER_POSTE
-from app.sync.installation import Installateur
+from app.sync.identifiants import activer_le_poste
+from app.sync.installation import Installateur, lire_appareil, lire_marqueur
 
 router = APIRouter(prefix="/api/poste", tags=["Poste local (hors-ligne)"])
 
 installateur = Installateur(DOSSIER_POSTE, CLOUD_URL, engine, dossier_fichiers=DOSSIER_FICHIERS)
+
+# Poste déjà installé : il reprend sa plage d'identifiants, son rang et la clé
+# de ses reçus dès le démarrage. Sinon, toute création reste refusée jusqu'à
+# la fin de l'installation.
+if lire_marqueur(DOSSIER_POSTE):
+    _appareil = lire_appareil(DOSSIER_POSTE)
+    activer_le_poste(engine, _appareil["appareil_id"], _appareil["rang"], _appareil["cle_signature"])
 
 
 class DemandeInstallation(BaseModel):

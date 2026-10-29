@@ -87,8 +87,25 @@ def setup_test_database():
     isolation parfaite entre sessions pytest.
     """
     Base.metadata.create_all(bind=engine_test)
+    _generateurs_d_identifiants()
     yield
     Base.metadata.drop_all(bind=engine_test)
+
+
+def _generateurs_d_identifiants():
+    """Comme sur un poste hors-ligne, chaque base qui écrit a son générateur
+    d'identifiants (app/sync/identifiants.py) : le cloud de test est
+    l'appareil 0, les postes simulés par les tests de synchronisation ont leur
+    propre numéro. Branché pour toute la session, avant la première écriture :
+    l'ORM met ses insertions en cache. Toute la suite passe ainsi par le
+    mécanisme qu'utilise le poste."""
+    from app.core.database import engine as moteur_application
+    from app.sync.identifiants import brancher_generateur, generateur_de
+
+    brancher_generateur()
+    for moteur in (engine_test, moteur_application):
+        with moteur.begin() as cx:
+            generateur_de(moteur).configurer(cx, 0)
 
 
 @pytest.fixture

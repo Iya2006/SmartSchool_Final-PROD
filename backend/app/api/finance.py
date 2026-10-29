@@ -1613,6 +1613,13 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         etablissement_id=etablissement_id,
     )
 
+    # Le code du QR est figé à l'émission, avec la clé de l'appareil qui
+    # encaisse : un autre poste qui réimprimera ce reçu n'a pas cette clé, il
+    # relira ce code (app/core/recu_paiement.py).
+    from app.core.recu_paiement import code_verification
+    db.flush()
+    paiement.code_verification = code_verification(paiement)
+
     db.commit()
     db.refresh(paiement)
     _invalidate_dashboard_cache(etablissement_id, facture.annee_id)

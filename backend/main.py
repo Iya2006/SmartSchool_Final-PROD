@@ -57,6 +57,15 @@ from app.api.reinscription import router as reinscription_router
 from app.api.tasks import router as tasks_router
 from app.api.monitoring import router as monitoring_router
 from app.api.poste import router as poste_router
+from app.core.mode import MODE_POSTE
+
+# Poste hors-ligne : chaque ligne créée prend son identifiant dans la plage du
+# poste. À brancher AVANT toute écriture, l'ORM mettant ses insertions en cache
+# (voir app/sync/identifiants.py).
+if MODE_POSTE:
+    from app.sync.identifiants import brancher_generateur, generateur_de
+    brancher_generateur()
+    generateur_de(engine)  # sans numéro tant que le poste n'est pas installé
 
 
 # Création des tables au démarrage
@@ -442,7 +451,6 @@ app.include_router(poste_router)
 
 # Sur le poste lui-même (application installée) : état et lancement de
 # l'installation, avant qu'aucun compte n'existe localement.
-from app.core.mode import MODE_POSTE
 if MODE_POSTE:
     from app.api.poste_local import router as poste_local_router
     app.include_router(poste_local_router)

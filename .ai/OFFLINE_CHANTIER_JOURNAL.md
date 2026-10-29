@@ -189,3 +189,22 @@ Prochaine étape (Phase B) : synchronisation multi-appareils. Elle couvre
 l'envoi et la réception des changements, les identifiants et numéros sans
 collision, la clé de signature des reçus par appareil, et les conflits
 signalés.
+
+---
+
+## 27-29/10/2026 — Phase B, étapes B1 et B2 : identifiants et pièces par poste
+
+- **B1** : chaque poste a un numéro N et crée ses lignes à partir de
+  N × 2³². Les 232 colonnes d'identifiant passent en 64 bits ; la migration
+  du cloud est à lancer à la fusion. Le poste s'enregistre auprès du cloud à
+  l'installation (`ss_appareils`), et un garde refuse tout identifiant hors
+  plage.
+- **B2** : reçus, factures, matricules et codes d'exemplaire portent le rang
+  du poste (`-P2-`). La clé des reçus est dérivée par poste, et le cloud
+  vérifie les reçus émis hors-ligne. Correctif : le QR d'un reçu de poste
+  pointait vers 127.0.0.1.
+
+Détail, pièges trouvés par prototype et vérifications :
+`.ai/CORRECTIFS_29_10_2026_RAPPORT.md`.
+
+Prochaine étape : B3, journal des changements par déclencheurs.
