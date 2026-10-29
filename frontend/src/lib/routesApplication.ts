@@ -78,6 +78,7 @@ export const ROUTES_APPLICATION: readonly string[] = [
     '/resultats-annuels',
     '/salle-des-profs',
     '/student-dashboard',
+    '/synchronisation',
     '/teacher-dashboard',
     '/vie-scolaire/absences-enseignants',
     '/vie-scolaire/incidents',

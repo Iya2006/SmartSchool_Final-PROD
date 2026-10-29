@@ -207,4 +207,24 @@ signalés.
 Détail, pièges trouvés par prototype et vérifications :
 `.ai/CORRECTIFS_29_10_2026_RAPPORT.md`.
 
-Prochaine étape : B3, journal des changements par déclencheurs.
+## 29/10/2026 — Phase B, étapes B3 à B5 : les échanges
+
+- **B3** : journal des changements tenu par des déclencheurs, sur le poste et
+  sur le cloud. Il note l'école concernée et l'appareil d'origine, et il est
+  publié sans trou possible.
+- **B4** : envoi et réception automatiques, contrôlés école par école. Rien
+  n'est écarté en silence, et une ligne refusée ne bloque jamais le reste.
+- **B5** :
+  - fusion champ par champ ;
+  - pour les données sensibles, c'est la direction qui tranche ;
+  - les totaux sont recalculés ;
+  - les identifiants sont dérivés de la clé naturelle pour les lignes
+    « cherchées ou créées » ;
+  - écran « Synchronisation » et indicateur du poste.
+
+Vérifié en réel : deux postes hors-ligne encaissent sur la même facture, puis
+reviennent en ligne. Tout converge seul, totaux justes, sans conflit. Même
+rapport.
+
+Reste en phase B : la synchronisation des fichiers (B6) et la vérification
+visuelle dans l'application installée.

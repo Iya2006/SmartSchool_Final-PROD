@@ -59,7 +59,10 @@ describe('QueryProvider — chiffrement du cache persisté', () => {
         const cached = await serialize(fakeClient());
 
         expect(cached).not.toContain('Quartier X');
-        expect(cached).not.toContain('O+');
+        // Le fragment JSON entier, pas « O+ » seul : « O » et « + » font partie
+        // de l'alphabet base64, et le chiffré les contenait parfois côte à côte
+        // par pur hasard (le test échouait environ une fois sur trois).
+        expect(cached).not.toContain('"groupe_sanguin":"O+"');
         expect(cached).not.toContain('Diallo');
         expect(cached).not.toContain('eleve_id');
     });

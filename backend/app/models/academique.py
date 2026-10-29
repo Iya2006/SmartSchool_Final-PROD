@@ -1650,6 +1650,67 @@ class Appareil(Base):
     revoque_le = Column(DateTime)
 
 
+class SyncJournal(Base):
+    """Journal des changements du cloud : une ligne par écriture, posée par
+    des déclencheurs (app/sync/journal.py), donc aussi pour le SQL brut.
+
+    Les postes y lisent, depuis leur dernier passage, ce qui a changé dans leur
+    école. `etablissement_id` est calculé à l'écriture quand une seule école
+    est concernée ; il reste vide pour une ligne partagée (parent dont les
+    enfants sont dans deux écoles, plan comptable commun), résolue à la
+    lecture par les règles du périmètre. `appareil_origine` vide : la version
+    web. Table propre au cloud (TABLES_HORS_SYNCHRO).
+
+    Les postes lisent par `publie`, pas par `seq`. Le numéro `seq` est pris à
+    l'écriture mais n'est visible qu'à la validation : une transaction lente
+    peut valider le n° 99 après que le n° 100 a déjà été lu, et un poste qui
+    lirait « après 100 » le perdrait pour toujours. `publie` n'est donné
+    qu'aux entrées déjà validées, une publication après l'autre
+    (app/sync/cote_cloud.py, `publier`) : une entrée validée en retard reçoit
+    simplement un numéro plus grand.
+    """
+    __tablename__ = "ss_sync_journal"
+    __table_args__ = (
+        Index("ix_sync_journal_etablissement_publie", "etablissement_id", "publie"),
+        Index("ix_sync_journal_publie", "publie"),
+        Index("ix_sync_journal_ligne", "nom_table", "cle"),
+    )
+    seq = Column(Identifiant, primary_key=True, autoincrement=True)
+    nom_table = Column(String(64), nullable=False)
+    cle = Column(Identifiant, nullable=False)
+    operation = Column(String(1), nullable=False)  # I, U, D
+    etablissement_id = Column(Identifiant, nullable=True)
+    appareil_origine = Column(Identifiant, nullable=True)
+    date_changement = Column(DateTime, server_default=func.now())
+    publie = Column(Identifiant, nullable=True)
+
+
+class SyncConflit(Base):
+    """Changement envoyé par un poste que le cloud n'a pas appliqué : doublon
+    d'une valeur unique, ligne supprimée entre-temps, modification concurrente
+    d'une donnée sensible... Rien n'est jamais écarté en silence : la version
+    du poste est gardée ici, avec la raison en clair, jusqu'à ce que la
+    direction tranche (écran « À vérifier »). Table propre au cloud."""
+    __tablename__ = "ss_sync_conflits"
+    __table_args__ = (
+        Index("ix_sync_conflits_appareil_seq", "appareil_id", "seq_poste"),
+    )
+    conflit_id = Column(Identifiant, primary_key=True, autoincrement=True)
+    etablissement_id = Column(Identifiant, ForeignKey("ss_etablissements.etablissement_id"), nullable=False, index=True)
+    appareil_id = Column(Identifiant, nullable=False)
+    seq_poste = Column(Identifiant, nullable=False)
+    nom_table = Column(String(64), nullable=False)
+    cle = Column(Identifiant, nullable=False)
+    operation = Column(String(1), nullable=False)
+    donnees = Column(Text)  # la version du poste, en JSON
+    donnees_serveur = Column(Text)  # la version du serveur au même moment, en JSON
+    raison = Column(String(300), nullable=False)
+    cree_le = Column(DateTime, server_default=func.now())
+    resolu_le = Column(DateTime)
+    resolu_par = Column(String(100))
+    resolution = Column(String(30))
+
+
 class SequenceMatricule(Base):
     """Compteur de matricules, un par (établissement, type d'entité).
 

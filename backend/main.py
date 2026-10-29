@@ -104,6 +104,27 @@ try:
 except Exception as _e:  # noqa: BLE001
     print(f"[SCHEMA] Assouplissement date_naissance ignoré : {_e}")
 
+# Journal des changements lu par les postes hors-ligne (app/sync/journal.py).
+# Posé seulement une fois la migration des identifiants passée : c'est elle qui
+# ouvre le cloud aux postes, rien ne change avant. Idempotent, tout ou rien ;
+# un échec n'empêche jamais le démarrage, il rend seulement la synchronisation
+# indisponible.
+if not MODE_POSTE:
+    try:
+        from app.sync.journal import installer_journal_cloud
+        from app.sync.schema import schema_identifiants_a_jour
+        if schema_identifiants_a_jour(engine):
+            installer_journal_cloud(engine)
+            print("[SYNCHRO] Journal des changements en place pour les postes hors-ligne.")
+            # Identifiants dérivés de la clé naturelle (séance, présence,
+            # note, journal comptable...) : les mêmes que ceux des postes, pour
+            # que deux créations de la même ligne se rejoignent. Au-delà de 2³¹,
+            # d'où la condition sur la migration. Avant toute écriture.
+            from app.sync.identifiants import brancher_generateur
+            brancher_generateur(seulement_cles_naturelles=True)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[SYNCHRO] Journal des changements non posé : {_e}")
+
 
 app = FastAPI(
     title="SMARTSCHOOL ERP API",
@@ -450,10 +471,20 @@ app.include_router(monitoring_router, dependencies=[Depends(require_roles(*ADMIN
 app.include_router(poste_router)
 
 # Sur le poste lui-même (application installée) : état et lancement de
-# l'installation, avant qu'aucun compte n'existe localement.
+# l'installation, avant qu'aucun compte n'existe localement. Sur le cloud :
+# les échanges avec les postes, authentifiés par leur jeton d'appareil.
 if MODE_POSTE:
+    from app.api.poste_local import relais as relais_conflits_router
     from app.api.poste_local import router as poste_local_router
     app.include_router(poste_local_router)
+    app.include_router(relais_conflits_router)
+else:
+    from app.api.sync_appareil import router as sync_appareil_router
+    from app.api.sync_conflits import postes_router as sync_postes_router
+    from app.api.sync_conflits import router as sync_conflits_router
+    app.include_router(sync_appareil_router)
+    app.include_router(sync_conflits_router)
+    app.include_router(sync_postes_router)
 
 # ── Routes PUBLIQUES (gèrent leur propre authentification) ──
 app.include_router(auth_router)           # Login admin → retourne le JWT

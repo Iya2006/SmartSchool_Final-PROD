@@ -26,6 +26,7 @@ from app.core.auth import get_current_user, require_etablissement, roles_du_comp
 from app.core.database import get_db
 from app.core.recu_paiement import cle_signature_appareil
 from app.models.academique import Appareil, Etablissement
+from app.sync.cote_cloud import curseur_actuel
 from app.sync.identifiants import NUMERO_APPAREIL_MAX
 from app.sync.instantane import TAILLE_PAGE_DEFAUT, TAILLE_PAGE_MAX, exporter_page, manifeste
 from app.sync.perimetre import verifier_toutes_les_tables
@@ -52,10 +53,15 @@ def instantane(db: Session = Depends(get_db), etablissement_id: int = Depends(re
     etab = db.get(Etablissement, etablissement_id)
     if not etab:
         raise HTTPException(404, "Établissement introuvable")
+    # Relevé AVANT le téléchargement : le poste lira ensuite le journal à
+    # partir d'ici, si bien qu'un changement fait pendant le téléchargement
+    # n'est jamais perdu (au pire, reçu deux fois, sans effet).
+    curseur = curseur_actuel(db)
     return {
         "etablissement_id": etablissement_id,
         "etablissement_nom": etab.nom,
         "genere_le": datetime.now(timezone.utc).isoformat(),
+        "curseur": curseur,
         "tables": manifeste(db, etablissement_id),
     }
 

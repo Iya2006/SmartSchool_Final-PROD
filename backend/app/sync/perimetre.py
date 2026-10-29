@@ -38,8 +38,8 @@ REFERENTIELS_COMMUNS = frozenset({"ss_comptes_comptables", "ss_journaux_comptabl
 
 # La mécanique de synchronisation elle-même : propre à chaque base, jamais
 # copiée d'une base à l'autre. Le registre des postes et l'empreinte de leurs
-# jetons restent sur le cloud.
-TABLES_HORS_SYNCHRO = frozenset({"ss_appareils"})
+# jetons restent sur le cloud, comme son journal des changements.
+TABLES_HORS_SYNCHRO = frozenset({"ss_appareils", "ss_sync_journal", "ss_sync_conflits"})
 
 
 class TableHorsPerimetre(Exception):
@@ -110,6 +110,13 @@ def _filtre(nom_table: str, etablissement_id: int, en_cours: frozenset = frozens
     if not conditions:
         raise TableHorsPerimetre(f"{nom_table} : aucun lien vers un établissement")
     return and_(*conditions, or_(*renseignes))
+
+
+def filtre_ecole(nom_table: str, etablissement_id: int):
+    """Condition SQL : la ligne appartient à l'école `etablissement_id`. La
+    même règle sert à l'installation, à la réception et au contrôle de ce
+    qu'un poste envoie."""
+    return _filtre(nom_table, etablissement_id)
 
 
 def _cles_du_perimetre(nom_table: str, etablissement_id: int, en_cours: frozenset = frozenset()) -> Select:

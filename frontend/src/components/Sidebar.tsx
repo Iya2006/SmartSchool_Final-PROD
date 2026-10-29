@@ -11,7 +11,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle, UserX } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle, UserX, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
@@ -274,6 +274,16 @@ export default function Sidebar() {
                             <span className={styles.menuText}>Archive Scolaire</span>
                         </Link>
                     </li>
+                    {/* Postes hors-ligne de l'école et décisions « à vérifier » :
+                        réservé à la direction (contrôle réel côté serveur). */}
+                    {canAccessPathForRole(user?.role, '/synchronisation', user?.role_base) && (
+                        <li className={pathname.startsWith('/synchronisation') ? styles.currentPage : ''}>
+                            <Link href="/synchronisation">
+                                <RefreshCw size={18} className={styles.menuIcon} />
+                                <span className={styles.menuText}>Synchronisation</span>
+                            </Link>
+                        </li>
+                    )}
 
                     {/* La comptabilité n'apparaît que pour qui y a droit : le
                         directeur de niveau (comme d'autres postes) n'y accède

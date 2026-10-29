@@ -19,6 +19,7 @@ import { Wifi, WifiOff, RefreshCw, AlertTriangle, ShieldAlert, HardDriveDownload
 import { subscribe, flushQueue, retryAllBlocked, SyncState } from '@/lib/syncEngine';
 import { isTokenLikelyExpired } from '@/lib/sessionExpiry';
 import { EST_POSTE } from '@/lib/poste';
+import IndicateurPoste from '@/components/IndicateurPoste';
 import {
     lireEtatPreparation,
     preparerPoste,
@@ -40,7 +41,14 @@ const INITIAL_STATE: SyncState = {
     lastError: null,
 };
 
+/** Sur un poste installé, la synchronisation est celle du moteur local
+ * (IndicateurPoste) ; dans un navigateur, celle de la file hors-ligne. Le
+ * choix est fixé à la compilation : l'ordre des hooks ne change jamais. */
 export default function SyncStatusIndicator() {
+    return EST_POSTE ? <IndicateurPoste /> : <IndicateurNavigateur />;
+}
+
+function IndicateurNavigateur() {
     const [state, setState] = useState<SyncState>(INITIAL_STATE);
     const [online, setOnline] = useState(true);
     const [sessionLikelyExpired, setSessionLikelyExpired] = useState(false);
@@ -125,10 +133,6 @@ export default function SyncStatusIndicator() {
             </span>
         );
     }
-
-    // Poste local (application installée) : rien à préparer, les données sont
-    // déjà dans la base de l'ordinateur.
-    if (toutVaBien && EST_POSTE) return null;
 
     // Tout va bien : un simple bouton-icône, discret, qui dit si le poste est
     // prêt pour le hors-ligne et permet de mettre ses données à jour.

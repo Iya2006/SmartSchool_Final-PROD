@@ -20,7 +20,7 @@ from app.core.database import Base
 from app.core.recu_paiement import cle_signature_appareil
 from app.models.academique import Appareil, Eleve, Evenement, Inscription, Message
 from app.sync.identifiants import (
-    TAILLE_PLAGE, PosteNonInstalle, activer_le_poste, appareil_de, application_distante,
+    TAILLE_PLAGE, PosteNonInstalle, activer_le_poste, appareil_de, application_distante, est_naturel,
     generateur_de, plage, preparer_tables_du_poste,
 )
 from app.sync.instantane import importer_page
@@ -150,6 +150,48 @@ def test_au_redemarrage_les_compteurs_reprennent_apres_le_dernier(db: Session):
     activer_le_poste(poste, 6, 6, cle_signature_appareil(6))
     second = _inscrire_hors_ligne(poste, a, "Apres")
     assert second.eleve_id == premier.eleve_id + 1
+
+
+def test_une_meme_ligne_a_cle_naturelle_creee_sur_deux_postes_a_le_meme_identifiant(db: Session):
+    """Ligne à clé naturelle : le même réglage (école, clé) créé hors-ligne sur
+    deux postes porte le même identifiant ; à la synchronisation, les deux se
+    rejoignent en une seule ligne au lieu de se heurter en doublon."""
+    from app.models.academique import ParametreEtablissement
+
+    a = Ecole(db, "A")
+    ids = []
+    for numero in (61, 62):
+        poste = _poste_installe(db, a, numero)
+        with Session(poste) as s:
+            reglage = ParametreEtablissement(etablissement_id=a.etab.etablissement_id, categorie="FINANCE",
+                                             cle="recu_prefixe", valeur=f"P{numero}")
+            s.add(reglage)
+            s.commit()
+            ids.append(reglage.parametre_id)
+    assert ids[0] == ids[1] and est_naturel(ids[0])
+
+
+def test_collision_d_empreinte_le_compteur_prend_le_relais(db: Session, monkeypatch):
+    """Deux clés DIFFÉRENTES qui tombent sur la même empreinte (rarissime) :
+    la seconde prend un identifiant ordinaire au lieu d'échouer. Les deux
+    clés donnant le même identifiant, c'est bien la clé qu'il faut comparer."""
+    import app.sync.identifiants as ident
+    from app.models.academique import ParametreEtablissement
+
+    a = Ecole(db, "A")
+    poste = _poste_installe(db, a, 63)
+    vrai = ident.identifiant_naturel
+    with Session(poste) as s:
+        premier = ParametreEtablissement(etablissement_id=a.etab.etablissement_id, categorie="T", cle="collision.a", valeur="1")
+        s.add(premier)
+        s.commit()
+        fixe = premier.parametre_id
+        monkeypatch.setattr(ident, "identifiant_naturel",
+                            lambda t, v: fixe if t == "ss_parametres" else vrai(t, v))
+        second = ParametreEtablissement(etablissement_id=a.etab.etablissement_id, categorie="T", cle="collision.b", valeur="2")
+        s.add(second)
+        s.commit()
+        assert est_naturel(fixe) and appareil_de(second.parametre_id) == 63
 
 
 def test_toute_colonne_d_identifiant_est_sur_64_bits():

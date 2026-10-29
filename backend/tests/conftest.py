@@ -102,10 +102,15 @@ def _generateurs_d_identifiants():
     from app.core.database import engine as moteur_application
     from app.sync.identifiants import brancher_generateur, generateur_de
 
+    from app.sync.journal import installer_journal_cloud
+
     brancher_generateur()
     for moteur in (engine_test, moteur_application):
         with moteur.begin() as cx:
             generateur_de(moteur).configurer(cx, 0)
+    # Le cloud de test tient son journal des changements comme le vrai : toute
+    # la suite écrit donc à travers ses déclencheurs.
+    installer_journal_cloud(engine_test)
 
 
 @pytest.fixture

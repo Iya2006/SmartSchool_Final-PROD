@@ -34,7 +34,8 @@ import httpx
 from sqlalchemy import String, Text, select
 from sqlalchemy.engine import Engine
 
-from app.sync.identifiants import activer_le_poste, retirer_les_gardes
+from app.sync.identifiants import activer_le_poste, preparer_tables_du_poste, retirer_les_gardes
+from app.sync.tables_poste import ecrire_etat, lire_etat
 from app.sync.instantane import importer_page
 from app.sync.perimetre import table, verifier_toutes_les_tables
 
@@ -220,10 +221,17 @@ def installer(
     progression.lignes_total = sum(t["total"] for t in manifeste["tables"])
     progression.tables_faites = progression.lignes_faites = 0
 
-    # Les lignes du cloud ont des identifiants hors de la plage du poste : les
-    # gardes d'une installation précédente interrompue les refuseraient.
+    preparer_tables_du_poste(moteur_local)
     with moteur_local.begin() as cx:
+        # Les lignes du cloud ont des identifiants hors de la plage du poste :
+        # les gardes d'une installation précédente interrompue les refuseraient.
         retirer_les_gardes(cx)
+        # Le journal du cloud sera lu à partir d'ici. Une installation reprise
+        # garde le curseur de sa PREMIÈRE tentative : une ligne déjà copiée
+        # alors, puis modifiée sur le cloud avant la reprise, n'est pas
+        # recopiée (l'import garde l'existant) ; le journal la rattrapera.
+        if lire_etat(cx, "curseur_reception") is None:
+            ecrire_etat(cx, "curseur_reception", manifeste.get("curseur") or 0)
 
     for entree in manifeste["tables"]:
         nom, apres = entree["table"], None
@@ -262,11 +270,13 @@ class Installateur:
     """Une seule installation à la fois, en arrière-plan, suivie par l'écran."""
 
     def __init__(self, dossier_poste: str, cloud_url: str, moteur_local: Engine,
-                 dossier_fichiers: Optional[str] = None):
+                 dossier_fichiers: Optional[str] = None, apres_installation=None):
         self.dossier_poste = dossier_poste
         self.cloud_url = cloud_url
         self.moteur_local = moteur_local
         self.dossier_fichiers = dossier_fichiers
+        # Appelé une fois le poste installé (démarrage de la synchronisation).
+        self.apres_installation = apres_installation
         self.progression = Progression()
         self._verrou = threading.Lock()
         marqueur = lire_marqueur(dossier_poste)
@@ -298,6 +308,8 @@ class Installateur:
             installer(identifiant, mot_de_passe, client=client, moteur_local=self.moteur_local,
                       dossier_poste=self.dossier_poste, progression=self.progression,
                       dossier_fichiers=self.dossier_fichiers)
+            if self.apres_installation:
+                self.apres_installation()
         except ErreurInstallation as exc:
             self.progression.statut, self.progression.erreur = "ECHEC", str(exc)
         except Exception:  # noqa: BLE001 — jamais de trace technique à l'écran

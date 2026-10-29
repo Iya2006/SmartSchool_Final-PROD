@@ -18,6 +18,7 @@ import app.sync.installation as module_installation
 from app.core.database import Base
 from app.models.academique import Appareil, Eleve, Evenement, Utilisateur
 from app.sync.identifiants import appareil_de
+from app.sync.tables_poste import lire_etat
 from app.sync.installation import (
     ErreurInstallation, Installateur, Progression, installer, lire_appareil, lire_marqueur,
 )
@@ -114,6 +115,12 @@ def test_coupure_puis_reprise_sans_doublon(client: TestClient, db: Session, tmp_
     # Interrompu : le poste n'est surtout pas déclaré installé.
     assert lire_marqueur(str(tmp_path)) is None
     assert prog.tables_faites < prog.tables_total
+    with poste.connect() as cx:
+        premier_curseur = lire_etat(cx, "curseur_reception")
+    assert premier_curseur is not None
+
+    # Le cloud change entre les deux tentatives.
+    a.evenement(db)
 
     prog = Progression()
     installer(a.admin.nom_utilisateur, "motdepasse123", client=client, moteur_local=poste,
@@ -126,6 +133,10 @@ def test_coupure_puis_reprise_sans_doublon(client: TestClient, db: Session, tmp_
     # La reprise garde le numéro reçu à la première tentative : un seul poste
     # enregistré, pas un par essai.
     assert db.query(Appareil).filter(Appareil.etablissement_id == a.etab.etablissement_id).count() == 1
+    # ... et le curseur de la première tentative : ce qui a changé entre-temps
+    # sera relu dans le journal du cloud.
+    with poste.connect() as cx:
+        assert lire_etat(cx, "curseur_reception") == premier_curseur
 
 
 def test_le_poste_installe_cree_dans_sa_propre_plage(client: TestClient, db: Session, tmp_path):
