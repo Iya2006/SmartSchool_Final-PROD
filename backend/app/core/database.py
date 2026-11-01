@@ -182,9 +182,26 @@ else:
     engine = create_engine(SQLALCHEMY_DATABASE_URL, **_pool_kwargs)
 
 
+def _minuscules(texte):
+    return texte.lower() if isinstance(texte, str) else texte
+
+
+def _majuscules(texte):
+    return texte.upper() if isinstance(texte, str) else texte
+
+
 def _reglages_sqlite(connexion_dbapi, _enregistrement):
     """Réglages de chaque connexion SQLite, en clair ou chiffrée."""
+    # Comme PostgreSQL : lower() et upper() traitent toutes les lettres. Celles
+    # de SQLite ne connaissent que l'ASCII — lower('TRAORÉ') y vaut 'traorÉ' —
+    # et la recherche sans accents (app/core/recherche.py) ratait, sur un poste
+    # seulement, les noms saisis en majuscules accentuées.
+    connexion_dbapi.create_function("lower", 1, _minuscules, deterministic=True)
+    connexion_dbapi.create_function("upper", 1, _majuscules, deterministic=True)
     curseur = connexion_dbapi.cursor()
+    # LIKE distingue majuscules et minuscules, comme sous PostgreSQL (ILIKE,
+    # traduit en lower(...) LIKE lower(...), reste insensible à la casse).
+    curseur.execute("PRAGMA case_sensitive_like=ON")
     # WAL : on peut lire pendant qu'une écriture est en cours.
     curseur.execute("PRAGMA journal_mode=WAL")
     curseur.execute("PRAGMA synchronous=NORMAL")
