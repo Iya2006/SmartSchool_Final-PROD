@@ -39,6 +39,10 @@ node_modules/
 .next/
 # Interface compilée pour l'application installée (desktop/scripts/construire-interface.mjs)
 .next-poste/
+# Empaquetage de l'application installée (desktop/scripts/empaqueter.mjs) :
+# Python embarqué, moteur compilé, installeur. Reconstruits à chaque fois.
+desktop/empaquetage/
+desktop/.cache-empaquetage/
 out/
 .nuxt/
 .output/

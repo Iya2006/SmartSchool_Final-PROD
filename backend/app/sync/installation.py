@@ -9,9 +9,9 @@ Seule la direction peut installer un poste (voir app/api/poste.py, côté cloud)
 Avant tout téléchargement, le poste s'enregistre auprès du cloud : il reçoit
 son numéro (sa plage d'identifiants, app/sync/identifiants.py), son rang dans
 l'école, son jeton de synchronisation et la clé qui signe ses reçus. Ces
-informations sont gardées dans `appareil.json` dès leur réception : une
-installation reprise après une coupure garde le même numéro au lieu d'en
-consommer un nouveau.
+informations sont gardées dans la base du poste (chiffrée) dès leur
+réception : une installation reprise après une coupure garde le même numéro
+au lieu d'en consommer un nouveau.
 
 Le téléchargement se fait table par table, page par page. Une coupure réseau
 déclenche quelques nouvelles tentatives ; si elle dure, l'installation
@@ -33,6 +33,7 @@ from typing import Optional
 import httpx
 from sqlalchemy import String, Text, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 
 from app.sync.identifiants import activer_le_poste, preparer_tables_du_poste, retirer_les_gardes
 from app.sync.tables_poste import ecrire_etat, lire_etat
@@ -84,24 +85,55 @@ def _ecrire_json(dossier_poste: str, nom: str, contenu: dict) -> None:
     os.replace(provisoire, chemin)
 
 
-def lire_appareil(dossier_poste: str) -> Optional[dict]:
-    """Identité du poste auprès du cloud (numéro, rang, jeton, clé des reçus)."""
-    return _lire_json(dossier_poste, FICHIER_APPAREIL)
+CLE_APPAREIL = "appareil"
+
+
+def lire_appareil(moteur_local: Engine, dossier_poste: Optional[str] = None) -> Optional[dict]:
+    """Identité du poste auprès du cloud : numéro, rang, école, jeton de
+    synchronisation et clé des reçus. Elle est rangée DANS la base du poste,
+    chiffrée, et jamais dans un fichier en clair : un ordinateur volé ne
+    livre ni le jeton (qui permettrait d'écrire dans l'école), ni la clé
+    (qui permettrait de signer de faux reçus).
+
+    Une installation antérieure la gardait dans `appareil.json` : elle est
+    reprise dans la base, puis le fichier est effacé."""
+    try:
+        with moteur_local.connect() as cx:
+            brut = lire_etat(cx, CLE_APPAREIL)
+    except OperationalError:
+        brut = None  # tables du poste pas encore créées
+    if brut:
+        return json.loads(brut)
+    if dossier_poste:
+        ancien = _lire_json(dossier_poste, FICHIER_APPAREIL)
+        if ancien:
+            _ecrire_appareil(moteur_local, ancien)
+            os.remove(os.path.join(dossier_poste, FICHIER_APPAREIL))
+            return ancien
+    return None
+
+
+def _ecrire_appareil(moteur_local: Engine, appareil: dict) -> None:
+    preparer_tables_du_poste(moteur_local)
+    with moteur_local.begin() as cx:
+        ecrire_etat(cx, CLE_APPAREIL, json.dumps(appareil))
 
 
 def lire_marqueur(dossier_poste: str) -> Optional[dict]:
     """Le marqueur d'installation, seulement si le poste est complet : une
     installation antérieure à l'enregistrement des postes (sans numéro
-    d'appareil) est à refaire, ses lignes n'auraient pas de plage."""
+    d'appareil) est à refaire, ses lignes n'auraient pas de plage. Il ne
+    contient rien de secret (école, numéro et rang du poste)."""
     marqueur = _lire_json(dossier_poste, FICHIER_MARQUEUR)
-    if not marqueur or not marqueur.get("appareil_id") or not lire_appareil(dossier_poste):
+    if not marqueur or not marqueur.get("appareil_id"):
         return None
     return marqueur
 
 
-def _enregistrer_le_poste(client, entetes: dict, dossier_poste: str, etablissement_id: int) -> dict:
+def _enregistrer_le_poste(client, entetes: dict, moteur_local: Engine, dossier_poste: str,
+                          etablissement_id: int) -> dict:
     """Numéro du poste : celui d'une installation interrompue, sinon un nouveau."""
-    appareil = lire_appareil(dossier_poste)
+    appareil = lire_appareil(moteur_local, dossier_poste)
     if appareil:
         if appareil.get("etablissement_id") != etablissement_id:
             # La base locale contient déjà une autre école : on ne mélange jamais.
@@ -118,7 +150,7 @@ def _enregistrer_le_poste(client, entetes: dict, dossier_poste: str, etablisseme
     if rep.status_code >= 400:
         raise ErreurInstallation("Impossible d'enregistrer cet ordinateur auprès du serveur. Réessayez dans un instant.")
     appareil = rep.json()
-    _ecrire_json(dossier_poste, FICHIER_APPAREIL, appareil)
+    _ecrire_appareil(moteur_local, appareil)
     return appareil
 
 
@@ -215,13 +247,13 @@ def installer(
     if rep.status_code >= 400:
         raise ErreurInstallation("Impossible de préparer l'installation sur le serveur. Réessayez dans un instant.")
     manifeste = rep.json()
-    appareil = _enregistrer_le_poste(client, entetes, dossier_poste, manifeste["etablissement_id"])
+    preparer_tables_du_poste(moteur_local)
+    appareil = _enregistrer_le_poste(client, entetes, moteur_local, dossier_poste, manifeste["etablissement_id"])
     progression.etablissement_nom = manifeste["etablissement_nom"]
     progression.tables_total = len(manifeste["tables"])
     progression.lignes_total = sum(t["total"] for t in manifeste["tables"])
     progression.tables_faites = progression.lignes_faites = 0
 
-    preparer_tables_du_poste(moteur_local)
     with moteur_local.begin() as cx:
         # Les lignes du cloud ont des identifiants hors de la plage du poste :
         # les gardes d'une installation précédente interrompue les refuseraient.

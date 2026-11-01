@@ -40,6 +40,45 @@ def postes_de_l_ecole(db: Session = Depends(get_db), etablissement_id: int = Dep
     } for a in appareils]}
 
 
+def _poste(db: Session, etablissement_id: int, rang: int):
+    from app.models.academique import Appareil
+
+    appareil = db.query(Appareil).filter(Appareil.etablissement_id == etablissement_id,
+                                         Appareil.rang == rang).first()
+    if appareil is None:
+        raise HTTPException(404, "Poste introuvable")
+    return appareil
+
+
+@postes_router.post("/{rang}/retirer")
+def retirer_un_poste(rang: int, db: Session = Depends(get_db),
+                     etablissement_id: int = Depends(require_etablissement),
+                     current_user: dict = Depends(exige_installation_poste)):
+    """Ordinateur perdu, volé ou remplacé : il ne peut plus se synchroniser, et
+    au premier échange refusé il verrouille toute connexion. Ses données
+    restent chiffrées sur son disque ; ce qu'il n'avait pas synchronisé est
+    perdu, d'où l'alerte des 7 jours."""
+    from datetime import datetime
+
+    appareil = _poste(db, etablissement_id, rang)
+    if appareil.revoque_le is None:
+        appareil.revoque_le = datetime.now()
+        db.commit()
+    return {"ok": True}
+
+
+@postes_router.post("/{rang}/remettre")
+def remettre_un_poste(rang: int, db: Session = Depends(get_db),
+                      etablissement_id: int = Depends(require_etablissement),
+                      current_user: dict = Depends(exige_installation_poste)):
+    """Retiré par erreur : il se resynchronise, et le verrou se lève de
+    lui-même au premier échange réussi."""
+    appareil = _poste(db, etablissement_id, rang)
+    appareil.revoque_le = None
+    db.commit()
+    return {"ok": True}
+
+
 class Choix(BaseModel):
     choix: str = Field(pattern="^(SERVEUR|POSTE)$")
 

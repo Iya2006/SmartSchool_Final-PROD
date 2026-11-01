@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.api.poste import SCHEMA_PAS_PRET, empreinte_jeton
 from app.core.database import get_db
 from app.core.fichiers import DOSSIER_FICHIERS
+from app.core.version import ENTETE, poste_a_jour
 from app.sync.fichiers import TAILLE_MAX, chemin_sur, ecrire, manquants
 from app.models.academique import Appareil, SyncConflit
 from app.sync.cote_cloud import (
@@ -32,6 +33,7 @@ router = APIRouter(prefix="/api/sync/appareil", tags=["Synchronisation des poste
 
 def appareil_authentifie(
     authorization: Optional[str] = Header(None),
+    version: Optional[str] = Header(None, alias=ENTETE),
     db: Session = Depends(get_db),
 ) -> Appareil:
     if not schema_identifiants_a_jour(db.get_bind()):
@@ -42,8 +44,15 @@ def appareil_authentifie(
     appareil = db.query(Appareil).filter(Appareil.jeton_empreinte == empreinte_jeton(jeton.strip())).first()
     if appareil is None:
         raise HTTPException(401, "Poste non reconnu.")
+    # Le retrait AVANT la version : un poste volé et resté sur une vieille
+    # version doit quand même apprendre qu'il est retiré, et se verrouiller.
     if appareil.revoque_le is not None:
         raise HTTPException(403, "Ce poste a été retiré par la direction : il ne peut plus se synchroniser.")
+    if not poste_a_jour(version or ""):
+        # 426 : le poste doit se mettre à jour avant d'échanger quoi que ce
+        # soit. Il continue de fonctionner hors-ligne en attendant.
+        raise HTTPException(426, "Ce poste doit être mis à jour pour se synchroniser. "
+                                 "La mise à jour se fait automatiquement dès qu'internet est là.")
     return appareil
 
 

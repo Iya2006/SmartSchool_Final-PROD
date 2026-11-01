@@ -104,6 +104,22 @@ export default function SynchronisationPage() {
 
     useEffect(() => { void charger(); }, [charger]);
 
+    const basculerPoste = async (p: Poste) => {
+        if (!p.retire && !window.confirm(
+            `Retirer le poste P${p.rang}${p.nom ? ` (${p.nom})` : ''} ?\n\n`
+            + 'Il ne pourra plus se synchroniser, et plus personne ne pourra s’y connecter. '
+            + 'Ce qu’il n’a pas encore synchronisé sera perdu. À faire pour un ordinateur perdu, volé ou remplacé.',
+        )) return;
+        setErreur(null);
+        try {
+            await api.post(`/api/sync/postes/${p.rang}/${p.retire ? 'remettre' : 'retirer'}`);
+            setMessage(p.retire ? `Le poste P${p.rang} est remis en service.` : `Le poste P${p.rang} est retiré.`);
+            await charger();
+        } catch (err) {
+            setErreur(messageErreur(err, 'L’opération n’a pas pu être faite.'));
+        }
+    };
+
     const trancher = async (c: Conflit, choix: 'SERVEUR' | 'POSTE') => {
         setEnCours(c.conflit_id);
         setErreur(null);
@@ -152,6 +168,7 @@ export default function SynchronisationPage() {
                                     <tr style={{ textAlign: 'left', color: '#64748b' }}>
                                         <th style={cellule}>Poste</th><th style={cellule}>Installé le</th>
                                         <th style={cellule}>Dernière synchronisation</th><th style={cellule}>État</th>
+                                        <th style={cellule} aria-label="Actions" />
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -167,6 +184,11 @@ export default function SynchronisationPage() {
                                                     {p.retire ? <Pastille ton="gris">Retiré</Pastille>
                                                         : ancien ? <Pastille ton="rouge">Pas sauvegardé depuis 7 jours</Pastille>
                                                             : <Pastille ton="vert">À jour</Pastille>}
+                                                </td>
+                                                <td style={{ ...cellule, textAlign: 'right' }}>
+                                                    <button onClick={() => void basculerPoste(p)} style={bouton}>
+                                                        {p.retire ? 'Remettre en service' : 'Retirer ce poste'}
+                                                    </button>
                                                 </td>
                                             </tr>
                                         );

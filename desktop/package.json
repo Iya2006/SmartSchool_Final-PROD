@@ -1,15 +1,59 @@
 {
   "name": "smartschool-poste",
   "productName": "SmartSchool",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "SmartSchool installé sur l'ordinateur de l'école : fonctionne avec ou sans internet, synchronisé avec le cloud.",
+  "author": "TrillionX",
   "main": "main.js",
   "scripts": {
     "interface": "node scripts/construire-interface.mjs",
-    "demarrer": "electron ."
+    "demarrer": "electron .",
+    "empaqueter": "node scripts/empaqueter.mjs"
+  },
+  "dependencies": {
+    "electron-updater": "6.6.2"
   },
   "devDependencies": {
-    "electron": "^45.0.0"
+    "electron": "^45.0.0",
+    "electron-builder": "26.0.12"
+  },
+  "build": {
+    "appId": "com.trillionx.smartschool",
+    "productName": "SmartSchool",
+    "copyright": "TrillionX",
+    "directories": {
+      "output": "dist",
+      "buildResources": "empaquetage"
+    },
+    "files": [
+      "main.js",
+      "demarrage.html",
+      "package.json"
+    ],
+    "afterPack": "scripts/apres-empaquetage.js",
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "empaquetage/icon.png",
+      "artifactName": "SmartSchool-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SmartSchool",
+      "installerLanguages": ["fr_FR"],
+      "language": "1036"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Iya2006",
+        "repo": "smartschool-installation",
+        "releaseType": "release"
+      }
+    ]
   }
 }

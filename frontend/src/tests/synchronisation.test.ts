@@ -51,6 +51,13 @@ describe('decrireEtat', () => {
         expect(d.detail).toContain('Plus de 7 jours');
     });
 
+    it('mise à jour demandée par le serveur : le dit, sans alarmer', () => {
+        const d = decrireEtat({ ...base, statut: 'MISE_A_JOUR_REQUISE' }, maintenant);
+        expect(d.texte).toBe('Mise à jour nécessaire');
+        expect(d.ton).toBe('orange');
+        expect(d.detail).toContain('continuer à travailler');
+    });
+
     it('poste retiré : rouge', () => {
         expect(decrireEtat({ ...base, statut: 'REFUSE' }, maintenant).texte).toBe('Poste retiré par la direction');
     });

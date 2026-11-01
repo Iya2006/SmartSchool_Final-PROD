@@ -68,6 +68,21 @@ if MODE_POSTE:
     generateur_de(engine)  # sans numéro tant que le poste n'est pas installé
 
 
+# Poste : au premier démarrage d'une nouvelle version, copie de la base AVANT
+# toute mise à niveau du schéma. Les changements faits hors-ligne et pas encore
+# synchronisés n'existent que sur ce poste (app/sync/sauvegarde.py).
+if MODE_POSTE:
+    from app.core.mode import DOSSIER_POSTE
+    from app.core.version import VERSION
+    from app.sync.sauvegarde import noter_version, sauvegarder_si_nouvelle_version
+    try:
+        _copie = sauvegarder_si_nouvelle_version(engine, DOSSIER_POSTE, VERSION)
+        if _copie:
+            print(f"[POSTE] Base sauvegardée avant la mise à niveau : {_copie}")
+    except Exception as _e:  # noqa: BLE001 — signalé ; la mise à niveau reste additive
+        print(f"[POSTE] Sauvegarde avant mise à niveau impossible : {_e}")
+
+
 # Création des tables au démarrage
 Base.metadata.create_all(bind=engine)
 
@@ -89,6 +104,18 @@ try:
               "(voir migrations/rattraper_colonnes_manquantes.py).")
 except Exception as _e:  # noqa: BLE001 — le démarrage prime sur la migration
     print(f"[SCHEMA] Mise à niveau auto du schéma ignorée : {_e}")
+
+# Poste : les index ajoutés aux modèles depuis l'installation (create_all ne
+# les crée qu'avec leur table), puis la version est notée comme appliquée.
+if MODE_POSTE:
+    try:
+        from migrations.rattraper_colonnes_manquantes import appliquer_index_manquants
+        _index = appliquer_index_manquants(engine)
+        if _index:
+            print(f"[SCHEMA] {len(_index)} index ajouté(s) sur ce poste.")
+        noter_version(DOSSIER_POSTE, VERSION)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[SCHEMA] Index du poste non complétés : {_e}")
 
 # Colonnes rendues OPTIONNELLES après coup (le modèle passe nullable=True mais la
 # base garde son ancienne contrainte NOT NULL). `create_all` ne touche jamais une
@@ -476,8 +503,11 @@ app.include_router(poste_router)
 if MODE_POSTE:
     from app.api.poste_local import relais as relais_conflits_router
     from app.api.poste_local import router as poste_local_router
+    from app.api.poste_local import verrou_poste_retire
     app.include_router(poste_local_router)
     app.include_router(relais_conflits_router)
+    # Un poste retiré par la direction refuse toute connexion.
+    app.middleware("http")(verrou_poste_retire)
 else:
     from app.api.sync_appareil import router as sync_appareil_router
     from app.api.sync_conflits import postes_router as sync_postes_router

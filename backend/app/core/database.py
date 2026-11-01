@@ -100,20 +100,103 @@ if EST_SQLITE:
     # attend son tour (30 s) au lieu d'échouer en « database is locked ».
     _pool_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL, **_pool_kwargs)
+
+# ── Base chiffrée d'un poste installé ──────────────────────────────────────
+# Un ordinateur volé ne doit pas livrer l'école. Sur un poste, l'application
+# installée fournit une clé de 256 bits (SMARTSCHOOL_CLE_BASE, protégée par le
+# compte Windows, voir desktop/main.js) : la base est chiffrée par SQLCipher,
+# illisible sans elle. Sans clé (tests, développement), rien ne change.
+
+def _chemin_sqlite(url: str) -> str:
+    return url.split(":///", 1)[1] if ":///" in url else url
+
+
+def connexion_chiffree(chemin: str, cle_hex: str):
+    """Ouvre la base chiffrée. La clé brute (64 caractères hexadécimaux) est
+    passée telle quelle : pas de dérivation à chaque ouverture."""
+    import sqlcipher3.dbapi2 as sqlcipher
+
+    connexion = sqlcipher.connect(chemin, check_same_thread=False, timeout=30)
+    connexion.execute(f"PRAGMA key = \"x'{cle_hex}'\"")
+    return connexion
+
+
+def moteur_chiffre(chemin: str, cle_hex: str, **options):
+    """Moteur SQLAlchemy sur une base SQLCipher. Le module de SQLCipher est
+    déclaré comme pilote : sans cela, ses erreurs (doublon, clé étrangère) ne
+    seraient pas reconnues comme telles par SQLAlchemy.
+
+    Le pool est imposé (QueuePool, comme pour un fichier SQLite ordinaire) :
+    avec l'adresse « sqlite:// », SQLAlchemy croirait à une base en mémoire et
+    prendrait un SingletonThreadPool, qui ne garde que cinq fils et ferme la
+    connexion des autres pendant qu'ils s'en servent. Le moteur en sert
+    quarante à la fois : le poste s'arrêtait net, sans aucune trace, au premier
+    afflux de requêtes (constaté sur l'application installée)."""
+    import sqlcipher3.dbapi2 as sqlcipher
+    from sqlalchemy.pool import QueuePool
+
+    options.setdefault("poolclass", QueuePool)
+    options.setdefault("pool_size", DB_POOL_SIZE)
+    options.setdefault("max_overflow", DB_MAX_OVERFLOW)
+    return create_engine("sqlite://", creator=lambda: connexion_chiffree(chemin, cle_hex),
+                         module=sqlcipher, **options)
+
+
+def chiffrer_base_en_clair(chemin: str, cle_hex: str) -> bool:
+    """Convertit, une seule fois, une base de poste encore en clair (installée
+    avant le chiffrement). Rend True si une conversion a eu lieu. Le fichier
+    n'est remplacé qu'une fois la copie chiffrée complète."""
+    import sqlcipher3.dbapi2 as sqlcipher
+
+    if not os.path.exists(chemin):
+        return False
+    with open(chemin, "rb") as f:
+        if f.read(16) != b"SQLite format 3\x00":
+            return False  # déjà chiffrée (ou vide)
+    provisoire = chemin + ".chiffrement"
+    if os.path.exists(provisoire):
+        os.remove(provisoire)
+    en_clair = sqlcipher.connect(chemin)
+    try:
+        en_clair.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        chemin_sql = provisoire.replace("'", "''")
+        en_clair.execute(f"ATTACH DATABASE '{chemin_sql}' AS chiffree KEY \"x'{cle_hex}'\"")
+        en_clair.execute("SELECT sqlcipher_export('chiffree')")
+        en_clair.execute("DETACH DATABASE chiffree")
+    finally:
+        en_clair.close()
+    for suffixe in ("-wal", "-shm"):
+        if os.path.exists(chemin + suffixe):
+            os.remove(chemin + suffixe)
+    os.replace(provisoire, chemin)
+    return True
+
+
+CLE_BASE = (os.getenv("SMARTSCHOOL_CLE_BASE") or "").strip()
+if EST_SQLITE and CLE_BASE:
+    _chemin_base = _chemin_sqlite(SQLALCHEMY_DATABASE_URL)
+    chiffrer_base_en_clair(_chemin_base, CLE_BASE)
+    _pool_kwargs.pop("connect_args", None)
+    engine = moteur_chiffre(_chemin_base, CLE_BASE, **_pool_kwargs)
+else:
+    engine = create_engine(SQLALCHEMY_DATABASE_URL, **_pool_kwargs)
+
+
+def _reglages_sqlite(connexion_dbapi, _enregistrement):
+    """Réglages de chaque connexion SQLite, en clair ou chiffrée."""
+    curseur = connexion_dbapi.cursor()
+    # WAL : on peut lire pendant qu'une écriture est en cours.
+    curseur.execute("PRAGMA journal_mode=WAL")
+    curseur.execute("PRAGMA synchronous=NORMAL")
+    # SQLite n'applique pas les clés étrangères par défaut, PostgreSQL si :
+    # sans ce réglage, le poste accepterait hors-ligne une donnée que le
+    # cloud refuserait ensuite à la synchronisation.
+    curseur.execute("PRAGMA foreign_keys=ON")
+    curseur.close()
+
 
 if EST_SQLITE:
-    @event.listens_for(engine, "connect")
-    def _reglages_sqlite(connexion_dbapi, _enregistrement):
-        curseur = connexion_dbapi.cursor()
-        # WAL : on peut lire pendant qu'une écriture est en cours.
-        curseur.execute("PRAGMA journal_mode=WAL")
-        curseur.execute("PRAGMA synchronous=NORMAL")
-        # SQLite n'applique pas les clés étrangères par défaut, PostgreSQL si :
-        # sans ce réglage, le poste accepterait hors-ligne une donnée que le
-        # cloud refuserait ensuite à la synchronisation.
-        curseur.execute("PRAGMA foreign_keys=ON")
-        curseur.close()
+    event.listen(engine, "connect", _reglages_sqlite)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

@@ -20,16 +20,20 @@ from app.core.auth import get_current_user
 from app.core.database import engine
 from app.core.fichiers import DOSSIER_FICHIERS
 from app.core.mode import CLOUD_URL, DOSSIER_POSTE
+from app.core.version import VERSION
 from app.sync.identifiants import activer_le_poste
 from app.sync.installation import Installateur, lire_appareil, lire_marqueur
-from app.sync.service import Synchroniseur
+from app.sync.service import Synchroniseur, poste_retire
+from app.sync.verrou import MESSAGE_RETIRE, verrou_pour
 
 router = APIRouter(prefix="/api/poste", tags=["Poste local (hors-ligne)"])
 
 
 def _jeton_du_poste():
-    appareil = lire_appareil(DOSSIER_POSTE)
-    return appareil.get("jeton") if appareil and lire_marqueur(DOSSIER_POSTE) else None
+    if not lire_marqueur(DOSSIER_POSTE):
+        return None
+    appareil = lire_appareil(engine, DOSSIER_POSTE)
+    return appareil.get("jeton") if appareil else None
 
 
 synchroniseur = Synchroniseur(engine, _jeton_du_poste, CLOUD_URL, dossier_fichiers=DOSSIER_FICHIERS)
@@ -40,9 +44,13 @@ installateur = Installateur(DOSSIER_POSTE, CLOUD_URL, engine, dossier_fichiers=D
 # de ses reçus dès le démarrage, puis se synchronise. Sinon, toute création
 # reste refusée jusqu'à la fin de l'installation.
 if lire_marqueur(DOSSIER_POSTE):
-    _appareil = lire_appareil(DOSSIER_POSTE)
+    _appareil = lire_appareil(engine, DOSSIER_POSTE)
     activer_le_poste(engine, _appareil["appareil_id"], _appareil["rang"], _appareil["cle_signature"])
     synchroniseur.demarrer()
+
+
+# Poste retiré par la direction : plus personne ne s'y connecte (app/sync/verrou.py).
+verrou_poste_retire = verrou_pour(engine)
 
 
 class DemandeInstallation(BaseModel):
@@ -53,8 +61,11 @@ class DemandeInstallation(BaseModel):
 @router.get("/etat")
 def etat_du_poste():
     """Sans authentification : avant l'installation, aucun compte n'existe sur
-    le poste. Ne révèle que l'état de l'installation et le nom de l'école."""
-    return {"mode": "poste", **installateur.etat()}
+    le poste. Ne révèle que l'état de l'installation, le nom de l'école et, le
+    cas échéant, que le poste a été retiré (l'écran de connexion le dit)."""
+    retire = poste_retire(engine)
+    return {"mode": "poste", **installateur.etat(), "retire": MESSAGE_RETIRE if retire else None,
+            "version": VERSION}
 
 
 @router.post("/installer", status_code=202)

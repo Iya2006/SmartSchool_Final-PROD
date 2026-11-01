@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import app.sync.installation as module_installation
 from app.core.database import get_db
+from app.core.version import ENTETE, VERSION
 from app.core.recu_paiement import code_verification
 from app.models.academique import (
     Appareil, Eleve, Evenement, Facture, Inscription, Paiement, SyncConflit, SyncJournal, Utilisateur,
@@ -44,8 +45,12 @@ class Poste:
         self.fichiers = str(dossier / "fichiers") if avec_fichiers else None
         installer(ecole.admin.nom_utilisateur, "motdepasse123", client=client, moteur_local=self.moteur,
                   dossier_poste=str(dossier / "poste"), progression=Progression(), dossier_fichiers=self.fichiers)
-        self.appareil = lire_appareil(str(dossier / "poste"))
+        self.appareil = lire_appareil(self.moteur)
         self.numero = self.appareil["appareil_id"]
+
+    def entetes(self) -> dict:
+        """Ce qu'envoie le service de synchronisation : jeton et version."""
+        return {"Authorization": f"Appareil {self.appareil['jeton']}", ENTETE: VERSION}
 
     def synchroniser(self) -> Synchroniseur:
         service = Synchroniseur(self.moteur, lambda: self.appareil["jeton"], "", dossier_fichiers=self.fichiers)
@@ -158,7 +163,7 @@ def test_un_lot_renvoye_apres_une_coupure_n_a_aucun_effet_de_plus(client: TestCl
     with poste.session() as s:
         ev_id = _evenement(s, a, "Sortie").evenement_id
     changements, _ = construire_lot(poste.moteur)
-    entetes = {"Authorization": f"Appareil {poste.appareil['jeton']}"}
+    entetes = poste.entetes()
     # La réponse s'est perdue : le poste renvoie le même lot.
     for _ in range(2):
         rep = client.post("/api/sync/appareil/envoi", json={"changements": changements}, headers=entetes)
@@ -170,7 +175,7 @@ def test_un_poste_ne_touche_jamais_une_autre_ecole(client: TestClient, db: Sessi
     a, b = Ecole(db, "A"), Ecole(db, "B")
     eleve_b = b.eleve(db)
     poste_a = Poste(client, a, tmp_path)
-    entetes = {"Authorization": f"Appareil {poste_a.appareil['jeton']}"}
+    entetes = poste_a.entetes()
     intrusions = [
         # Modifier un élève de l'école B.
         {"seq": 1, "table": "ss_eleves", "cle": eleve_b.eleve_id, "operation": "U",

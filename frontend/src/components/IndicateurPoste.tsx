@@ -21,7 +21,7 @@ import { useAuth } from '@/context/AuthContext';
 import { canAccessPathForRole } from '@/lib/roleAccess';
 
 interface EtatSynchro {
-    statut: 'INACTIF' | 'EN_COURS' | 'SYNCHRONISE' | 'HORS_LIGNE' | 'REFUSE' | 'ERREUR';
+    statut: 'INACTIF' | 'EN_COURS' | 'SYNCHRONISE' | 'HORS_LIGNE' | 'REFUSE' | 'MISE_A_JOUR_REQUISE' | 'ERREUR';
     en_attente: number;
     // Refusé par le cloud ou impossible à appliquer sur ce poste.
     mis_de_cote: number;
@@ -48,6 +48,13 @@ export function decrireEtat(etat: EtatSynchro, maintenant: number = Date.now()) 
         : false;
     if (etat.statut === 'REFUSE') {
         return { ton: 'rouge' as const, Icone: ShieldAlert, texte: 'Poste retiré par la direction', detail: etat.erreur };
+    }
+    if (etat.statut === 'MISE_A_JOUR_REQUISE') {
+        return {
+            ton: 'orange' as const, Icone: AlertTriangle, texte: 'Mise à jour nécessaire',
+            detail: 'Le serveur demande une version plus récente de SmartSchool pour synchroniser. '
+                + 'Elle s’installe automatiquement ; en attendant, vous pouvez continuer à travailler.',
+        };
     }
     if (etat.statut === 'EN_COURS') {
         return { ton: 'orange' as const, Icone: RefreshCw, texte: 'Synchronisation…', detail: null };

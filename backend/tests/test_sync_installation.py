@@ -145,10 +145,15 @@ def test_le_poste_installe_cree_dans_sa_propre_plage(client: TestClient, db: Ses
     installer(a.admin.nom_utilisateur, "motdepasse123", client=client, moteur_local=poste,
               dossier_poste=str(tmp_path), progression=Progression())
 
-    appareil, marqueur = lire_appareil(str(tmp_path)), lire_marqueur(str(tmp_path))
+    appareil, marqueur = lire_appareil(poste), lire_marqueur(str(tmp_path))
     assert marqueur["appareil_id"] == appareil["appareil_id"]
     assert marqueur["rang"] == appareil["rang"] == 1
     assert appareil["jeton"] and appareil["cle_signature"]
+    # Les secrets du poste sont dans sa base (chiffrée sur un vrai poste),
+    # jamais dans un fichier en clair à côté.
+    import os
+    assert not os.path.exists(tmp_path / "appareil.json")
+    assert appareil["jeton"] not in (tmp_path / "poste.json").read_text(encoding="utf-8")
     with Session(poste) as s:
         evenement = Evenement(etablissement_id=a.etab.etablissement_id, titre="Hors-ligne",
                               date_debut=date(2026, 6, 1), cible="TOUS", statut="BROUILLON")

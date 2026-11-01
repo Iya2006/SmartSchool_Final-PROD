@@ -66,7 +66,7 @@ def test_un_logo_change_en_ligne_arrive_sur_le_poste(client: TestClient, db: Ses
 def test_le_cloud_n_ecrase_jamais_un_fichier_et_refuse_les_chemins_pieges(client: TestClient, db: Session, tmp_path):
     a = Ecole(db, "A")
     poste = Poste(client, a, tmp_path)
-    entetes = {"Authorization": f"Appareil {poste.appareil['jeton']}"}
+    entetes = poste.entetes()
     nom = f"existant-{_uid()}.jpg"
     cloud = _fichier_du_cloud("photos", "eleves", nom)
     with open(cloud, "wb") as f:

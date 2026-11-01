@@ -227,4 +227,33 @@ reviennent en ligne. Tout converge seul, totaux justes, sans conflit. Même
 rapport.
 
 Reste en phase B : la synchronisation des fichiers (B6) et la vérification
-visuelle dans l'application installée.
+visuelle dans l'application installée. Les deux ont été faites dans le même
+commit (`3ff40b0`), même rapport.
+
+## 29/10 au 01/11/2026 — Phase C : installeur, mises à jour, chiffrement, retrait
+
+- **C1** : installeur Windows `SmartSchool-Setup.exe`, construit par
+  `desktop/scripts/empaqueter.mjs`.
+  - Il embarque un Python autonome et le moteur compilé, sans les sources.
+  - Ni `.env` ni `secrets/` : c'est contrôlé.
+  - La désinstallation garde les données.
+- **C2** : mises à jour automatiques (electron-updater).
+  - Le cloud refuse un poste trop ancien (426), qui affiche « Mise à jour
+    nécessaire ».
+  - Le schéma local se met à niveau sous SQLite aussi.
+  - La base est sauvegardée avant chaque nouvelle version.
+- **C3** : base du poste chiffrée (SQLCipher).
+  - La clé est protégée par Windows (DPAPI).
+  - Les secrets de synchronisation sont rangés dans la base chiffrée.
+- **C4** : « Retirer ce poste » sur l'écran Synchronisation. Le poste retiré
+  refuse toute connexion.
+- **C5** : section « Télécharger » sur la vitrine. Elle part avec la fusion.
+- Corrigé aussi : une fenêtre d'erreur à la fermeture de l'application
+  (journal des services fermé trop tôt).
+
+Tout est vérifié sur l'application réellement installée : premier lancement,
+mise à jour 0.3.0 → 0.3.1, retrait depuis le vrai bouton, désinstallation puis
+réinstallation. **Rien n'est publié.** Le dépôt public des installeurs sera
+créé avec la fusion, avec l'accord du fondateur.
+
+Détail, pièges et limites : `.ai/CORRECTIFS_01_11_2026_RAPPORT.md`.
