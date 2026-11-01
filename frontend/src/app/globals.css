@@ -1,7 +1,7 @@
 /* Inter porte toute l'application. Sora (titres) et Fraunces (accent en
    italique) ne servent que sur les écrans publics — vitrine, connexion,
-   inscription — d'où leur chargement ici, dans la même requête. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Sora:wght@400;600;700;800&family=Fraunces:ital,opsz,wght@1,9..144,400;1,9..144,500&display=swap');
+   inscription. Toutes sont servies par l'application elle-même, pour
+   fonctionner hors-ligne : src/fonts/polices.css (chargée dans layout.tsx). */
 
 :root {
   /* SkillPath Brand Colors */
