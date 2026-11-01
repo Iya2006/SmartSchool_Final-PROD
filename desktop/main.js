@@ -311,15 +311,38 @@ function creerFenetre() {
         backgroundColor: '#0f172a',
         webPreferences: { contextIsolation: true, sandbox: true },
     });
-    // Les liens externes s'ouvrent dans le navigateur, jamais dans l'application.
-    fenetre.webContents.setWindowOpenHandler(({ url }) => {
-        if (!url.startsWith(`http://127.0.0.1:${PORT_INTERFACE}`)) {
-            void shell.openExternal(url);
-            return { action: 'deny' };
-        }
-        return { action: 'allow' };
-    });
+    regirLesFenetres(fenetre.webContents);
     return fenetre;
+}
+
+/**
+ * Ce qu'une page de l'application peut ouvrir dans une nouvelle fenêtre.
+ * - Dans l'application : l'interface elle-même, une fenêtre vierge que la page
+ *   remplit pour l'imprimer (bulletins, badges, reçus), et un document qu'elle
+ *   a produit (« blob: », PDF des notes ou des résultats). Les refuser, c'était
+ *   rendre l'impression impossible sur un poste : la fenêtre n'existait pas,
+ *   et une page vide partait dans le navigateur du système.
+ * - Tout le reste (liens externes) : dans le navigateur, jamais ici.
+ * La même règle vaut pour les fenêtres ainsi ouvertes.
+ */
+function regirLesFenetres(contenu) {
+    const interfaceLocale = `http://127.0.0.1:${PORT_INTERFACE}`;
+    contenu.setWindowOpenHandler(({ url }) => {
+        if (url === 'about:blank' || url.startsWith(`${interfaceLocale}/`) || url === interfaceLocale
+            || url.startsWith(`blob:${interfaceLocale}/`)) {
+            return {
+                action: 'allow',
+                overrideBrowserWindowOptions: {
+                    autoHideMenuBar: true,
+                    backgroundColor: '#ffffff',
+                    webPreferences: { contextIsolation: true, sandbox: true },
+                },
+            };
+        }
+        void shell.openExternal(url);
+        return { action: 'deny' };
+    });
+    contenu.on('did-create-window', (enfant) => regirLesFenetres(enfant.webContents));
 }
 
 const verrou = app.requestSingleInstanceLock();
