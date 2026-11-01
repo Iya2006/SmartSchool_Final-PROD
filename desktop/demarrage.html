@@ -13,6 +13,10 @@
         .bloc { text-align: center; }
         .nom { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 6px; }
         .texte { margin: 0; color: rgba(241, 245, 249, 0.7); font-size: 14px; }
+        /* Ouverte avec « #redemarrage » (main.js) quand un service est relancé. */
+        #redemarrage { display: none; }
+        #redemarrage:target { display: block; }
+        #redemarrage:target ~ .demarrage { display: none; }
         .barre { width: 220px; height: 4px; margin: 22px auto 0; border-radius: 999px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
         .barre::after {
             content: ""; display: block; width: 40%; height: 100%; border-radius: 999px;
@@ -25,7 +29,8 @@
 <body>
     <div class="bloc">
         <p class="nom">SmartSchool</p>
-        <p class="texte">Démarrage sur cet ordinateur…</p>
+        <p class="texte" id="redemarrage">Redémarrage en cours… Ce qui a été enregistré est conservé.</p>
+        <p class="texte demarrage">Démarrage sur cet ordinateur…</p>
         <div class="barre" role="progressbar" aria-label="Démarrage"></div>
     </div>
 </body>

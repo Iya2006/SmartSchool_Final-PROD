@@ -39,8 +39,16 @@ const DOSSIER_INTERFACE = process.env.SMARTSCHOOL_INTERFACE || (RESSOURCES
     ? path.join(RESSOURCES, 'interface')
     : path.join(RACINE_DEPOT, 'frontend', '.next-poste', 'standalone'));
 
-const processus = [];
+// Le processus en cours de chaque service (« moteur », « interface »), et de
+// quoi le relancer (demarrerServices).
+const processus = new Map();
+const services = {};
 let fenetre = null;
+let dossierJournaux = null;
+// Une fois l'application prête, un service qui s'arrête de lui-même est
+// relancé ; jamais pendant la fermeture, où on les arrête exprès.
+let surveillance = false;
+let enFermeture = false;
 
 function dossiersDuPoste() {
     const base = process.env.SMARTSCHOOL_DONNEES || path.join(app.getPath('userData'), 'donnees');
@@ -84,7 +92,7 @@ function secretDuPoste(dossierPoste, nom, octets) {
  * l'application (constaté sur l'application installée). Un journal qui ne
  * s'écrit pas (disque plein) ne doit jamais arrêter l'application.
  */
-function lancer(nom, commande, args, options, dossierJournaux) {
+function lancer(nom, commande, args, options) {
     const journal = fs.createWriteStream(path.join(dossierJournaux, `${nom}.log`), { flags: 'a' });
     journal.on('error', () => {});
     journal.write(`\n=== ${new Date().toISOString()} démarrage ${nom} ===\n`);
@@ -94,8 +102,11 @@ function lancer(nom, commande, args, options, dossierJournaux) {
     p.on('error', (erreur) => {
         if (!journal.writableEnded) journal.write(`=== ${nom} n'a pas pu démarrer : ${erreur.message} ===\n`);
     });
-    p.on('close', (code) => journal.end(`=== ${nom} arrêté (code ${code}) ===\n`));
-    processus.push(p);
+    p.on('close', (code) => {
+        journal.end(`=== ${nom} arrêté (code ${code}) ===\n`);
+        if (surveillance && !enFermeture && processus.get(nom) === p) void relancer(nom);
+    });
+    processus.set(nom, p);
     return p;
 }
 
@@ -115,8 +126,80 @@ function attendre(url, delaiMs) {
     });
 }
 
+/** Attend que le service réponde ; échoue aussitôt s'il s'arrête avant. */
+function pret(p, url, delaiMs) {
+    return new Promise((resolve, reject) => {
+        const surArret = (code) => reject(new Error(`Le service s'est arrêté pendant son démarrage (code ${code}).`));
+        p.once('close', surArret);
+        attendre(url, delaiMs).then(
+            () => { p.off('close', surArret); resolve(); },
+            (erreur) => { p.off('close', surArret); reject(erreur); },
+        );
+    });
+}
+
+/**
+ * Un service (moteur ou interface) s'est arrêté de lui-même : on le relance,
+ * en montrant « Redémarrage en cours… », puis on revient à l'écran où l'on
+ * était. Rien n'est perdu : une écriture n'est confirmée à l'écran qu'une fois
+ * enregistrée dans la base. Au-delà de trois arrêts en deux minutes, relancer
+ * ne sert plus à rien : on le dit clairement.
+ */
+const RELANCES_MAX = 3;
+const DUREE_RELANCES_MS = 2 * 60 * 1000;
+const relancesRecentes = [];
+const enRelance = new Set();
+let adresseAvantRelance = null;
+let alerteAffichee = false;
+
+async function relancer(nom) {
+    const maintenant = Date.now();
+    while (relancesRecentes.length && maintenant - relancesRecentes[0] > DUREE_RELANCES_MS) relancesRecentes.shift();
+    if (relancesRecentes.length >= RELANCES_MAX) return alerterArretsRepetes(nom);
+    relancesRecentes.push(maintenant);
+
+    if (enRelance.size === 0 && fenetre) {
+        const adresse = fenetre.webContents.getURL();
+        if (adresse.startsWith(`http://127.0.0.1:${PORT_INTERFACE}`)) adresseAvantRelance = adresse;
+        void fenetre.loadFile(path.join(__dirname, 'demarrage.html'), { hash: 'redemarrage' });
+    }
+    enRelance.add(nom);
+    const service = services[nom];
+    const p = service.demarrer();
+    try {
+        await pret(p, service.adresse, 120000);
+    } catch {
+        // Arrêté avant d'être prêt : son propre arrêt relance encore, ou
+        // alerte. Toujours en marche mais muet au bout de deux minutes : alerte.
+        if (p.exitCode === null) void alerterArretsRepetes(nom);
+        return;
+    }
+    enRelance.delete(nom);
+    if (enRelance.size === 0 && fenetre) {
+        await fenetre.loadURL(adresseAvantRelance || `http://127.0.0.1:${PORT_INTERFACE}/login`).catch(() => {});
+    }
+}
+
+async function alerterArretsRepetes(nom) {
+    if (alerteAffichee || enFermeture) return;
+    alerteAffichee = true;
+    const { response } = await dialog.showMessageBox(fenetre ?? undefined, {
+        type: 'error',
+        title: 'SmartSchool',
+        message: `${nom === 'moteur' ? 'Le moteur' : 'L’interface'} de SmartSchool s’est arrêté plusieurs fois de suite.`,
+        detail: 'Ce qui a été enregistré est conservé. Redémarrez SmartSchool ; si le problème continue, '
+            + `transmettez au support les journaux de ce dossier :\n${dossierJournaux}`,
+        buttons: ['Redémarrer SmartSchool', 'Quitter'],
+        defaultId: 0,
+        cancelId: 1,
+    });
+    if (response === 0) app.relaunch();
+    app.quit();
+}
+
 async function demarrerServices() {
     const d = dossiersDuPoste();
+    dossierJournaux = d.journaux;
     const environnementMoteur = {
         ...process.env,
         SMARTSCHOOL_MODE: 'poste',
@@ -134,30 +217,32 @@ async function demarrerServices() {
         PYTHONIOENCODING: 'utf-8',
         PYTHONUTF8: '1',
     };
-    lancer('moteur', PYTHON,
-        ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(PORT_MOTEUR)],
-        { cwd: DOSSIER_MOTEUR, env: environnementMoteur }, d.journaux);
+    services.moteur = {
+        adresse: `http://127.0.0.1:${PORT_MOTEUR}/health`,
+        demarrer: () => lancer('moteur', PYTHON,
+            ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(PORT_MOTEUR)],
+            { cwd: DOSSIER_MOTEUR, env: environnementMoteur }),
+    };
+    services.interface = {
+        adresse: `http://127.0.0.1:${PORT_INTERFACE}/login`,
+        demarrer: () => lancer('interface', process.execPath, [path.join(DOSSIER_INTERFACE, 'server.js')], {
+            cwd: DOSSIER_INTERFACE,
+            env: {
+                ...process.env,
+                ELECTRON_RUN_AS_NODE: '1',
+                NODE_ENV: 'production',
+                PORT: String(PORT_INTERFACE),
+                HOSTNAME: '127.0.0.1',
+            },
+        }),
+    };
 
-    lancer('interface', process.execPath, [path.join(DOSSIER_INTERFACE, 'server.js')], {
-        cwd: DOSSIER_INTERFACE,
-        env: {
-            ...process.env,
-            ELECTRON_RUN_AS_NODE: '1',
-            NODE_ENV: 'production',
-            PORT: String(PORT_INTERFACE),
-            HOSTNAME: '127.0.0.1',
-        },
-    }, d.journaux);
-
-    await Promise.all([
-        attendre(`http://127.0.0.1:${PORT_MOTEUR}/health`, 120000),
-        attendre(`http://127.0.0.1:${PORT_INTERFACE}/login`, 120000),
-    ]);
+    await Promise.all(Object.values(services).map((service) => pret(service.demarrer(), service.adresse, 120000)));
     return d;
 }
 
 function arreterServices() {
-    for (const p of processus) {
+    for (const p of processus.values()) {
         if (p.exitCode !== null) continue;
         // Sous Windows, le Python d'un environnement virtuel lance lui-même un
         // second processus : il faut arrêter l'arbre entier, sinon le moteur
@@ -258,6 +343,7 @@ if (!verrou) {
 
         try {
             const d = await demarrerServices();
+            surveillance = true;
             const principale = creerFenetre();
             principale.once('ready-to-show', () => {
                 chargement.destroy();
@@ -279,5 +365,8 @@ if (!verrou) {
     });
 
     app.on('window-all-closed', () => app.quit());
+    // Fermeture (y compris pour installer une mise à jour) : les services
+    // s'arrêtent exprès, on ne les relance pas.
+    app.on('before-quit', () => { enFermeture = true; });
     app.on('will-quit', arreterServices);
 }
