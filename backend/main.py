@@ -138,19 +138,26 @@ except Exception as _e:  # noqa: BLE001
 # indisponible.
 if not MODE_POSTE:
     try:
-        from app.sync.journal import installer_journal_cloud
         from app.sync.schema import schema_identifiants_a_jour
-        if schema_identifiants_a_jour(engine):
+        _schema_synchro_pret = schema_identifiants_a_jour(engine)
+    except Exception as _e:  # noqa: BLE001
+        _schema_synchro_pret = False
+        print(f"[SYNCHRO] Schéma des identifiants illisible : {_e}")
+    if _schema_synchro_pret:
+        # Identifiants dérivés de la clé naturelle (séance, présence, note,
+        # journal comptable...) : les mêmes que ceux des postes, pour que deux
+        # créations de la même ligne se rejoignent. Au-delà de 2³¹, d'où la
+        # condition sur la migration. Avant toute écriture, et quoi qu'il
+        # advienne du journal ci-dessous : un processus sans eux créerait des
+        # doublons de ce que les postes créent.
+        from app.sync.identifiants import brancher_generateur
+        brancher_generateur(seulement_cles_naturelles=True)
+        try:
+            from app.sync.journal import installer_journal_cloud
             installer_journal_cloud(engine)
             print("[SYNCHRO] Journal des changements en place pour les postes hors-ligne.")
-            # Identifiants dérivés de la clé naturelle (séance, présence,
-            # note, journal comptable...) : les mêmes que ceux des postes, pour
-            # que deux créations de la même ligne se rejoignent. Au-delà de 2³¹,
-            # d'où la condition sur la migration. Avant toute écriture.
-            from app.sync.identifiants import brancher_generateur
-            brancher_generateur(seulement_cles_naturelles=True)
-    except Exception as _e:  # noqa: BLE001
-        print(f"[SYNCHRO] Journal des changements non posé : {_e}")
+        except Exception as _e:  # noqa: BLE001
+            print(f"[SYNCHRO] Journal des changements non posé : {_e}")
 
 
 app = FastAPI(

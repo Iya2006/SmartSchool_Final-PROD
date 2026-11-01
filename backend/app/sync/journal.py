@@ -42,6 +42,10 @@ from sqlalchemy.engine import Connection, Engine
 from app.sync.perimetre import REFERENTIELS_COMMUNS, colonne_cle, table, verifier_toutes_les_tables
 from app.sync.tables_poste import completer_colonnes, journal_local, metadonnees_poste
 
+# Verrou de PostgreSQL qui met la pose du journal à la file (voir
+# installer_journal_cloud). Distinct de celui des publications (cote_cloud.py).
+VERROU_POSE_DU_JOURNAL = 734_202
+
 TABLES_PROPRES_A_CHAQUE_BASE = frozenset({"ss_sequences_matricule"})
 TABLES_REMONTANTES = frozenset({"ss_audit_log", "ss_incidents_applicatifs"})
 
@@ -217,6 +221,13 @@ def installer_journal_cloud(moteur: Engine) -> None:
     from app.models.academique import SyncJournal
 
     with moteur.begin() as cx:
+        if cx.dialect.name == "postgresql":
+            # Le cloud démarre plusieurs processus à la fois (Dockerfile.prod :
+            # --workers 4), qui posent tous le journal. Sans verrou, ils
+            # s'interbloquaient : 15 poses sur 20 échouaient (deadlock 40P01),
+            # vérifié sur une copie. Ils passent ici l'un après l'autre ; le
+            # verrou est rendu à la fin de la transaction.
+            cx.execute(text("SELECT pg_advisory_xact_lock(:cle)"), {"cle": VERROU_POSE_DU_JOURNAL})
         SyncJournal.__table__.create(cx, checkfirst=True)
         verifier_expressions(cx)
         if cx.dialect.name == "postgresql":
