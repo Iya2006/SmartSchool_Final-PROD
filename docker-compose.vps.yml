@@ -1,0 +1,164 @@
+# SmartSchool — pile de production pour UN serveur loué (VPS)
+#
+# POURQUOI CE FICHIER EXISTE, À CÔTÉ DE docker-compose.prod.yml
+# Le fichier `prod` déclare huit services, dont quatre — Elasticsearch, MinIO,
+# Keycloak, Tesseract — qu'AUCUNE ligne du code n'utilise. Les lancer sur une
+# petite machine mangerait toute la mémoire pour rien : Elasticsearch seul en
+# réclame plus que l'application entière. Il déclare aussi un PostgreSQL, alors
+# que les données vivent chez Supabase.
+#
+# Ici on ne lance que ce qui sert réellement :
+#   - l'API (uvicorn)
+#   - le worker (calcul des moyennes, bulletins PDF — voir les écrans Notes et
+#     Résultats de fin d'année, qui appellent les routes `*-async`)
+#   - Redis, qui sert de cache ET de file d'attente au worker
+#   - Caddy, qui termine le HTTPS et transmet à l'API
+#
+# La base de données n'est PAS ici : `DATABASE_URL` pointe vers Supabase.
+#
+# Démarrage :  docker compose -f docker-compose.vps.yml up -d
+# Mise à jour : docker compose -f docker-compose.vps.yml up -d --build
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    container_name: smartschool_redis
+    restart: always
+    # `appendonly` : la file d'attente survit à un redémarrage de la machine.
+    # Sans ça, un calcul de moyennes lancé juste avant une coupure serait perdu
+    # sans que personne ne le sache — l'écran resterait sur « en file d'attente ».
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD manquant dans .env}
+      --maxmemory 256mb
+      --maxmemory-policy volatile-lru
+    volumes:
+      - redis_data:/data
+    networks: [smartschool]
+    # Jamais exposé à l'extérieur : seuls l'API et le worker y accèdent, par le
+    # réseau interne de Docker.
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging: &journal
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: smartschool_api:vps
+    container_name: smartschool_api
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+    # L'image démarre par défaut avec 4 processus web. Sur une machine à
+    # 2 cœurs qui fait aussi tourner le worker et Redis, c'est trop : ils se
+    # disputeraient le processeur au pire moment, la connexion du matin, qui
+    # est déjà l'opération la plus lourde. On reprend les 2 processus que
+    # Render utilisait (voir backend/render_start.sh), éprouvés en production.
+    command:
+      - uvicorn
+      - main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8500"
+      - --workers
+      - "2"
+      - --loop
+      - uvloop
+      - --http
+      - httptools
+      - --access-log
+    environment:
+      # Supabase — la seule source de vérité des données.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL manquant dans .env}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY manquant dans .env}
+      JWT_ALGORITHM: HS256
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "480"
+      # Pas d'espace après les virgules : `main.py` découpe sur "," sans
+      # nettoyer, et une origine avec espace de tête ne correspond à rien.
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS manquant dans .env}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      ENVIRONMENT: production
+      LOG_LEVEL: info
+      RATELIMIT_ENABLED: "1"
+    volumes:
+      # Les fichiers déposés : logo de l'école, photos, sujets d'examen,
+      # justificatifs. Volume Docker, donc conservé d'un redéploiement à
+      # l'autre — c'est ce que faisait le disque payant de Render.
+      - uploads:/app/uploads
+      - logs:/app/logs
+    networks: [smartschool]
+    # Pas de `ports:` : rien n'est ouvert sur Internet, Caddy est le seul point
+    # d'entrée. Une API exposée en direct contournerait le HTTPS.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8500/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging: *journal
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    image: smartschool_api:vps
+    container_name: smartschool_worker
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["rq", "worker", "--url", "redis://:${REDIS_PASSWORD}@redis:6379/0", "default"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      ENVIRONMENT: production
+      LOG_LEVEL: info
+    volumes:
+      # Le MÊME volume que l'API : le worker écrit les bulletins PDF que l'API
+      # servira ensuite. Deux volumes séparés donneraient des PDF introuvables.
+      - uploads:/app/uploads
+      - logs:/app/logs
+    networks: [smartschool]
+    logging: *journal
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: smartschool_caddy
+    restart: always
+    depends_on: [api]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAINE_API: ${DOMAINE_API:?DOMAINE_API manquant dans .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificats — à conserver, sinon regénérés à chaque fois
+      - caddy_config:/config
+    networks: [smartschool]
+    logging: *journal
+
+networks:
+  smartschool:
+    driver: bridge
+
+volumes:
+  uploads:
+  logs:
+  redis_data:
+  caddy_data:
+  caddy_config:
