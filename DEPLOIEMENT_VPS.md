@@ -35,15 +35,24 @@ génère une nouvelle et chacun se reconnecte une fois. Mais autant l'éviter.
 **Ce qu'il faut :** 2 Go de mémoire au minimum, un disque d'au moins 20 Go,
 Ubuntu 24.04, et une localisation en Europe (c'est là qu'est Supabase).
 
-**Où :** essayer **OVHcloud** en premier — le moins cher à cette taille, support
-en français, sauvegarde quotidienne incluse. Puis **Contabo** si la carte est
-refusée.
+**Ce qui a été pris en novembre 2026 :** Contabo **Cloud VPS 4** — 4 cœurs,
+8 Go, 100 Go, région Union européenne — à **6,60 $/mois sans engagement**, plus
+**2 $ d'Auto Backup**, soit 8,60 $. OVHcloud avait été essayé d'abord, mais ses
+deux offres les moins chères étaient en rupture.
 
-> **À vérifier au moment de payer :** certains tarifs annoncés supposent un
-> engagement de 12 mois réglé d'avance. Regarder le total avant de valider.
+> **Deux pièges au moment de payer :**
+> - Les tarifs d'appel supposent souvent **12 ou 24 mois réglés d'avance**.
+>   Prendre la durée **1 mois** : l'économie ne vaut pas le verrouillage.
+> - L'**Auto Backup** vaut ses 2 $. La sauvegarde de l'étape 8 vit sur le
+>   serveur lui-même : elle protège d'une suppression accidentelle, pas de la
+>   perte de la machine. C'est exactement ce qui a fait perdre les fichiers
+>   restés chez Render.
 
-À la commande, choisir **Ubuntu 24.04** comme système. À la fin, l'hébergeur
-donne une **adresse IP** et un **mot de passe root** : les garder sous la main.
+À la commande, choisir **Ubuntu** comme système, et **copier immédiatement le
+mot de passe root** : il n'est pas envoyé par courriel.
+
+La livraison prend une trentaine de minutes. L'hébergeur envoie ensuite un
+courriel avec l'**adresse IP** et les identifiants.
 
 ---
 

@@ -61,11 +61,18 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    # L'image démarre par défaut avec 4 processus web. Sur une machine à
-    # 2 cœurs qui fait aussi tourner le worker et Redis, c'est trop : ils se
-    # disputeraient le processeur au pire moment, la connexion du matin, qui
-    # est déjà l'opération la plus lourde. On reprend les 2 processus que
-    # Render utilisait (voir backend/render_start.sh), éprouvés en production.
+    # 4 processus web pour les 4 cœurs de la machine.
+    #
+    # Render n'en faisait tourner que 2, mais sur une machine bien plus petite.
+    # Le nombre de processus est ce qui plafonne les connexions simultanées :
+    # le chiffrement du mot de passe est l'opération la plus lourde de
+    # l'application, et elle occupe un cœur entier le temps qu'elle dure. Avec
+    # 4 processus, quatre personnes peuvent se connecter en même temps — ce qui
+    # compte à 7h50, quand toute l'école arrive.
+    #
+    # Si un jour plusieurs écoles s'ajoutent : passer à une machine à plus de
+    # cœurs et monter ce nombre d'autant. Au-delà du nombre de cœurs, les
+    # processus se gênent au lieu de s'entraider.
     command:
       - uvicorn
       - main:app
@@ -74,7 +81,7 @@ services:
       - --port
       - "8500"
       - --workers
-      - "2"
+      - "4"
       - --loop
       - uvloop
       - --http
