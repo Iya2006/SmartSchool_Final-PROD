@@ -24,6 +24,16 @@ VOLUME="smartschool_uploads"          # nom réel : <dossier>_uploads, voir `doc
 DESTINATION="/opt/sauvegardes"
 GARDER_JOURS=14
 
+# Le volume doit EXISTER. C'est la seule vraie anomalie : un volume absent
+# signifie que la sauvegarde ne protège rien, et il faut le savoir. Un volume
+# simplement vide, lui, est normal sur une installation neuve — avant que
+# l'école n'ait déposé son premier logo.
+if ! docker volume inspect "$VOLUME" >/dev/null 2>&1; then
+    echo "SmartSchool : le volume '$VOLUME' n'existe pas — rien n'est sauvegardé." >&2
+    echo "Volumes disponibles : $(docker volume ls --format '{{.Name}}' | tr '\n' ' ')" >&2
+    exit 1
+fi
+
 mkdir -p "$DESTINATION"
 horodatage=$(date +%Y-%m-%d)
 archive="$DESTINATION/uploads-$horodatage.tar.gz"
@@ -36,17 +46,18 @@ docker run --rm \
     alpine:3 \
     tar czf "/cible/uploads-$horodatage.tar.gz" -C /source .
 
-# Une archive vide ou minuscule signale un volume mal nommé : mieux vaut le
-# savoir tout de suite que de le découvrir le jour où on en a besoin.
 taille=$(stat -c%s "$archive")
-if [ "$taille" -lt 100 ]; then
-    echo "SmartSchool : sauvegarde suspecte ($taille octets) — le volume '$VOLUME' existe-t-il ?" >&2
-    exit 1
-fi
-
 find "$DESTINATION" -name 'uploads-*.tar.gz' -mtime +"$GARDER_JOURS" -delete
 
-echo "SmartSchool : sauvegarde du $horodatage — $(numfmt --to=iec "$taille")"
+# Cron envoie un courriel dès qu'un script écrit quelque chose. On ne dit donc
+# rien quand tout va bien : le silence quotidien est le signe que ça marche.
+# Seule une archive anormalement petite alors que le volume contient des
+# fichiers mérite un signalement.
+fichiers=$(docker run --rm -v "${VOLUME}:/source:ro" alpine:3 sh -c 'find /source -type f | wc -l')
+if [ "$fichiers" -gt 0 ] && [ "$taille" -lt 200 ]; then
+    echo "SmartSchool : $fichiers fichier(s) dans le volume mais archive de $taille octets seulement." >&2
+    exit 1
+fi
 
 # POUR ALLER PLUS LOIN
 # Cette copie vit sur la même machine : elle protège d'une suppression
