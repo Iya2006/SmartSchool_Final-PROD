@@ -1423,24 +1423,40 @@ def list_paiements(
     response: Response,
     annee_id: Optional[int] = None,
     search: Optional[str] = None,
+    classe_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    """Historique des encaissements.
+
+    Renvoie aussi la CLASSE et le TARIF de chaque versement. Les deux étaient
+    absents alors que la classe était déjà jointe : impossible, depuis cet
+    écran, de savoir pour quel frais un parent avait payé, ni de retrouver les
+    versements d'une classe. Le reçu, lui, porte bien le motif — mais il faut
+    l'ouvrir un par un pour le lire.
+    """
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = (
-        db.query(Paiement, Facture, Eleve)
+        db.query(Paiement, Facture, Eleve, Classe, TypeFrais)
         .join(Facture, Paiement.facture_id == Facture.facture_id)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
+        # `outerjoin` et non `join` : `Facture.type_frais_id` est nullable —
+        # les ventes libres et les factures anciennes n'en portent pas. Une
+        # jointure stricte les ferait disparaître de l'historique, et des
+        # encaissements réels deviendraient invisibles.
+        .outerjoin(TypeFrais, Facture.type_frais_id == TypeFrais.type_frais_id)
         .filter(Classe.etablissement_id == etablissement_id)
     )
     if annee_id is not None:
         query = query.filter(Inscription.annee_id == annee_id)
+    if classe_id is not None:
+        query = query.filter(Inscription.classe_id == classe_id)
     # Recherche SERVEUR : sans elle, la page ne filtrait que les paiements
     # deja charges (une page), donc chercher un eleve absent de la page
     # courante ne renvoyait rien. On cherche par nom/prenom d'eleve, numero
@@ -1475,10 +1491,20 @@ def list_paiements(
             "echeance_id": p.echeance_id,
             "numero_facture": f.numero_facture,
             "description": f.description,  # ce qui a été acheté (ventes de tarif libre)
+            "montant_facture": float(f.montant_net or 0),
+            "eleve_id": e.eleve_id,
             "eleve_nom": e.nom,
-            "eleve_prenom": e.prenom
+            "eleve_prenom": e.prenom,
+            "matricule": e.matricule,
+            "classe_id": c.classe_id,
+            "classe_libelle": c.libelle,
+            # Le frais concerné. `None` pour une vente libre ou une facture
+            # antérieure aux types de frais : l'écran retombe alors sur
+            # `description`, qui dit ce qui a été acheté.
+            "type_frais_id": tf.type_frais_id if tf else None,
+            "type_frais_libelle": tf.libelle if tf else None,
         }
-        for p, f, e in results
+        for p, f, e, c, tf in results
     ]
 
 
