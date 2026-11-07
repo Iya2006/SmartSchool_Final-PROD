@@ -192,7 +192,44 @@ export default function SalleDesProfsPage() {
         if (!groupedByCycle[key]) groupedByCycle[key] = [];
         groupedByCycle[key].push(c);
     });
-    const cycleOrder = ['MAT', 'PRM', 'CLG', 'LYC'];
+    // L'ORDRE est connu d'avance, la LISTE non.
+    //
+    // Cette liste était figée à ['MAT','PRM','CLG','LYC'], et l'affichage ne
+    // parcourait qu'elle : toute classe dont le cycle portait un autre code
+    // — ou aucun — disparaissait de l'écran alors que le serveur l'avait bien
+    // renvoyée. Une école entière pouvait donc lire « 0 classe » avec ses
+    // douze classes en base, sans la moindre explication. Les codes de cycle
+    // sont créés par chaque école : rien ne garantit qu'elle emploie les
+    // quatre codes guinéens habituels.
+    //
+    // On garde donc l'ordre pédagogique pour les codes connus, et on ajoute à
+    // la suite tous les autres cycles réellement présents. Aucune classe ne
+    // peut plus être invisible.
+    const ORDRE_CONNU = ['MAT', 'PRM', 'CLG', 'LYC'];
+    const cyclesPresents = Object.keys(groupedByCycle);
+    const cycleOrder = [
+        ...ORDRE_CONNU.filter(c => cyclesPresents.includes(c)),
+        ...cyclesPresents.filter(c => !ORDRE_CONNU.includes(c)).sort(),
+    ];
+
+    // Les boutons de filtre suivent la même règle, mais se construisent sur
+    // TOUTES les classes et non sur celles déjà filtrées : sinon, choisir un
+    // cycle ferait disparaître les boutons des autres, et on ne pourrait plus
+    // revenir en arrière.
+    const cyclesConnusDeLEcole = Array.from(new Set(classesData.map(c => c.cycle_code || '—')));
+    const filtresCycle = [
+        { code: '', label: 'Tous' },
+        ...[
+            ...ORDRE_CONNU.filter(c => cyclesConnusDeLEcole.includes(c)),
+            ...cyclesConnusDeLEcole.filter(c => !ORDRE_CONNU.includes(c)).sort(),
+        ].map(code => ({
+            code,
+            // Le nom que l'école a donné au cycle, plutôt qu'une étiquette
+            // imposée : « Maternelle » n'a de sens que si c'est son nom.
+            label: classesData.find(c => (c.cycle_code || '—') === code)?.cycle
+                || CYCLE_COLORS[code]?.badge || code,
+        })),
+    ];
 
     const filteredEnseignants = enseignants.filter(e =>
         `${e.prenom} ${e.nom} ${e.matricule} ${e.specialite || ''}`.toLowerCase().includes(searchEns.toLowerCase())
@@ -280,7 +317,7 @@ export default function SalleDesProfsPage() {
                         style={{ width: '100%', padding: '10px 12px 10px 36px', borderRadius: '10px', border: '1.5px solid var(--border-light)', fontSize: '13px', outline: 'none', fontFamily: 'Inter, sans-serif' }} />
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                    {[{ code: '', label: 'Tous' }, { code: 'MAT', label: 'Maternelle' }, { code: 'PRM', label: 'Primaire' }, { code: 'CLG', label: 'Collège' }, { code: 'LYC', label: 'Lycée' }].map(f => (
+                    {filtresCycle.map(f => (
                         <button key={f.code} onClick={() => setFilterCycle(f.code)}
                             style={{
                                 padding: '7px 14px', borderRadius: '20px', fontSize: '12px', fontWeight: 600,
