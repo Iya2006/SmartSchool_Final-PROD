@@ -108,13 +108,13 @@ def _encaisser(db: Session, ecole, classe_code: str, nom: str, type_frais, monta
     )
     db.add(facture); db.commit(); db.refresh(facture)
 
-    db.add(Paiement(
+    paiement = Paiement(
         facture_id=facture.facture_id, annee_id=ecole["annee"].annee_id,
         numero_recu=f"REC-HIS-{uid}", montant=montant,
         mode_paiement="ESPECES", statut="VALIDE", date_paiement=date.today(),
-    ))
-    db.commit()
-    return eleve
+    )
+    db.add(paiement); db.commit(); db.refresh(paiement)
+    return eleve, paiement
 
 
 class TestHistoriqueDesEncaissements:
@@ -237,3 +237,92 @@ class TestHistoriqueDesEncaissements:
         noms = {x["eleve_nom"] for x in client.get("/api/finance/paiements", headers=h).json()}
         assert "ChezNous" in noms
         assert "ChezEux" not in noms
+
+
+class TestRecapitulatifPdf:
+    """
+    Un récapitulatif rassemble plusieurs reçus d'un même élève sur un seul
+    feuillet. Ce n'est pas une facture : il ne crée aucune pièce comptable.
+    """
+
+    def _versements(self, db, ecole, classe, nom, combien):
+        """Plusieurs versements pour UN même élève, via des factures distinctes."""
+        ids = []
+        eleve = None
+        for _ in range(combien):
+            el, p = _encaisser(db, ecole, classe, nom, ecole["scolarite"])
+            # `_encaisser` crée un élève par appel : on rattache les versements
+            # suivants au premier, pour simuler un élève qui paie en plusieurs
+            # fois.
+            if eleve is None:
+                eleve = el
+            else:
+                facture = db.query(Facture).filter(Facture.facture_id == p.facture_id).first()
+                insc_premier = db.query(Inscription).filter(
+                    Inscription.eleve_id == eleve.eleve_id).first()
+                facture.inscription_id = insc_premier.inscription_id
+                db.commit()
+            ids.append(p.paiement_id)
+        return eleve, ids
+
+    def test_produit_un_pdf_valide(self, client, db, ecole):
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        _, ids = self._versements(db, ecole, "A", "Bah", 3)
+
+        r = client.get(f"/api/finance/paiements/recapitulatif-pdf?ids={','.join(map(str, ids))}",
+                       headers=h)
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"].startswith("application/pdf")
+        # Un vrai PDF, pas une page d'erreur déguisée.
+        assert r.content[:4] == b"%PDF"
+        assert len(r.content) > 1000
+
+    def test_la_route_n_est_pas_masquee_par_celle_du_recu(self, client, db, ecole):
+        """
+        `/paiements/{id}/recu-pdf` est déclarée avant `/paiements/recapitulatif-pdf`.
+        Si l'ordre posait problème, « recapitulatif-pdf » serait pris pour un
+        identifiant de paiement et la route répondrait 404 ou 422.
+        """
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        _, ids = self._versements(db, ecole, "A", "Sylla", 1)
+
+        r = client.get(f"/api/finance/paiements/recapitulatif-pdf?ids={ids[0]}", headers=h)
+        assert r.status_code == 200, r.text
+
+    def test_refuse_de_melanger_plusieurs_eleves(self, client, db, ecole):
+        """
+        Additionner les versements de deux familles donnerait un total que
+        personne ne doit, et qu'aucun parent ne pourrait vérifier.
+        """
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        _, p1 = _encaisser(db, ecole, "A", "Premier", ecole["scolarite"])
+        _, p2 = _encaisser(db, ecole, "A", "Second", ecole["scolarite"])
+
+        r = client.get(
+            f"/api/finance/paiements/recapitulatif-pdf?ids={p1.paiement_id},{p2.paiement_id}",
+            headers=h)
+        assert r.status_code == 400
+        assert "plusieurs élèves" in r.json()["detail"]
+
+    def test_refuse_un_versement_annule(self, client, db, ecole):
+        """Un paiement annulé gonflerait un total remis à une famille."""
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        _, p = _encaisser(db, ecole, "A", "Annule", ecole["scolarite"])
+        paiement = db.query(Paiement).filter(Paiement.paiement_id == p.paiement_id).first()
+        paiement.statut = "ANNULE"
+        db.commit()
+
+        r = client.get(f"/api/finance/paiements/recapitulatif-pdf?ids={p.paiement_id}", headers=h)
+        assert r.status_code == 400
+        assert "annulé" in r.json()["detail"].lower()
+
+    def test_une_selection_vide_est_refusee(self, client, ecole):
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        assert client.get("/api/finance/paiements/recapitulatif-pdf?ids=", headers=h).status_code == 400
+
+    def test_les_versements_d_une_autre_ecole_sont_introuvables(self, client, db, ecole):
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        # Un identifiant qui n'appartient pas à cette école : le filtre sur
+        # l'établissement doit le faire disparaître, pas produire son PDF.
+        r = client.get("/api/finance/paiements/recapitulatif-pdf?ids=999999", headers=h)
+        assert r.status_code == 404

@@ -3175,6 +3175,116 @@ def generer_recu_pdf(paiement_id: int, request: Request, db: Session = Depends(g
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
+@router.get("/paiements/recapitulatif-pdf")
+def generer_recapitulatif_pdf(
+    ids: str,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Récapitulatif PDF de plusieurs versements d'un même élève.
+
+    `ids` : les identifiants de paiement séparés par des virgules.
+
+    C'est un RÉCAPITULATIF, pas une facture : il rappelle des reçus déjà émis
+    et en fait la somme, sans créer de pièce comptable ni d'écriture. Il évite
+    simplement de remettre cinq feuillets à une famille qui en attend un.
+
+    Tous les versements doivent appartenir AU MÊME ÉLÈVE. Additionner les
+    paiements de plusieurs familles sur un seul document donnerait un total
+    que personne ne doit, et qu'aucun parent ne pourrait vérifier.
+    """
+    from app.core.documents_settings import get_documents_settings
+    from app.core.recapitulatif_paiements import generer_pdf_recapitulatif
+    # `Etablissement` n'est pas dans les imports de tête de ce module.
+    from app.models.academique import Etablissement
+
+    try:
+        identifiants = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(400, "Liste d'identifiants invalide.")
+    if not identifiants:
+        raise HTTPException(400, "Aucun versement sélectionné.")
+    if len(identifiants) > 100:
+        raise HTTPException(400, "Trop de versements sélectionnés (100 au maximum).")
+
+    lignes = (
+        db.query(Paiement, Facture, Eleve, Classe, TypeFrais, AnneeScolaire)
+        .join(Facture, Paiement.facture_id == Facture.facture_id)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .join(AnneeScolaire, Inscription.annee_id == AnneeScolaire.annee_id)
+        .outerjoin(TypeFrais, Facture.type_frais_id == TypeFrais.type_frais_id)
+        .filter(
+            Paiement.paiement_id.in_(identifiants),
+            Classe.etablissement_id == etablissement_id,
+        )
+        .order_by(Paiement.date_paiement)
+        .all()
+    )
+    if not lignes:
+        raise HTTPException(404, "Aucun versement trouvé.")
+
+    eleves = {e.eleve_id for _, _, e, _, _, _ in lignes}
+    if len(eleves) > 1:
+        raise HTTPException(
+            400,
+            "Les versements sélectionnés appartiennent à plusieurs élèves. "
+            "Un récapitulatif ne concerne qu'un seul élève.",
+        )
+
+    # Un paiement annulé ne doit pas gonfler un total remis à une famille.
+    annules = [p.numero_recu for p, _, _, _, _, _ in lignes if (p.statut or "").upper() == "ANNULE"]
+    if annules:
+        raise HTTPException(
+            400,
+            f"Versement(s) annulé(s) dans la sélection : {', '.join(annules)}. "
+            "Retirez-les avant d'éditer le récapitulatif.",
+        )
+
+    _, _, eleve, classe, _, annee = lignes[0]
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == etablissement_id
+    ).first()
+    settings = get_documents_settings(db, etablissement_id)
+
+    donnees = {
+        "etablissement": {
+            "nom": etablissement.nom if etablissement else "—",
+            "adresse": getattr(etablissement, "adresse", None),
+            "telephone": getattr(etablissement, "telephone", None),
+            "couleur": settings.get("couleur_primaire") or "#1e3a8a",
+        },
+        "eleve": {
+            "nom_complet": f"{eleve.prenom or ''} {eleve.nom or ''}".strip(),
+            "matricule": eleve.matricule,
+            "classe": classe.libelle,
+        },
+        "annee": annee.libelle if annee else None,
+        "devise": (lignes[0][0].devise or "GNF"),
+        "paiements": [
+            {
+                "date": str(p.date_paiement) if p.date_paiement else "—",
+                "numero_recu": p.numero_recu,
+                # Le frais concerné ; à défaut la désignation libre de la
+                # facture (ventes au coup par coup), qui dit ce qui a été payé.
+                "motif": (tf.libelle if tf else None) or f.description or "—",
+                "mode_paiement": p.mode_paiement,
+                "montant": float(p.montant or 0),
+            }
+            for p, f, _, _, tf, _ in lignes
+        ],
+    }
+
+    contenu = generer_pdf_recapitulatif(donnees, settings)
+    nom = f"recapitulatif_{eleve.matricule or eleve.eleve_id}.pdf"
+    return Response(
+        content=contenu,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nom}"'},
+    )
+
+
 # ============================================================================
 # FOURNISSEURS — Liste des fournisseurs avec totaux
 # ============================================================================
