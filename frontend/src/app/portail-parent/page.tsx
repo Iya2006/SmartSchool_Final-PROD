@@ -1706,7 +1706,7 @@ export default function PortailParent() {
                                                                                     {d.date_limite && <span><Calendar size={14} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', verticalAlign: 'middle' }} /> Limite: {new Date(d.date_limite).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</span>}
                                                                                     <span>Publié le {d.date_creation ? new Date(d.date_creation).toLocaleDateString('fr-FR') : '—'}</span>
                                                                                     {d.fichier_nom && (
-                                                                                        <a href={`http://localhost:8300${d.fichier_path}`} target="_blank" rel="noreferrer"
+                                                                                        <a href={`${API_BASE}${d.fichier_path}`} target="_blank" rel="noreferrer"
                                                                                             style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '4px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: '#ede9fe', color: '#7c3aed', textDecoration: 'none' }}>
                                                                                             📎 {d.fichier_nom}
                                                                                         </a>
