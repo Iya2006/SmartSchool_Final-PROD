@@ -11,7 +11,6 @@ renommé en `.pdf` ne doit pas être accepté puis servi à tous les parents. Le
 type annoncé par le navigateur ne prouve rien — seule la signature du fichier
 fait foi.
 """
-import os
 from datetime import date
 
 import pytest
@@ -32,10 +31,34 @@ def _uid() -> int:
     return _C[0]
 
 
+@pytest.fixture(autouse=True)
+def dossier_isole(tmp_path, monkeypatch):
+    """
+    Les PDF des tests n'écrivent JAMAIS dans `backend/uploads`.
+
+    Ces fichiers vivent sur le disque, pas en base : ils survivent donc au
+    recyclage de la base entre fichiers de tests, alors que les identifiants
+    de classe repartent à 1. Un PDF laissé par un test précédent faisait
+    croire au suivant qu'un emploi du temps était déjà déposé — et au passage
+    on polluait le dépôt de travail.
+
+    Même parade que `test_photo_eleve_par_la_direction.py`, qui redirige déjà
+    son dossier d'upload vers un répertoire temporaire.
+    """
+    from app.api import emploi_du_temps
+    dossier = tmp_path / "emplois"
+    dossier.mkdir()
+    monkeypatch.setattr(emploi_du_temps, "DOSSIER_PDF", str(dossier))
+
+
 @pytest.fixture
 def ecole(db: Session):
     uid = _uid()
-    etab = Etablissement(code=f"EDT-{uid}", nom=f"École {uid}", type_etablissement="COLLEGE")
+    # Préfixe propre à ce fichier : `EDT-` est déjà pris par
+    # `test_emploi_du_temps_eleve_parent.py`, et le code d'établissement est
+    # unique pour toute la base — deux fichiers qui comptent chacun à partir
+    # de 1 finissent par se marcher dessus.
+    etab = Etablissement(code=f"EDTPDF-{uid}", nom=f"École {uid}", type_etablissement="COLLEGE")
     db.add(etab); db.commit(); db.refresh(etab)
     eid = etab.etablissement_id
 
@@ -61,21 +84,7 @@ def ecole(db: Session):
         etablissement_id=eid,
     )
     db.add(admin); db.commit(); db.refresh(admin)
-
-    # Les PDF vivent sur le DISQUE, pas en base : ils survivent donc au
-    # recyclage de la base entre fichiers de tests, alors que les
-    # identifiants de classe, eux, repartent à 1. Sans ce nettoyage, un
-    # fichier laissé par un test précédent ferait croire à celui-ci qu'un
-    # emploi du temps est déjà déposé.
-    from app.api.emploi_du_temps import _chemin_pdf
-    chemin = _chemin_pdf(classe.classe_id)
-    if os.path.exists(chemin):
-        os.remove(chemin)
-
-    yield {"eid": eid, "classe": classe, "admin": admin}
-
-    if os.path.exists(chemin):
-        os.remove(chemin)
+    return {"eid": eid, "classe": classe, "admin": admin}
 
 
 def _headers(client: TestClient, login: str) -> dict:
