@@ -213,6 +213,105 @@ function appareilHorsLigne(): boolean {
     return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
+
+// ────────────────────────────────────────────────────────────────────────
+// Reprise automatique des coupures passagères
+//
+// Mesuré depuis Conakry : sur une même fenêtre de quelques minutes, la
+// liaison perd des paquets par bouffées. 1 appel sur 30 n'aboutit pas du
+// tout, et un tiers dépasse la seconde — Google et GitHub ralentissent en
+// même temps, donc c'est la liaison, pas le serveur. Un fichier de 11 Ko
+// tombe bien plus souvent qu'une petite réponse JSON : plus il y a
+// d'octets sur le fil, plus il y a de chances d'être coupé.
+//
+// Sans reprise, le premier appel malchanceux affiche « Serveur
+// indisponible » alors que tout fonctionne. L'utilisateur d'une école en
+// conclut que le logiciel est fragile. On réessaie donc tout seul : quatre
+// tentatives étalées sur environ sept secondes, pendant lesquelles il ne
+// voit que l'indicateur de chargement habituel.
+//
+// Le délai dépassé (30 s) a un budget à part : le rejouer quatre fois
+// ferait patienter deux minutes, ce qui est pire que l'erreur.
+// Exporté pour src/tests/api.offlineQueueing.test.ts : ces tests décrivent le
+// message vu APRÈS l'échec des reprises, et marquent donc le budget comme
+// dépensé. Partager la constante leur évite de dériver si on change le nombre
+// de tentatives ici.
+export const DELAIS_REPRISE_MS = [400, 1000, 2000, 4000];
+const REPRISES_MAX_DELAI_DEPASSE = 1;
+
+function estDelaiDepasse(error: any): boolean {
+    return error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT';
+}
+
+/** Panne qui a de bonnes chances de disparaître d'elle-même. */
+function estPanneTransitoire(error: any): boolean {
+    if (estDelaiDepasse(error)) return true;
+    if (estErreurReseau(error)) return true;
+    if (!error?.response) return true;
+    const statut = error.response.status;
+    // L'hébergeur répond à la place du serveur : redémarrage, sortie de
+    // veille. Jamais un refus métier.
+    return statut === 502 || statut === 503 || statut === 504;
+}
+
+/**
+ * Cette requête peut-elle être renvoyée sans risque ?
+ *
+ * **C'est la question qui compte, et la réponse est non par défaut.**
+ *
+ * Une lecture peut être rejouée mille fois sans conséquence. Un
+ * encaissement, non : si le serveur a bien enregistré le paiement et que
+ * c'est sa réponse qui s'est perdue en route, un deuxième envoi encaisse le
+ * même tarif deux fois. Dans un logiciel de comptabilité d'école, cette
+ * faute-là coûte la confiance d'un parent et la crédibilité du produit —
+ * très au-delà du désagrément d'un message d'erreur.
+ *
+ * Les connexions font exception : elles ne produisent qu'un jeton, les
+ * rejouer ne laisse aucune trace. Et c'est précisément là que l'utilisateur
+ * rencontrait le message, puisque c'est le premier écran de la journée.
+ *
+ * Les écritures restantes gardent donc leur message clair, et c'est un
+ * humain qui décide de recommencer. Pour les protéger aussi, il faudrait un
+ * identifiant d'opération que le serveur refuse en double.
+ */
+function peutEtreRejouee(config: any): boolean {
+    const methode = (config?.method || 'get').toLowerCase();
+    if (methode === 'get' || methode === 'head' || methode === 'options') return true;
+
+    const url: string = config?.url || '';
+    return methode === 'post' && /\/(auth|portail-parent|portail-enseignant|portail-eleve)\/login$/.test(url);
+}
+
+function patienter(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Rejoue la requête si c'est sans danger, et rend `null` sinon — l'appelant
+ * poursuit alors vers le message d'erreur habituel.
+ *
+ * Hors-ligne déclaré : on ne réessaie pas. Insister ne sert à rien, et la
+ * file locale (`mettreEnFileSiHorsLigne`) ou le message « vous êtes
+ * hors-ligne » sont la bonne réponse. À l'inverse, pendant une bouffée de
+ * pertes de paquets, `navigator.onLine` reste vrai : c'est exactement le cas
+ * que cette reprise rattrape.
+ */
+async function reprendreSiPossible(error: any): Promise<any | null> {
+    const config = error?.config;
+    if (!config || appareilHorsLigne()) return null;
+    if (!estPanneTransitoire(error) || !peutEtreRejouee(config)) return null;
+
+    const faites: number = config.__reprises ?? 0;
+    const budget = estDelaiDepasse(error) ? REPRISES_MAX_DELAI_DEPASSE : DELAIS_REPRISE_MS.length;
+    if (faites >= budget) return null;
+
+    config.__reprises = faites + 1;
+    await patienter(DELAIS_REPRISE_MS[faites] ?? 4000);
+    // L'échec éventuel de cette tentative repasse par cet intercepteur, qui
+    // reprendra le compte là où il en est : pas de récursion à surveiller.
+    return api.request(config);
+}
+
 /**
  * Traduit une panne en phrase compréhensible.
  *
@@ -242,6 +341,11 @@ api.interceptors.response.use(
     (response) => response,
     async (error) => {
         normaliserDetailErreur(error);
+
+        // Avant d'annoncer quoi que ce soit : réessayer. Une coupure de
+        // quelques secondes ne doit pas devenir un message d'erreur.
+        const reprise = await reprendreSiPossible(error);
+        if (reprise) return reprise;
 
         const queued = await mettreEnFileSiHorsLigne(error);
         if (queued) return queued;

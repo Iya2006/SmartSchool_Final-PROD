@@ -28,7 +28,7 @@ vi.mock('idb-keyval', () => ({
     keys: vi.fn(async () => Array.from(memoryStore.keys())),
 }));
 
-import api from '@/lib/api';
+import api, { DELAIS_REPRISE_MS } from '@/lib/api';
 import { listPending } from '@/lib/offlineQueue';
 
 function getRejectedHandler(): (error: unknown) => Promise<unknown> {
@@ -37,8 +37,20 @@ function getRejectedHandler(): (error: unknown) => Promise<unknown> {
     return rejected as (error: unknown) => Promise<unknown>;
 }
 
+/**
+ * Erreur d'absence réseau, reprises automatiques déjà épuisées.
+ *
+ * `lib/api.ts` réessaie désormais les lectures avant d'annoncer quoi que ce
+ * soit (coupures passagères mesurées sur la liaison). Ces tests décrivent ce
+ * que l'utilisateur voit *une fois ces tentatives échouées* — c'est bien le
+ * cas réel. On marque donc le budget comme dépensé, sinon l'intercepteur
+ * tenterait de vrais appels réseau au milieu des tests.
+ */
 function networkError(config: { method: string; url: string; data?: unknown }) {
-    return Object.assign(new Error('net'), { code: 'ERR_NETWORK', config });
+    return Object.assign(new Error('net'), {
+        code: 'ERR_NETWORK',
+        config: { ...config, __reprises: DELAIS_REPRISE_MS.length },
+    });
 }
 
 describe('lib/api — mise en file hors-ligne', () => {
@@ -117,10 +129,12 @@ function simulerConnexion(enLigne: boolean) {
     Object.defineProperty(navigator, 'onLine', { value: enLigne, configurable: true });
 }
 
-/** Erreur porteuse d'une réponse du serveur (ou de l'hébergeur). */
+/** Erreur porteuse d'une réponse du serveur (ou de l'hébergeur), reprises
+ * épuisées — même raison que `networkError` ci-dessus : 502/503/504 sont
+ * réessayés avant d'être annoncés. */
 function erreurAvecStatut(status: number, data: unknown = {}) {
     return Object.assign(new Error(`Request failed with status code ${status}`), {
-        config: { method: 'get', url: '/api/eleves' },
+        config: { method: 'get', url: '/api/eleves', __reprises: DELAIS_REPRISE_MS.length },
         response: { status, data },
     });
 }
@@ -200,7 +214,7 @@ describe('lib/api — pannes serveur dites en français', () => {
     it('dépassement de délai : on invite à réessayer, sans « timeout of 30000ms exceeded »', async () => {
         const erreur = Object.assign(new Error('timeout of 30000ms exceeded'), {
             code: 'ECONNABORTED',
-            config: { method: 'get', url: '/api/eleves' },
+            config: { method: 'get', url: '/api/eleves', __reprises: DELAIS_REPRISE_MS.length },
         });
         expect(await messageRendu(erreur)).toMatch(/trop de temps/i);
     });
