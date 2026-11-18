@@ -1428,7 +1428,13 @@ def resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int,
         })
 
     resultats: Dict[int, dict] = {}
-    for inscription_id, par_matiere in par_inscription.items():
+    # On parcourt l'UNION des élèves qui ont un détail par matière et de ceux
+    # qui n'ont qu'une moyenne de période. Les seconds existent depuis que les
+    # écoles peuvent importer leurs résultats au format « moyenne générale
+    # seule » (app/services/import_resultats.py) : les ignorer les aurait
+    # effacés du classement annuel alors que leur moyenne est connue.
+    for inscription_id in set(par_inscription) | set(moyennes_periode):
+        par_matiere = par_inscription.get(inscription_id, {})
         details = []
         total_points = 0.0
         total_coef = 0.0
@@ -1452,8 +1458,11 @@ def resultats_annuels_bulk(db: Session, inscription_ids: List[int]) -> Dict[int,
             "nb_periodes": len(periodes),
             "periodes": periodes,
             "moyennes_periodes": [p["moyenne"] for p in periodes],
-            "total_points": round(total_points, 2),
-            "total_coefficients": total_coef,
+            # Sans détail par matière, il n'y a pas de total de points : `None`
+            # se lit « non applicable » sur la fiche, là où 0 se lirait
+            # « l'élève n'a aucun point », ce qui serait faux.
+            "total_points": round(total_points, 2) if details else None,
+            "total_coefficients": total_coef if details else None,
             "lignes": details,
         }
     return resultats
