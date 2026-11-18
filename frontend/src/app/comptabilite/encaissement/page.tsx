@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Search, Loader2, ChevronRight, Users, X, Printer,
     CheckCircle2, AlertTriangle, CreditCard, Banknote, Smartphone,
-    FileText, Receipt, ArrowLeft, TrendingUp, Eye, Download
+    FileText, Receipt, ArrowLeft, TrendingUp, Eye, Download, PencilLine
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -29,7 +29,11 @@ type EleveSearch = {
 
 type FactureDetail = {
     facture_id: number; numero_facture: string; date_facture: string;
+    // `montant_total` est le NET réclamé. `montant_brut` est ce qui avait été
+    // facturé au départ, `montant_remise` ce qu'on a renoncé à réclamer :
+    // facultatifs, car une session ouverte avant leur ajout ne les a pas.
     montant_total: number; montant_paye: number; montant_restant: number;
+    montant_brut?: number; montant_remise?: number;
     statut: string; type_frais_libelle: string;
     echeances: { echeance_id: number; libelle: string; date_limite: string; montant_attendu: number; montant_paye: number; statut: string; }[];
     paiements: { paiement_id: number; numero_recu: string; date_paiement: string; montant: number; mode_paiement: string; }[];
@@ -123,6 +127,13 @@ function EncaissementContent() {
     const [payEcheanceId, setPayEcheanceId] = useState('');
     const [payLoading, setPayLoading] = useState(false);
     const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+    // Correction d'une facture émise par erreur : on ne réécrit pas le montant
+    // d'origine, on enregistre ce qu'on renonce à réclamer, avec son motif.
+    const [factureACorriger, setFactureACorriger] = useState<FactureDetail | null>(null);
+    const [remiseMontant, setRemiseMontant] = useState('');
+    const [remiseMotif, setRemiseMotif] = useState('');
+    const [remiseLoading, setRemiseLoading] = useState(false);
 
     // Receipt state
     const [recuData, setRecuData] = useState<RecuData | null>(null);
@@ -248,6 +259,46 @@ function EncaissementContent() {
         setPayReference('');
         setPayEcheanceId('');
         setStep('payer');
+    };
+
+    // ─── Corriger une facture (remise) ───
+    const ouvrirCorrection = (facture: FactureDetail) => {
+        setFactureACorriger(facture);
+        // Pré-rempli avec la remise DÉJÀ en place, pas avec zéro : le serveur
+        // attend la remise totale, et proposer 0 inviterait à effacer sans le
+        // vouloir une remise accordée la semaine précédente.
+        setRemiseMontant(String(Math.round(facture.montant_remise ?? 0)));
+        setRemiseMotif('');
+    };
+
+    const enregistrerRemise = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!factureACorriger || remiseLoading) return;
+        const montant = parseFloat(remiseMontant);
+        if (!Number.isFinite(montant) || montant < 0) {
+            showMsg('Indiquez un montant de remise valide.', 'error');
+            return;
+        }
+        setRemiseLoading(true);
+        try {
+            const res = await api.put(
+                `/api/finance/factures/${factureACorriger.facture_id}/remise`,
+                { montant_remise: montant, motif: remiseMotif },
+            );
+            showMsg(res.data.message, 'success');
+            setFactureACorriger(null);
+            setRemiseMotif('');
+            // On recharge le solde : les montants de l'écran viennent du
+            // serveur, les recalculer ici les ferait diverger de la facture.
+            if (selectedEleve) await selectEleve(selectedEleve);
+            queryClient.invalidateQueries({ queryKey: ['encaissement-solvabilite'] });
+        } catch (err: any) {
+            // Le serveur explique précisément ce qu'il refuse — notamment le
+            // trop-perçu, avec la marche à suivre. On l'affiche tel quel.
+            showMsg(err?.response?.data?.detail || "La correction n'a pas pu être enregistrée.", 'error');
+        } finally {
+            setRemiseLoading(false);
+        }
     };
 
     // ─── Submit payment ───
@@ -592,6 +643,13 @@ function EncaissementContent() {
                                             <span style={{ fontSize: 12, color: '#94a3b8' }}>{f.type_frais_libelle}</span>
                                         </div>
                                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                            {/* Corriger reste proposé même sur une facture soldée : le
+                                                trop-facturé se découvre souvent après l'encaissement. */}
+                                            <button className="no-print" onClick={(e) => { e.stopPropagation(); ouvrirCorrection(f); }}
+                                                title="Diminuer le montant réclamé (erreur de tarif, exonération oubliée…)"
+                                                style={{ padding: '8px 14px', background: '#fff', color: '#b45309', border: '1.5px solid #fde68a', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <PencilLine size={15} /> Corriger
+                                            </button>
                                             {f.statut !== 'PAYEE' && (
                                                 <button className="no-print" onClick={(e) => { e.stopPropagation(); openPayer(f); }}
                                                     style={{ padding: '8px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -610,8 +668,20 @@ function EncaissementContent() {
                                             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ overflow: 'hidden' }}>
 
                                     {/* Amounts */}
-                                    <div style={{ padding: '14px 22px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, fontSize: 13 }}>
-                                        <div><p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>Facturé</p><p style={{ fontWeight: 700, margin: '4px 0 0' }}>{fmt(f.montant_total)} GNF</p></div>
+                                    {/* Une facture corrigée doit dire les deux chiffres : ce qui
+                                        avait été facturé, et ce qu'on a renoncé à réclamer. Sinon
+                                        le montant « a changé tout seul » aux yeux du parent. */}
+                                    <div style={{ padding: '14px 22px', display: 'grid', gridTemplateColumns: (f.montant_remise ?? 0) > 0 ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12, fontSize: 13 }}>
+                                        <div>
+                                            <p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>{(f.montant_remise ?? 0) > 0 ? 'Facturé au départ' : 'Facturé'}</p>
+                                            <p style={{ fontWeight: 700, margin: '4px 0 0' }}>{fmt((f.montant_remise ?? 0) > 0 ? (f.montant_brut ?? f.montant_total) : f.montant_total)} GNF</p>
+                                        </div>
+                                        {(f.montant_remise ?? 0) > 0 && (
+                                            <div>
+                                                <p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>Remise</p>
+                                                <p style={{ fontWeight: 700, color: '#b45309', margin: '4px 0 0' }}>− {fmt(f.montant_remise ?? 0)} GNF</p>
+                                            </div>
+                                        )}
                                         <div><p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>Payé</p><p style={{ fontWeight: 700, color: '#10b981', margin: '4px 0 0' }}>{fmt(f.montant_paye)} GNF</p></div>
                                         <div><p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>Reste</p><p style={{ fontWeight: 700, color: '#ef4444', margin: '4px 0 0' }}>{fmt(f.montant_restant)} GNF</p></div>
                                     </div>
@@ -848,6 +918,89 @@ function EncaissementContent() {
                     )}
                 </>
             )}
+
+            {/* ─── Corriger une facture : la remise ─── */}
+            <AnimatePresence>
+                {factureACorriger && (
+                    <motion.div className="no-print"
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={() => !remiseLoading && setFactureACorriger(null)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 60 }}>
+                        <motion.form onSubmit={enregistrerRemise} onClick={e => e.stopPropagation()}
+                            initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
+                            style={{ background: '#fff', borderRadius: 16, padding: 24, width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 14, maxHeight: '90vh', overflowY: 'auto' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0f172a' }}>Corriger cette facture</h3>
+                                    <p style={{ margin: '4px 0 0', fontSize: 12.5, color: '#64748b' }}>
+                                        {factureACorriger.numero_facture} — {factureACorriger.type_frais_libelle}
+                                    </p>
+                                </div>
+                                <button type="button" onClick={() => setFactureACorriger(null)}
+                                    style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', padding: 2 }}>
+                                    <X size={19} />
+                                </button>
+                            </div>
+
+                            <div style={{ background: '#f8fafc', borderRadius: 11, padding: 13, fontSize: 13, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                                <div>
+                                    <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>Facturé au départ</p>
+                                    <p style={{ margin: '3px 0 0', fontWeight: 700 }}>{fmt(factureACorriger.montant_brut ?? factureACorriger.montant_total)} GNF</p>
+                                </div>
+                                <div>
+                                    <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>Déjà payé</p>
+                                    <p style={{ margin: '3px 0 0', fontWeight: 700, color: '#10b981' }}>{fmt(factureACorriger.montant_paye)} GNF</p>
+                                </div>
+                            </div>
+
+                            <p style={{ margin: 0, fontSize: 12.5, color: '#475569', lineHeight: 1.6 }}>
+                                Le montant d&apos;origine n&apos;est pas effacé : on enregistre ce que l&apos;école
+                                renonce à réclamer. La facture reste justifiable devant un parent.
+                            </p>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <label style={{ fontSize: 12.5, fontWeight: 700, color: '#334155' }}>Remise totale sur cette facture</label>
+                                <input type="number" min="0" step="any" inputMode="numeric" autoFocus
+                                    value={remiseMontant} onChange={e => setRemiseMontant(e.target.value)}
+                                    style={{ padding: '11px 13px', borderRadius: 10, border: '1.5px solid #d5e1f6', fontSize: 15, fontWeight: 700, textAlign: 'right', color: '#12213f', outline: 'none' }} />
+                                <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
+                                    Reste à payer après correction :{' '}
+                                    <strong style={{ color: '#b45309' }}>
+                                        {fmt(Math.max(0, (factureACorriger.montant_brut ?? factureACorriger.montant_total) - (parseFloat(remiseMontant) || 0) - factureACorriger.montant_paye))} GNF
+                                    </strong>
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <label style={{ fontSize: 12.5, fontWeight: 700, color: '#334155' }}>Motif de la correction</label>
+                                <input value={remiseMotif} onChange={e => setRemiseMotif(e.target.value)}
+                                    placeholder="Mauvais tarif appliqué, exonération oubliée…"
+                                    style={{ padding: '11px 13px', borderRadius: 10, border: '1.5px solid #d5e1f6', fontSize: 14, color: '#12213f', outline: 'none' }} />
+                                <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
+                                    Obligatoire : c&apos;est lui qui rend la correction explicable dans six mois.
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 2 }}>
+                                <button type="button" onClick={() => setFactureACorriger(null)} disabled={remiseLoading}
+                                    style={{ padding: '11px 18px', borderRadius: 10, border: '1.5px solid #e2e8f0', background: '#fff', color: '#475569', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                                    Annuler
+                                </button>
+                                <button type="submit" disabled={remiseLoading || remiseMotif.trim().length < 3}
+                                    style={{
+                                        padding: '11px 20px', borderRadius: 10, border: 'none', fontSize: 14, fontWeight: 700, color: '#fff',
+                                        background: remiseLoading || remiseMotif.trim().length < 3 ? '#cbd5e1' : 'linear-gradient(135deg,#f59e0b,#d97706)',
+                                        cursor: remiseLoading || remiseMotif.trim().length < 3 ? 'not-allowed' : 'pointer',
+                                        display: 'inline-flex', alignItems: 'center', gap: 7,
+                                    }}>
+                                    {remiseLoading ? <Loader2 size={15} className="animate-spin" /> : <PencilLine size={15} />}
+                                    Enregistrer la correction
+                                </button>
+                            </div>
+                        </motion.form>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* ─── Print Styles ─── */}
             <style>{`

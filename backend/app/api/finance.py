@@ -2456,7 +2456,15 @@ def solde_eleve(eleve_id: int, annee_id: Optional[int] = None, db: Session = Dep
                 "facture_id": facture.facture_id,
                 "numero_facture": facture.numero_facture,
                 "type_frais_libelle": libelle_frais,
+                # `montant_total` reste le NET (ce qui est réclamé) : tout
+                # l'écran existant compte là-dessus, on n'y touche pas.
                 "montant_total": float(facture.montant_net or 0),
+                # Ajoutés pour l'écran de correction : sans le brut ni la
+                # remise déjà appliquée, impossible d'afficher honnêtement
+                # « 300 000 facturés, 50 000 de remise » ni de pré-remplir la
+                # correction sans risquer de l'écraser.
+                "montant_brut": float(facture.montant_total or 0),
+                "montant_remise": float(facture.montant_remise or 0),
                 "montant_paye": float(facture.montant_paye or 0),
                 "montant_restant": float(facture.montant_restant or 0),
                 "statut": facture.statut,
@@ -3863,6 +3871,166 @@ def annuler_paiement(
         "motif": motif,
         "facture_statut": facture.statut if facture else None,
         "message": f"Paiement {paiement.numero_recu} annulé avec succès. Montant de {montant_paiement:,.0f} GNF reversé."
+    }
+
+
+# ============================================================================
+# CORRIGER UNE FACTURE ÉMISE PAR ERREUR — la remise
+# ============================================================================
+
+class RemiseFacture(BaseModel):
+    """Nouvelle remise TOTALE sur la facture, pas un supplément.
+
+    On remplace la valeur au lieu de l'ajouter : « la remise est de 50 000 »
+    est vérifiable d'un coup d'œil sur la facture, « on a ajouté 20 000 »
+    oblige à refaire l'historique des corrections pour savoir où l'on en est.
+    """
+    montant_remise: float
+    motif: str
+
+
+@router.put("/factures/{facture_id}/remise")
+def appliquer_remise_facture(
+    facture_id: int,
+    data: RemiseFacture,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """
+    Diminue le montant réclamé à un élève sur une facture déjà émise.
+
+    **Pourquoi une remise et non une modification du montant.** Une école se
+    trompe : mauvais tarif, élève exonéré oublié, frais facturé deux fois.
+    Il faut pouvoir corriger. Mais écraser le montant d'origine effacerait la
+    trace de l'erreur, et une facture dont le montant a changé sans
+    explication est une facture que personne ne peut plus justifier devant un
+    parent ni devant un contrôle. La remise, elle, dit les deux choses à la
+    fois : ce qui était dû, et ce qu'on a décidé de ne pas réclamer, avec le
+    motif.
+
+    Pour une facture entièrement erronée, la remise va jusqu'au montant
+    total : le reste à payer tombe à zéro et la ligne reste lisible.
+
+    **Le garde-fou qui compte** est le refus de descendre le net sous ce qui
+    a déjà été encaissé. Sinon on fabriquerait un trop-perçu silencieux : la
+    famille aurait payé plus que dû, sans que rien ne le signale ni ne
+    déclenche de remboursement. Dans ce cas il faut d'abord annuler le
+    versement en trop — ce que la route `/paiements/{id}/annuler` fait déjà,
+    en reversant l'argent et en contre-passant l'écriture.
+    """
+    motif = (data.motif or "").strip()
+    if len(motif) < 3:
+        raise HTTPException(400, "Le motif de la remise est obligatoire — c'est lui qui rend la correction justifiable plus tard.")
+
+    facture = _facture_de_l_ecole(db, facture_id, etablissement_id)
+    _verifier_annee_modifiable(db, facture.annee_id)
+
+    total = float(facture.montant_total or 0)
+    deja_paye = float(facture.montant_paye or 0)
+    ancienne_remise = float(facture.montant_remise or 0)
+    nouvelle_remise = round(float(data.montant_remise), 2)
+
+    if nouvelle_remise < 0:
+        raise HTTPException(400, "Une remise ne peut pas être négative. Pour réclamer davantage, diminuez la remise.")
+    if nouvelle_remise > total + 0.005:
+        raise HTTPException(
+            400,
+            f"La remise ({nouvelle_remise:,.0f} GNF) dépasse le montant facturé "
+            f"({total:,.0f} GNF). Au maximum, la remise annule la facture entière.",
+        )
+
+    nouveau_net = round(total - nouvelle_remise, 2)
+    if nouveau_net < deja_paye - 0.005:
+        raise HTTPException(
+            400,
+            f"Cet élève a déjà versé {deja_paye:,.0f} GNF sur cette facture. Une remise de "
+            f"{nouvelle_remise:,.0f} GNF ramènerait le montant dû à {nouveau_net:,.0f} GNF, "
+            f"soit moins que ce qui est encaissé — il y aurait un trop-perçu de "
+            f"{(deja_paye - nouveau_net):,.0f} GNF. Annulez d'abord le versement en trop "
+            "depuis l'historique des paiements, puis refaites cette remise.",
+        )
+
+    delta = round(nouvelle_remise - ancienne_remise, 2)
+    if abs(delta) < 0.005:
+        return {
+            "facture_id": facture.facture_id,
+            "numero_facture": facture.numero_facture,
+            "montant_remise": ancienne_remise,
+            "montant_net": float(facture.montant_net or 0),
+            "montant_restant": float(facture.montant_restant or 0),
+            "statut": facture.statut,
+            "message": "Cette remise est déjà celle qui est appliquée — rien n'a été modifié.",
+        }
+
+    facture.montant_remise = nouvelle_remise
+    facture.montant_net = nouveau_net
+    facture.montant_restant = round(nouveau_net - deja_paye, 2)
+
+    if facture.montant_restant <= 0:
+        facture.montant_restant = 0
+        facture.statut = "PAYEE"
+    elif deja_paye > 0:
+        facture.statut = "PARTIELLEMENT_PAYEE"
+    else:
+        facture.statut = "EN_ATTENTE"
+
+    # Comptabilité générale : la facturation avait constaté la créance
+    # (Débit 4111 Élèves / Crédit 7061 Produits). Une remise la diminue, donc
+    # elle écrit exactement l'inverse — sur le seul écart, pas sur le total :
+    # rejouer l'écriture entière à chaque correction gonflerait le journal de
+    # mouvements qui n'ont jamais eu lieu.
+    insc = db.query(Inscription).filter(Inscription.inscription_id == facture.inscription_id).first()
+    montant_ecriture = abs(delta)
+    remise_accordee = delta > 0
+    lignes_ecriture = [
+        {
+            "compte": COMPTE_PRODUITS_SCOLARITE,
+            "debit": montant_ecriture if remise_accordee else 0,
+            "credit": 0 if remise_accordee else montant_ecriture,
+            "classe_id": insc.classe_id if insc else None,
+            "description": facture.numero_facture,
+        },
+        {
+            "compte": COMPTE_ELEVES,
+            "debit": 0 if remise_accordee else montant_ecriture,
+            "credit": montant_ecriture if remise_accordee else 0,
+            "eleve_id": insc.eleve_id if insc else None,
+            "classe_id": insc.classe_id if insc else None,
+            "description": facture.numero_facture,
+        },
+    ]
+    generer_ecriture_auto(
+        db, date_ecriture=date_type.today(), journal_code="VE",
+        libelle=(
+            f"{'Remise' if remise_accordee else 'Reprise de remise'} sur "
+            f"{facture.numero_facture} — {motif}"
+        ),
+        reference=facture.numero_facture,
+        lignes=lignes_ecriture,
+        etablissement_id=etablissement_id,
+    )
+
+    db.commit()
+    db.refresh(facture)
+    _invalidate_dashboard_cache(etablissement_id, facture.annee_id)
+
+    return {
+        "facture_id": facture.facture_id,
+        "numero_facture": facture.numero_facture,
+        "montant_total": total,
+        "montant_remise": nouvelle_remise,
+        "montant_net": float(facture.montant_net or 0),
+        "montant_paye": deja_paye,
+        "montant_restant": float(facture.montant_restant or 0),
+        "statut": facture.statut,
+        "motif": motif,
+        "message": (
+            f"Remise de {nouvelle_remise:,.0f} GNF appliquée sur {facture.numero_facture}. "
+            f"Reste à payer : {float(facture.montant_restant or 0):,.0f} GNF."
+            if remise_accordee else
+            f"Remise ramenée à {nouvelle_remise:,.0f} GNF sur {facture.numero_facture}. "
+            f"Reste à payer : {float(facture.montant_restant or 0):,.0f} GNF."
+        ),
     }
 
 
