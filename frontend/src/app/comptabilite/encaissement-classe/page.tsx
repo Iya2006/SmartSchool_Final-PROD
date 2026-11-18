@@ -21,7 +21,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
-    AlertTriangle, ArrowLeft, Banknote, CheckCircle2, Loader2, Users,
+    AlertTriangle, ArrowLeft, Banknote, CheckCircle2, Loader2, Search, Users, X,
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
@@ -40,6 +40,11 @@ type Classe = { classe_id: number; libelle: string };
 
 const fmt = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n || 0));
 
+/** « traore » doit trouver « Traoré » : sans ça, la recherche est inutilisable
+ *  sur des noms guinéens, que personne ne saisit avec leurs accents. Même
+ *  normalisation que l'écran « Encaisser un paiement ». */
+const sansAccent = (s: string) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
 const champ: React.CSSProperties = {
     padding: '9px 12px', borderRadius: 10, border: '1.5px solid #d5e1f6',
     fontSize: 14, color: '#12213f', background: '#fff', outline: 'none',
@@ -52,6 +57,11 @@ export default function EncaissementClassePage() {
     const [classeId, setClasseId] = useState<string>('');
     const [eleves, setEleves] = useState<EleveSituation[]>([]);
     const [chargement, setChargement] = useState(false);
+
+    // Deux filtres indépendants : la classe choisit QUI est chargé (le lot est
+    // par classe côté serveur), la recherche par nom retrouve un élève dans
+    // une classe de soixante sans faire défiler la page entière.
+    const [recherche, setRecherche] = useState('');
 
     const [modes, setModes] = useState<string[]>(DEFAULT_MODES_PAIEMENT);
     const [mode, setMode] = useState<string>(DEFAULT_MODES_PAIEMENT[0] || 'ESPECES');
@@ -76,6 +86,10 @@ export default function EncaissementClassePage() {
         setChargement(true);
         setSaisies({});
         setResultat(null);
+        // Changer de classe remet la recherche à zéro : un nom tapé pour la
+        // classe précédente ne filtrerait plus rien et donnerait l'illusion
+        // d'une classe vide.
+        setRecherche('');
         try {
             const r = await api.get(`/api/finance/classe/${id}/situation-encaissement?annee_id=${anneeId}`);
             setEleves(r.data.eleves || []);
@@ -89,21 +103,58 @@ export default function EncaissementClassePage() {
 
     useEffect(() => { chargerSituation(classeId); }, [classeId, chargerSituation]);
 
+    /**
+     * Élèves réellement affichés.
+     *
+     * Les montants déjà saisis ne sont PAS effacés quand on filtre : on tape
+     * souvent plusieurs familles, puis on cherche la suivante par son nom.
+     * Perdre la saisie à chaque recherche rendrait le filtre inutilisable.
+     */
+    const elevesAffiches = useMemo(() => {
+        const q = sansAccent(recherche).trim();
+        if (!q) return eleves;
+        // Chaque mot doit se retrouver : « bah alpha » trouve « Alpha Bah »,
+        // alors qu'une simple sous-chaîne échouerait sur l'ordre inverse.
+        const mots = q.split(/\s+/).filter(Boolean);
+        return eleves.filter(e => {
+            const cible = `${sansAccent(e.nom_complet)} ${sansAccent(e.matricule || '')}`;
+            return mots.every(m => cible.includes(m));
+        });
+    }, [eleves, recherche]);
+
     const lignes = useMemo(() => Object.entries(saisies)
         .map(([facture_id, v]) => ({ facture_id: Number(facture_id), montant: parseFloat(v) }))
         .filter(l => Number.isFinite(l.montant) && l.montant > 0), [saisies]);
 
     const total = lignes.reduce((s, l) => s + l.montant, 0);
 
+    /**
+     * Combien de versements saisis concernent un élève que le filtre cache ?
+     *
+     * Le lot part en entier, filtre ou pas. Valider douze versements alors que
+     * l'écran n'en montre que deux serait une mauvaise surprise : on l'annonce
+     * au lieu de la laisser arriver.
+     */
+    const lignesMasquees = useMemo(() => {
+        if (elevesAffiches.length === eleves.length) return 0;
+        const visibles = new Set(elevesAffiches.flatMap(e => e.frais.map(f => f.facture_id)));
+        return lignes.filter(l => !visibles.has(l.facture_id)).length;
+    }, [lignes, elevesAffiches, eleves]);
+
     const remplirLeReste = () => {
         // Pré-remplit ce qui reste dû sur chaque frais non soldé. Le caissier
         // corrige ensuite les familles qui paient autre chose — c'est plus
         // rapide que tout saisir, et chaque montant reste modifiable.
-        const suivant: Record<number, string> = {};
-        eleves.forEach(e => e.frais.forEach(f => {
-            if (f.reste > 0) suivant[f.facture_id] = String(Math.round(f.reste));
-        }));
-        setSaisies(suivant);
+        //
+        // Uniquement sur les élèves affichés : pré-remplir des élèves qu'un
+        // filtre cache, c'est préparer un encaissement que personne n'a vu.
+        setSaisies(s => {
+            const suivant = { ...s };
+            elevesAffiches.forEach(e => e.frais.forEach(f => {
+                if (f.reste > 0) suivant[f.facture_id] = String(Math.round(f.reste));
+            }));
+            return suivant;
+        });
     };
 
     const encaisser = async () => {
@@ -157,6 +208,22 @@ export default function EncaissementClassePage() {
                         {classes.map(c => <option key={c.classe_id} value={c.classe_id}>{c.libelle}</option>)}
                     </select>
                 </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: '1 1 230px', minWidth: 210 }}>
+                    <label style={{ fontSize: 12.5, fontWeight: 700, color: '#334155' }}>Rechercher un élève</label>
+                    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                        <Search size={15} style={{ position: 'absolute', left: 11, color: '#94a3b8', pointerEvents: 'none' }} />
+                        <input value={recherche} onChange={e => setRecherche(e.target.value)}
+                            disabled={!classeId}
+                            placeholder="Nom, prénom ou matricule…"
+                            style={{ ...champ, width: '100%', paddingLeft: 33, paddingRight: recherche ? 32 : 12 }} />
+                        {recherche && (
+                            <button onClick={() => setRecherche('')} aria-label="Effacer la recherche"
+                                style={{ position: 'absolute', right: 8, display: 'flex', border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', padding: 2 }}>
+                                <X size={15} />
+                            </button>
+                        )}
+                    </div>
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 170 }}>
                     <label style={{ fontSize: 12.5, fontWeight: 700, color: '#334155' }}>Mode de paiement</label>
                     <select value={mode} onChange={e => setMode(e.target.value)} style={champ}>
@@ -168,10 +235,12 @@ export default function EncaissementClassePage() {
                     <input value={reference} onChange={e => setReference(e.target.value)}
                         placeholder="N° de bordereau, transaction…" style={champ} />
                 </div>
-                {eleves.length > 0 && (
+                {elevesAffiches.length > 0 && (
                     <button onClick={remplirLeReste}
                         style={{ ...champ, cursor: 'pointer', fontWeight: 700, color: '#2563eb', borderColor: '#bfdbfe', background: '#eff6ff' }}>
-                        Pré-remplir le reste dû
+                        {recherche.trim()
+                            ? `Pré-remplir le reste dû (${elevesAffiches.length} affiché${elevesAffiches.length > 1 ? 's' : ''})`
+                            : 'Pré-remplir le reste dû'}
                     </button>
                 )}
             </div>
@@ -203,12 +272,20 @@ export default function EncaissementClassePage() {
             {!chargement && eleves.length > 0 && (
                 <>
                     <div style={{ fontSize: 13, color: '#64748b' }}>
-                        <strong style={{ color: '#0f172a' }}>{eleves.length}</strong> élève(s) •
+                        {recherche.trim()
+                            ? <><strong style={{ color: '#0f172a' }}>{elevesAffiches.length}</strong> élève(s) sur {eleves.length} •{' '}</>
+                            : <><strong style={{ color: '#0f172a' }}>{eleves.length}</strong> élève(s) •{' '}</>}
                         reste dû pour la classe : <strong style={{ color: '#b45309' }}>{fmt(totalResteClasse)} GNF</strong>
                     </div>
 
+                    {recherche.trim() && elevesAffiches.length === 0 && (
+                        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: 32, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
+                            Aucun élève de cette classe ne correspond à «&nbsp;{recherche.trim()}&nbsp;».
+                        </div>
+                    )}
+
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {eleves.map(el => (
+                        {elevesAffiches.map(el => (
                             <div key={el.eleve_id} style={{
                                 background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14,
                                 padding: 14, opacity: el.solde === 'SOLDE' ? 0.72 : 1,
@@ -264,6 +341,11 @@ export default function EncaissementClassePage() {
                         <div style={{ fontSize: 13.5, color: '#334155' }}>
                             <strong>{lignes.length}</strong> versement(s) — total{' '}
                             <strong style={{ color: '#059669', fontSize: 17 }}>{fmt(total)} GNF</strong>
+                            {lignesMasquees > 0 && (
+                                <div style={{ fontSize: 12, color: '#b45309', marginTop: 3 }}>
+                                    dont {lignesMasquees} pour un élève que la recherche masque — tout partira ensemble.
+                                </div>
+                            )}
                         </div>
                         <button onClick={encaisser} disabled={!lignes.length || envoi}
                             style={{
