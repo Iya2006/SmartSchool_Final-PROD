@@ -3771,29 +3771,15 @@ def list_decaissements(
 # ANNULATION DE PAIEMENT — Annuler un paiement et reverser les montants
 # ============================================================================
 
-@router.put("/paiements/{paiement_id}/annuler")
-def annuler_paiement(
-    paiement_id: int,
-    data: dict,
-    db: Session = Depends(get_db),
-    etablissement_id: int = Depends(require_etablissement),
-):
-    """
-    Annule un paiement et reverse les montants sur la facture et l'échéance associée.
-    Champs attendus : motif (raison de l'annulation).
-    """
-    motif = data.get("motif", "")
-    if not motif:
-        raise HTTPException(status_code=400, detail="Le motif d'annulation est obligatoire")
+def _paiement_de_l_ecole(db: Session, paiement_id: int, etablissement_id: int) -> Paiement:
+    """Le paiement, ou 404 — jamais celui d'une autre école.
 
-    # Récupérer le paiement
+    Avant le Lot 2, n'importe quel `paiement_id` deviné pouvait être annulé,
+    avec reversement des montants, depuis n'importe quelle école.
+    """
     paiement = db.query(Paiement).filter(Paiement.paiement_id == paiement_id).first()
     if not paiement:
         raise HTTPException(status_code=404, detail="Paiement non trouvé")
-
-    # Vérifie que ce paiement appartient bien à l'établissement appelant —
-    # avant le Lot 2, n'importe quel paiement_id deviné pouvait être annulé
-    # (avec reversement des montants) depuis n'importe quelle école.
     proprietaire = (
         db.query(Classe.etablissement_id)
         .join(Inscription, Inscription.classe_id == Classe.classe_id)
@@ -3803,25 +3789,33 @@ def annuler_paiement(
     )
     if proprietaire != etablissement_id:
         raise HTTPException(status_code=404, detail="Paiement non trouvé")
+    return paiement
 
-    if paiement.statut == "ANNULE":
-        raise HTTPException(status_code=400, detail="Ce paiement est déjà annulé")
 
-    _verifier_annee_modifiable(db, paiement.annee_id)
+def _reverser_un_paiement(
+    db: Session, paiement: Paiement, motif: str, etablissement_id: int,
+) -> tuple:
+    """Annule UN paiement : facture, échéance, et contre-passation au journal.
 
+    Ne valide pas la transaction — l'appelant décide. C'est ce qui permet à
+    l'annulation en lot d'être tout ou rien : plusieurs reçus annulés en un
+    seul `commit`, ou aucun. Un lot à moitié passé laisserait une caisse
+    impossible à rapprocher.
+
+    Dupliquer ce code pour le lot aurait été plus rapide à écrire et
+    désastreux à vivre : deux chemins qui reversent de l'argent finissent par
+    diverger en silence, et c'est le journal comptable qui en paie le prix.
+    """
     montant_paiement = float(paiement.montant or 0)
 
-    # Mettre à jour le statut du paiement
     paiement.statut = "ANNULE"
     paiement.motif_annulation = motif
 
-    # Reverser les montants sur la facture
     facture = db.query(Facture).filter(Facture.facture_id == paiement.facture_id).first()
     if facture:
         facture.montant_paye = max(0, float(facture.montant_paye or 0) - montant_paiement)
         facture.montant_restant = float(facture.montant_net or 0) - float(facture.montant_paye)
 
-        # Mettre à jour le statut de la facture
         if facture.montant_paye <= 0:
             facture.statut = "EN_ATTENTE"
         elif facture.montant_restant <= 0:
@@ -3830,7 +3824,6 @@ def annuler_paiement(
         else:
             facture.statut = "PARTIELLEMENT_PAYEE"
 
-    # Reverser les montants sur l'échéance si applicable
     if paiement.echeance_id:
         echeance = db.query(EcheanceFacture).filter(
             EcheanceFacture.echeance_id == paiement.echeance_id
@@ -3861,6 +3854,32 @@ def annuler_paiement(
         ],
         etablissement_id=etablissement_id,
     )
+    return montant_paiement, facture
+
+
+@router.put("/paiements/{paiement_id}/annuler")
+def annuler_paiement(
+    paiement_id: int,
+    data: dict,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """
+    Annule un paiement et reverse les montants sur la facture et l'échéance associée.
+    Champs attendus : motif (raison de l'annulation).
+    """
+    motif = data.get("motif", "")
+    if not motif:
+        raise HTTPException(status_code=400, detail="Le motif d'annulation est obligatoire")
+
+    paiement = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+
+    if paiement.statut == "ANNULE":
+        raise HTTPException(status_code=400, detail="Ce paiement est déjà annulé")
+
+    _verifier_annee_modifiable(db, paiement.annee_id)
+
+    montant_paiement, facture = _reverser_un_paiement(db, paiement, motif, etablissement_id)
 
     db.commit()
 
@@ -3871,6 +3890,184 @@ def annuler_paiement(
         "motif": motif,
         "facture_statut": facture.statut if facture else None,
         "message": f"Paiement {paiement.numero_recu} annulé avec succès. Montant de {montant_paiement:,.0f} GNF reversé."
+    }
+
+
+# ============================================================================
+# CORRIGER CE QU'UN ÉLÈVE A PAYÉ — les doublons d'encaissement
+#
+# Un double-clic sur « Encaisser » produit deux versements, un triple-clic
+# trois. L'argent n'a été reçu qu'une fois : la caisse et le solde de l'élève
+# sont alors faux, et l'école devait retrouver chaque reçu facture par facture
+# pour les annuler un par un. Ces deux routes rassemblent le geste en un seul
+# endroit, au niveau de l'ÉLÈVE.
+# ============================================================================
+
+@router.get("/eleve/{eleve_id}/versements")
+def versements_de_l_eleve(
+    eleve_id: int,
+    annee_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Tous les versements valides d'un élève, avec les doublons repérés.
+
+    **La détection des doublons est le cœur de cette route.** Deux versements
+    du même montant, le même jour, sur la même facture, ne correspondent
+    presque jamais à deux paiements réels : c'est un clic répété. On les
+    regroupe et on marque tous ceux qui suivent le premier — à l'école de
+    confirmer, jamais au logiciel de supprimer tout seul.
+
+    Le premier de chaque groupe n'est jamais marqué : il y a bien eu un
+    paiement, et c'est son reçu que la famille détient.
+    """
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
+    if not eleve:
+        raise HTTPException(404, "Élève non trouvé")
+
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+
+    requete = db.query(Paiement, Facture, TypeFrais).select_from(Paiement).join(
+        Facture, Facture.facture_id == Paiement.facture_id
+    ).join(
+        Inscription, Inscription.inscription_id == Facture.inscription_id
+    ).outerjoin(
+        # Jointure externe : le type de frais est facultatif (ventes libres).
+        # Une jointure stricte ferait disparaître ces versements, donc le
+        # doublon qu'on cherche justement à corriger.
+        TypeFrais, TypeFrais.type_frais_id == Facture.type_frais_id
+    ).filter(
+        Inscription.eleve_id == eleve_id,
+        Paiement.statut == "VALIDE",
+    )
+    if annee_id:
+        requete = requete.filter(Inscription.annee_id == annee_id)
+
+    lignes = requete.order_by(Paiement.date_paiement.asc(), Paiement.paiement_id.asc()).all()
+
+    # Groupes de doublons : même facture, même montant, même jour.
+    groupes: dict = {}
+    for p, f, _tf in lignes:
+        cle = (p.facture_id, round(float(p.montant or 0), 2), str(p.date_paiement))
+        groupes.setdefault(cle, []).append(p.paiement_id)
+
+    doublons = {}
+    for ids in groupes.values():
+        if len(ids) > 1:
+            for rang, pid in enumerate(ids):
+                doublons[pid] = {"rang": rang, "taille": len(ids)}
+
+    versements = []
+    total = 0.0
+    total_doublons = 0.0
+    for p, f, tf in lignes:
+        montant = float(p.montant or 0)
+        total += montant
+        info = doublons.get(p.paiement_id)
+        surnumeraire = bool(info and info["rang"] > 0)
+        if surnumeraire:
+            total_doublons += montant
+        versements.append({
+            "paiement_id": p.paiement_id,
+            "numero_recu": p.numero_recu,
+            "date_paiement": str(p.date_paiement),
+            "montant": montant,
+            "mode_paiement": p.mode_paiement,
+            "facture_id": f.facture_id,
+            "numero_facture": f.numero_facture,
+            "tarif": tf.libelle if tf else "Frais Scolaires (Standard)",
+            "montant_facture": float(f.montant_net or 0),
+            "facture_payee": float(f.montant_paye or 0),
+            # `doublon_probable` ne vaut jamais pour le premier d'un groupe :
+            # ce paiement-là a bien eu lieu.
+            "doublon_probable": surnumeraire,
+            "nb_identiques": info["taille"] if info else 1,
+        })
+
+    return {
+        "eleve_id": eleve.eleve_id,
+        "matricule": eleve.matricule,
+        "nom_complet": f"{eleve.prenom or ''} {eleve.nom or ''}".strip(),
+        "annee_id": annee_id,
+        "total_paye": round(total, 2),
+        "total_doublons_probables": round(total_doublons, 2),
+        "nb_versements": len(versements),
+        "versements": versements,
+    }
+
+
+class AnnulationEnLot(BaseModel):
+    paiement_ids: List[int]
+    motif: str
+
+
+@router.post("/paiements/annuler-en-lot")
+def annuler_paiements_en_lot(
+    data: AnnulationEnLot,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Annule plusieurs versements d'un coup — tout ou rien.
+
+    C'est la réponse au clic répété : l'école cocherait les reçus en trop et
+    corrige le solde de l'élève en un geste, au lieu de rouvrir chaque
+    facture. Chaque versement passe par exactement le même code que
+    l'annulation unitaire : reversement sur la facture, sur l'échéance, et
+    contre-passation au journal.
+
+    **Un seul `commit` pour tout le lot.** Si une annulation échoue, aucune
+    n'est enregistrée : un lot à moitié passé laisserait une caisse qu'on ne
+    peut plus rapprocher, et l'école sans savoir lesquelles reprendre.
+
+    Les reçus annulés restent lisibles avec leur motif — on ne fait jamais
+    disparaître une pièce dont un parent détient l'original.
+    """
+    motif = (data.motif or "").strip()
+    if len(motif) < 3:
+        raise HTTPException(400, "Le motif d'annulation est obligatoire — c'est lui qui rend la correction justifiable plus tard.")
+
+    ids = list(dict.fromkeys(data.paiement_ids or []))
+    if not ids:
+        raise HTTPException(400, "Aucun versement sélectionné.")
+    if len(ids) > 100:
+        raise HTTPException(400, "Trop de versements d'un coup (100 au maximum).")
+
+    annules = []
+    total = 0.0
+    for paiement_id in ids:
+        paiement = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+        if paiement.statut == "ANNULE":
+            # Refus explicite plutôt que silence : si un reçu est déjà annulé,
+            # l'écran de l'école n'est plus à jour et le reste de sa sélection
+            # est peut-être faux aussi. Mieux vaut qu'elle recharge.
+            raise HTTPException(
+                400,
+                f"Le versement {paiement.numero_recu} est déjà annulé. Rien n'a été modifié — "
+                "rechargez la liste des versements de cet élève.",
+            )
+        _verifier_annee_modifiable(db, paiement.annee_id)
+        montant, _facture = _reverser_un_paiement(db, paiement, motif, etablissement_id)
+        total += montant
+        annules.append({
+            "paiement_id": paiement.paiement_id,
+            "numero_recu": paiement.numero_recu,
+            "montant": montant,
+        })
+        _invalidate_dashboard_cache(etablissement_id, paiement.annee_id)
+
+    db.commit()
+
+    return {
+        "nb_annules": len(annules),
+        "total_annule": round(total, 2),
+        "motif": motif,
+        "annules": annules,
+        "message": (
+            f"{len(annules)} versement(s) annulé(s) pour un total de {total:,.0f} GNF. "
+            "Le solde de l'élève et la caisse sont corrigés."
+        ),
     }
 
 
