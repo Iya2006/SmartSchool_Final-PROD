@@ -44,6 +44,7 @@ const MODULES = [
         path: '/comptabilite/encaissement',
         subItems: [
             { id: 'encaisser', label: 'Encaisser un paiement', path: '/comptabilite/encaissement' },
+            { id: 'encaisser-classe', label: 'Encaisser une classe', path: '/comptabilite/encaissement-classe' },
             { id: 'paiements', label: 'Historique des paiements', path: '/comptabilite/paiements' },
         ]
     },

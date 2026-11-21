@@ -28,6 +28,11 @@ type Paiement = {
     montant: number; mode_paiement: string; statut: string;
     numero_facture: string; eleve_nom: string; eleve_prenom: string;
     facture_id: number; echeance_id: number | null; reference_externe: string | null;
+    // Renvoyés par /api/finance/paiements. `type_frais_libelle` est nul pour
+    // une vente libre : `description` dit alors ce qui a été acheté.
+    eleve_id?: number; matricule?: string | null;
+    classe_id?: number | null; classe_libelle?: string | null;
+    type_frais_libelle?: string | null; description?: string | null;
 };
 
 type Facture = {
@@ -165,6 +170,14 @@ function GestionPaiements() {
     // « Derniers Paiements » : cliquer un mode dans la repartition doit
     // filtrer la liste, sinon la repartition ne sert qu'a regarder.
     const [filtreMode, setFiltreMode] = useState<string>('');
+    // Filtre par classe : la liste des classes était déjà chargée, mais ne
+    // servait nulle part dans cet écran.
+    const [filtreClasse, setFiltreClasse] = useState<string>('');
+    // Versements cochés pour le récapitulatif groupé. Un récapitulatif ne
+    // concerne qu'UN élève : le serveur refuse d'en mélanger plusieurs, et
+    // l'écran empêche de les cocher ensemble pour éviter d'aller au refus.
+    const [recapSelection, setRecapSelection] = useState<Set<number>>(new Set());
+    const [recapEnCours, setRecapEnCours] = useState(false);
     const [rechercheRecents, setRechercheRecents] = useState('');
     useEffect(() => { fetchModesPaiement().then(setModesPaiementConfig); }, []);
     const modesAffichables = modesPaiementConfig.map(value => ({
@@ -417,6 +430,53 @@ function GestionPaiements() {
     }, []);
 
     /* ═══ IMPRIMER RECU PDF ═══ */
+    /* ═══ RECAPITULATIF GROUPE ═══
+       Un seul feuillet pour plusieurs versements d'un même élève. Ce n'est
+       pas une facture : il rappelle des reçus déjà émis et en fait la somme,
+       sans créer de pièce comptable ni d'écriture. */
+    const basculerSelectionRecap = (p: Paiement) => {
+        setRecapSelection(prev => {
+            const suivant = new Set(prev);
+            if (suivant.has(p.paiement_id)) {
+                suivant.delete(p.paiement_id);
+                return suivant;
+            }
+            // Cocher un versement d'un AUTRE élève repart de zéro : additionner
+            // ceux de deux familles donnerait un total que personne ne doit, et
+            // qu'aucun parent ne pourrait vérifier. Le serveur le refuse aussi,
+            // mais autant ne pas laisser l'utilisateur aller jusqu'au refus.
+            const dejaUnAutreEleve = paiements.some(
+                x => suivant.has(x.paiement_id) && x.eleve_id !== p.eleve_id,
+            );
+            if (dejaUnAutreEleve) return new Set([p.paiement_id]);
+            suivant.add(p.paiement_id);
+            return suivant;
+        });
+    };
+
+    const ouvrirRecapitulatif = async () => {
+        if (recapSelection.size === 0 || recapEnCours) return;
+        setRecapEnCours(true);
+        try {
+            const ids = Array.from(recapSelection).join(',');
+            const res = await api.get(`/api/finance/paiements/recapitulatif-pdf?ids=${ids}`, {
+                responseType: 'blob',
+            });
+            const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+            window.open(url, '_blank');
+        } catch (err: any) {
+            // Le serveur explique pourquoi il refuse — versement annulé,
+            // élèves mélangés. On montre sa phrase plutôt qu'un message
+            // générique qui n'apprendrait rien au comptable.
+            setPayResult({
+                type: 'error',
+                msg: err?.response?.data?.detail || "Impossible d'éditer le récapitulatif.",
+            });
+        } finally {
+            setRecapEnCours(false);
+        }
+    };
+
     const printRecuPDF = async (paiementId: number, numeroRecu: string) => {
         if (recuEnCours !== null) return;
         setRecuEnCours(paiementId);
@@ -504,6 +564,7 @@ function GestionPaiements() {
         // période » (les dates), et « où est le reçu de cette famille » (la
         // recherche, qui porte aussi sur le mode et le montant).
         if (filtreMode && p.mode_paiement !== filtreMode) return false;
+        if (filtreClasse && String(p.classe_id ?? '') !== filtreClasse) return false;
 
         if (p.date_paiement) {
             const jour = p.date_paiement.split('T')[0];
@@ -849,6 +910,13 @@ function GestionPaiements() {
                                     value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
                                     style={{ ...inputStyle, paddingLeft: '38px', width: '100%' }} />
                             </div>
+                            <select value={filtreClasse} onChange={e => setFiltreClasse(e.target.value)}
+                                style={inputStyle} title="Filtrer par classe">
+                                <option value="">Toutes les classes</option>
+                                {classes.map(c => (
+                                    <option key={c.classe_id} value={String(c.classe_id)}>{c.libelle}</option>
+                                ))}
+                            </select>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <input type="date" value={encaisDateDebut} onChange={e => setEncaisDateDebut(e.target.value)} style={inputStyle} title="Date début" />
                                 <span style={{ color: '#94a3b8' }}>-</span>
@@ -861,6 +929,16 @@ function GestionPaiements() {
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: '10px' }}>
+                            {recapSelection.size > 0 && (
+                                <button style={{ ...btnSecondary, borderColor: '#3b82f6', color: '#2563eb' }}
+                                    onClick={ouvrirRecapitulatif} disabled={recapEnCours}
+                                    title="Un seul feuillet reprenant les versements cochés">
+                                    {recapEnCours
+                                        ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                                        : <FileText size={16} />}
+                                    Récapitulatif ({recapSelection.size})
+                                </button>
+                            )}
                             <button style={btnPrimary} onClick={() => setShowPayModal(true)}>
                                 <Plus size={16} /> Nouveau Paiement
                             </button>
@@ -881,8 +959,8 @@ function GestionPaiements() {
                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '820px' }}>
                             <thead>
                                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-                                    {['N Recu', 'Date', 'Eleve', 'Montant', 'Mode', 'N Facture', 'Statut', 'Actions'].map(h => (
-                                        <th key={h} style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{h}</th>
+                                    {['', 'N Recu', 'Date', 'Eleve', 'Classe', 'Tarif', 'Montant', 'Mode', 'N Facture', 'Statut', 'Actions'].map((h, i) => (
+                                        <th key={h || `col-${i}`} style={{ padding: '12px 16px', textAlign: 'left', fontWeight: 600, color: '#475569', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{h}</th>
                                     ))}
                                 </tr>
                             </thead>
@@ -893,6 +971,13 @@ function GestionPaiements() {
                                             onClick={() => group.historique.length > 1 && setExpandedStudent(expandedStudent === group.eleve_nom_complet ? null : group.eleve_nom_complet)}
                                             onMouseOver={e => (e.currentTarget.style.background = '#f8fafc')}
                                             onMouseOut={e => (e.currentTarget.style.background = 'transparent')}>
+                                            {/* `stopPropagation` : cocher ne doit pas replier la ligne. */}
+                                            <td style={{ padding: '12px 0 12px 16px' }} onClick={e => e.stopPropagation()}>
+                                                <input type="checkbox" style={{ cursor: 'pointer', width: 16, height: 16 }}
+                                                    checked={recapSelection.has(group.latest_paiement.paiement_id)}
+                                                    onChange={() => basculerSelectionRecap(group.latest_paiement)}
+                                                    title="Inclure au récapitulatif" />
+                                            </td>
                                             <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a' }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                     {group.historique.length > 1 ? (expandedStudent === group.eleve_nom_complet ? <ChevronDown size={16} color="#94a3b8" /> : <ChevronRight size={16} color="#94a3b8" />) : <div style={{width: 16}} />}
@@ -901,6 +986,12 @@ function GestionPaiements() {
                                             </td>
                                             <td style={{ padding: '12px 16px', color: '#64748b' }}>{formatDate(group.latest_paiement.date_paiement)}</td>
                                             <td style={{ padding: '12px 16px', fontWeight: 500, color: '#0f172a' }}>{group.eleve_nom_complet}</td>
+                                            <td style={{ padding: '12px 16px', color: '#64748b' }}>{group.latest_paiement.classe_libelle || '—'}</td>
+                                            {/* Le frais payé ; à défaut la désignation libre de la facture,
+                                                qui dit ce qui a été acheté (ventes au coup par coup). */}
+                                            <td style={{ padding: '12px 16px', color: '#475569' }}>
+                                                {group.latest_paiement.type_frais_libelle || group.latest_paiement.description || '—'}
+                                            </td>
                                             <td style={{ padding: '12px 16px', fontWeight: 700, color: group.latest_paiement.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(group.latest_paiement.montant)}</td>
                                             <td style={{ padding: '12px 16px', color: '#475569' }}>{modePaiementLabel(group.latest_paiement.mode_paiement)}</td>
                                             <td style={{ padding: '12px 16px', color: '#3b82f6', fontWeight: 500 }}>{group.latest_paiement.numero_facture}</td>
@@ -931,15 +1022,22 @@ function GestionPaiements() {
                                         </tr>
                                         {expandedStudent === group.eleve_nom_complet && group.historique.length > 1 && (
                                             <tr style={{ background: '#f8fafc' }}>
-                                                <td colSpan={8} style={{ padding: '16px', borderBottom: '1px solid #e2e8f0' }}>
+                                                <td colSpan={11} style={{ padding: '16px', borderBottom: '1px solid #e2e8f0' }}>
                                                     <div style={{ background: 'white', borderRadius: '8px', padding: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
                                                         <h4 style={{ margin: '0 0 12px 0', fontSize: '13px', color: '#64748b' }}>Historique des paiements ({group.historique.length})</h4>
                                                         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                                                             <tbody>
                                                                 {group.historique.map(hp => hp.paiement_id !== group.latest_paiement.paiement_id ? (
                                                                     <tr key={hp.paiement_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                                                        <td style={{ padding: '8px 0 8px 8px' }}>
+                                                                            <input type="checkbox" style={{ cursor: 'pointer', width: 15, height: 15 }}
+                                                                                checked={recapSelection.has(hp.paiement_id)}
+                                                                                onChange={() => basculerSelectionRecap(hp)}
+                                                                                title="Inclure au récapitulatif" />
+                                                                        </td>
                                                                         <td style={{ padding: '8px', fontWeight: 600 }}>{hp.numero_recu}</td>
                                                                         <td style={{ padding: '8px', color: '#64748b' }}>{formatDate(hp.date_paiement)}</td>
+                                                                        <td style={{ padding: '8px', color: '#475569' }}>{hp.type_frais_libelle || hp.description || '—'}</td>
                                                                         <td style={{ padding: '8px', fontWeight: 600, color: hp.statut === 'ANNULE' ? '#ef4444' : '#059669' }}>{formatMoney(hp.montant)}</td>
                                                                         <td style={{ padding: '8px' }}>{modePaiementLabel(hp.mode_paiement)}</td>
                                                                         <td style={{ padding: '8px', color: '#3b82f6' }}>{hp.numero_facture}</td>

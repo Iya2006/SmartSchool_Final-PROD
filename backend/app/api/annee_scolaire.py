@@ -63,7 +63,21 @@ def verification_cloture(annee_id: int, db: Session = Depends(get_db), etablisse
         ),
     ))
 
-    # ── BLOQUANT : un bulletin PUBLIE par (élève actif × trimestre) ──
+    # ── AVERTISSEMENT : un bulletin PUBLIE par (élève actif × trimestre) ──
+    #
+    # Ce contrôle était BLOQUANT : il exigeait un bulletin publié pour CHAQUE
+    # élève actif et CHAQUE trimestre, sans quoi l'année ne pouvait pas être
+    # clôturée. Dans la vraie vie d'une école, cette exigence ne se réalise
+    # jamais tout à fait — un élève arrivé en mars, un autre parti avant les
+    # compositions, une matière jamais notée faute d'enseignant. L'école se
+    # retrouvait avec une année qu'elle ne pouvait plus fermer, donc une
+    # comptabilité qu'elle ne pouvait plus arrêter : un blocage administratif
+    # créé par le logiciel, pas par la réalité.
+    #
+    # Le chiffre reste affiché, parce qu'il est utile : « 40 / 52 » dit en un
+    # coup d'œil ce qui manque. Mais c'est la direction qui décide si cela
+    # justifie d'attendre. Le classement se calcule avec les élèves qui ont
+    # des notes — les autres n'en ont simplement pas.
     nb_inscriptions = db.query(func.count(Inscription.inscription_id)).filter(
         Inscription.annee_id == annee_id, Inscription.statut == "ACTIVE"
     ).scalar() or 0
@@ -75,11 +89,15 @@ def verification_cloture(annee_id: int, db: Session = Depends(get_db), etablisse
         Bulletin.statut == "PUBLIE",
     ).scalar() or 0
     controles.append(_controle(
-        "bulletins_publies", "Tous les bulletins sont générés et publiés", "BLOQUANT",
+        "bulletins_publies", "Tous les bulletins sont générés et publiés", "AVERTISSEMENT",
         ok=(attendu > 0 and nb_publies >= attendu),
         detail=(
             "Aucun élève actif ou aucun trimestre configuré." if attendu == 0
-            else f"{nb_publies} / {attendu} bulletins publiés (élèves actifs × trimestres)."
+            else f"{nb_publies} / {attendu} bulletins publiés (élèves actifs × trimestres). "
+                 "Les élèves sans bulletin ne bloquent pas la clôture ; ils ne sont "
+                 "simplement pas classés."
+            if nb_publies < attendu
+            else f"{nb_publies} / {attendu} bulletins publiés."
         ),
     ))
 

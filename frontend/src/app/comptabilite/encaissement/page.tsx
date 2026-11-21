@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Search, Loader2, ChevronRight, Users, X, Printer,
     CheckCircle2, AlertTriangle, CreditCard, Banknote, Smartphone,
-    FileText, Receipt, ArrowLeft, TrendingUp, Eye, Download
+    FileText, Receipt, ArrowLeft, TrendingUp, Eye, Download, PencilLine, Undo2
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -29,10 +29,28 @@ type EleveSearch = {
 
 type FactureDetail = {
     facture_id: number; numero_facture: string; date_facture: string;
+    // `montant_total` est le NET réclamé. `montant_brut` est ce qui avait été
+    // facturé au départ, `montant_remise` ce qu'on a renoncé à réclamer :
+    // facultatifs, car une session ouverte avant leur ajout ne les a pas.
     montant_total: number; montant_paye: number; montant_restant: number;
+    montant_brut?: number; montant_remise?: number;
     statut: string; type_frais_libelle: string;
     echeances: { echeance_id: number; libelle: string; date_limite: string; montant_attendu: number; montant_paye: number; statut: string; }[];
     paiements: { paiement_id: number; numero_recu: string; date_paiement: string; montant: number; mode_paiement: string; }[];
+};
+
+// Versements d'un élève, avec les doublons déjà repérés par le serveur.
+type Versement = {
+    paiement_id: number; numero_recu: string; date_paiement: string;
+    montant: number; mode_paiement: string;
+    facture_id: number; numero_facture: string; tarif: string;
+    doublon_probable: boolean; nb_identiques: number;
+};
+
+type VueVersements = {
+    eleve_id: number; matricule: string | null; nom_complet: string;
+    total_paye: number; total_doublons_probables: number; nb_versements: number;
+    versements: Versement[];
 };
 
 type SoldeData = {
@@ -123,6 +141,24 @@ function EncaissementContent() {
     const [payEcheanceId, setPayEcheanceId] = useState('');
     const [payLoading, setPayLoading] = useState(false);
     const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+    // Correction d'une facture émise par erreur : on ne réécrit pas le montant
+    // d'origine, on enregistre ce qu'on renonce à réclamer, avec son motif.
+    const [factureACorriger, setFactureACorriger] = useState<FactureDetail | null>(null);
+    const [remiseMontant, setRemiseMontant] = useState('');
+    const [remiseMotif, setRemiseMotif] = useState('');
+    const [remiseLoading, setRemiseLoading] = useState(false);
+
+    // Correction de ce qui a été ENCAISSÉ (un clic répété sur « Encaisser »
+    // a produit deux ou trois reçus pour un seul paiement réel). Accessible
+    // depuis la ligne de l'élève : quand il a trop payé, son solde est à zéro
+    // et tous les autres chemins de l'écran se ferment devant lui.
+    const [eleveVersements, setEleveVersements] = useState<EleveSearch | null>(null);
+    const [versements, setVersements] = useState<VueVersements | null>(null);
+    const [versementsLoading, setVersementsLoading] = useState(false);
+    const [selectionAnnulation, setSelectionAnnulation] = useState<number[]>([]);
+    const [motifAnnulation, setMotifAnnulation] = useState('');
+    const [annulationLoading, setAnnulationLoading] = useState(false);
 
     // Receipt state
     const [recuData, setRecuData] = useState<RecuData | null>(null);
@@ -248,6 +284,108 @@ function EncaissementContent() {
         setPayReference('');
         setPayEcheanceId('');
         setStep('payer');
+    };
+
+    // ─── Corriger une facture (remise) ───
+    const ouvrirCorrection = (facture: FactureDetail) => {
+        setFactureACorriger(facture);
+        // Pré-rempli avec la remise DÉJÀ en place, pas avec zéro : le serveur
+        // attend la remise totale, et proposer 0 inviterait à effacer sans le
+        // vouloir une remise accordée la semaine précédente.
+        setRemiseMontant(String(Math.round(facture.montant_remise ?? 0)));
+        setRemiseMotif('');
+    };
+
+    // ─── Corriger ce qui a été encaissé ───
+    const ouvrirVersements = async (d: EleveSearch) => {
+        setEleveVersements(d);
+        setVersements(null);
+        setMotifAnnulation('');
+        setSelectionAnnulation([]);
+        setVersementsLoading(true);
+        try {
+            const res = await api.get(`/api/finance/eleve/${d.eleve_id}/versements?annee_id=${filterAnnee}`);
+            const vue: VueVersements = res.data;
+            setVersements(vue);
+            // Les doublons repérés sont cochés d'avance : c'est le geste que
+            // l'école vient faire. Le premier de chaque groupe ne l'est jamais
+            // — ce paiement a bien eu lieu, la famille en détient le reçu.
+            setSelectionAnnulation(vue.versements.filter(v => v.doublon_probable).map(v => v.paiement_id));
+            if (vue.versements.some(v => v.doublon_probable)) {
+                setMotifAnnulation('Doublon de saisie');
+            }
+        } catch (err: any) {
+            showMsg(err?.response?.data?.detail || "Impossible de charger les versements.", 'error');
+            setEleveVersements(null);
+        } finally {
+            setVersementsLoading(false);
+        }
+    };
+
+    const basculerVersement = (paiementId: number) => {
+        setSelectionAnnulation(s =>
+            s.includes(paiementId) ? s.filter(x => x !== paiementId) : [...s, paiementId]);
+    };
+
+    const confirmerAnnulations = async () => {
+        if (!selectionAnnulation.length || annulationLoading) return;
+        const total = (versements?.versements || [])
+            .filter(v => selectionAnnulation.includes(v.paiement_id))
+            .reduce((s, v) => s + v.montant, 0);
+        if (!confirm(
+            `Annuler ${selectionAnnulation.length} versement(s) pour un total de ${fmt(total)} GNF ?\n\n`
+            + "Les reçus resteront lisibles avec leur motif."
+        )) return;
+
+        setAnnulationLoading(true);
+        try {
+            const res = await api.post('/api/finance/paiements/annuler-en-lot', {
+                paiement_ids: selectionAnnulation,
+                motif: motifAnnulation,
+            });
+            showMsg(res.data.message, 'success');
+            // On recharge depuis le serveur : recalculer les totaux ici les
+            // ferait diverger des factures.
+            if (eleveVersements) await ouvrirVersements(eleveVersements);
+            queryClient.invalidateQueries({ queryKey: ['encaissement-solvabilite'] });
+            if (selectedEleve?.eleve_id === eleveVersements?.eleve_id) await selectEleve(selectedEleve!);
+        } catch (err: any) {
+            // Le serveur refuse le lot entier plutôt que la moitié : son
+            // message dit quoi faire (recharger la liste, par exemple).
+            showMsg(err?.response?.data?.detail || "L'annulation a échoué. Aucun versement n'a été modifié.", 'error');
+        } finally {
+            setAnnulationLoading(false);
+        }
+    };
+
+    const enregistrerRemise = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!factureACorriger || remiseLoading) return;
+        const montant = parseFloat(remiseMontant);
+        if (!Number.isFinite(montant) || montant < 0) {
+            showMsg('Indiquez un montant de remise valide.', 'error');
+            return;
+        }
+        setRemiseLoading(true);
+        try {
+            const res = await api.put(
+                `/api/finance/factures/${factureACorriger.facture_id}/remise`,
+                { montant_remise: montant, motif: remiseMotif },
+            );
+            showMsg(res.data.message, 'success');
+            setFactureACorriger(null);
+            setRemiseMotif('');
+            // On recharge le solde : les montants de l'écran viennent du
+            // serveur, les recalculer ici les ferait diverger de la facture.
+            if (selectedEleve) await selectEleve(selectedEleve);
+            queryClient.invalidateQueries({ queryKey: ['encaissement-solvabilite'] });
+        } catch (err: any) {
+            // Le serveur explique précisément ce qu'il refuse — notamment le
+            // trop-perçu, avec la marche à suivre. On l'affiche tel quel.
+            showMsg(err?.response?.data?.detail || "La correction n'a pas pu être enregistrée.", 'error');
+        } finally {
+            setRemiseLoading(false);
+        }
     };
 
     // ─── Submit payment ───
@@ -498,21 +636,31 @@ function EncaissementContent() {
                                             )}
                                         </td>
                                         <td style={{ padding: '12px 14px' }}>
-                                            <button onClick={(e) => {
-                                                e.stopPropagation();
-                                                if (estReellementSolde(d)) {
-                                                    alert(`Non autorisé : L'élève ${d.eleve_prenom} ${d.eleve_nom} a déjà réglé l'intégralité de sa scolarité.`);
-                                                    return;
-                                                }
-                                                if (d.total_facture <= 0) {
-                                                    alert(`Aucune facture n'a encore été générée pour ${d.eleve_prenom} ${d.eleve_nom} — générez d'abord une facture (page Frais) avant d'encaisser.`);
-                                                    return;
-                                                }
-                                                selectEleve(d);
-                                            }}
-                                                style={{ padding: '6px 14px', background: d.total_restant <= 0 ? '#e2e8f0' : 'linear-gradient(135deg, #10b981, #059669)', color: d.total_restant <= 0 ? '#94a3b8' : '#fff', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: d.total_restant <= 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                                <Banknote size={13} /> Encaisser
-                                            </button>
+                                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                                <button onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (estReellementSolde(d)) {
+                                                        alert(`Non autorisé : L'élève ${d.eleve_prenom} ${d.eleve_nom} a déjà réglé l'intégralité de sa scolarité.`);
+                                                        return;
+                                                    }
+                                                    if (d.total_facture <= 0) {
+                                                        alert(`Aucune facture n'a encore été générée pour ${d.eleve_prenom} ${d.eleve_nom} — générez d'abord une facture (page Frais) avant d'encaisser.`);
+                                                        return;
+                                                    }
+                                                    selectEleve(d);
+                                                }}
+                                                    style={{ padding: '6px 14px', background: d.total_restant <= 0 ? '#e2e8f0' : 'linear-gradient(135deg, #10b981, #059669)', color: d.total_restant <= 0 ? '#94a3b8' : '#fff', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: d.total_restant <= 0 ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                    <Banknote size={13} /> Encaisser
+                                                </button>
+                                                {/* Reste accessible quand l'élève paraît soldé : c'est
+                                                    précisément le cas où il a trop payé, et tous les
+                                                    autres chemins de l'écran se ferment devant lui. */}
+                                                <button onClick={(e) => { e.stopPropagation(); ouvrirVersements(d); }}
+                                                    title="Voir ce qui a été encaissé et annuler un versement saisi deux fois"
+                                                    style={{ padding: '6px 12px', background: '#fff', color: '#b45309', border: '1.5px solid #fde68a', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+                                                    <Undo2 size={13} /> Corriger
+                                                </button>
+                                            </div>
                                         </td>
                                     </motion.tr>
                                 ))}
@@ -592,6 +740,13 @@ function EncaissementContent() {
                                             <span style={{ fontSize: 12, color: '#94a3b8' }}>{f.type_frais_libelle}</span>
                                         </div>
                                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                            {/* Corriger reste proposé même sur une facture soldée : le
+                                                trop-facturé se découvre souvent après l'encaissement. */}
+                                            <button className="no-print" onClick={(e) => { e.stopPropagation(); ouvrirCorrection(f); }}
+                                                title="Diminuer le montant réclamé (erreur de tarif, exonération oubliée…)"
+                                                style={{ padding: '8px 14px', background: '#fff', color: '#b45309', border: '1.5px solid #fde68a', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <PencilLine size={15} /> Corriger
+                                            </button>
                                             {f.statut !== 'PAYEE' && (
                                                 <button className="no-print" onClick={(e) => { e.stopPropagation(); openPayer(f); }}
                                                     style={{ padding: '8px 18px', background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -610,8 +765,20 @@ function EncaissementContent() {
                                             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} style={{ overflow: 'hidden' }}>
 
                                     {/* Amounts */}
-                                    <div style={{ padding: '14px 22px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, fontSize: 13 }}>
-                                        <div><p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>Facturé</p><p style={{ fontWeight: 700, margin: '4px 0 0' }}>{fmt(f.montant_total)} GNF</p></div>
+                                    {/* Une facture corrigée doit dire les deux chiffres : ce qui
+                                        avait été facturé, et ce qu'on a renoncé à réclamer. Sinon
+                                        le montant « a changé tout seul » aux yeux du parent. */}
+                                    <div style={{ padding: '14px 22px', display: 'grid', gridTemplateColumns: (f.montant_remise ?? 0) > 0 ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12, fontSize: 13 }}>
+                                        <div>
+                                            <p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>{(f.montant_remise ?? 0) > 0 ? 'Facturé au départ' : 'Facturé'}</p>
+                                            <p style={{ fontWeight: 700, margin: '4px 0 0' }}>{fmt((f.montant_remise ?? 0) > 0 ? (f.montant_brut ?? f.montant_total) : f.montant_total)} GNF</p>
+                                        </div>
+                                        {(f.montant_remise ?? 0) > 0 && (
+                                            <div>
+                                                <p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>Remise</p>
+                                                <p style={{ fontWeight: 700, color: '#b45309', margin: '4px 0 0' }}>− {fmt(f.montant_remise ?? 0)} GNF</p>
+                                            </div>
+                                        )}
                                         <div><p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>Payé</p><p style={{ fontWeight: 700, color: '#10b981', margin: '4px 0 0' }}>{fmt(f.montant_paye)} GNF</p></div>
                                         <div><p style={{ color: '#94a3b8', fontSize: 11, margin: 0 }}>Reste</p><p style={{ fontWeight: 700, color: '#ef4444', margin: '4px 0 0' }}>{fmt(f.montant_restant)} GNF</p></div>
                                     </div>
@@ -848,6 +1015,225 @@ function EncaissementContent() {
                     )}
                 </>
             )}
+
+            {/* ─── Corriger ce qui a été encaissé ─── */}
+            <AnimatePresence>
+                {eleveVersements && (
+                    <motion.div className="no-print"
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={() => !annulationLoading && setEleveVersements(null)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 60 }}>
+                        <motion.div onClick={e => e.stopPropagation()}
+                            initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
+                            style={{ background: '#fff', borderRadius: 16, padding: 24, width: '100%', maxWidth: 680, display: 'flex', flexDirection: 'column', gap: 14, maxHeight: '90vh', overflowY: 'auto' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0f172a' }}>Corriger ce qui a été encaissé</h3>
+                                    <p style={{ margin: '4px 0 0', fontSize: 12.5, color: '#64748b' }}>
+                                        {eleveVersements.eleve_prenom} {eleveVersements.eleve_nom} · {eleveVersements.eleve_matricule}
+                                    </p>
+                                </div>
+                                <button type="button" onClick={() => setEleveVersements(null)}
+                                    style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', padding: 2 }}>
+                                    <X size={19} />
+                                </button>
+                            </div>
+
+                            {versementsLoading && (
+                                <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+                                    <Loader2 size={30} className="animate-spin" color="#10b981" />
+                                </div>
+                            )}
+
+                            {!versementsLoading && versements && versements.nb_versements === 0 && (
+                                <div style={{ padding: 28, textAlign: 'center', color: '#64748b', fontSize: 13.5, background: '#f8fafc', borderRadius: 12 }}>
+                                    Aucun versement enregistré pour cet élève sur cette année scolaire.
+                                </div>
+                            )}
+
+                            {!versementsLoading && versements && versements.nb_versements > 0 && (
+                                <>
+                                    {versements.total_doublons_probables > 0 ? (
+                                        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12, padding: '13px 15px', fontSize: 13, color: '#92400e', lineHeight: 1.6 }}>
+                                            <strong>{fmt(versements.total_doublons_probables)} GNF encaissés en double.</strong>{' '}
+                                            Des versements du même montant, le même jour, sur le même frais — c&apos;est
+                                            la trace d&apos;un clic répété. Ils sont déjà cochés ci-dessous. Le premier de
+                                            chaque série ne l&apos;est jamais : ce paiement a bien eu lieu, et c&apos;est son
+                                            reçu que la famille détient.
+                                        </div>
+                                    ) : (
+                                        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12, padding: '13px 15px', fontSize: 13, color: '#166534' }}>
+                                            Aucun doublon détecté. Vous pouvez quand même cocher un versement à annuler.
+                                        </div>
+                                    )}
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                                        {versements.versements.map(v => {
+                                            const coche = selectionAnnulation.includes(v.paiement_id);
+                                            return (
+                                                <label key={v.paiement_id}
+                                                    style={{
+                                                        display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px',
+                                                        borderRadius: 11, cursor: 'pointer', fontSize: 13,
+                                                        background: coche ? '#fef2f2' : v.doublon_probable ? '#fffbeb' : '#f8fafc',
+                                                        border: `1.5px solid ${coche ? '#fecaca' : v.doublon_probable ? '#fde68a' : '#e2e8f0'}`,
+                                                    }}>
+                                                    <input type="checkbox" checked={coche}
+                                                        onChange={() => basculerVersement(v.paiement_id)}
+                                                        style={{ width: 17, height: 17, cursor: 'pointer', accentColor: '#dc2626' }} />
+                                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                                        <div style={{ fontWeight: 700, color: '#0f172a' }}>
+                                                            {fmt(v.montant)} GNF
+                                                            <span style={{ fontWeight: 600, color: '#64748b', marginLeft: 8 }}>{v.tarif}</span>
+                                                        </div>
+                                                        <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 2 }}>
+                                                            Reçu {v.numero_recu} · {new Date(v.date_paiement).toLocaleDateString('fr-FR')} · {modePaiementLabel(v.mode_paiement)}
+                                                        </div>
+                                                    </div>
+                                                    {v.doublon_probable && (
+                                                        <span style={{ padding: '3px 9px', borderRadius: 99, background: '#fde68a', color: '#92400e', fontWeight: 700, fontSize: 10.5, whiteSpace: 'nowrap' }}>
+                                                            DOUBLON ({v.nb_identiques}×)
+                                                        </span>
+                                                    )}
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+
+                                    <div style={{ background: '#f8fafc', borderRadius: 11, padding: 13, fontSize: 13, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                                        <div>
+                                            <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>Encaissé aujourd&apos;hui</p>
+                                            <p style={{ margin: '3px 0 0', fontWeight: 700 }}>{fmt(versements.total_paye)} GNF</p>
+                                        </div>
+                                        <div>
+                                            <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>Après annulation</p>
+                                            <p style={{ margin: '3px 0 0', fontWeight: 800, color: '#059669' }}>
+                                                {fmt(versements.total_paye - versements.versements
+                                                    .filter(v => selectionAnnulation.includes(v.paiement_id))
+                                                    .reduce((s, v) => s + v.montant, 0))} GNF
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                        <label style={{ fontSize: 12.5, fontWeight: 700, color: '#334155' }}>Motif de l&apos;annulation</label>
+                                        <input value={motifAnnulation} onChange={e => setMotifAnnulation(e.target.value)}
+                                            placeholder="Doublon de saisie, erreur de montant…"
+                                            style={{ padding: '11px 13px', borderRadius: 10, border: '1.5px solid #d5e1f6', fontSize: 14, color: '#12213f', outline: 'none' }} />
+                                        <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
+                                            Les reçus annulés restent lisibles avec ce motif — on ne fait jamais
+                                            disparaître une pièce dont un parent détient l&apos;original.
+                                        </span>
+                                    </div>
+
+                                    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                                        <button type="button" onClick={() => setEleveVersements(null)} disabled={annulationLoading}
+                                            style={{ padding: '11px 18px', borderRadius: 10, border: '1.5px solid #e2e8f0', background: '#fff', color: '#475569', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                                            Fermer
+                                        </button>
+                                        <button type="button" onClick={confirmerAnnulations}
+                                            disabled={annulationLoading || !selectionAnnulation.length || motifAnnulation.trim().length < 3}
+                                            style={{
+                                                padding: '11px 20px', borderRadius: 10, border: 'none', fontSize: 14, fontWeight: 700, color: '#fff',
+                                                background: annulationLoading || !selectionAnnulation.length || motifAnnulation.trim().length < 3
+                                                    ? '#cbd5e1' : 'linear-gradient(135deg,#ef4444,#b91c1c)',
+                                                cursor: annulationLoading || !selectionAnnulation.length || motifAnnulation.trim().length < 3
+                                                    ? 'not-allowed' : 'pointer',
+                                                display: 'inline-flex', alignItems: 'center', gap: 7,
+                                            }}>
+                                            {annulationLoading ? <Loader2 size={15} className="animate-spin" /> : <Undo2 size={15} />}
+                                            Annuler {selectionAnnulation.length || ''} versement{selectionAnnulation.length > 1 ? 's' : ''}
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ─── Corriger une facture : la remise ─── */}
+            <AnimatePresence>
+                {factureACorriger && (
+                    <motion.div className="no-print"
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        onClick={() => !remiseLoading && setFactureACorriger(null)}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 60 }}>
+                        <motion.form onSubmit={enregistrerRemise} onClick={e => e.stopPropagation()}
+                            initial={{ scale: 0.96, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.96, opacity: 0 }}
+                            style={{ background: '#fff', borderRadius: 16, padding: 24, width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 14, maxHeight: '90vh', overflowY: 'auto' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                                <div>
+                                    <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0f172a' }}>Corriger cette facture</h3>
+                                    <p style={{ margin: '4px 0 0', fontSize: 12.5, color: '#64748b' }}>
+                                        {factureACorriger.numero_facture} — {factureACorriger.type_frais_libelle}
+                                    </p>
+                                </div>
+                                <button type="button" onClick={() => setFactureACorriger(null)}
+                                    style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', padding: 2 }}>
+                                    <X size={19} />
+                                </button>
+                            </div>
+
+                            <div style={{ background: '#f8fafc', borderRadius: 11, padding: 13, fontSize: 13, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                                <div>
+                                    <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>Facturé au départ</p>
+                                    <p style={{ margin: '3px 0 0', fontWeight: 700 }}>{fmt(factureACorriger.montant_brut ?? factureACorriger.montant_total)} GNF</p>
+                                </div>
+                                <div>
+                                    <p style={{ margin: 0, fontSize: 11, color: '#94a3b8' }}>Déjà payé</p>
+                                    <p style={{ margin: '3px 0 0', fontWeight: 700, color: '#10b981' }}>{fmt(factureACorriger.montant_paye)} GNF</p>
+                                </div>
+                            </div>
+
+                            <p style={{ margin: 0, fontSize: 12.5, color: '#475569', lineHeight: 1.6 }}>
+                                Le montant d&apos;origine n&apos;est pas effacé : on enregistre ce que l&apos;école
+                                renonce à réclamer. La facture reste justifiable devant un parent.
+                            </p>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <label style={{ fontSize: 12.5, fontWeight: 700, color: '#334155' }}>Remise totale sur cette facture</label>
+                                <input type="number" min="0" step="any" inputMode="numeric" autoFocus
+                                    value={remiseMontant} onChange={e => setRemiseMontant(e.target.value)}
+                                    style={{ padding: '11px 13px', borderRadius: 10, border: '1.5px solid #d5e1f6', fontSize: 15, fontWeight: 700, textAlign: 'right', color: '#12213f', outline: 'none' }} />
+                                <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
+                                    Reste à payer après correction :{' '}
+                                    <strong style={{ color: '#b45309' }}>
+                                        {fmt(Math.max(0, (factureACorriger.montant_brut ?? factureACorriger.montant_total) - (parseFloat(remiseMontant) || 0) - factureACorriger.montant_paye))} GNF
+                                    </strong>
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                <label style={{ fontSize: 12.5, fontWeight: 700, color: '#334155' }}>Motif de la correction</label>
+                                <input value={remiseMotif} onChange={e => setRemiseMotif(e.target.value)}
+                                    placeholder="Mauvais tarif appliqué, exonération oubliée…"
+                                    style={{ padding: '11px 13px', borderRadius: 10, border: '1.5px solid #d5e1f6', fontSize: 14, color: '#12213f', outline: 'none' }} />
+                                <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
+                                    Obligatoire : c&apos;est lui qui rend la correction explicable dans six mois.
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 2 }}>
+                                <button type="button" onClick={() => setFactureACorriger(null)} disabled={remiseLoading}
+                                    style={{ padding: '11px 18px', borderRadius: 10, border: '1.5px solid #e2e8f0', background: '#fff', color: '#475569', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
+                                    Annuler
+                                </button>
+                                <button type="submit" disabled={remiseLoading || remiseMotif.trim().length < 3}
+                                    style={{
+                                        padding: '11px 20px', borderRadius: 10, border: 'none', fontSize: 14, fontWeight: 700, color: '#fff',
+                                        background: remiseLoading || remiseMotif.trim().length < 3 ? '#cbd5e1' : 'linear-gradient(135deg,#f59e0b,#d97706)',
+                                        cursor: remiseLoading || remiseMotif.trim().length < 3 ? 'not-allowed' : 'pointer',
+                                        display: 'inline-flex', alignItems: 'center', gap: 7,
+                                    }}>
+                                    {remiseLoading ? <Loader2 size={15} className="animate-spin" /> : <PencilLine size={15} />}
+                                    Enregistrer la correction
+                                </button>
+                            </div>
+                        </motion.form>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             {/* ─── Print Styles ─── */}
             <style>{`

@@ -48,6 +48,29 @@ interface Synthese {
     seuil_passage: number; atteignent_seuil: number; taux_reussite: number | null;
     mentions: Record<string, number>;
 }
+interface RapportMoyennes {
+    dry_run: boolean;
+    classe: string;
+    periode: string;
+    format_detecte: string;
+    format_retenu: string;
+    colonnes_matieres: { colonne: string; libelle: string; coefficient: number }[];
+    colonnes_inconnues: string[];
+    lignes_lues: number;
+    nb_rapproches?: number;
+    bulletins_crees?: number;
+    bulletins_mis_a_jour?: number;
+    non_rapproches: { ligne: number; identite: string; raison: string }[];
+    eleves_sans_resultat: { nom_complet?: string; matricule: string | null }[];
+    erreurs: { ligne: number; message: string }[];
+    apercu?: {
+        matricule: string | null; nom_complet: string; moyenne_generale: number;
+        moyenne_fournie: boolean; moyenne_calculee: number | null; nb_matieres: number;
+    }[];
+    classement?: { rang: number | null; nom_complet: string; moyenne_generale: number; mention: string | null }[];
+    message: string;
+}
+
 interface RapportImport {
     classe: string; fichier: string; lignes_lues: number;
     a_appliquer: number; remplacements: number; admis: number; non_admis: number;
@@ -92,6 +115,21 @@ export default function ResultatsAnnuelsPage() {
     const [importEnCours, setImportEnCours] = useState(false);
     const fichierRef = useRef<HTMLInputElement>(null);
 
+    // ─── Import des MOYENNES d'une classe ───
+    // À ne pas confondre avec l'import ci-dessus, qui porte sur le résultat
+    // ADMIS/NON ADMIS de l'examen national. Ici il s'agit des moyennes que
+    // l'école tient déjà dans son classeur.
+    const [periodesAnnee, setPeriodesAnnee] = useState<{ trimestre_id: number; libelle: string; numero: number }[]>([]);
+    const [importPeriode, setImportPeriode] = useState<string>('');
+    const [importFormat, setImportFormat] = useState<'DETAILLE' | 'SIMPLE'>('DETAILLE');
+    const [rapportMoyennes, setRapportMoyennes] = useState<RapportMoyennes | null>(null);
+    const [importMoyennesEnCours, setImportMoyennesEnCours] = useState(false);
+    // Les octets du fichier, conservés tels quels entre l'analyse et la
+    // confirmation : on renvoie exactement ce qui a été analysé, et non une
+    // relecture du disque qui pourrait avoir changé entre-temps.
+    const [fichierMoyennes, setFichierMoyennes] = useState<{ nom: string; blob: Blob } | null>(null);
+    const fichierMoyennesRef = useRef<HTMLInputElement>(null);
+
     useEffect(() => {
         // Filtré par année : sinon le sélecteur de classe mélangeait les années
         // (ex. la « 3ème année » de l'an prochain apparaissait en consultant une
@@ -99,6 +137,11 @@ export default function ResultatsAnnuelsPage() {
         api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`)
             .then(r => setClasses(r.data))
             .catch(() => setClasses([]));
+        // Les périodes de l'ANNÉE, pas celles déduites des bulletins existants :
+        // au moment d'importer, il n'y a justement encore aucun bulletin.
+        api.get(`/api/parametrage/trimestres?annee_id=${anneeId}`)
+            .then(r => setPeriodesAnnee(r.data || []))
+            .catch(() => setPeriodesAnnee([]));
     }, [etablissementId, anneeId]);
 
     const charger = useCallback(async () => {
@@ -282,6 +325,59 @@ export default function ResultatsAnnuelsPage() {
         setImportEnCours(false);
     };
 
+    // ═══ IMPORT DES MOYENNES ═══
+    // Même geste en deux temps que l'import des résultats d'examen : analyse
+    // d'abord, rien n'est écrit, puis confirmation. Un import de moyennes
+    // touche le classement de toute une classe ; l'école doit voir ce qui ne
+    // se rapproche pas AVANT que ce soit enregistré, pas après.
+    const urlImportMoyennes = (dryRun: boolean) => {
+        const params = [`format=${importFormat}`];
+        if (importPeriode) params.push(`trimestre_id=${importPeriode}`);
+        if (dryRun) params.push('dry_run=true');
+        return `/api/evaluations/classe/${selectedClasse}/import-resultats?${params.join('&')}`;
+    };
+
+    const envoyerMoyennes = async (nom: string, blob: Blob, dryRun: boolean) => {
+        const form = new FormData();
+        form.append('fichier', blob, nom);
+        const res = await api.post(urlImportMoyennes(dryRun), form, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        return res.data as RapportMoyennes;
+    };
+
+    const analyserMoyennes = async (fichier: File) => {
+        if (!selectedClasse) return;
+        setImportMoyennesEnCours(true);
+        setRapportMoyennes(null);
+        try {
+            const octets = await fichier.arrayBuffer();
+            const blob = new Blob([octets]);
+            setFichierMoyennes({ nom: fichier.name, blob });
+            setRapportMoyennes(await envoyerMoyennes(fichier.name, blob, true));
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || e.message);
+            setFichierMoyennes(null);
+        }
+        setImportMoyennesEnCours(false);
+        if (fichierMoyennesRef.current) fichierMoyennesRef.current.value = '';
+    };
+
+    const confirmerMoyennes = async () => {
+        if (!fichierMoyennes) return;
+        setImportMoyennesEnCours(true);
+        try {
+            const res = await envoyerMoyennes(fichierMoyennes.nom, fichierMoyennes.blob, false);
+            setRapportMoyennes(res);
+            setFichierMoyennes(null);
+            flash(res.message);
+            await charger();
+        } catch (e: any) {
+            alert(e?.response?.data?.detail || e.message);
+        }
+        setImportMoyennesEnCours(false);
+    };
+
     const groupes = classes.reduce((acc: any, c: any) => {
         const cycle = c.cycle_libelle || 'Autres';
         (acc[cycle] = acc[cycle] || []).push(c);
@@ -363,6 +459,201 @@ export default function ResultatsAnnuelsPage() {
                     </>
                 )}
             </div>
+
+            {/* ═══ IMPORTER LES MOYENNES D'UNE CLASSE ═══
+                Pour les écoles qui tiennent déjà leurs moyennes dans un
+                classeur. La saisie épreuve par épreuve reste là : ceci est une
+                porte d'entrée de plus, pas un remplacement. */}
+            {selectedClasse && (
+                <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                    style={{ background: 'white', borderRadius: '16px', border: '1.5px solid #c7d2fe', overflow: 'hidden', marginBottom: '22px' }}>
+                    <div style={{ padding: '14px 18px', background: '#eef2ff', borderBottom: '1px solid #c7d2fe' }}>
+                        <div style={{ fontSize: '14px', fontWeight: 800, color: '#3730a3', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Upload size={18} /> Importer les moyennes d&apos;une classe
+                        </div>
+                        <div style={{ fontSize: '12.5px', color: '#4338ca', marginTop: '7px', lineHeight: 1.6 }}>
+                            Si vos moyennes sont déjà dans un classeur, importez-les au lieu de ressaisir
+                            chaque note. Le classement, les mentions et les bulletins en sortent
+                            automatiquement. Importez chaque période pour que les résultats de fin
+                            d&apos;année se calculent tout seuls — ou une seule fois, en fin d&apos;année.
+                        </div>
+                    </div>
+
+                    <div style={{ padding: '16px 18px', display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <div>
+                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>PÉRIODE</label>
+                            <select value={importPeriode} onChange={e => { setImportPeriode(e.target.value); setRapportMoyennes(null); }}
+                                style={{ padding: '9px 13px', borderRadius: '10px', border: '1.5px solid #cbd5e1', fontSize: '13px', fontWeight: 600, minWidth: '190px' }}>
+                                <option value="">Année complète (en une fois)</option>
+                                {periodesAnnee.map(p => (
+                                    <option key={p.trimestre_id} value={p.trimestre_id}>{p.libelle}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>CONTENU DU FICHIER</label>
+                            <select value={importFormat} onChange={e => { setImportFormat(e.target.value as 'DETAILLE' | 'SIMPLE'); setRapportMoyennes(null); }}
+                                style={{ padding: '9px 13px', borderRadius: '10px', border: '1.5px solid #cbd5e1', fontSize: '13px', fontWeight: 600, minWidth: '240px' }}>
+                                <option value="DETAILLE">Une colonne par matière — bulletin détaillé</option>
+                                <option value="SIMPLE">Une seule moyenne générale — plus rapide</option>
+                            </select>
+                        </div>
+                        <input ref={fichierMoyennesRef} type="file" accept=".csv,.xlsx,.xlsm,.txt" style={{ display: 'none' }}
+                            onChange={e => e.target.files?.[0] && analyserMoyennes(e.target.files[0])} />
+                        <button onClick={() => ouvrirFichier(
+                            `/api/evaluations/classe/${selectedClasse}/modele-import-resultats?format=${importFormat}`,
+                            'text/csv', `moyennes_${selectedClasse}_${importFormat.toLowerCase()}.csv`)}
+                            style={btn('#4338ca')}>
+                            <Download size={14} /> Modèle à remplir
+                        </button>
+                        <button onClick={() => fichierMoyennesRef.current?.click()} disabled={importMoyennesEnCours}
+                            style={btn('#4f46e5', true)}>
+                            <Upload size={14} /> {importMoyennesEnCours ? 'Lecture…' : 'Choisir le fichier'}
+                        </button>
+                    </div>
+
+                    <div style={{ padding: '0 18px 16px', fontSize: '12px', color: '#64748b', lineHeight: 1.6 }}>
+                        Le modèle sort déjà rempli des élèves de la classe : les noms correspondent donc
+                        forcément aux vôtres. {importFormat === 'DETAILLE'
+                            ? 'Une colonne par matière, plus une colonne Moyenne facultative — si vous la remplissez, c’est elle qui fait foi.'
+                            : 'Une colonne Moyenne par élève. Le bulletin n’aura pas de détail par matière.'}
+                        {' '}CSV ou Excel, virgule décimale acceptée.
+                    </div>
+
+                    {rapportMoyennes && (
+                        <div style={{ borderTop: '1px solid #e2e8f0', padding: '16px 18px', background: '#f8fafc' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                                {rapportMoyennes.dry_run
+                                    ? <AlertTriangle size={16} color="#b45309" />
+                                    : <CheckCircle2 size={16} color="#059669" />}
+                                <strong style={{ fontSize: '13.5px', color: '#0f172a' }}>
+                                    {rapportMoyennes.dry_run ? 'Analyse — rien n’est encore enregistré' : 'Import effectué'}
+                                </strong>
+                                <span style={{ fontSize: '12.5px', color: '#64748b' }}>
+                                    {rapportMoyennes.classe} · {rapportMoyennes.periode} ·{' '}
+                                    {rapportMoyennes.format_retenu === 'DETAILLE' ? 'détail par matière' : 'moyenne générale seule'}
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: '10px', marginBottom: '12px' }}>
+                                {[
+                                    { label: 'LIGNES LUES', valeur: String(rapportMoyennes.lignes_lues), couleur: '#0f172a' },
+                                    {
+                                        label: rapportMoyennes.dry_run ? 'ÉLÈVES RECONNUS' : 'BULLETINS ÉCRITS',
+                                        valeur: String(rapportMoyennes.dry_run
+                                            ? (rapportMoyennes.nb_rapproches ?? 0)
+                                            : (rapportMoyennes.bulletins_crees ?? 0) + (rapportMoyennes.bulletins_mis_a_jour ?? 0)),
+                                        couleur: '#059669',
+                                    },
+                                    {
+                                        label: 'NON RECONNUS', valeur: String(rapportMoyennes.non_rapproches.length),
+                                        couleur: rapportMoyennes.non_rapproches.length ? '#b91c1c' : '#64748b',
+                                    },
+                                    {
+                                        label: 'SANS RÉSULTAT', valeur: String(rapportMoyennes.eleves_sans_resultat.length),
+                                        couleur: rapportMoyennes.eleves_sans_resultat.length ? '#b45309' : '#64748b',
+                                    },
+                                ].map(c => (
+                                    <div key={c.label} style={{ background: 'white', border: '1px solid #e2e8f0', borderRadius: '11px', padding: '10px 13px' }}>
+                                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.5px' }}>{c.label}</div>
+                                        <div style={{ fontSize: '17px', fontWeight: 800, color: c.couleur, marginTop: '3px' }}>{c.valeur}</div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {rapportMoyennes.colonnes_matieres.length > 0 && (
+                                <div style={{ fontSize: '12.5px', color: '#334155', marginBottom: '8px' }}>
+                                    <strong>Matières reconnues :</strong>{' '}
+                                    {rapportMoyennes.colonnes_matieres.map(c => `${c.libelle} (coef. ${c.coefficient})`).join(' · ')}
+                                </div>
+                            )}
+                            {rapportMoyennes.colonnes_inconnues.length > 0 && (
+                                <div style={{ fontSize: '12.5px', color: '#b45309', marginBottom: '8px' }}>
+                                    <strong>Colonnes non reconnues</strong> (ignorées) :{' '}
+                                    {rapportMoyennes.colonnes_inconnues.join(' · ')}
+                                </div>
+                            )}
+
+                            {rapportMoyennes.non_rapproches.length > 0 && (
+                                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '11px', padding: '11px 13px', marginBottom: '8px' }}>
+                                    <div style={{ fontSize: '12.5px', fontWeight: 700, color: '#b91c1c', marginBottom: '5px' }}>
+                                        Lignes non rapprochées — aucun élève n&apos;est créé pour elles
+                                    </div>
+                                    {rapportMoyennes.non_rapproches.slice(0, 8).map(n => (
+                                        <div key={n.ligne} style={{ fontSize: '12px', color: '#7f1d1d' }}>
+                                            Ligne {n.ligne} — <strong>{n.identite}</strong> : {n.raison}
+                                        </div>
+                                    ))}
+                                    {rapportMoyennes.non_rapproches.length > 8 && (
+                                        <div style={{ fontSize: '11.5px', color: '#991b1b', marginTop: '4px' }}>
+                                            … et {rapportMoyennes.non_rapproches.length - 8} autre(s).
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {rapportMoyennes.eleves_sans_resultat.length > 0 && (
+                                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '11px', padding: '11px 13px', marginBottom: '8px', fontSize: '12px', color: '#92400e' }}>
+                                    <strong>Élèves de la classe absents du fichier</strong> — leur bulletin
+                                    existant n&apos;est pas touché :{' '}
+                                    {rapportMoyennes.eleves_sans_resultat.slice(0, 10)
+                                        .map(e => e.nom_complet || e.matricule).join(' · ')}
+                                    {rapportMoyennes.eleves_sans_resultat.length > 10 && ' …'}
+                                </div>
+                            )}
+
+                            {rapportMoyennes.erreurs.length > 0 && (
+                                <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '11px', padding: '11px 13px', marginBottom: '8px' }}>
+                                    {rapportMoyennes.erreurs.slice(0, 6).map((e, i) => (
+                                        <div key={i} style={{ fontSize: '12px', color: '#9a3412' }}>Ligne {e.ligne} — {e.message}</div>
+                                    ))}
+                                    {rapportMoyennes.erreurs.length > 6 && (
+                                        <div style={{ fontSize: '11.5px', color: '#9a3412', marginTop: '4px' }}>
+                                            … et {rapportMoyennes.erreurs.length - 6} autre(s).
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {rapportMoyennes.dry_run && (rapportMoyennes.apercu?.length ?? 0) > 0 && (
+                                <div style={{ marginBottom: '12px' }}>
+                                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#64748b', marginBottom: '5px' }}>
+                                        APERÇU DES PREMIÈRES LIGNES
+                                    </div>
+                                    {rapportMoyennes.apercu!.map((a, i) => (
+                                        <div key={i} style={{ fontSize: '12.5px', color: '#334155' }}>
+                                            {a.nom_complet} — <strong>{a.moyenne_generale}</strong>
+                                            {a.moyenne_fournie ? ' (du fichier)' : ' (calculée)'}
+                                            {a.nb_matieres > 0 && ` · ${a.nb_matieres} matière(s)`}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {rapportMoyennes.dry_run ? (
+                                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                                    <button onClick={confirmerMoyennes}
+                                        disabled={importMoyennesEnCours || (rapportMoyennes.nb_rapproches ?? 0) === 0}
+                                        style={btn('#059669', true)}>
+                                        <CheckCircle2 size={15} />
+                                        {importMoyennesEnCours
+                                            ? 'Import…'
+                                            : `Enregistrer ${rapportMoyennes.nb_rapproches ?? 0} résultat(s)`}
+                                    </button>
+                                    <button onClick={() => { setRapportMoyennes(null); setFichierMoyennes(null); }}
+                                        style={btn('#64748b')}>
+                                        <X size={15} /> Abandonner
+                                    </button>
+                                </div>
+                            ) : (
+                                <div style={{ fontSize: '12.5px', color: '#059669', fontWeight: 600 }}>
+                                    {rapportMoyennes.message}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </motion.div>
+            )}
 
             {!selectedClasse ? (
                 <div style={{ padding: '60px', textAlign: 'center', color: '#94a3b8', background: 'white', borderRadius: '16px', border: '1px solid #e2e8f0' }}>

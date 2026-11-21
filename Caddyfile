@@ -1,0 +1,49 @@
+# Caddy — point d'entrée HTTPS du serveur SmartSchool.
+#
+# Caddy obtient et renouvelle tout seul le certificat Let's Encrypt. C'est ce
+# que Render faisait pour nous ; ici c'est une ligne de configuration, et plus
+# rien à surveiller ensuite.
+#
+# ATTENTION AU PREMIER DÉMARRAGE
+# Pour délivrer le certificat, Let's Encrypt doit joindre ce serveur
+# directement. Si l'enregistrement DNS est en « proxy » chez Cloudflare (nuage
+# orange), la demande n'arrive pas et Caddy échoue en boucle.
+# Marche à suivre : mettre le DNS en « DNS only » (nuage gris), démarrer,
+# vérifier que le certificat est obtenu, puis remettre le nuage orange avec le
+# mode SSL « Full (strict) ».
+
+{$DOMAINE_API} {
+	encode zstd gzip
+
+	# Tout est transmis à l'API, qui écoute en interne sur le réseau Docker.
+	reverse_proxy api:8500 {
+		# Sans ces en-têtes, l'application voit toutes les requêtes venir de
+		# Caddy : le limiteur anti-force-brute compterait les tentatives de
+		# TOUTE l'école sur une seule adresse, et bloquerait tout le monde au
+		# bout de cinq connexions.
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Les PDF de bulletins et les imports de classes dépassent la limite par
+	# défaut ; sans ça, un import d'élèves échoue sans message clair.
+	request_body {
+		max_size 50MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output file /data/acces.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+	}
+}

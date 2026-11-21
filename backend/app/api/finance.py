@@ -446,6 +446,27 @@ def factures_sans_type(
     }
 
 
+class LigneEncaissementGroupe(BaseModel):
+    """Un versement dans un encaissement groupé : une facture, un montant."""
+    facture_id: int
+    montant: float
+
+
+class EncaissementGroupe(BaseModel):
+    """
+    Plusieurs versements saisis en une fois, pour une classe.
+
+    Le mode de paiement et la date valent pour tout le lot : le caissier
+    encaisse une file d'attente de parents sur un même créneau. S'il faut un
+    mode différent pour l'un d'eux, il le saisit à part — c'est plus sûr que
+    de laisser un réglage par ligne qu'on oublie de changer.
+    """
+    lignes: List[LigneEncaissementGroupe]
+    mode_paiement: str
+    date_paiement: Optional[date_type] = None
+    reference_externe: Optional[str] = None
+
+
 class RattachementFactures(BaseModel):
     """Quelles factures, et à quel type de frais."""
     facture_ids: List[int]
@@ -1423,24 +1444,40 @@ def list_paiements(
     response: Response,
     annee_id: Optional[int] = None,
     search: Optional[str] = None,
+    classe_id: Optional[int] = None,
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
     etablissement_id: int = Depends(require_etablissement),
 ):
+    """Historique des encaissements.
+
+    Renvoie aussi la CLASSE et le TARIF de chaque versement. Les deux étaient
+    absents alors que la classe était déjà jointe : impossible, depuis cet
+    écran, de savoir pour quel frais un parent avait payé, ni de retrouver les
+    versements d'une classe. Le reçu, lui, porte bien le motif — mais il faut
+    l'ouvrir un par un pour le lire.
+    """
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
     query = (
-        db.query(Paiement, Facture, Eleve)
+        db.query(Paiement, Facture, Eleve, Classe, TypeFrais)
         .join(Facture, Paiement.facture_id == Facture.facture_id)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
+        # `outerjoin` et non `join` : `Facture.type_frais_id` est nullable —
+        # les ventes libres et les factures anciennes n'en portent pas. Une
+        # jointure stricte les ferait disparaître de l'historique, et des
+        # encaissements réels deviendraient invisibles.
+        .outerjoin(TypeFrais, Facture.type_frais_id == TypeFrais.type_frais_id)
         .filter(Classe.etablissement_id == etablissement_id)
     )
     if annee_id is not None:
         query = query.filter(Inscription.annee_id == annee_id)
+    if classe_id is not None:
+        query = query.filter(Inscription.classe_id == classe_id)
     # Recherche SERVEUR : sans elle, la page ne filtrait que les paiements
     # deja charges (une page), donc chercher un eleve absent de la page
     # courante ne renvoyait rien. On cherche par nom/prenom d'eleve, numero
@@ -1475,87 +1512,118 @@ def list_paiements(
             "echeance_id": p.echeance_id,
             "numero_facture": f.numero_facture,
             "description": f.description,  # ce qui a été acheté (ventes de tarif libre)
+            "montant_facture": float(f.montant_net or 0),
+            "eleve_id": e.eleve_id,
             "eleve_nom": e.nom,
-            "eleve_prenom": e.prenom
+            "eleve_prenom": e.prenom,
+            "matricule": e.matricule,
+            "classe_id": c.classe_id,
+            "classe_libelle": c.libelle,
+            # Le frais concerné. `None` pour une vente libre ou une facture
+            # antérieure aux types de frais : l'écran retombe alors sur
+            # `description`, qui dit ce qui a été acheté.
+            "type_frais_id": tf.type_frais_id if tf else None,
+            "type_frais_libelle": tf.libelle if tf else None,
         }
-        for p, f, e in results
+        for p, f, e, c, tf in results
     ]
 
 
-@router.post("/paiements", status_code=201)
-def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Enregistre un paiement avec mise à jour facture et échéance si applicable."""
-    # La facture doit appartenir à l'établissement appelant — avant le Lot 2,
-    # n'importe quel facture_id d'une AUTRE école pouvait recevoir un paiement
-    # depuis ce compte (enregistrement d'un règlement fictif ou détournement
-    # de la comptabilité d'une autre école).
+def _facture_de_l_ecole(db: Session, facture_id: int, etablissement_id: int) -> Facture:
+    """La facture, à condition qu'elle appartienne bien à l'école appelante.
+
+    Sans ce filtre, n'importe quel `facture_id` deviné recevrait un règlement
+    depuis ce compte — règlement fictif, ou détournement de la comptabilité
+    d'une autre école.
+    """
     facture = (
         db.query(Facture)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
-        .filter(Facture.facture_id == data.facture_id, Classe.etablissement_id == etablissement_id)
+        .filter(Facture.facture_id == facture_id, Classe.etablissement_id == etablissement_id)
         .first()
     )
     if not facture:
         raise HTTPException(status_code=404, detail="Facture non trouvée")
+    return facture
 
-    _verifier_annee_modifiable(db, facture.annee_id)
 
-    if data.montant <= 0:
+def _enregistrer_encaissement(
+    db: Session,
+    facture: Facture,
+    *,
+    montant: float,
+    mode_paiement: str,
+    etablissement_id: int,
+    settings: dict,
+    reference_externe: Optional[str] = None,
+    echeance_id: Optional[int] = None,
+    jour: Optional[date_type] = None,
+) -> Paiement:
+    """
+    Enregistre UN versement : le reçu, la facture, l'échéance et l'écriture
+    comptable. Ne committe pas — l'appelant décide de la transaction.
+
+    POURQUOI CETTE FONCTION EXISTE
+    Elle est le seul endroit où un encaissement se crée. L'encaissement à
+    l'unité et l'encaissement groupé d'une classe l'appellent tous les deux.
+    Dupliquer ce code aurait été plus rapide à écrire et désastreux à vivre :
+    ce dépôt a déjà connu deux moteurs de calcul de moyennes recopiés l'un de
+    l'autre, qui ont divergé en silence jusqu'à donner des résultats
+    différents. Sur de l'argent, une divergence pareille devient un écart de
+    caisse que personne ne sait expliquer.
+    """
+    if montant <= 0:
         raise HTTPException(status_code=400, detail="Le montant doit être supérieur à 0")
 
     # PAS de plafond sur le montant encaissé — c'était un refus pur et simple
     # dès que la somme dépassait le reste à payer, et dès que la facture était
     # soldée. Or une école encaisse ce que la famille lui remet : 310 000 GNF
-    # sur une scolarité de 300 000, un versement d'avance sur l'année suivante,
-    # un arrondi laissé à l'école. Le caissier se retrouvait à refuser de
-    # l'argent réellement reçu, ou à le saisir faux pour passer le contrôle.
+    # sur une scolarité de 300 000, un versement d'avance, un arrondi. Le
+    # caissier se retrouvait à refuser de l'argent réellement reçu, ou à le
+    # saisir faux pour passer le contrôle.
     #
     # Le trop-perçu n'est pas perdu : `montant_paye` et le reçu portent la
     # somme réelle, et l'écriture comptable crédite le compte de l'élève
-    # d'autant — son compte auxiliaire passe donc créditeur, ce qui est
-    # exactement la représentation comptable d'une avance. Seul
-    # `montant_restant` est borné à 0, pour que les états d'impayés ne
-    # comptent pas une dette négative.
+    # d'autant — son compte auxiliaire passe créditeur, ce qui EST la
+    # représentation comptable d'une avance. Seul `montant_restant` reste
+    # borné à 0, pour que les états d'impayés ne comptent pas une dette
+    # négative.
 
-    # Mettre à jour l'échéance si précisée
-    if data.echeance_id:
+    if echeance_id:
         echeance = db.query(EcheanceFacture).filter(
-            EcheanceFacture.echeance_id == data.echeance_id,
-            EcheanceFacture.facture_id == data.facture_id
+            EcheanceFacture.echeance_id == echeance_id,
+            EcheanceFacture.facture_id == facture.facture_id,
         ).first()
         if not echeance:
             raise HTTPException(status_code=404, detail="Échéance non trouvée pour cette facture")
-
-        # Même principe que sur la facture : une échéance n'est pas un plafond,
-        # c'est un calendrier. Une famille qui règle deux tranches d'un coup, ou
-        # qui arrondit au-dessus, ne doit pas être renvoyée au guichet.
-        echeance.montant_paye = float(echeance.montant_paye or 0) + data.montant
+        # Une échéance n'est pas un plafond, c'est un calendrier. Une famille
+        # qui règle deux tranches d'un coup ne doit pas être renvoyée au
+        # guichet.
+        echeance.montant_paye = float(echeance.montant_paye or 0) + montant
         if echeance.montant_paye >= float(echeance.montant_attendu or 0):
             echeance.statut = "PAYEE"
         else:
             echeance.statut = "PARTIELLEMENT_PAYEE"
 
+    # « Especes », « ESPECES » et « Cash » étaient trois modes différents pour
+    # la base : le panneau « Répartition par Mode » affichait 0 GNF partout,
+    # faute de retrouver ses codes. On normalise à l'écriture, pas à
+    # l'affichage — un total ne se répare pas après coup.
+    mode_normalise = exiger_mode_paiement(mode_paiement, settings.get("modes_paiement"))
+
     # Le numéro de reçu venait d'un COUNT global : il régressait dès qu'un
     # paiement était annulé, et réattribuait alors un numéro figurant sur un
-    # reçu déjà remis à un parent. Deux pièces portant le même numéro, c'est un
-    # litige que la comptabilité ne peut pas trancher.
-    settings = get_finance_settings(db, etablissement_id)
-    # « Especes », « ESPECES » et « Cash » etaient trois modes differents pour
-    # la base : le panneau « Repartition par Mode » affichait 0 GNF partout,
-    # faute de retrouver ses codes. On normalise a l'ecriture, pas a
-    # l'affichage — un total ne se repare pas apres coup.
-    mode_normalise = exiger_mode_paiement(
-        data.mode_paiement, settings.get("modes_paiement")
-    )
+    # reçu déjà remis à un parent. Deux pièces portant le même numéro, c'est
+    # un litige que la comptabilité ne peut pas trancher.
     numero_recu = generer_numero_recu(
         db, etablissement_id, facture.annee_id, settings.get("recu_prefixe") or "REC"
     )
 
-    # Un encaissement porte la date a laquelle l'argent est entre, pas celle de
-    # la saisie. Une date future serait en revanche une faute de frappe : on
-    # n'encaisse pas demain.
-    jour_encaissement = data.date_paiement or date_type.today()
+    # Un encaissement porte la date à laquelle l'argent est entré, pas celle
+    # de la saisie. Une date future serait en revanche une faute de frappe :
+    # on n'encaisse pas demain.
+    jour_encaissement = jour or date_type.today()
     if jour_encaissement > date_type.today():
         raise HTTPException(
             status_code=400,
@@ -1563,21 +1631,20 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         )
 
     paiement = Paiement(
-        facture_id=data.facture_id,
+        facture_id=facture.facture_id,
         annee_id=facture.annee_id,
-        echeance_id=data.echeance_id,
+        echeance_id=echeance_id,
         numero_recu=numero_recu,
-        montant=data.montant,
+        montant=montant,
         mode_paiement=mode_normalise,
-        reference_externe=data.reference_externe,
+        reference_externe=reference_externe,
         date_paiement=jour_encaissement,
         devise=settings.get("devise") or "GNF",
-        statut="VALIDE"
+        statut="VALIDE",
     )
     db.add(paiement)
 
-    # Mettre à jour la facture
-    facture.montant_paye = float(facture.montant_paye or 0) + data.montant
+    facture.montant_paye = float(facture.montant_paye or 0) + montant
     facture.montant_restant = float(facture.montant_net or 0) - float(facture.montant_paye)
     if facture.montant_restant <= 0:
         facture.statut = "PAYEE"
@@ -1585,32 +1652,51 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
     else:
         facture.statut = "PARTIELLEMENT_PAYEE"
 
-    # Comptabilité générale : encaissement réel (Debit trésorerie / Credit 4111 Élèves)
-    insc = db.query(Inscription).filter(Inscription.inscription_id == facture.inscription_id).first()
+    # Comptabilité générale : encaissement réel (Débit trésorerie / Crédit 4111).
+    insc = db.query(Inscription).filter(
+        Inscription.inscription_id == facture.inscription_id
+    ).first()
     compte_tresorerie, journal_tresorerie = compte_tresorerie_pour_mode(mode_normalise)
     # `eleve_id` n'est posé QUE sur la ligne 4111 (compte élève) — c'est elle
-    # qui identifie le compte auxiliaire de l'élève. La poser aussi sur la
-    # ligne de trésorerie (comme c'était le cas avant ce correctif) fausse le
-    # solde auxiliaire de l'élève : les requêtes "compte individuel" (voir
-    # comptabilite.py) somment débit/crédit par eleve_id sans filtrer par
-    # compte, donc la ligne trésorerie (qui n'appartient pas à l'élève, elle
-    # appartient à la caisse/banque de l'école) venait gonfler artificiellement
-    # le total débit de l'élève d'exactement le montant payé — masquant tout
-    # solde réellement dû (symptôme observé : "Facturé"/"Réglé" identiques,
-    # toujours "Soldé", quel que soit le montant réellement facturé).
+    # qui identifie le compte auxiliaire. La poser aussi sur la ligne de
+    # trésorerie fausse le solde de l'élève : les requêtes « compte
+    # individuel » somment débit/crédit par eleve_id sans filtrer par compte,
+    # et la trésorerie (qui appartient à la caisse, pas à l'élève) venait
+    # gonfler son total débit d'exactement le montant payé — masquant tout
+    # solde réellement dû.
     generer_ecriture_auto(
         db, date_ecriture=jour_encaissement, journal_code=journal_tresorerie,
         libelle=f"Encaissement scolarité — {numero_recu}",
         reference=numero_recu,
         lignes=[
-            {"compte": compte_tresorerie, "debit": float(data.montant), "credit": 0,
+            {"compte": compte_tresorerie, "debit": float(montant), "credit": 0,
              "classe_id": insc.classe_id if insc else None,
              "description": numero_recu},
-            {"compte": COMPTE_ELEVES, "debit": 0, "credit": float(data.montant),
-             "eleve_id": insc.eleve_id if insc else None, "classe_id": insc.classe_id if insc else None,
+            {"compte": COMPTE_ELEVES, "debit": 0, "credit": float(montant),
+             "eleve_id": insc.eleve_id if insc else None,
+             "classe_id": insc.classe_id if insc else None,
              "description": numero_recu},
         ],
         etablissement_id=etablissement_id,
+    )
+    return paiement
+
+
+@router.post("/paiements", status_code=201)
+def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
+    """Enregistre un paiement avec mise à jour facture et échéance si applicable."""
+    facture = _facture_de_l_ecole(db, data.facture_id, etablissement_id)
+    _verifier_annee_modifiable(db, facture.annee_id)
+
+    paiement = _enregistrer_encaissement(
+        db, facture,
+        montant=data.montant,
+        mode_paiement=data.mode_paiement,
+        etablissement_id=etablissement_id,
+        settings=get_finance_settings(db, etablissement_id),
+        reference_externe=data.reference_externe,
+        echeance_id=data.echeance_id,
+        jour=data.date_paiement,
     )
 
     # Le code du QR est figé à l'émission, avec la clé de l'appareil qui
@@ -1626,12 +1712,163 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
 
     return {
         "paiement_id": paiement.paiement_id,
-        "numero_recu": numero_recu,
+        "numero_recu": paiement.numero_recu,
         "montant": float(paiement.montant),
         "mode_paiement": paiement.mode_paiement,
         "statut": paiement.statut,
         "facture_statut": facture.statut,
-        "message": f"Paiement enregistré. Reçu N° {numero_recu}"
+        "message": f"Paiement enregistré. Reçu N° {paiement.numero_recu}"
+    }
+
+
+@router.get("/classe/{classe_id}/situation-encaissement")
+def situation_encaissement_classe(
+    classe_id: int,
+    annee_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Ce que chaque élève de la classe doit encore, tarif par tarif.
+
+    Sert d'écran d'avant-encaissement : le caissier voit ce qui a DÉJÀ été
+    réglé avant de saisir quoi que ce soit. Sans cette vue, rien n'empêchait
+    d'encaisser une seconde fois un frais déjà payé — l'erreur ne se
+    découvrait qu'au moment où un parent présentait son reçu.
+    """
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+    classe = db.query(Classe).filter(
+        Classe.classe_id == classe_id, Classe.etablissement_id == etablissement_id
+    ).first()
+    if not classe:
+        raise HTTPException(404, "Classe non trouvée")
+
+    inscriptions = (
+        db.query(Inscription, Eleve)
+        .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
+        .filter(
+            Inscription.classe_id == classe_id,
+            Inscription.annee_id == annee_id,
+            Inscription.statut == "ACTIVE",
+        )
+        .order_by(Eleve.nom, Eleve.prenom)
+        .all()
+    )
+    if not inscriptions:
+        return {"classe": classe.libelle, "classe_id": classe_id, "eleves": []}
+
+    # Tout en deux requêtes, jamais une par élève : une classe de cinquante
+    # élèves ayant chacun quatre frais ferait sinon deux cents allers-retours
+    # pour afficher un seul écran.
+    ids = [i.inscription_id for i, _ in inscriptions]
+    factures = (
+        db.query(Facture, TypeFrais)
+        .outerjoin(TypeFrais, Facture.type_frais_id == TypeFrais.type_frais_id)
+        .filter(Facture.inscription_id.in_(ids))
+        .all()
+    )
+    par_inscription: Dict[int, list] = {}
+    for f, tf in factures:
+        par_inscription.setdefault(f.inscription_id, []).append((f, tf))
+
+    eleves = []
+    for insc, el in inscriptions:
+        lignes = []
+        for f, tf in par_inscription.get(insc.inscription_id, []):
+            lignes.append({
+                "facture_id": f.facture_id,
+                "numero_facture": f.numero_facture,
+                "tarif": (tf.libelle if tf else None) or f.description or "Frais",
+                "montant_du": float(f.montant_net or 0),
+                "deja_paye": float(f.montant_paye or 0),
+                "reste": float(f.montant_restant or 0),
+                "statut": f.statut,
+            })
+        total_du = sum(x["montant_du"] for x in lignes)
+        total_paye = sum(x["deja_paye"] for x in lignes)
+        eleves.append({
+            "eleve_id": el.eleve_id,
+            "matricule": el.matricule,
+            "nom_complet": f"{el.prenom or ''} {el.nom or ''}".strip(),
+            "total_du": total_du,
+            "total_paye": total_paye,
+            # Borné à 0 : un élève en avance ne doit pas apparaître avec une
+            # dette négative, qui fausserait le total de la classe.
+            "reste": max(0.0, total_du - total_paye),
+            "solde": "SOLDE" if total_du > 0 and total_paye >= total_du else "EN_COURS",
+            "frais": lignes,
+        })
+
+    return {
+        "classe": classe.libelle,
+        "classe_id": classe_id,
+        "annee_id": annee_id,
+        "eleves": eleves,
+    }
+
+
+@router.post("/encaissements-groupes", status_code=201)
+def encaisser_en_groupe(
+    data: EncaissementGroupe,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Enregistre plusieurs versements en une seule fois.
+
+    TOUT OU RIEN. Les versements sont écrits dans une seule transaction : si
+    l'un échoue, aucun n'est enregistré. Un lot à moitié passé laisserait le
+    caissier sans savoir lesquels refaire, et les reçus déjà numérotés
+    rendraient la reprise hasardeuse.
+
+    Chaque ligne produit son PROPRE reçu, avec son numéro. C'est voulu : un
+    reçu appartient à une famille, et chacune doit pouvoir présenter le sien.
+    Pour remettre un seul feuillet à une famille qui a payé plusieurs frais,
+    le récapitulatif est là (`/paiements/recapitulatif-pdf`).
+    """
+    if not data.lignes:
+        raise HTTPException(400, "Aucun versement à enregistrer.")
+    if len(data.lignes) > 200:
+        raise HTTPException(400, "Trop de versements en une fois (200 au maximum).")
+
+    doublons = {l.facture_id for l in data.lignes}
+    if len(doublons) != len(data.lignes):
+        raise HTTPException(
+            400,
+            "La même facture apparaît plusieurs fois. Regroupez les montants en une seule ligne.",
+        )
+
+    settings = get_finance_settings(db, etablissement_id)
+    resultats = []
+    annees_touchees = set()
+
+    for ligne in data.lignes:
+        facture = _facture_de_l_ecole(db, ligne.facture_id, etablissement_id)
+        _verifier_annee_modifiable(db, facture.annee_id)
+        paiement = _enregistrer_encaissement(
+            db, facture,
+            montant=ligne.montant,
+            mode_paiement=data.mode_paiement,
+            etablissement_id=etablissement_id,
+            settings=settings,
+            reference_externe=data.reference_externe,
+            jour=data.date_paiement,
+        )
+        annees_touchees.add(facture.annee_id)
+        resultats.append({
+            "facture_id": facture.facture_id,
+            "numero_recu": paiement.numero_recu,
+            "montant": float(paiement.montant),
+        })
+
+    # Un seul commit : c'est lui qui rend le lot atomique.
+    db.commit()
+    for annee in annees_touchees:
+        _invalidate_dashboard_cache(etablissement_id, annee)
+
+    total = sum(r["montant"] for r in resultats)
+    return {
+        "message": f"{len(resultats)} versement(s) enregistré(s) pour un total de {total:,.0f}.".replace(",", " "),
+        "total": total,
+        "paiements": resultats,
     }
 
 
@@ -2226,7 +2463,15 @@ def solde_eleve(eleve_id: int, annee_id: Optional[int] = None, db: Session = Dep
                 "facture_id": facture.facture_id,
                 "numero_facture": facture.numero_facture,
                 "type_frais_libelle": libelle_frais,
+                # `montant_total` reste le NET (ce qui est réclamé) : tout
+                # l'écran existant compte là-dessus, on n'y touche pas.
                 "montant_total": float(facture.montant_net or 0),
+                # Ajoutés pour l'écran de correction : sans le brut ni la
+                # remise déjà appliquée, impossible d'afficher honnêtement
+                # « 300 000 facturés, 50 000 de remise » ni de pré-remplir la
+                # correction sans risquer de l'écraser.
+                "montant_brut": float(facture.montant_total or 0),
+                "montant_remise": float(facture.montant_remise or 0),
                 "montant_paye": float(facture.montant_paye or 0),
                 "montant_restant": float(facture.montant_restant or 0),
                 "statut": facture.statut,
@@ -3156,6 +3401,116 @@ def generer_recu_pdf(paiement_id: int, request: Request, db: Session = Depends(g
         headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
+@router.get("/paiements/recapitulatif-pdf")
+def generer_recapitulatif_pdf(
+    ids: str,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Récapitulatif PDF de plusieurs versements d'un même élève.
+
+    `ids` : les identifiants de paiement séparés par des virgules.
+
+    C'est un RÉCAPITULATIF, pas une facture : il rappelle des reçus déjà émis
+    et en fait la somme, sans créer de pièce comptable ni d'écriture. Il évite
+    simplement de remettre cinq feuillets à une famille qui en attend un.
+
+    Tous les versements doivent appartenir AU MÊME ÉLÈVE. Additionner les
+    paiements de plusieurs familles sur un seul document donnerait un total
+    que personne ne doit, et qu'aucun parent ne pourrait vérifier.
+    """
+    from app.core.documents_settings import get_documents_settings
+    from app.core.recapitulatif_paiements import generer_pdf_recapitulatif
+    # `Etablissement` n'est pas dans les imports de tête de ce module.
+    from app.models.academique import Etablissement
+
+    try:
+        identifiants = [int(x) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(400, "Liste d'identifiants invalide.")
+    if not identifiants:
+        raise HTTPException(400, "Aucun versement sélectionné.")
+    if len(identifiants) > 100:
+        raise HTTPException(400, "Trop de versements sélectionnés (100 au maximum).")
+
+    lignes = (
+        db.query(Paiement, Facture, Eleve, Classe, TypeFrais, AnneeScolaire)
+        .join(Facture, Paiement.facture_id == Facture.facture_id)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .join(AnneeScolaire, Inscription.annee_id == AnneeScolaire.annee_id)
+        .outerjoin(TypeFrais, Facture.type_frais_id == TypeFrais.type_frais_id)
+        .filter(
+            Paiement.paiement_id.in_(identifiants),
+            Classe.etablissement_id == etablissement_id,
+        )
+        .order_by(Paiement.date_paiement)
+        .all()
+    )
+    if not lignes:
+        raise HTTPException(404, "Aucun versement trouvé.")
+
+    eleves = {e.eleve_id for _, _, e, _, _, _ in lignes}
+    if len(eleves) > 1:
+        raise HTTPException(
+            400,
+            "Les versements sélectionnés appartiennent à plusieurs élèves. "
+            "Un récapitulatif ne concerne qu'un seul élève.",
+        )
+
+    # Un paiement annulé ne doit pas gonfler un total remis à une famille.
+    annules = [p.numero_recu for p, _, _, _, _, _ in lignes if (p.statut or "").upper() == "ANNULE"]
+    if annules:
+        raise HTTPException(
+            400,
+            f"Versement(s) annulé(s) dans la sélection : {', '.join(annules)}. "
+            "Retirez-les avant d'éditer le récapitulatif.",
+        )
+
+    _, _, eleve, classe, _, annee = lignes[0]
+    etablissement = db.query(Etablissement).filter(
+        Etablissement.etablissement_id == etablissement_id
+    ).first()
+    settings = get_documents_settings(db, etablissement_id)
+
+    donnees = {
+        "etablissement": {
+            "nom": etablissement.nom if etablissement else "—",
+            "adresse": getattr(etablissement, "adresse", None),
+            "telephone": getattr(etablissement, "telephone", None),
+            "couleur": settings.get("couleur_primaire") or "#1e3a8a",
+        },
+        "eleve": {
+            "nom_complet": f"{eleve.prenom or ''} {eleve.nom or ''}".strip(),
+            "matricule": eleve.matricule,
+            "classe": classe.libelle,
+        },
+        "annee": annee.libelle if annee else None,
+        "devise": (lignes[0][0].devise or "GNF"),
+        "paiements": [
+            {
+                "date": str(p.date_paiement) if p.date_paiement else "—",
+                "numero_recu": p.numero_recu,
+                # Le frais concerné ; à défaut la désignation libre de la
+                # facture (ventes au coup par coup), qui dit ce qui a été payé.
+                "motif": (tf.libelle if tf else None) or f.description or "—",
+                "mode_paiement": p.mode_paiement,
+                "montant": float(p.montant or 0),
+            }
+            for p, f, _, _, tf, _ in lignes
+        ],
+    }
+
+    contenu = generer_pdf_recapitulatif(donnees, settings)
+    nom = f"recapitulatif_{eleve.matricule or eleve.eleve_id}.pdf"
+    return Response(
+        content=contenu,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nom}"'},
+    )
+
+
 # ============================================================================
 # FOURNISSEURS — Liste des fournisseurs avec totaux
 # ============================================================================
@@ -3423,29 +3778,15 @@ def list_decaissements(
 # ANNULATION DE PAIEMENT — Annuler un paiement et reverser les montants
 # ============================================================================
 
-@router.put("/paiements/{paiement_id}/annuler")
-def annuler_paiement(
-    paiement_id: int,
-    data: dict,
-    db: Session = Depends(get_db),
-    etablissement_id: int = Depends(require_etablissement),
-):
-    """
-    Annule un paiement et reverse les montants sur la facture et l'échéance associée.
-    Champs attendus : motif (raison de l'annulation).
-    """
-    motif = data.get("motif", "")
-    if not motif:
-        raise HTTPException(status_code=400, detail="Le motif d'annulation est obligatoire")
+def _paiement_de_l_ecole(db: Session, paiement_id: int, etablissement_id: int) -> Paiement:
+    """Le paiement, ou 404 — jamais celui d'une autre école.
 
-    # Récupérer le paiement
+    Avant le Lot 2, n'importe quel `paiement_id` deviné pouvait être annulé,
+    avec reversement des montants, depuis n'importe quelle école.
+    """
     paiement = db.query(Paiement).filter(Paiement.paiement_id == paiement_id).first()
     if not paiement:
         raise HTTPException(status_code=404, detail="Paiement non trouvé")
-
-    # Vérifie que ce paiement appartient bien à l'établissement appelant —
-    # avant le Lot 2, n'importe quel paiement_id deviné pouvait être annulé
-    # (avec reversement des montants) depuis n'importe quelle école.
     proprietaire = (
         db.query(Classe.etablissement_id)
         .join(Inscription, Inscription.classe_id == Classe.classe_id)
@@ -3455,25 +3796,33 @@ def annuler_paiement(
     )
     if proprietaire != etablissement_id:
         raise HTTPException(status_code=404, detail="Paiement non trouvé")
+    return paiement
 
-    if paiement.statut == "ANNULE":
-        raise HTTPException(status_code=400, detail="Ce paiement est déjà annulé")
 
-    _verifier_annee_modifiable(db, paiement.annee_id)
+def _reverser_un_paiement(
+    db: Session, paiement: Paiement, motif: str, etablissement_id: int,
+) -> tuple:
+    """Annule UN paiement : facture, échéance, et contre-passation au journal.
 
+    Ne valide pas la transaction — l'appelant décide. C'est ce qui permet à
+    l'annulation en lot d'être tout ou rien : plusieurs reçus annulés en un
+    seul `commit`, ou aucun. Un lot à moitié passé laisserait une caisse
+    impossible à rapprocher.
+
+    Dupliquer ce code pour le lot aurait été plus rapide à écrire et
+    désastreux à vivre : deux chemins qui reversent de l'argent finissent par
+    diverger en silence, et c'est le journal comptable qui en paie le prix.
+    """
     montant_paiement = float(paiement.montant or 0)
 
-    # Mettre à jour le statut du paiement
     paiement.statut = "ANNULE"
     paiement.motif_annulation = motif
 
-    # Reverser les montants sur la facture
     facture = db.query(Facture).filter(Facture.facture_id == paiement.facture_id).first()
     if facture:
         facture.montant_paye = max(0, float(facture.montant_paye or 0) - montant_paiement)
         facture.montant_restant = float(facture.montant_net or 0) - float(facture.montant_paye)
 
-        # Mettre à jour le statut de la facture
         if facture.montant_paye <= 0:
             facture.statut = "EN_ATTENTE"
         elif facture.montant_restant <= 0:
@@ -3482,7 +3831,6 @@ def annuler_paiement(
         else:
             facture.statut = "PARTIELLEMENT_PAYEE"
 
-    # Reverser les montants sur l'échéance si applicable
     if paiement.echeance_id:
         echeance = db.query(EcheanceFacture).filter(
             EcheanceFacture.echeance_id == paiement.echeance_id
@@ -3513,6 +3861,32 @@ def annuler_paiement(
         ],
         etablissement_id=etablissement_id,
     )
+    return montant_paiement, facture
+
+
+@router.put("/paiements/{paiement_id}/annuler")
+def annuler_paiement(
+    paiement_id: int,
+    data: dict,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """
+    Annule un paiement et reverse les montants sur la facture et l'échéance associée.
+    Champs attendus : motif (raison de l'annulation).
+    """
+    motif = data.get("motif", "")
+    if not motif:
+        raise HTTPException(status_code=400, detail="Le motif d'annulation est obligatoire")
+
+    paiement = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+
+    if paiement.statut == "ANNULE":
+        raise HTTPException(status_code=400, detail="Ce paiement est déjà annulé")
+
+    _verifier_annee_modifiable(db, paiement.annee_id)
+
+    montant_paiement, facture = _reverser_un_paiement(db, paiement, motif, etablissement_id)
 
     db.commit()
 
@@ -3523,6 +3897,344 @@ def annuler_paiement(
         "motif": motif,
         "facture_statut": facture.statut if facture else None,
         "message": f"Paiement {paiement.numero_recu} annulé avec succès. Montant de {montant_paiement:,.0f} GNF reversé."
+    }
+
+
+# ============================================================================
+# CORRIGER CE QU'UN ÉLÈVE A PAYÉ — les doublons d'encaissement
+#
+# Un double-clic sur « Encaisser » produit deux versements, un triple-clic
+# trois. L'argent n'a été reçu qu'une fois : la caisse et le solde de l'élève
+# sont alors faux, et l'école devait retrouver chaque reçu facture par facture
+# pour les annuler un par un. Ces deux routes rassemblent le geste en un seul
+# endroit, au niveau de l'ÉLÈVE.
+# ============================================================================
+
+@router.get("/eleve/{eleve_id}/versements")
+def versements_de_l_eleve(
+    eleve_id: int,
+    annee_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Tous les versements valides d'un élève, avec les doublons repérés.
+
+    **La détection des doublons est le cœur de cette route.** Deux versements
+    du même montant, le même jour, sur la même facture, ne correspondent
+    presque jamais à deux paiements réels : c'est un clic répété. On les
+    regroupe et on marque tous ceux qui suivent le premier — à l'école de
+    confirmer, jamais au logiciel de supprimer tout seul.
+
+    Le premier de chaque groupe n'est jamais marqué : il y a bien eu un
+    paiement, et c'est son reçu que la famille détient.
+    """
+    eleve = db.query(Eleve).filter(
+        Eleve.eleve_id == eleve_id, Eleve.etablissement_id == etablissement_id
+    ).first()
+    if not eleve:
+        raise HTTPException(404, "Élève non trouvé")
+
+    annee_id = resoudre_annee(db, etablissement_id, annee_id)
+
+    requete = db.query(Paiement, Facture, TypeFrais).select_from(Paiement).join(
+        Facture, Facture.facture_id == Paiement.facture_id
+    ).join(
+        Inscription, Inscription.inscription_id == Facture.inscription_id
+    ).outerjoin(
+        # Jointure externe : le type de frais est facultatif (ventes libres).
+        # Une jointure stricte ferait disparaître ces versements, donc le
+        # doublon qu'on cherche justement à corriger.
+        TypeFrais, TypeFrais.type_frais_id == Facture.type_frais_id
+    ).filter(
+        Inscription.eleve_id == eleve_id,
+        Paiement.statut == "VALIDE",
+    )
+    if annee_id:
+        requete = requete.filter(Inscription.annee_id == annee_id)
+
+    lignes = requete.order_by(Paiement.date_paiement.asc(), Paiement.paiement_id.asc()).all()
+
+    # Groupes de doublons : même facture, même montant, même jour.
+    groupes: dict = {}
+    for p, f, _tf in lignes:
+        cle = (p.facture_id, round(float(p.montant or 0), 2), str(p.date_paiement))
+        groupes.setdefault(cle, []).append(p.paiement_id)
+
+    doublons = {}
+    for ids in groupes.values():
+        if len(ids) > 1:
+            for rang, pid in enumerate(ids):
+                doublons[pid] = {"rang": rang, "taille": len(ids)}
+
+    versements = []
+    total = 0.0
+    total_doublons = 0.0
+    for p, f, tf in lignes:
+        montant = float(p.montant or 0)
+        total += montant
+        info = doublons.get(p.paiement_id)
+        surnumeraire = bool(info and info["rang"] > 0)
+        if surnumeraire:
+            total_doublons += montant
+        versements.append({
+            "paiement_id": p.paiement_id,
+            "numero_recu": p.numero_recu,
+            "date_paiement": str(p.date_paiement),
+            "montant": montant,
+            "mode_paiement": p.mode_paiement,
+            "facture_id": f.facture_id,
+            "numero_facture": f.numero_facture,
+            "tarif": tf.libelle if tf else "Frais Scolaires (Standard)",
+            "montant_facture": float(f.montant_net or 0),
+            "facture_payee": float(f.montant_paye or 0),
+            # `doublon_probable` ne vaut jamais pour le premier d'un groupe :
+            # ce paiement-là a bien eu lieu.
+            "doublon_probable": surnumeraire,
+            "nb_identiques": info["taille"] if info else 1,
+        })
+
+    return {
+        "eleve_id": eleve.eleve_id,
+        "matricule": eleve.matricule,
+        "nom_complet": f"{eleve.prenom or ''} {eleve.nom or ''}".strip(),
+        "annee_id": annee_id,
+        "total_paye": round(total, 2),
+        "total_doublons_probables": round(total_doublons, 2),
+        "nb_versements": len(versements),
+        "versements": versements,
+    }
+
+
+class AnnulationEnLot(BaseModel):
+    paiement_ids: List[int]
+    motif: str
+
+
+@router.post("/paiements/annuler-en-lot")
+def annuler_paiements_en_lot(
+    data: AnnulationEnLot,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Annule plusieurs versements d'un coup — tout ou rien.
+
+    C'est la réponse au clic répété : l'école cocherait les reçus en trop et
+    corrige le solde de l'élève en un geste, au lieu de rouvrir chaque
+    facture. Chaque versement passe par exactement le même code que
+    l'annulation unitaire : reversement sur la facture, sur l'échéance, et
+    contre-passation au journal.
+
+    **Un seul `commit` pour tout le lot.** Si une annulation échoue, aucune
+    n'est enregistrée : un lot à moitié passé laisserait une caisse qu'on ne
+    peut plus rapprocher, et l'école sans savoir lesquelles reprendre.
+
+    Les reçus annulés restent lisibles avec leur motif — on ne fait jamais
+    disparaître une pièce dont un parent détient l'original.
+    """
+    motif = (data.motif or "").strip()
+    if len(motif) < 3:
+        raise HTTPException(400, "Le motif d'annulation est obligatoire — c'est lui qui rend la correction justifiable plus tard.")
+
+    ids = list(dict.fromkeys(data.paiement_ids or []))
+    if not ids:
+        raise HTTPException(400, "Aucun versement sélectionné.")
+    if len(ids) > 100:
+        raise HTTPException(400, "Trop de versements d'un coup (100 au maximum).")
+
+    annules = []
+    total = 0.0
+    for paiement_id in ids:
+        paiement = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+        if paiement.statut == "ANNULE":
+            # Refus explicite plutôt que silence : si un reçu est déjà annulé,
+            # l'écran de l'école n'est plus à jour et le reste de sa sélection
+            # est peut-être faux aussi. Mieux vaut qu'elle recharge.
+            raise HTTPException(
+                400,
+                f"Le versement {paiement.numero_recu} est déjà annulé. Rien n'a été modifié — "
+                "rechargez la liste des versements de cet élève.",
+            )
+        _verifier_annee_modifiable(db, paiement.annee_id)
+        montant, _facture = _reverser_un_paiement(db, paiement, motif, etablissement_id)
+        total += montant
+        annules.append({
+            "paiement_id": paiement.paiement_id,
+            "numero_recu": paiement.numero_recu,
+            "montant": montant,
+        })
+        _invalidate_dashboard_cache(etablissement_id, paiement.annee_id)
+
+    db.commit()
+
+    return {
+        "nb_annules": len(annules),
+        "total_annule": round(total, 2),
+        "motif": motif,
+        "annules": annules,
+        "message": (
+            f"{len(annules)} versement(s) annulé(s) pour un total de {total:,.0f} GNF. "
+            "Le solde de l'élève et la caisse sont corrigés."
+        ),
+    }
+
+
+# ============================================================================
+# CORRIGER UNE FACTURE ÉMISE PAR ERREUR — la remise
+# ============================================================================
+
+class RemiseFacture(BaseModel):
+    """Nouvelle remise TOTALE sur la facture, pas un supplément.
+
+    On remplace la valeur au lieu de l'ajouter : « la remise est de 50 000 »
+    est vérifiable d'un coup d'œil sur la facture, « on a ajouté 20 000 »
+    oblige à refaire l'historique des corrections pour savoir où l'on en est.
+    """
+    montant_remise: float
+    motif: str
+
+
+@router.put("/factures/{facture_id}/remise")
+def appliquer_remise_facture(
+    facture_id: int,
+    data: RemiseFacture,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """
+    Diminue le montant réclamé à un élève sur une facture déjà émise.
+
+    **Pourquoi une remise et non une modification du montant.** Une école se
+    trompe : mauvais tarif, élève exonéré oublié, frais facturé deux fois.
+    Il faut pouvoir corriger. Mais écraser le montant d'origine effacerait la
+    trace de l'erreur, et une facture dont le montant a changé sans
+    explication est une facture que personne ne peut plus justifier devant un
+    parent ni devant un contrôle. La remise, elle, dit les deux choses à la
+    fois : ce qui était dû, et ce qu'on a décidé de ne pas réclamer, avec le
+    motif.
+
+    Pour une facture entièrement erronée, la remise va jusqu'au montant
+    total : le reste à payer tombe à zéro et la ligne reste lisible.
+
+    **Le garde-fou qui compte** est le refus de descendre le net sous ce qui
+    a déjà été encaissé. Sinon on fabriquerait un trop-perçu silencieux : la
+    famille aurait payé plus que dû, sans que rien ne le signale ni ne
+    déclenche de remboursement. Dans ce cas il faut d'abord annuler le
+    versement en trop — ce que la route `/paiements/{id}/annuler` fait déjà,
+    en reversant l'argent et en contre-passant l'écriture.
+    """
+    motif = (data.motif or "").strip()
+    if len(motif) < 3:
+        raise HTTPException(400, "Le motif de la remise est obligatoire — c'est lui qui rend la correction justifiable plus tard.")
+
+    facture = _facture_de_l_ecole(db, facture_id, etablissement_id)
+    _verifier_annee_modifiable(db, facture.annee_id)
+
+    total = float(facture.montant_total or 0)
+    deja_paye = float(facture.montant_paye or 0)
+    ancienne_remise = float(facture.montant_remise or 0)
+    nouvelle_remise = round(float(data.montant_remise), 2)
+
+    if nouvelle_remise < 0:
+        raise HTTPException(400, "Une remise ne peut pas être négative. Pour réclamer davantage, diminuez la remise.")
+    if nouvelle_remise > total + 0.005:
+        raise HTTPException(
+            400,
+            f"La remise ({nouvelle_remise:,.0f} GNF) dépasse le montant facturé "
+            f"({total:,.0f} GNF). Au maximum, la remise annule la facture entière.",
+        )
+
+    nouveau_net = round(total - nouvelle_remise, 2)
+    if nouveau_net < deja_paye - 0.005:
+        raise HTTPException(
+            400,
+            f"Cet élève a déjà versé {deja_paye:,.0f} GNF sur cette facture. Une remise de "
+            f"{nouvelle_remise:,.0f} GNF ramènerait le montant dû à {nouveau_net:,.0f} GNF, "
+            f"soit moins que ce qui est encaissé — il y aurait un trop-perçu de "
+            f"{(deja_paye - nouveau_net):,.0f} GNF. Annulez d'abord le versement en trop "
+            "depuis l'historique des paiements, puis refaites cette remise.",
+        )
+
+    delta = round(nouvelle_remise - ancienne_remise, 2)
+    if abs(delta) < 0.005:
+        return {
+            "facture_id": facture.facture_id,
+            "numero_facture": facture.numero_facture,
+            "montant_remise": ancienne_remise,
+            "montant_net": float(facture.montant_net or 0),
+            "montant_restant": float(facture.montant_restant or 0),
+            "statut": facture.statut,
+            "message": "Cette remise est déjà celle qui est appliquée — rien n'a été modifié.",
+        }
+
+    facture.montant_remise = nouvelle_remise
+    facture.montant_net = nouveau_net
+    facture.montant_restant = round(nouveau_net - deja_paye, 2)
+
+    if facture.montant_restant <= 0:
+        facture.montant_restant = 0
+        facture.statut = "PAYEE"
+    elif deja_paye > 0:
+        facture.statut = "PARTIELLEMENT_PAYEE"
+    else:
+        facture.statut = "EN_ATTENTE"
+
+    # Comptabilité générale : la facturation avait constaté la créance
+    # (Débit 4111 Élèves / Crédit 7061 Produits). Une remise la diminue, donc
+    # elle écrit exactement l'inverse — sur le seul écart, pas sur le total :
+    # rejouer l'écriture entière à chaque correction gonflerait le journal de
+    # mouvements qui n'ont jamais eu lieu.
+    insc = db.query(Inscription).filter(Inscription.inscription_id == facture.inscription_id).first()
+    montant_ecriture = abs(delta)
+    remise_accordee = delta > 0
+    lignes_ecriture = [
+        {
+            "compte": COMPTE_PRODUITS_SCOLARITE,
+            "debit": montant_ecriture if remise_accordee else 0,
+            "credit": 0 if remise_accordee else montant_ecriture,
+            "classe_id": insc.classe_id if insc else None,
+            "description": facture.numero_facture,
+        },
+        {
+            "compte": COMPTE_ELEVES,
+            "debit": 0 if remise_accordee else montant_ecriture,
+            "credit": montant_ecriture if remise_accordee else 0,
+            "eleve_id": insc.eleve_id if insc else None,
+            "classe_id": insc.classe_id if insc else None,
+            "description": facture.numero_facture,
+        },
+    ]
+    generer_ecriture_auto(
+        db, date_ecriture=date_type.today(), journal_code="VE",
+        libelle=(
+            f"{'Remise' if remise_accordee else 'Reprise de remise'} sur "
+            f"{facture.numero_facture} — {motif}"
+        ),
+        reference=facture.numero_facture,
+        lignes=lignes_ecriture,
+        etablissement_id=etablissement_id,
+    )
+
+    db.commit()
+    db.refresh(facture)
+    _invalidate_dashboard_cache(etablissement_id, facture.annee_id)
+
+    return {
+        "facture_id": facture.facture_id,
+        "numero_facture": facture.numero_facture,
+        "montant_total": total,
+        "montant_remise": nouvelle_remise,
+        "montant_net": float(facture.montant_net or 0),
+        "montant_paye": deja_paye,
+        "montant_restant": float(facture.montant_restant or 0),
+        "statut": facture.statut,
+        "motif": motif,
+        "message": (
+            f"Remise de {nouvelle_remise:,.0f} GNF appliquée sur {facture.numero_facture}. "
+            f"Reste à payer : {float(facture.montant_restant or 0):,.0f} GNF."
+            if remise_accordee else
+            f"Remise ramenée à {nouvelle_remise:,.0f} GNF sur {facture.numero_facture}. "
+            f"Reste à payer : {float(facture.montant_restant or 0):,.0f} GNF."
+        ),
     }
 
 

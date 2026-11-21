@@ -2,11 +2,12 @@
 
 import { useApp } from '@/context/AppContext';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Calendar, ChevronRight, Loader2, Plus, Trash2, Edit3, X, Clock,
-    BookOpen, Wand2, CheckCircle2, AlertCircle, Users, MapPin, Search, Zap, Utensils, User
+    BookOpen, Wand2, CheckCircle2, AlertCircle, Users, MapPin, Search, Zap, Utensils, User,
+    Upload, FileText
 } from 'lucide-react';
 import api from '@/lib/api';
 import Link from 'next/link';
@@ -47,6 +48,55 @@ export default function EmploiDuTempsPage() {
     const [loading, setLoading] = useState(true);
     const [loadingEmploi, setLoadingEmploi] = useState(false);
     const [generating, setGenerating] = useState(false);
+
+    // Emploi du temps déposé en PDF, pour les écoles qui le construisent à la
+    // main. Le document est conservé et consultable — il ne devient pas des
+    // créneaux : interpréter une grille dessinée librement n'est jamais fiable,
+    // et une lecture fausse par endroits serait pire que pas de lecture.
+    const pdfRef = useRef<HTMLInputElement>(null);
+    const [pdfEnCours, setPdfEnCours] = useState(false);
+    const [pdfInfo, setPdfInfo] = useState<{ existe: boolean; depose_le: string | null } | null>(null);
+
+    const rafraichirPdfInfo = useCallback(async (classeId: number | null) => {
+        if (!classeId) { setPdfInfo(null); return; }
+        try {
+            const res = await api.get(`/api/emploi-du-temps/${classeId}/pdf/existe`);
+            setPdfInfo(res.data);
+        } catch { setPdfInfo(null); }
+    }, []);
+
+    useEffect(() => { rafraichirPdfInfo(selectedClasseId); }, [selectedClasseId, rafraichirPdfInfo]);
+
+    const deposerPdf = async (fichier: File) => {
+        if (!selectedClasseId || pdfEnCours) return;
+        setPdfEnCours(true);
+        try {
+            const corps = new FormData();
+            corps.append('fichier', fichier);
+            await api.post(`/api/emploi-du-temps/${selectedClasseId}/pdf`, corps);
+            await rafraichirPdfInfo(selectedClasseId);
+        } catch (err: any) {
+            // Le serveur dit précisément ce qui ne va pas — mauvais format,
+            // fichier déguisé, trop volumineux. Sa phrase vaut mieux qu'un
+            // message générique.
+            alert(err?.response?.data?.detail || "Le dépôt du PDF a échoué.");
+        } finally {
+            setPdfEnCours(false);
+            if (pdfRef.current) pdfRef.current.value = '';
+        }
+    };
+
+    const consulterPdf = async () => {
+        if (!selectedClasseId) return;
+        try {
+            const res = await api.get(`/api/emploi-du-temps/${selectedClasseId}/pdf`,
+                { responseType: 'blob' });
+            const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+            window.open(url, '_blank');
+        } catch {
+            alert("Impossible d'ouvrir le PDF.");
+        }
+    };
 
     // Modal
     const [showModal, setShowModal] = useState(false);
@@ -300,6 +350,34 @@ export default function EmploiDuTempsPage() {
                             {generating ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
                             Générer Auto
                         </button>
+                        {/* Emploi du temps déposé en PDF — pour les écoles qui le
+                            construisent à la main et l'ont déjà prêt. Le document est
+                            conservé et consultable ; il ne devient pas des créneaux. */}
+                        <input ref={pdfRef} type="file" accept="application/pdf" style={{ display: 'none' }}
+                            onChange={e => { const f = e.target.files?.[0]; if (f) deposerPdf(f); }} />
+                        <button onClick={() => pdfRef.current?.click()} disabled={pdfEnCours || !selectedClasseId}
+                            title="Déposer la grille horaire de cette classe en PDF"
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '6px',
+                                padding: '10px 18px', borderRadius: '12px', fontSize: '13px', fontWeight: 700,
+                                background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)',
+                                cursor: pdfEnCours || !selectedClasseId ? 'not-allowed' : 'pointer', backdropFilter: 'blur(4px)'
+                            }}>
+                            {pdfEnCours ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                            {pdfInfo?.existe ? 'Remplacer le PDF' : 'Déposer un PDF'}
+                        </button>
+                        {pdfInfo?.existe && (
+                            <button onClick={consulterPdf}
+                                title={`Déposé le ${new Date(pdfInfo.depose_le!).toLocaleString('fr-FR')}`}
+                                style={{
+                                    display: 'flex', alignItems: 'center', gap: '6px',
+                                    padding: '10px 18px', borderRadius: '12px', fontSize: '13px', fontWeight: 700,
+                                    background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid rgba(255,255,255,0.3)',
+                                    cursor: 'pointer', backdropFilter: 'blur(4px)'
+                                }}>
+                                <FileText size={14} /> Voir le PDF
+                            </button>
+                        )}
                         {/* Link to generated timetables */}
                         <Link href="/emploi-du-temps/generes" style={{
                             display: 'flex', alignItems: 'center', gap: '6px',

@@ -2,7 +2,10 @@
 SMARTSCHOOL API — Emploi du Temps
 CRUD complet + Génération intelligente basée sur les matières attribuées
 """
-from fastapi import APIRouter, Depends, HTTPException
+import os
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.core.database import get_db
@@ -14,6 +17,26 @@ from app.models.academique import (
 )
 
 router = APIRouter(prefix="/api/emploi-du-temps", tags=["Emploi du Temps"])
+
+# Emplois du temps déposés en PDF. Même volume `uploads` que les sujets
+# d'examen et les photos : il est sauvegardé chaque nuit et survit aux
+# redéploiements (voir scripts/sauvegarde-uploads.sh).
+DOSSIER_PDF = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "uploads", "emplois",
+)
+os.makedirs(DOSSIER_PDF, exist_ok=True)
+
+
+def _chemin_pdf(classe_id: int) -> str:
+    """Un seul PDF par classe : déposer remplace le précédent.
+
+    Le nom ne vient JAMAIS de celui envoyé par le navigateur — un nom de
+    fichier contrôlé par l'appelant peut contenir « ../ » et faire écrire
+    ailleurs sur le disque. On le fabrique à partir de l'identifiant, qui est
+    un entier validé.
+    """
+    return os.path.join(DOSSIER_PDF, f"classe_{int(classe_id)}.pdf")
 
 
 # ── Helpers d'isolation (Lot 9) ───────────────────────────────────────────
@@ -382,3 +405,115 @@ def get_emploi_stats(db: Session = Depends(get_db), etablissement_id: int = Depe
         "classes_avec_emploi": classes_avec,
         "classes_total": classes_total,
     }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# EMPLOI DU TEMPS DÉPOSÉ EN PDF
+#
+# Beaucoup d'écoles construisent leur emploi du temps à la main, sur papier
+# ou dans un tableur, et le diffusent en PDF. Les saisir créneau par créneau
+# dans le logiciel représente des heures de travail pour un résultat qu'elles
+# ont déjà. On leur permet donc de déposer leur document tel quel.
+#
+# CE N'EST PAS UNE LECTURE AUTOMATIQUE du PDF. Le document est conservé et
+# consultable, rien de plus : il ne devient pas des créneaux dans la base, ne
+# nourrit ni les séances ni le cahier de texte. Interpréter une grille
+# horaire dessinée librement n'est jamais fiable, et une lecture fausse à
+# 10 % serait pire que pas de lecture du tout — personne ne saurait quelles
+# lignes se méfier. La saisie créneau par créneau reste là pour qui veut
+# l'exploitation complète.
+# ════════════════════════════════════════════════════════════════════════
+
+@router.post("/{classe_id}/pdf", status_code=201)
+async def deposer_emploi_pdf(
+    classe_id: int,
+    fichier: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Dépose l'emploi du temps d'une classe en PDF. Remplace le précédent."""
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+
+    if (fichier.content_type or "") != "application/pdf":
+        raise HTTPException(400, "Seuls les fichiers PDF sont acceptés.")
+
+    contenu = await fichier.read()
+    if not contenu:
+        raise HTTPException(400, "Le fichier est vide.")
+    # 10 Mo : largement de quoi contenir une grille horaire, même scannée.
+    if len(contenu) > 10 * 1024 * 1024:
+        raise HTTPException(400, "Fichier trop volumineux (10 Mo au maximum).")
+    # Le type déclaré par le navigateur ne prouve rien : on vérifie la
+    # signature réelle du fichier. Sans ça, n'importe quoi renommé en .pdf
+    # serait accepté puis servi à tous les parents.
+    if contenu[:4] != b"%PDF":
+        raise HTTPException(400, "Ce fichier n'est pas un PDF valide.")
+
+    with open(_chemin_pdf(classe_id), "wb") as f:
+        f.write(contenu)
+
+    return {
+        "message": f"Emploi du temps de {classe.libelle} déposé.",
+        "classe_id": classe_id,
+        "taille": len(contenu),
+    }
+
+
+@router.get("/{classe_id}/pdf")
+def lire_emploi_pdf(
+    classe_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Renvoie l'emploi du temps déposé pour cette classe."""
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    chemin = _chemin_pdf(classe_id)
+    if not os.path.exists(chemin):
+        raise HTTPException(404, "Aucun emploi du temps déposé pour cette classe.")
+
+    with open(chemin, "rb") as f:
+        contenu = f.read()
+    nom = f"emploi_du_temps_{classe.code or classe_id}.pdf"
+    return Response(
+        content=contenu,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nom}"'},
+    )
+
+
+@router.get("/{classe_id}/pdf/existe")
+def emploi_pdf_existe(
+    classe_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Y a-t-il un PDF déposé, et de quand date-t-il ?
+
+    Sert à l'écran pour afficher « consulter » plutôt que « déposer », sans
+    avoir à télécharger le document entier juste pour le savoir.
+    """
+    _classe_ou_404(db, classe_id, etablissement_id)
+    chemin = _chemin_pdf(classe_id)
+    if not os.path.exists(chemin):
+        return {"existe": False, "depose_le": None, "taille": None}
+    stat = os.stat(chemin)
+    return {
+        "existe": True,
+        "depose_le": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "taille": stat.st_size,
+    }
+
+
+@router.delete("/{classe_id}/pdf")
+def supprimer_emploi_pdf(
+    classe_id: int,
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Retire l'emploi du temps déposé pour cette classe."""
+    _classe_ou_404(db, classe_id, etablissement_id)
+    chemin = _chemin_pdf(classe_id)
+    if not os.path.exists(chemin):
+        raise HTTPException(404, "Aucun emploi du temps déposé pour cette classe.")
+    os.remove(chemin)
+    return {"message": "Emploi du temps retiré."}

@@ -5,7 +5,7 @@ Toute la logique de calcul (coefficients, moyennes, mentions, barèmes) vit dans
 app/services/notation.py — source unique partagée avec portail_enseignant.py.
 Ce module ne fait qu'exposer les routes HTTP.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
 from typing import List, Optional
@@ -1024,6 +1024,201 @@ def apercu_resultats_annuels(classe_id: int, db: Session = Depends(get_db), etab
     res["classe_examen"] = bool(niveau and niveau.est_examen == "O")
     res["examen_national"] = niveau.examen_national if niveau else None
     return res
+
+
+# ════════════════════════════════════════════════════════════
+# IMPORTER LES RÉSULTATS D'UNE CLASSE
+#
+# Pour les écoles qui tiennent déjà leurs moyennes dans un classeur. La saisie
+# épreuve par épreuve reste là, inchangée : ceci est une porte d'entrée de
+# plus, pas un remplacement. Voir app/services/import_resultats.py.
+# ════════════════════════════════════════════════════════════
+
+def _trimestre_de_la_classe(db: Session, classe: Classe, trimestre_id: Optional[int]) -> Optional[Trimestre]:
+    """Vérifie que la période appartient bien à l'année de cette classe.
+
+    Sans ce contrôle, un `trimestre_id` d'une autre année — ou d'une autre
+    école — écrirait des bulletins rattachés à une période qui n'a rien à voir,
+    et le classement annuel agrégerait des moyennes de deux années.
+    """
+    if trimestre_id is None:
+        return None
+    trimestre = db.query(Trimestre).filter(
+        Trimestre.trimestre_id == trimestre_id,
+        Trimestre.annee_id == classe.annee_id,
+    ).first()
+    if not trimestre:
+        raise HTTPException(404, "Période introuvable pour l'année de cette classe.")
+    return trimestre
+
+
+@router.get("/classe/{classe_id}/modele-import-resultats")
+def modele_import_resultats(
+    classe_id: int,
+    format: str = Query("DETAILLE", description="DETAILLE (une colonne par matière) ou SIMPLE (moyenne seule)"),
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Modèle à remplir, déjà rempli des élèves de la classe.
+
+    C'est la pièce qui fait tenir l'import : l'école n'a pas à devenir
+    experte en intitulés de colonnes, et les noms correspondent forcément aux
+    siens puisqu'ils sortent de sa propre base. Le rapprochement par matricule
+    réussit alors à coup sûr.
+    """
+    import csv as _csv
+    import io as _io
+    from fastapi.responses import StreamingResponse
+    from app.services.import_resultats import FORMAT_DETAILLE, FORMAT_SIMPLE, matieres_de_la_classe
+
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    format_retenu = (format or FORMAT_DETAILLE).upper()
+    if format_retenu not in (FORMAT_DETAILLE, FORMAT_SIMPLE):
+        raise HTTPException(400, "format doit valoir DETAILLE ou SIMPLE.")
+
+    eleves = db.query(Inscription, Eleve).join(
+        Eleve, Eleve.eleve_id == Inscription.eleve_id
+    ).filter(
+        Inscription.classe_id == classe_id,
+        Inscription.statut == "ACTIVE",
+    ).order_by(Eleve.nom, Eleve.prenom).all()
+
+    entetes = ["Matricule", "Nom", "Prenom"]
+    matieres: List[str] = []
+    if format_retenu == FORMAT_DETAILLE:
+        vues = {}
+        for info in matieres_de_la_classe(db, classe_id).values():
+            vues[info["matiere_id"]] = info["libelle"]
+        matieres = sorted(vues.values())
+        if not matieres:
+            raise HTTPException(
+                400,
+                "Aucune matière active n'est rattachée à cette classe : le modèle détaillé "
+                "n'aurait aucune colonne. Rattachez les matières, ou utilisez le modèle "
+                "« moyenne générale seule ».",
+            )
+        entetes += matieres
+    entetes.append("Moyenne")
+
+    tampon = _io.StringIO()
+    tampon.write("﻿")  # Excel francophone ouvre alors l'UTF-8 sans abîmer les accents
+    writer = _csv.writer(tampon, delimiter=";", lineterminator="\r\n")
+    writer.writerow(entetes)
+    for _insc, el in eleves:
+        writer.writerow([el.matricule or "", el.nom or "", el.prenom or ""] + [""] * len(matieres) + [""])
+
+    nom_fichier = f"resultats-{classe.code or classe.classe_id}-{format_retenu.lower()}.csv"
+    return StreamingResponse(
+        _io.BytesIO(tampon.getvalue().encode("utf-8")),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{nom_fichier}"'},
+    )
+
+
+@router.post("/classe/{classe_id}/import-resultats")
+async def importer_resultats_classe(
+    classe_id: int,
+    fichier: UploadFile = File(...),
+    trimestre_id: Optional[int] = Query(None, description="Période concernée ; vide = résultat annuel direct"),
+    format: Optional[str] = Query(None, description="DETAILLE, SIMPLE, ou vide pour laisser détecter"),
+    note_sur: Optional[float] = Query(None, description="Barème du fichier si différent de celui de l'école"),
+    dry_run: bool = Query(False, description="true : analyse sans rien écrire"),
+    db: Session = Depends(get_db),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Importe les moyennes d'une classe depuis un tableau (CSV ou Excel).
+
+    Deux formats, au choix de l'école :
+
+    - **une colonne par matière** — le bulletin a le détail des matières ;
+    - **une seule colonne de moyenne générale** — se remplit en cinq minutes,
+      le classement et les mentions sortent, le bulletin n'a pas de détail.
+
+    Le format est déduit des en-têtes ; `format` permet de l'imposer.
+
+    Avec `trimestre_id`, l'import écrit le bulletin de cette période : une
+    école qui importe chaque semestre obtient ses résultats de fin d'année par
+    l'agrégation habituelle, sans rien faire de plus. Sans `trimestre_id`, il
+    écrit directement le bulletin annuel.
+
+    **`dry_run=true` n'écrit rien et rend le même rapport.** À utiliser
+    d'abord : l'import touche le classement de toute une classe, et il vaut
+    mieux voir ce qui ne se rapproche pas avant que ce soit enregistré.
+
+    Un élève du fichier qui ne correspond à personne n'est jamais créé, et un
+    élève de la classe absent du fichier n'est jamais effacé — les deux sont
+    listés dans le rapport.
+    """
+    from app.services.import_tabulaire import FichierIllisible, lire_lignes
+    from app.services.import_resultats import ImportImpossible, analyser, appliquer
+
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    verifier_annee_modifiable(db, classe.annee_id)
+    trimestre = _trimestre_de_la_classe(db, classe, trimestre_id)
+
+    contenu = await fichier.read()
+    try:
+        colonnes, lignes = lire_lignes(fichier.filename or "resultats.csv", contenu)
+    except FichierIllisible as e:
+        raise HTTPException(400, str(e))
+    if not lignes:
+        raise HTTPException(400, "Le fichier ne contient aucune ligne d'élève sous l'en-tête.")
+
+    try:
+        analyse = analyser(
+            db, classe, colonnes, lignes,
+            format_impose=format, note_sur=note_sur, etablissement_id=etablissement_id,
+        )
+    except ImportImpossible as e:
+        raise HTTPException(400, str(e))
+
+    periode_libelle = trimestre.libelle if trimestre else "Année complète"
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "periode": periode_libelle,
+            "trimestre_id": trimestre_id,
+            **{k: v for k, v in analyse.items() if k != "rapproches"},
+            # Aperçu seulement : la liste complète ferait une réponse énorme
+            # pour une classe de soixante, alors qu'on veut juste vérifier que
+            # les bons élèves ont été reconnus.
+            "apercu": [
+                {
+                    "matricule": r["eleve"]["matricule"],
+                    "nom_complet": r["eleve"]["nom_complet"],
+                    "moyenne_generale": r["moyenne_generale"],
+                    "moyenne_fournie": r["moyenne_fournie"],
+                    "moyenne_calculee": r["moyenne_calculee"],
+                    "nb_matieres": len(r["notes"]),
+                }
+                for r in analyse["rapproches"][:10]
+            ],
+            "message": (
+                f"{analyse['nb_rapproches']} élève(s) rapproché(s) sur {analyse['lignes_lues']} ligne(s) lue(s). "
+                "Rien n'a été enregistré."
+            ),
+        }
+
+    try:
+        resultat = appliquer(
+            db, classe, analyse,
+            trimestre_id=trimestre_id, etablissement_id=etablissement_id,
+        )
+    except ImportImpossible as e:
+        raise HTTPException(400, str(e))
+
+    resultat["dry_run"] = False
+    resultat["periode"] = periode_libelle
+    resultat["message"] = (
+        f"{resultat['bulletins_crees'] + resultat['bulletins_mis_a_jour']} bulletin(s) "
+        f"enregistré(s) pour {classe.libelle} — {periode_libelle}. "
+        + (f"{len(resultat['non_rapproches'])} ligne(s) non rapprochée(s). "
+           if resultat["non_rapproches"] else "")
+        + (f"{len(resultat['eleves_sans_resultat'])} élève(s) de la classe sans résultat dans le fichier."
+           if resultat["eleves_sans_resultat"] else "")
+    ).strip()
+    return resultat
 
 
 @router.get("/classe/{classe_id}/fiche-annuelle/pdf")
