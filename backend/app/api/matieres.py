@@ -61,7 +61,7 @@ def list_matieres(cycle_id: Optional[int] = None, db: Session = Depends(get_db),
     )
     if cycle_id:
         query = query.filter(Matiere.cycle_id == cycle_id)
-    return query.order_by(Matiere.categorie, Matiere.libelle).all()
+    return query.order_by(Matiere.categorie, Matiere.libelle, Matiere.matiere_id).all()
 
 
 @router.get("/stats")
@@ -783,7 +783,7 @@ def get_matieres_par_cycle_groupes(db: Session = Depends(get_db), etablissement_
     for c in cycles:
         matieres = db.query(Matiere).filter(
             Matiere.cycle_id == c.cycle_id
-        ).order_by(Matiere.categorie, Matiere.libelle).all()
+        ).order_by(Matiere.categorie, Matiere.libelle, Matiere.matiere_id).all()
         result.append({
             "cycle_id": c.cycle_id,
             "cycle_code": c.code,

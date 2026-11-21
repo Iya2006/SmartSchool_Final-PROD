@@ -108,7 +108,7 @@ def list_messages(
         sous_requete_messages_masques(db, viewer_type, viewer_id)
     ))
 
-    msgs = q.order_by(desc(Message.date_envoi)).limit(100).all()
+    msgs = q.order_by(desc(Message.date_envoi), desc(Message.message_id)).limit(100).all()
 
     result = []
     for m in msgs:
@@ -877,7 +877,7 @@ def get_parents_list(db: Session = Depends(get_db), etablissement_id: int = Depe
     if not eleve_ids:
         return []
 
-    liens = db.query(EleveParent).filter(EleveParent.eleve_id.in_(eleve_ids)).all()
+    liens = db.query(EleveParent).filter(EleveParent.eleve_id.in_(eleve_ids)).order_by(EleveParent.eleve_parent_id).all()
     if not liens:
         return []
     parent_ids = list({lien.parent_id for lien in liens})
@@ -887,7 +887,7 @@ def get_parents_list(db: Session = Depends(get_db), etablissement_id: int = Depe
 
     parents = db.query(Parent).filter(
         Parent.parent_id.in_(parent_ids), Parent.statut == "ACTIF"
-    ).order_by(Parent.nom).all()
+    ).order_by(Parent.nom, Parent.prenom, Parent.parent_id).all()
 
     inscriptions_actives: Dict[int, Inscription] = {}
     for insc in db.query(Inscription).filter(
@@ -949,7 +949,7 @@ def list_messages_parents(db: Session = Depends(get_db), etablissement_id: int =
         ),
         # « Supprimer pour moi » : même boîte admin (partagée par établissement).
         Message.message_id.notin_(sous_requete_messages_masques(db, "ADMIN", etablissement_id)),
-    ).order_by(desc(Message.date_envoi)).limit(200).all()
+    ).order_by(desc(Message.date_envoi), desc(Message.message_id)).limit(200).all()
 
     parent_ids = {m.expediteur_id for m in msgs if m.expediteur_type == "PARENT" and m.expediteur_id}
     parent_ids |= {m.destinataire_id for m in msgs if m.destinataire_type == "PARENT" and m.destinataire_id}
@@ -1128,7 +1128,7 @@ def get_parents_annuaire(
         )
 
     response.headers["X-Total-Count"] = str(query.count())
-    parents = query.order_by(Parent.prenom, Parent.nom).offset(skip).limit(limit).all()
+    parents = query.order_by(Parent.prenom, Parent.nom, Parent.parent_id).offset(skip).limit(limit).all()
     if not parents:
         return []
 

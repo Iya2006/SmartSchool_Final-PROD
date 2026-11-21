@@ -555,14 +555,14 @@ def get_ecritures(db: Session = Depends(get_db), etablissement_id: int = Depends
     ecritures = (
         db.query(EcritureComptable)
         .filter(EcritureComptable.etablissement_id == etablissement_id)
-        .order_by(EcritureComptable.date_ecriture.desc(), EcritureComptable.created_at.desc())
+        .order_by(EcritureComptable.date_ecriture.desc(), EcritureComptable.created_at.desc(), EcritureComptable.ecriture_id.desc())
         .limit(100)
         .all()
     )
     result = []
     for e in ecritures:
         journal = db.query(JournalComptable).filter(JournalComptable.journal_id == e.journal_id).first()
-        lignes = db.query(LigneEcriture).filter(LigneEcriture.ecriture_id == e.ecriture_id).all()
+        lignes = db.query(LigneEcriture).filter(LigneEcriture.ecriture_id == e.ecriture_id).order_by(LigneEcriture.ligne_id).all()
         lignes_formattees = []
         for l in lignes:
             compte = db.query(CompteComptable).filter(CompteComptable.compte_id == l.compte_id).first()

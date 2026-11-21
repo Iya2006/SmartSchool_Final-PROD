@@ -385,7 +385,7 @@ def get_edt_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Session
         .filter(
             CreneauEmploi.classe_id == inscription.classe_id,
             CreneauEmploi.statut == "ACTIVE"
-        ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut).all()
+        ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut, CreneauEmploi.creneau_id).all()
 
     result = []
     for c, mat, ens in creneaux:
@@ -680,7 +680,7 @@ def get_enseignants_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db:
         Matiere, Affectation.matiere_id == Matiere.matiere_id
     ).filter(
         Affectation.classe_id == insc.classe_id
-    ).all()
+    ).order_by(Matiere.libelle, Matiere.matiere_id, Affectation.affectation_id).all()
 
     result = []
     seen = set()

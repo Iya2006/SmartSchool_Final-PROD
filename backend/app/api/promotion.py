@@ -322,7 +322,7 @@ def apercu_cloture_classe(classe_id: int, db: Session = Depends(get_db), etablis
         Eleve, Inscription.eleve_id == Eleve.eleve_id
     ).filter(
         Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     deja_calcule = any(insc.statut_promotion for insc, _ in inscriptions)
     resultats_calc = {} if deja_calcule else _resultats_annuels_bulk(
@@ -763,7 +763,7 @@ def lister_resultats_officiels(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
     ).filter(
         Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     officiels = _resultats_officiels_bulk(db, [i.inscription_id for i, _ in inscriptions])
 
@@ -954,7 +954,7 @@ def modele_import_resultats_officiels(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
     ).filter(
         Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     tampon = _io.StringIO()
     # `;` et BOM UTF-8 : c'est ce qu'attend Excel en configuration française,

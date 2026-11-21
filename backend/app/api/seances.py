@@ -194,7 +194,7 @@ def get_historique_seances(
     )
     if classe_id:
         q = q.filter(Seance.classe_id == classe_id)
-    seances = q.order_by(Seance.date_seance.desc(), Seance.heure_debut_prevue.desc()).limit(200).all()
+    seances = q.order_by(Seance.date_seance.desc(), Seance.heure_debut_prevue.desc(), Seance.seance_id.desc()).limit(200).all()
     return [_serialize_seance(db, s) for s in seances]
 
 
@@ -483,7 +483,7 @@ def list_seances(
     if statut:
         q = q.filter(Seance.statut == statut)
 
-    seances = q.order_by(Seance.date_seance.desc(), Seance.heure_debut_prevue.desc()).limit(500).all()
+    seances = q.order_by(Seance.date_seance.desc(), Seance.heure_debut_prevue.desc(), Seance.seance_id.desc()).limit(500).all()
     resultats = [_serialize_seance(db, s) for s in seances]
 
     # ── Appels de la DEMI-JOURNÉE (primaire) ──────────────────────────────

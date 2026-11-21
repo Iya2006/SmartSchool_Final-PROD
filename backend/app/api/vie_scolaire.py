@@ -63,7 +63,7 @@ def list_presences(
     if demi_journee:
         query = query.filter(Presence.demi_journee == demi_journee)
 
-    results = query.order_by(Eleve.nom, Eleve.prenom).all()
+    results = query.order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id, Presence.date_presence, Presence.presence_id).all()
     return [
         {
             "presence_id": r.presence_id,
@@ -231,7 +231,7 @@ def feuille_appel(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
     ).filter(
         Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE"
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     inscriptions = [l.inscription_id for l in lignes] or [0]
     if seance is not None:
@@ -634,7 +634,7 @@ def enseignants_par_cycle(
     profs = db.query(Enseignant).filter(
         Enseignant.etablissement_id == etablissement_id,
         Enseignant.statut == "ACTIF",
-    ).order_by(Enseignant.nom, Enseignant.prenom).all()
+    ).order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id).all()
 
     # Combien d'affectations chaque professeur a-t-il dans chaque cycle ?
     comptes = db.query(

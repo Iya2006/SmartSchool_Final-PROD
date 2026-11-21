@@ -59,7 +59,7 @@ def get_lycee_series_coefficients(
         classes = db.query(Classe).filter(
             Classe.niveau_id.in_(niveau_ids), Classe.statut == "ACTIVE",
             Classe.etablissement_id == etablissement_id,
-        ).all()
+        ).order_by(Classe.classe_id).all()
         classe_ids = [c.classe_id for c in classes]
 
         # Get unique matières for these classes via JOIN (avoids N+1)
@@ -73,6 +73,7 @@ def get_lycee_series_coefficients(
                     ClasseMatiere.classe_id == ref_class_id,
                     ClasseMatiere.est_active == "O"
                 )
+                .order_by(Matiere.libelle, Matiere.matiere_id)
                 .all()
             )
             for cm, m in rows:
@@ -290,7 +291,7 @@ def get_classe_eleves(classe_id: int, db: Session = Depends(get_db), etablisseme
     ).filter(
         Inscription.classe_id == classe_id,
         Inscription.statut == "ACTIVE"
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     return [
         {
@@ -561,7 +562,7 @@ def get_classe_profil(classe_id: int, db: Session = Depends(get_db), etablisseme
         Inscription, Eleve.eleve_id == Inscription.eleve_id
     ).filter(
         Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE"
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
     
     # Historique de redoublement — compté en UNE requête groupée (pas une par
     # élève) sur TOUTES les inscriptions passées de cette classe, quelle que

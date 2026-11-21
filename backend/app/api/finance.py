@@ -1074,7 +1074,7 @@ def list_factures(
     total = query.count()
     response.headers["X-Total-Count"] = str(total)
 
-    results = query.order_by(Facture.date_facture.desc()).offset(skip).limit(limit).all()
+    results = query.order_by(Facture.date_facture.desc(), Facture.facture_id.desc()).offset(skip).limit(limit).all()
 
     factures = []
     for facture, eleve, classe, type_frais in results:
@@ -1495,7 +1495,7 @@ def list_paiements(
 
     results = (
         query
-        .order_by(Paiement.date_paiement.desc())
+        .order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc())
         .offset(skip).limit(limit).all()
     )
 
@@ -1750,7 +1750,7 @@ def situation_encaissement_classe(
             Inscription.annee_id == annee_id,
             Inscription.statut == "ACTIVE",
         )
-        .order_by(Eleve.nom, Eleve.prenom)
+        .order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id)
         .all()
     )
     if not inscriptions:
@@ -2096,7 +2096,7 @@ def stats_depenses(annee_id: Optional[int] = None, db: Session = Depends(get_db)
         Depense.categorie,
         func.sum(Depense.montant).label("total"),
         func.count(Depense.depense_id).label("nb"),
-    ).group_by(Depense.categorie).order_by(func.sum(Depense.montant).desc()).all()
+    ).group_by(Depense.categorie).order_by(func.sum(Depense.montant).desc(), Depense.categorie).all()
 
     total_valide = query_base.filter(Depense.statut == "VALIDE").with_entities(
         func.coalesce(func.sum(Depense.montant), 0)
@@ -2187,7 +2187,7 @@ def list_impayes(
         echeances = db.query(EcheanceFacture).filter(
             EcheanceFacture.facture_id == facture.facture_id,
             EcheanceFacture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"])
-        ).order_by(EcheanceFacture.date_limite).all()
+        ).order_by(EcheanceFacture.date_limite, EcheanceFacture.echeance_id).all()
 
         # Calculer les jours de retard depuis l'échéance la plus ancienne ;
         # à défaut d'échéancier (facture à paiement unique, sans EcheanceFacture),
@@ -2283,7 +2283,7 @@ def list_retards(
     if niveau_id:
         query = query.filter(Classe.niveau_id == niveau_id)
 
-    results = query.order_by(EcheanceFacture.date_limite).offset(skip).limit(limit).all()
+    results = query.order_by(EcheanceFacture.date_limite, EcheanceFacture.echeance_id).offset(skip).limit(limit).all()
 
     retards = []
     for echeance, facture, eleve, classe in results:
@@ -2345,7 +2345,7 @@ def tableau_solvabilite(
     if classe_id:
         query = query.filter(Classe.classe_id == classe_id)
 
-    results = query.order_by(Eleve.nom, Eleve.prenom).all()
+    results = query.order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     # Précharge TOUTES les factures des inscriptions concernées en une seule
     # requête plutôt qu'une par élève dans la boucle ci-dessous — à l'échelle
@@ -2453,7 +2453,7 @@ def solde_eleve(eleve_id: int, annee_id: Optional[int] = None, db: Session = Dep
             paiements = db.query(Paiement).filter(
                 Paiement.facture_id == facture.facture_id,
                 Paiement.statut == "VALIDE"
-            ).order_by(Paiement.date_paiement.desc()).all()
+            ).order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc()).all()
 
             echeances = db.query(EcheanceFacture).filter(
                 EcheanceFacture.facture_id == facture.facture_id
@@ -3285,7 +3285,7 @@ def notifier_impayes(
             echeance = (
                 db.query(EcheanceFacture)
                 .filter(EcheanceFacture.facture_id == facture.facture_id, EcheanceFacture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"]))
-                .order_by(EcheanceFacture.date_limite)
+                .order_by(EcheanceFacture.date_limite, EcheanceFacture.echeance_id)
                 .first()
             )
             date_limite = str(echeance.date_limite) if echeance and echeance.date_limite else str(today)
@@ -3354,7 +3354,7 @@ def get_recu(paiement_id: int, request: Request = None, db: Session = Depends(ge
     historique = (
         db.query(Paiement)
         .filter(Paiement.facture_id == facture.facture_id, Paiement.statut == "VALIDE")
-        .order_by(Paiement.date_paiement.desc())
+        .order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc())
         .all()
     )
     # Clés historiques conservées (recu, facture.type_frais, historique_paiements)
@@ -3538,7 +3538,7 @@ def list_fournisseurs(
             Depense.fournisseur != ""
         )
         .group_by(Depense.fournisseur)
-        .order_by(func.sum(Depense.montant).desc())
+        .order_by(func.sum(Depense.montant).desc(), Depense.fournisseur)
         .all()
     )
 
@@ -3729,7 +3729,7 @@ def list_decaissements(
     response.headers["X-Total-Count"] = str(total)
 
     # Récupérer les transactions
-    transactions = query.order_by(Depense.date_depense.desc()).offset(skip).limit(limit).all()
+    transactions = query.order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).offset(skip).limit(limit).all()
 
     # Calculer les totaux par catégorie (sur la même base filtrée, sans pagination)
     query_totaux = db.query(
@@ -3747,7 +3747,7 @@ def list_decaissements(
     if categorie:
         query_totaux = query_totaux.filter(Depense.categorie == categorie)
 
-    totaux_par_categorie = query_totaux.group_by(Depense.categorie).all()
+    totaux_par_categorie = query_totaux.group_by(Depense.categorie).order_by(Depense.categorie).all()
 
     # Total général
     total_general = sum(float(r.total) for r in totaux_par_categorie)
@@ -4282,7 +4282,7 @@ def list_acomptes(
 
     results = (
         query
-        .order_by(Paiement.date_paiement.desc())
+        .order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc())
         .offset(skip).limit(limit)
         .all()
     )
@@ -4551,7 +4551,7 @@ def list_employes_salaires(
         )
         if _debut_annee is not None:
             _q_ens = _q_ens.filter(Depense.date_depense >= _debut_annee)
-        depenses = _q_ens.order_by(Depense.date_depense.desc()).limit(12).all()
+        depenses = _q_ens.order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).limit(12).all()
 
         historique = []
         for dep in depenses:
@@ -4609,7 +4609,7 @@ def list_employes_salaires(
         )
         if _debut_annee is not None:
             _q_pers = _q_pers.filter(Depense.date_depense >= _debut_annee)
-        depenses = _q_pers.order_by(Depense.date_depense.desc()).limit(12).all()
+        depenses = _q_pers.order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).limit(12).all()
 
         historique = []
         for dep in depenses:
@@ -5087,13 +5087,13 @@ def _lister_employes_actifs(db: Session, etablissement_id: int):
     refs = []
     for ens in db.query(Enseignant).filter(
         Enseignant.etablissement_id == etablissement_id, Enseignant.statut == "ACTIF"
-    ).all():
+    ).order_by(Enseignant.enseignant_id).all():
         refs.append(f"ENS_{ens.enseignant_id}")
     for pers in db.query(Utilisateur).filter(
         Utilisateur.etablissement_id == etablissement_id,
         Utilisateur.statut == "ACTIF",
         Utilisateur.role != "SUPER_ADMIN",
-    ).all():
+    ).order_by(Utilisateur.utilisateur_id).all():
         refs.append(f"PERS_{pers.utilisateur_id}")
     return refs
 
@@ -5694,7 +5694,7 @@ def historique_salaire_endpoint(employe_id: str, db: Session = Depends(get_db), 
         Depense.categorie == "SALAIRES",
         Depense.statut == "VALIDE",
         Depense.etablissement_id == etablissement_id,
-    ).order_by(Depense.date_depense.desc()).all()
+    ).order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).all()
     
     return [
         {
@@ -6122,7 +6122,7 @@ def preparer_la_paie(
     enseignants = db.query(Enseignant).filter(
         Enseignant.etablissement_id == etablissement_id,
         Enseignant.statut == "ACTIF",
-    ).order_by(Enseignant.nom, Enseignant.prenom).all()
+    ).order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id).all()
 
     # Un appel pour tout le monde, pas un par personne : la version en boucle
     # lancait quatre requetes par enseignant, soit plus de deux cents sur un
@@ -6154,7 +6154,7 @@ def preparer_la_paie(
         Utilisateur.etablissement_id == etablissement_id,
         Utilisateur.statut == "ACTIF",
         Utilisateur.role != "SUPER_ADMIN",
-    ).order_by(Utilisateur.nom, Utilisateur.prenom).all():
+    ).order_by(Utilisateur.nom, Utilisateur.prenom, Utilisateur.utilisateur_id).all():
         r = _paie.salaire_personnel(db, u.utilisateur_id)
         lignes.append({
             "type": "PERSONNEL",

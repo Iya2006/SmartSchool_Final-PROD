@@ -27,6 +27,7 @@ from app.schemas.schemas import (
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import require_etablissement
 from app.services.notation import (
+    ordre_de_classement,
     calendrier_mois,
     epreuves_retenues_periode,
     periode_pour_date,
@@ -246,7 +247,7 @@ def get_notes_evaluation(evaluation_id: int, db: Session = Depends(get_db), etab
         Eleve, Inscription.eleve_id == Eleve.eleve_id
     ).filter(
         Note.evaluation_id == evaluation_id
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     return [
         {
@@ -595,8 +596,8 @@ def get_notes_centralisees_classe(
             "mention": get_mention(moy_gen, db, cycle_key, etablissement_id) if moy_gen is not None else None,
         })
 
-    # Trier par moyenne décroissante pour le rang
-    eleves_data.sort(key=lambda x: x["moyenne_generale"] or 0, reverse=True)
+    # Trier par moyenne décroissante pour le rang (égalités : services/notation.py)
+    eleves_data.sort(key=lambda x: ordre_de_classement(x["moyenne_generale"], x["inscription_id"]))
     for i, e in enumerate(eleves_data):
         e["rang"] = i + 1
 
@@ -1081,7 +1082,7 @@ def modele_import_resultats(
     ).filter(
         Inscription.classe_id == classe_id,
         Inscription.statut == "ACTIVE",
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     entetes = ["Matricule", "Nom", "Prenom"]
     matieres: List[str] = []
@@ -2889,7 +2890,7 @@ def _build_bulletin_pdf_bytes(bulletin_id: int, db: Session):
         db.query(BulletinLigne, Matiere)
         .join(Matiere, BulletinLigne.matiere_id == Matiere.matiere_id)
         .filter(BulletinLigne.bulletin_id == bulletin_id)
-        .order_by(Matiere.libelle)
+        .order_by(Matiere.libelle, Matiere.matiere_id)
         .all()
     )
 

@@ -59,7 +59,7 @@ def list_enseignants(
     # qui dépasse la 5e page invisible malgré un pagineur qui laissait croire
     # le contraire.
     response.headers["X-Total-Count"] = str(query.count())
-    return query.order_by(Enseignant.nom).offset(skip).limit(limit).all()
+    return query.order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id).offset(skip).limit(limit).all()
 
 
 @router.get("/count")
@@ -145,7 +145,7 @@ def get_emploi_enseignant(enseignant_id: int, annee_id: int = Depends(resolve_an
         CreneauEmploi.enseignant_id == enseignant_id,
         CreneauEmploi.annee_id == annee_id,
         CreneauEmploi.statut == "ACTIVE"
-    ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut).all()
+    ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut, CreneauEmploi.creneau_id).all()
 
     result = []
     for c in creneaux:
@@ -213,7 +213,7 @@ def get_enseignant_stats(enseignant_id: int, annee_id: int = Depends(resolve_ann
         Affectation.enseignant_id == enseignant_id,
         Affectation.annee_id == annee_id,
         Affectation.statut == "ACTIVE"
-    ).all()
+    ).order_by(Classe.libelle).all()
 
     return {
         "nb_classes": nb_classes,
@@ -249,6 +249,7 @@ def enseignants_de_la_classe(classe_id: int, annee_id: int = Depends(resolve_ann
             Affectation.statut == "ACTIVE",
         )
         .distinct()
+        .order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id)
         .all()
     )
     return [
@@ -629,7 +630,7 @@ def get_affectations_globales(annee_id: int = Depends(resolve_annee_id), db: Ses
         Enseignant.etablissement_id == etablissement_id,
         Classe.etablissement_id == etablissement_id,
     ).order_by(
-        Classe.libelle, Matiere.libelle
+        Classe.libelle, Matiere.libelle, Affectation.affectation_id
     ).all()
 
     return [
@@ -681,7 +682,7 @@ def get_classes_avec_matieres(
     )
     if annee_id is not None:
         query = query.filter(Classe.annee_id == annee_id)
-    classes = query.order_by(Classe.libelle).all()
+    classes = query.order_by(Classe.libelle, Classe.classe_id).all()
 
     result = []
     for cls in classes:

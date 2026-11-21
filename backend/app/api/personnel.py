@@ -232,7 +232,7 @@ def stats_personnel(db: Session = Depends(get_db), etablissement_id: int = Depen
         func.sum(case((Utilisateur.nom_utilisateur.isnot(None), 1), else_=0)).label("avec_acces"),
     ).filter(
         Utilisateur.etablissement_id == etablissement_id
-    ).group_by(Utilisateur.role).all()
+    ).group_by(Utilisateur.role).order_by(Utilisateur.role).all()
 
     return [
         {

@@ -253,7 +253,7 @@ def parent_dashboard(parent_id: int, _auth: dict = Depends(_parent_auth), db: Se
                 # Fetch echeances for this facture
                 echeances_raw = db.query(EcheanceFacture).filter(
                     EcheanceFacture.facture_id == f.facture_id
-                ).order_by(EcheanceFacture.date_limite).all()
+                ).order_by(EcheanceFacture.date_limite, EcheanceFacture.echeance_id).all()
 
                 # Fetch type_frais label
                 tf = db.query(TypeFrais).filter(TypeFrais.type_frais_id == f.type_frais_id).first() if f.type_frais_id else None
@@ -450,7 +450,7 @@ def get_edt_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_parent_
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.classe_id == inscription.classe_id,
         CreneauEmploi.statut == "ACTIVE"
-    ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut).all()
+    ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut, CreneauEmploi.creneau_id).all()
     
     result = []
     for c in creneaux:
@@ -984,7 +984,7 @@ def get_enseignants_du_parent(parent_id: int, _auth: dict = Depends(_parent_auth
         .join(C, C.classe_id == Affectation.classe_id)
         .outerjoin(Matiere, Matiere.matiere_id == Affectation.matiere_id)
         .filter(Affectation.classe_id.in_(classe_ids), Affectation.statut == "ACTIVE")
-        .order_by(Enseignant.nom, Enseignant.prenom)
+        .order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id)
         .all()
     )
     # Un même prof peut enseigner plusieurs matières : on le liste une fois,

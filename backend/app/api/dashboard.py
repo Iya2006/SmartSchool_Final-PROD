@@ -376,7 +376,7 @@ def get_dashboard(
         Classe, Inscription.classe_id == Classe.classe_id
     ).filter(
         Classe.etablissement_id == etablissement_id
-    ).order_by(Paiement.date_paiement.desc()).limit(8).all()
+    ).order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc()).limit(8).all()
 
     # ==== IMPAYÉS EN ATTENTE ====
     impayes_en_attente = db.query(
@@ -395,7 +395,7 @@ def get_dashboard(
     ).filter(
         Classe.etablissement_id == etablissement_id,
         Facture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"])
-    ).order_by(Facture.montant_restant.desc()).all()
+    ).order_by(Facture.montant_restant.desc(), Facture.facture_id).all()
 
     # ==== ÉVÉNEMENTS À VENIR (Publiés) ====
     evenements_a_venir_raw = db.query(Evenement).filter(

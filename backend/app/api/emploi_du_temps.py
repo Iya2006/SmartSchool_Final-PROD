@@ -202,7 +202,7 @@ def get_emploi_du_temps(classe_id: int, db: Session = Depends(get_db), etablisse
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.classe_id == classe_id,
         CreneauEmploi.statut == "ACTIVE"
-    ).all()
+    ).order_by(CreneauEmploi.creneau_id).all()
 
     result = []
     for c in creneaux:

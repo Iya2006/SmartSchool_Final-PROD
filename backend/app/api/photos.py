@@ -184,7 +184,7 @@ def get_galerie_tab(
         elif filter_photo == "without":
             query = query.filter(Enseignant.photo_url.is_(None))
         response.headers["X-Total-Count"] = str(query.count())
-        rows = query.order_by(Enseignant.nom, Enseignant.prenom).offset(skip).limit(limit).all()
+        rows = query.order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id).offset(skip).limit(limit).all()
         return [{
             "enseignant_id": e.enseignant_id, "nom": e.nom, "prenom": e.prenom, "sexe": e.sexe,
             "matricule": e.matricule, "photo_url": e.photo_url, "specialite": e.specialite, "statut": e.statut,
@@ -203,7 +203,7 @@ def get_galerie_tab(
         elif filter_photo == "without":
             query = query.filter(Parent.photo_url.is_(None))
         response.headers["X-Total-Count"] = str(query.count())
-        rows = query.order_by(Parent.nom, Parent.prenom).offset(skip).limit(limit).all()
+        rows = query.order_by(Parent.nom, Parent.prenom, Parent.parent_id).offset(skip).limit(limit).all()
         return [{
             "parent_id": p.parent_id, "nom": p.nom, "prenom": p.prenom, "sexe": p.sexe,
             "telephone_1": p.telephone_1, "photo_url": p.photo_url, "profession": p.profession, "statut": p.statut,

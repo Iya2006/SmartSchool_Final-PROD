@@ -245,7 +245,7 @@ def get_historique_paiements(enseignant_id: int, _auth: dict = Depends(_enseigna
         Depense.fournisseur == f"ENS_{enseignant_id}",
         Depense.categorie == "SALAIRES",
         Depense.statut == "VALIDE"
-    ).order_by(Depense.date_depense.desc()).all()
+    ).order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).all()
     
     ens = db.query(Enseignant).filter(Enseignant.enseignant_id == enseignant_id).first()
     
@@ -413,7 +413,7 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
     ).filter(
         Affectation.enseignant_id == enseignant_id,
         Affectation.statut == "ACTIVE"
-    ).all()
+    ).order_by(Classe.libelle, Matiere.libelle, Affectation.affectation_id).all()
 
     classes_data = []
     total_heures = 0
@@ -474,7 +474,7 @@ def enseignant_dashboard(enseignant_id: int, _auth: dict = Depends(_enseignant_a
         ).filter(
             Classe.professeur_principal == enseignant_id,
             Niveau.evaluation_simple == "O",
-        ).order_by(Classe.libelle).all()
+        ).order_by(Classe.libelle, Classe.classe_id).all()
     ]
     total_eleves_mat = sum(m["effectif"] for m in classes_maternelle)
 
@@ -523,7 +523,7 @@ def get_edt_enseignant(enseignant_id: int, _auth: dict = Depends(_enseignant_aut
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.enseignant_id == enseignant_id,
         CreneauEmploi.statut == "ACTIVE"
-    ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut).all()
+    ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut, CreneauEmploi.creneau_id).all()
 
     result = []
     for c in creneaux:
@@ -912,7 +912,7 @@ def get_detail_evaluation(enseignant_id: int, evaluation_id: int, _auth: dict = 
         Eleve, Inscription.eleve_id == Eleve.eleve_id
     ).filter(
         Note.evaluation_id == evaluation_id
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     notes_list = []
     valid_notes = []
@@ -1489,7 +1489,7 @@ def maternelle_lister(
         Eleve, Inscription.eleve_id == Eleve.eleve_id
     ).filter(
         Inscription.classe_id == classe_id, Inscription.statut == "ACTIVE",
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
     ids = [i.inscription_id for i, _ in inscriptions]
     officiels = {}
     if ids:

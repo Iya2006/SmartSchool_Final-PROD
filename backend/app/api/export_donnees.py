@@ -182,7 +182,7 @@ def exporter_eleves(
             e.lieu_naissance or "", c.libelle if c else "",
             e.telephone or "", e.email or "", e.quartier or "", e.statut or "",
         ]
-        for e, c in requete.order_by(Eleve.nom, Eleve.prenom).yield_per(_LIGNES_PAR_LOT)
+        for e, c in requete.order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).yield_per(_LIGNES_PAR_LOT)
     )
     return _fichier_csv(
         ["Matricule", "Nom", "Prénom", "Sexe", "Date de naissance", "Lieu de naissance",
@@ -270,7 +270,7 @@ def exporter_paiements(
         .join(Eleve, Eleve.eleve_id == Inscription.eleve_id)
         .join(Classe, Classe.classe_id == Inscription.classe_id)
         .filter(Classe.etablissement_id == etablissement_id)
-        .order_by(Facture.date_facture.desc())
+        .order_by(Facture.date_facture.desc(), Facture.facture_id.desc())
         .yield_per(_LIGNES_PAR_LOT)
     )
 
