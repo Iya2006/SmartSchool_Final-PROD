@@ -160,8 +160,10 @@ if not MODE_POSTE:
             print(f"[SYNCHRO] Journal des changements non posé : {_e}")
 
 # Emplois du temps déposés en PDF sous leur premier nom (« classe_<id>.pdf ») :
-# leur classe les cite désormais, pour qu'ils suivent la synchronisation. Après
-# le journal, pour que les postes l'apprennent.
+# leur classe les cite désormais, pour qu'ils suivent la synchronisation. Puis
+# les anciennes présences d'agents et pointages d'élèves sans école, rattachés
+# à l'école de leur agent ou de leur élève (app/sync/rattrapage.py). Après le
+# journal, pour que les postes l'apprennent.
 if not MODE_POSTE:
     try:
         from app.api.emploi_du_temps import rattacher_les_pdf_deposes
@@ -170,6 +172,12 @@ if not MODE_POSTE:
             print(f"[FICHIERS] {_rattachees} emploi(s) du temps PDF rattaché(s) à leur classe.")
     except Exception as _e:  # noqa: BLE001
         print(f"[FICHIERS] Emplois du temps PDF non rattachés : {_e}")
+    try:
+        from app.sync.rattrapage import rattacher_les_lignes_sans_ecole
+        for _nom, _n in rattacher_les_lignes_sans_ecole(engine).items():
+            print(f"[SYNCHRO] {_n} ligne(s) ancienne(s) de {_nom} rattachée(s) à leur école.")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[SYNCHRO] Lignes anciennes sans école non rattachées : {_e}")
 
 
 app = FastAPI(
