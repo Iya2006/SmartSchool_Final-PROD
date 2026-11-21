@@ -1,9 +1,16 @@
 import os
+import unicodedata
+from functools import lru_cache
+
 from dotenv import load_dotenv
 load_dotenv()
 from sqlalchemy import create_engine, event
+from sqlalchemy.dialects.sqlite.base import SQLiteCompiler
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import operators, sqltypes
+from sqlalchemy.sql.compiler import OPERATORS
+from sqlalchemy.sql.elements import UnaryExpression
 
 # Configure la base de données PostgreSQL
 # À partir du docker-compose : postgres / admin / admin / mydb / 15433 (port hôte)
@@ -190,6 +197,89 @@ def _majuscules(texte):
     return texte.upper() if isinstance(texte, str) else texte
 
 
+# ── L'ordre alphabétique d'un poste, identique à celui du cloud ────────────
+# PostgreSQL (en ligne, collation en_US.UTF-8) trie selon la langue :
+# « Éducation physique » avec les E, « Aïcha » avant « Aissata ». SQLite (poste)
+# trie octet par octet : « Éducation physique » après « Zoologie ». Une même
+# liste ne sortait donc pas dans le même ordre sur le poste et en ligne.
+#
+# Sur un poste, chaque tri sur une colonne de texte passe par la collation
+# ci-dessous (CompilateurPoste). Sa clé imite la collation du cloud : d'abord
+# les lettres et chiffres sans accent ni casse (espaces et ponctuation
+# ignorés), puis les accents, puis la casse (minuscule d'abord), enfin les
+# octets — l'ordre est total : deux textes ne sont égaux que s'ils sont
+# identiques. Vérifié contre PostgreSQL sur toutes les valeurs triées de l'école
+# de test (noms, prénoms, libellés, codes, clés de paramètres) : même ordre.
+COLLATION_ALPHABETIQUE = "alphabetique"
+_LIGATURES = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
+
+
+@lru_cache(maxsize=200_000)
+def cle_alphabetique(texte: str) -> tuple:
+    texte = texte.translate(_LIGATURES)
+    signes = [c for c in texte if c.isalnum()]
+    lettres = "".join(
+        c for c in unicodedata.normalize("NFD", "".join(signes)) if not unicodedata.combining(c)
+    ).casefold()
+    accents = tuple(unicodedata.normalize("NFD", c)[1:] for c in signes)
+    casse = tuple(0 if c.islower() else 1 for c in signes)
+    return (lettres, accents, casse, texte)
+
+
+def _comparer_alphabetiquement(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    return -1 if cle_alphabetique(a) < cle_alphabetique(b) else 1
+
+
+_MODIFICATEURS_DE_TRI = frozenset({operators.asc_op, operators.desc_op,
+                                   operators.nulls_first_op, operators.nulls_last_op})
+
+
+def _trier_alphabetiquement(clause):
+    """`clause` triée selon la collation alphabétique si c'est un texte."""
+    if isinstance(clause, UnaryExpression) and clause.modifier in _MODIFICATEURS_DE_TRI:
+        return UnaryExpression(_trier_alphabetiquement(clause.element), modifier=clause.modifier,
+                               wraps_column_expression=False)
+    if isinstance(getattr(clause, "type", None), sqltypes.String):
+        return clause.collate(COLLATION_ALPHABETIQUE)
+    return clause
+
+
+class CompilateurPoste(SQLiteCompiler):
+    """SQLite, avec les tris de texte dans l'ordre alphabétique du cloud. Seul
+    l'ORDER BY change : ni les tables, ni les index, ni les comparaisons."""
+
+    def order_by_clause(self, select, **kw):
+        tri = self._generate_delimited_list(
+            [_trier_alphabetiquement(c) for c in select._order_by_clauses], OPERATORS[operators.comma_op], **kw
+        )
+        return " ORDER BY " + tri if tri else ""
+
+
+def mettre_a_jour_les_statistiques(moteur) -> None:
+    """Statistiques de SQLite sur la base du poste (ANALYZE).
+
+    PostgreSQL entretient les siennes tout seul ; SQLite n'en a aucune tant
+    qu'on ne les lui demande pas, et choisit alors mal ses index. La liste des
+    élèves parcourait, pour CHAQUE élève, toutes les inscriptions de l'année :
+    1,8 s sur un poste contre 0,3 s en ligne ; 4 ms une fois les statistiques
+    calculées. À faire quand les données changent beaucoup — fin d'installation
+    — puis à chaque démarrage. `analysis_limit` borne le coût sur une grosse
+    base : les statistiques sont estimées sur un échantillon."""
+    with moteur.connect() as cx:
+        cx.exec_driver_sql("PRAGMA analysis_limit=1000")
+        cx.exec_driver_sql("ANALYZE")
+        cx.commit()
+
+
+def regler_sqlite(moteur) -> None:
+    """Réglages d'un moteur SQLite de poste : ceux de chaque connexion
+    (_reglages_sqlite) et l'ordre alphabétique de ses tris."""
+    event.listen(moteur, "connect", _reglages_sqlite)
+    moteur.dialect.statement_compiler = CompilateurPoste
+
+
 def _reglages_sqlite(connexion_dbapi, _enregistrement):
     """Réglages de chaque connexion SQLite, en clair ou chiffrée."""
     # Comme PostgreSQL : lower() et upper() traitent toutes les lettres. Celles
@@ -198,6 +288,7 @@ def _reglages_sqlite(connexion_dbapi, _enregistrement):
     # seulement, les noms saisis en majuscules accentuées.
     connexion_dbapi.create_function("lower", 1, _minuscules, deterministic=True)
     connexion_dbapi.create_function("upper", 1, _majuscules, deterministic=True)
+    connexion_dbapi.create_collation(COLLATION_ALPHABETIQUE, _comparer_alphabetiquement)
     curseur = connexion_dbapi.cursor()
     # LIKE distingue majuscules et minuscules, comme sous PostgreSQL (ILIKE,
     # traduit en lower(...) LIKE lower(...), reste insensible à la casse).
@@ -213,7 +304,7 @@ def _reglages_sqlite(connexion_dbapi, _enregistrement):
 
 
 if EST_SQLITE:
-    event.listen(engine, "connect", _reglages_sqlite)
+    regler_sqlite(engine)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

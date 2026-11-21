@@ -286,6 +286,10 @@ def installer(
         _telecharger_fichiers(client, moteur_local, dossier_fichiers, progression)
 
     activer_le_poste(moteur_local, appareil["appareil_id"], appareil["rang"], appareil["cle_signature"])
+    # Toute l'école vient d'arriver : sans statistiques, SQLite choisit mal
+    # ses index et certaines listes prennent des secondes (core/database.py).
+    from app.core.database import mettre_a_jour_les_statistiques
+    mettre_a_jour_les_statistiques(moteur_local)
 
     _ecrire_json(dossier_poste, FICHIER_MARQUEUR, {
         "etablissement_id": manifeste["etablissement_id"],

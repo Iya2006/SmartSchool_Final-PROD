@@ -116,6 +116,14 @@ if MODE_POSTE:
         noter_version(DOSSIER_POSTE, VERSION)
     except Exception as _e:  # noqa: BLE001
         print(f"[SCHEMA] Index du poste non complétés : {_e}")
+    # Statistiques de SQLite, pour qu'il choisisse ses index comme PostgreSQL
+    # (app/core/database.py) : les données ont pu beaucoup changer depuis le
+    # dernier démarrage (synchronisation, saisies).
+    try:
+        from app.core.database import mettre_a_jour_les_statistiques
+        mettre_a_jour_les_statistiques(engine)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[SCHEMA] Statistiques du poste non mises à jour : {_e}")
 
 # Colonnes rendues OPTIONNELLES après coup (le modèle passe nullable=True mais la
 # base garde son ancienne contrainte NOT NULL). `create_all` ne touche jamais une
