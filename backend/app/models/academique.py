@@ -278,6 +278,9 @@ class Classe(Base):
     effectif_actuel = Column(Integer, default=0)
     professeur_principal = Column(Identifiant, ForeignKey("ss_enseignants.enseignant_id"))
     statut = Column(String(20), default="ACTIVE", nullable=False)
+    # Emploi du temps déposé en PDF (api/emploi_du_temps.py) : « /uploads/emplois/… ».
+    # Cité ici, le fichier suit la synchronisation entre postes et cloud.
+    emploi_pdf = Column(String(255), nullable=True)
 
     etablissement = relationship("Etablissement", back_populates="classes")
     # foreign_keys explicite : Inscription a DEUX FK vers Classe depuis la Phase 2

@@ -30,6 +30,7 @@ export const ROUTES_APPLICATION: readonly string[] = [
     '/comptabilite/dashboard',
     '/comptabilite/depenses',
     '/comptabilite/encaissement',
+    '/comptabilite/encaissement-classe',
     '/comptabilite/exports',
     '/comptabilite/frais',
     '/comptabilite/general',

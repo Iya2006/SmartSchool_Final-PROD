@@ -159,6 +159,18 @@ if not MODE_POSTE:
         except Exception as _e:  # noqa: BLE001
             print(f"[SYNCHRO] Journal des changements non posé : {_e}")
 
+# Emplois du temps déposés en PDF sous leur premier nom (« classe_<id>.pdf ») :
+# leur classe les cite désormais, pour qu'ils suivent la synchronisation. Après
+# le journal, pour que les postes l'apprennent.
+if not MODE_POSTE:
+    try:
+        from app.api.emploi_du_temps import rattacher_les_pdf_deposes
+        _rattachees = rattacher_les_pdf_deposes(engine)
+        if _rattachees:
+            print(f"[FICHIERS] {_rattachees} emploi(s) du temps PDF rattaché(s) à leur classe.")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[FICHIERS] Emplois du temps PDF non rattachés : {_e}")
+
 
 app = FastAPI(
     title="SMARTSCHOOL ERP API",
