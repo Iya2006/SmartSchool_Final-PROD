@@ -3778,11 +3778,16 @@ def list_decaissements(
 # ANNULATION DE PAIEMENT — Annuler un paiement et reverser les montants
 # ============================================================================
 
-def _paiement_de_l_ecole(db: Session, paiement_id: int, etablissement_id: int) -> Paiement:
+def _paiement_seul_de_l_ecole(db: Session, paiement_id: int, etablissement_id: int) -> Paiement:
     """Le paiement, ou 404 — jamais celui d'une autre école.
 
     Avant le Lot 2, n'importe quel `paiement_id` deviné pouvait être annulé,
     avec reversement des montants, depuis n'importe quelle école.
+
+    Nom distinct de `_paiement_de_l_ecole` (plus haut), qui rend le paiement
+    AVEC sa facture, son inscription, son élève et sa classe pour les reçus :
+    sous le même nom, cette définition remplaçait l'autre, et l'affichage
+    comme l'impression des reçus tombaient en erreur.
     """
     paiement = db.query(Paiement).filter(Paiement.paiement_id == paiement_id).first()
     if not paiement:
@@ -3879,7 +3884,7 @@ def annuler_paiement(
     if not motif:
         raise HTTPException(status_code=400, detail="Le motif d'annulation est obligatoire")
 
-    paiement = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+    paiement = _paiement_seul_de_l_ecole(db, paiement_id, etablissement_id)
 
     if paiement.statut == "ANNULE":
         raise HTTPException(status_code=400, detail="Ce paiement est déjà annulé")
@@ -4044,7 +4049,7 @@ def annuler_paiements_en_lot(
     annules = []
     total = 0.0
     for paiement_id in ids:
-        paiement = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+        paiement = _paiement_seul_de_l_ecole(db, paiement_id, etablissement_id)
         if paiement.statut == "ANNULE":
             # Refus explicite plutôt que silence : si un reçu est déjà annulé,
             # l'écran de l'école n'est plus à jour et le reste de sa sélection
