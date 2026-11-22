@@ -77,7 +77,7 @@ export const getRedirectPath = (
 // renvoie vers l'espace de son role.
 // `/installation` : application installée, avant que l'école ne soit
 // téléchargée sur l'ordinateur — aucun compte n'existe encore localement.
-const PUBLIC_PATHS = ['/', '/login', '/login/ecole', '/inscription', '/installation'];
+export const PUBLIC_PATHS = ['/', '/login', '/login/ecole', '/inscription', '/installation'];
 
 /** Écran où un administrateur plateforme choisit l'école dans laquelle il
  * travaille. Il n'appartient à aucune école : sans ce passage, toutes les

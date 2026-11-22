@@ -104,7 +104,12 @@ def _vers_le_cloud(methode: str, chemin: str, **options):
 
 @relais.get("", dependencies=[Depends(get_current_user)])
 def conflits(tous: bool = False):
-    return conflits_du_cloud(CLOUD_URL, _jeton_du_poste(), tous)
+    hors_ligne = synchroniseur.etat().get("statut") == "HORS_LIGNE"
+    if hors_ligne:
+        # Un nouvel essai part aussitôt, en arrière-plan : au retour
+        # d'internet, la liste s'affiche dès l'ouverture suivante.
+        synchroniseur.synchroniser_maintenant()
+    return conflits_du_cloud(CLOUD_URL, _jeton_du_poste(), tous, hors_ligne_connu=hors_ligne)
 
 
 @relais.post("/{conflit_id}/resoudre")

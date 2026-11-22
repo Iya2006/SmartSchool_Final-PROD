@@ -684,30 +684,50 @@ def get_classes_avec_matieres(
         query = query.filter(Classe.annee_id == annee_id)
     classes = query.order_by(Classe.libelle, Classe.classe_id).all()
 
+    # Tout est chargé d'un coup, puis assemblé : la version précédente faisait
+    # plusieurs requêtes par classe et par matière (plus d'un millier pour une
+    # école, 3,6 à 6,8 s mesurées). Même contenu, dans le même ordre.
+    ids_classes = [c.classe_id for c in classes]
+    niveaux = {n.niveau_id: n for n in db.query(Niveau).filter(
+        Niveau.niveau_id.in_({c.niveau_id for c in classes if c.niveau_id}))}
+    cycles = {c.cycle_id: c for c in db.query(Cycle).filter(
+        Cycle.cycle_id.in_({n.cycle_id for n in niveaux.values()}))}
+    cms_par_classe: dict = {}
+    for cm in db.query(ClasseMatiere).filter(
+        ClasseMatiere.classe_id.in_(ids_classes), ClasseMatiere.est_active == "O",
+    ).order_by(ClasseMatiere.classe_matiere_id):
+        cms_par_classe.setdefault(cm.classe_id, []).append(cm)
+    matieres = {m.matiere_id: m for m in db.query(Matiere).filter(
+        Matiere.matiere_id.in_({cm.matiere_id for liste in cms_par_classe.values() for cm in liste}))}
+    # Un enseignant par (classe, matière) : la plus ancienne affectation
+    # active, toujours la même (`.first()` sans ordre la laissait au hasard).
+    affectations: dict = {}
+    for aff in db.query(Affectation).filter(
+        Affectation.classe_id.in_(ids_classes), Affectation.statut == "ACTIVE",
+    ).order_by(Affectation.affectation_id):
+        affectations.setdefault((aff.classe_id, aff.matiere_id), aff)
+    ids_enseignants = {a.enseignant_id for a in affectations.values()} | {
+        c.professeur_principal for c in classes if c.professeur_principal}
+    enseignants = {e.enseignant_id: e for e in db.query(Enseignant).filter(
+        Enseignant.enseignant_id.in_(ids_enseignants))}
+
     result = []
     for cls in classes:
-        niveau = db.query(Niveau).filter(Niveau.niveau_id == cls.niveau_id).first() if cls.niveau_id else None
-        cycle = db.query(Cycle).filter(Cycle.cycle_id == niveau.cycle_id).first() if niveau else None
+        niveau = niveaux.get(cls.niveau_id) if cls.niveau_id else None
+        cycle = cycles.get(niveau.cycle_id) if niveau else None
 
         # Matières attribuées à cette classe
-        cms = db.query(ClasseMatiere).filter(
-            ClasseMatiere.classe_id == cls.classe_id,
-            ClasseMatiere.est_active == "O"
-        ).all()
+        cms = cms_par_classe.get(cls.classe_id, [])
 
         matieres_list = []
         for cm in cms:
-            mat = db.query(Matiere).filter(Matiere.matiere_id == cm.matiere_id).first()
+            mat = matieres.get(cm.matiere_id)
             if mat:
                 # Chercher si un enseignant est déjà affecté
-                aff = db.query(Affectation).filter(
-                    Affectation.classe_id == cls.classe_id,
-                    Affectation.matiere_id == mat.matiere_id,
-                    Affectation.statut == "ACTIVE"
-                ).first()
+                aff = affectations.get((cls.classe_id, mat.matiere_id))
                 ens_info = None
                 if aff:
-                    ens = db.query(Enseignant).filter(Enseignant.enseignant_id == aff.enseignant_id).first()
+                    ens = enseignants.get(aff.enseignant_id)
                     if ens:
                         ens_info = {
                             "enseignant_id": ens.enseignant_id,
@@ -731,9 +751,7 @@ def get_classes_avec_matieres(
         evaluation_simple = bool(niveau and niveau.evaluation_simple == "O")
         titulaire = None
         if cls.professeur_principal:
-            pp = db.query(Enseignant).filter(
-                Enseignant.enseignant_id == cls.professeur_principal
-            ).first()
+            pp = enseignants.get(cls.professeur_principal)
             if pp:
                 titulaire = {
                     "enseignant_id": pp.enseignant_id,
@@ -808,16 +826,16 @@ def get_salle_des_profs_stats(annee_id: int = Depends(resolve_annee_id), db: Ses
     ).all()
 
     total_postes = len(classes_with_matieres)
-    postes_pourvus = 0
-    for cm in classes_with_matieres:
-        aff = db.query(Affectation).filter(
-            Affectation.classe_id == cm.classe_id,
-            Affectation.matiere_id == cm.matiere_id,
+    # Une requête pour tous les postes (une par poste auparavant : 1,5 à 2,5 s).
+    pourvus = {
+        (classe_id, matiere_id)
+        for classe_id, matiere_id in db.query(Affectation.classe_id, Affectation.matiere_id).filter(
+            Affectation.classe_id.in_({cm.classe_id for cm in classes_with_matieres}),
             Affectation.annee_id == annee_id,
-            Affectation.statut == "ACTIVE"
-        ).first()
-        if aff:
-            postes_pourvus += 1
+            Affectation.statut == "ACTIVE",
+        ).distinct()
+    }
+    postes_pourvus = sum(1 for cm in classes_with_matieres if (cm.classe_id, cm.matiere_id) in pourvus)
 
     return {
         "total_enseignants": total_enseignants,

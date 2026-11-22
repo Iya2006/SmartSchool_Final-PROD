@@ -75,11 +75,34 @@ def _seance_admin_ou_404(db: Session, seance_id: int, etablissement_id: int) -> 
     return s
 
 
-def _serialize_seance(db: Session, s: Seance) -> dict:
-    matiere = db.query(Matiere).filter(Matiere.matiere_id == s.matiere_id).first()
-    classe = db.query(Classe).filter(Classe.classe_id == s.classe_id).first()
-    prevu = db.query(Enseignant).filter(Enseignant.enseignant_id == s.enseignant_prevu_id).first()
-    reel = db.query(Enseignant).filter(Enseignant.enseignant_id == s.enseignant_reel_id).first() if s.enseignant_reel_id else None
+def _serialiser_les_seances(db: Session, seances: List[Seance]) -> List[dict]:
+    """Les mêmes lignes que `_serialize_seance`, avec 3 requêtes en tout au
+    lieu de 4 par séance. La liste de l'administration en sérialise jusqu'à
+    500 : 2 000 allers-retours avec la base, soit 9 s mesurées sur un
+    PostgreSQL local, et davantage en production, où chacun traverse le
+    réseau."""
+    if not seances:
+        return []
+    matieres = {m.matiere_id: m for m in db.query(Matiere).filter(
+        Matiere.matiere_id.in_({s.matiere_id for s in seances}))}
+    classes = {c.classe_id: c for c in db.query(Classe).filter(
+        Classe.classe_id.in_({s.classe_id for s in seances}))}
+    ids = {s.enseignant_prevu_id for s in seances} | {s.enseignant_reel_id for s in seances if s.enseignant_reel_id}
+    enseignants = {e.enseignant_id: e for e in db.query(Enseignant).filter(Enseignant.enseignant_id.in_(ids))}
+    return [_serialize_seance(db, s, matieres=matieres, classes=classes, enseignants=enseignants) for s in seances]
+
+
+def _serialize_seance(db: Session, s: Seance, matieres: Optional[dict] = None, classes: Optional[dict] = None,
+                      enseignants: Optional[dict] = None) -> dict:
+    if matieres is not None:
+        matiere, classe = matieres.get(s.matiere_id), classes.get(s.classe_id)
+        prevu = enseignants.get(s.enseignant_prevu_id)
+        reel = enseignants.get(s.enseignant_reel_id) if s.enseignant_reel_id else None
+    else:
+        matiere = db.query(Matiere).filter(Matiere.matiere_id == s.matiere_id).first()
+        classe = db.query(Classe).filter(Classe.classe_id == s.classe_id).first()
+        prevu = db.query(Enseignant).filter(Enseignant.enseignant_id == s.enseignant_prevu_id).first()
+        reel = db.query(Enseignant).filter(Enseignant.enseignant_id == s.enseignant_reel_id).first() if s.enseignant_reel_id else None
     return {
         "seance_id": s.seance_id,
         "classe_id": s.classe_id,
@@ -176,7 +199,7 @@ def get_seances_du_jour(
     jour_date = date_type.fromisoformat(date) if date else date_type.today()
     seances = _generer_seances_du_jour(db, enseignant_id, jour_date)
     seances.sort(key=lambda s: s.heure_debut_prevue)
-    return [_serialize_seance(db, s) for s in seances]
+    return _serialiser_les_seances(db, seances)
 
 
 @router.get("/{enseignant_id}/seances/historique")
@@ -195,7 +218,7 @@ def get_historique_seances(
     if classe_id:
         q = q.filter(Seance.classe_id == classe_id)
     seances = q.order_by(Seance.date_seance.desc(), Seance.heure_debut_prevue.desc(), Seance.seance_id.desc()).limit(200).all()
-    return [_serialize_seance(db, s) for s in seances]
+    return _serialiser_les_seances(db, seances)
 
 
 @router.get("/{enseignant_id}/seances/{seance_id}")
@@ -484,7 +507,7 @@ def list_seances(
         q = q.filter(Seance.statut == statut)
 
     seances = q.order_by(Seance.date_seance.desc(), Seance.heure_debut_prevue.desc(), Seance.seance_id.desc()).limit(500).all()
-    resultats = [_serialize_seance(db, s) for s in seances]
+    resultats = _serialiser_les_seances(db, seances)
 
     # ── Appels de la DEMI-JOURNÉE (primaire) ──────────────────────────────
     # Au primaire, un seul maître tient la classe : l'appel ne porte pas sur

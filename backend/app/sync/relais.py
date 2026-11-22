@@ -20,11 +20,17 @@ LISTE_HORS_LIGNE = ("La liste « À vérifier » se consulte avec internet : "
 DELAIS = httpx.Timeout(30.0, connect=5.0)
 
 
-def conflits_du_cloud(cloud_url: str, jeton: str | None, tous: bool) -> dict:
+def conflits_du_cloud(cloud_url: str, jeton: str | None, tous: bool, hors_ligne_connu: bool = False) -> dict:
     """La liste « À vérifier », lue au cloud. Sans internet, ce n'est pas une
     erreur mais un état du poste : une réponse normale le dit, et l'écran
     l'affiche, sans erreur dans le navigateur. Les décisions, elles, restent
-    refusées (503 marqué) : elles ne peuvent pas se prendre hors-ligne."""
+    refusées (503 marqué) : elles ne peuvent pas se prendre hors-ligne.
+
+    `hors_ligne_connu` : le poste vient de constater que le cloud ne répond
+    pas (état de la synchronisation). On le dit tout de suite, au lieu de
+    l'attendre jusqu'à 5 s de plus à chaque ouverture de l'écran."""
+    if hors_ligne_connu:
+        return {"conflits": [], "hors_ligne": True, "message": LISTE_HORS_LIGNE}
     try:
         return vers_le_cloud(cloud_url, jeton, "GET", "/api/sync/appareil/conflits", params={"tous": tous})
     except HTTPException as refus:

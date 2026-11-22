@@ -32,6 +32,14 @@ def test_la_liste_a_verifier_hors_ligne_est_un_etat_pas_une_erreur():
         "conflits": [], "hors_ligne": True, "message": LISTE_HORS_LIGNE}
 
 
+def test_hors_ligne_deja_constate_la_reponse_est_immediate():
+    # Le poste sait déjà le cloud injoignable : aucune tentative, aucune attente.
+    debut = time.monotonic()
+    rep = conflits_du_cloud("http://10.255.255.1:9", "jeton-du-poste", tous=False, hors_ligne_connu=True)
+    assert rep["hors_ligne"] is True and rep["conflits"] == []
+    assert time.monotonic() - debut < 0.5
+
+
 def test_joindre_le_cloud_ne_prend_jamais_plus_de_5_secondes():
     # Un routeur sans accès à internet laisse souvent la connexion en suspens.
     assert DELAIS.connect == 5

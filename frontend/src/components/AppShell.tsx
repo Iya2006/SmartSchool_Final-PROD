@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { usePathname } from 'next/navigation';
-import { useAuth } from '@/context/AuthContext';
+import { PUBLIC_PATHS, useAuth } from '@/context/AuthContext';
 import { UIProvider, useUI } from '@/context/UIContext';
 import { isAdminSystemRole } from '@/lib/roleAccess';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -30,7 +30,7 @@ const FULLSCREEN_PATHS = [
 
 function AppShellInner({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
-    const { isAuthenticated, user } = useAuth();
+    const { isAuthenticated, user, sessionLue } = useAuth();
     const { sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar } = useUI();
     const isMobile = useIsMobile();
 
@@ -69,6 +69,16 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
     }, [isAuthenticated]);
 
     const isFullscreen = FULLSCREEN_PATHS.some(p => pathname.startsWith(p));
+
+    // Page de l'application (avec menu), session pas encore relue : rien
+    // n'est affiché encore — l'écran de démarrage la couvre, et AuthContext
+    // la relit dès le premier effet. Sans cette attente, la page s'affichait
+    // d'abord seule, puis était démontée et remontée dans la mise en page
+    // avec menu : toutes ses requêtes partaient deux fois à chaque chargement.
+    // Les pages publiques (vitrine, connexion) s'affichent sans attendre.
+    if (!sessionLue && !isFullscreen && !PUBLIC_PATHS.includes(pathname)) {
+        return null;
+    }
 
     if (isFullscreen || !isAuthenticated) {
         return <>{children}</>;
