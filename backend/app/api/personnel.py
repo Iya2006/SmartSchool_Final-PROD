@@ -479,13 +479,71 @@ def liste_salaires(db: Session = Depends(get_db), etablissement_id: int = Depend
     return [_row_to_dict(p) for p in rows]
 
 
-# ─── CHANGER SON PROPRE MOT DE PASSE ───────────────────────────────────────────
+# ─── MON COMPTE : le libre-service de chaque membre du personnel ───────────────
+# Lire sa fiche, corriger son nom ou ses coordonnées, changer son mot de passe :
+# chacun le fait pour LUI-MÊME, quel que soit son rôle. Ce routeur est monté
+# sans la liste PERSONNEL_ROLES (main.py) : elle ferme la GESTION du personnel
+# au directeur de niveau, et lui fermait du même coup son propre profil — il ne
+# pouvait même pas changer son mot de passe. Monté AVANT le routeur du
+# personnel, sinon « me » serait lu comme un numéro de fiche.
+moi = APIRouter(prefix="/api/personnel/me", tags=["Mon compte"])
+
+
+def _mon_compte(current_user: dict, db: Session) -> Utilisateur:
+    """Le compte du jeton présenté, et lui seul."""
+    if current_user.get("type") != "admin":
+        raise HTTPException(403, "Réservé aux comptes du personnel")
+    p = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == int(current_user["sub"])).first()
+    if not p:
+        raise HTTPException(404, "Compte introuvable")
+    return p
+
+
+@moi.get("", summary="Ma fiche")
+def ma_fiche(current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Sa propre fiche se lit en entier, comme par GET /{personnel_id}.
+    return _row_to_dict(_mon_compte(current_user, db))
+
+
+class MesCoordonnees(BaseModel):
+    nom: Optional[str] = None
+    prenom: Optional[str] = None
+    email: Optional[str] = None
+    telephone: Optional[str] = None
+
+
+@moi.put("", summary="Corriger mon nom ou mes coordonnées")
+def modifier_ma_fiche(
+    data: MesCoordonnees,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Seuls le nom, le prénom, l'e-mail et le téléphone : le rôle, le statut et
+    le salaire restent l'affaire de la direction (`PUT /{personnel_id}`)."""
+    p = _mon_compte(current_user, db)
+    valeurs = {c: (v.strip() if isinstance(v, str) else v) for c, v in data.model_dump(exclude_unset=True).items()}
+    if any(c in valeurs and not valeurs[c] for c in ("nom", "prenom")):
+        raise HTTPException(400, "Le nom et le prénom ne peuvent pas être vides.")
+    # E-mail et téléphone servent à se connecter : vides, ils sont retirés, et
+    # jamais en double (comme à la création d'une fiche).
+    for champ in ("email", "telephone"):
+        if champ in valeurs and not valeurs[champ]:
+            valeurs[champ] = None
+    exiger_identifiants_libres(db, [valeurs.get("email"), valeurs.get("telephone")],
+                               ignorer=(Utilisateur, p.utilisateur_id))
+    for champ, valeur in valeurs.items():
+        setattr(p, champ, valeur)
+    db.commit()
+    db.refresh(p)
+    return _row_to_dict(p)
+
+
 class ChangePasswordRequest(BaseModel):
     ancien_mdp: Optional[str] = None
     nouveau_mdp: str
 
 
-@router.put("/me/changer-mot-de-passe", summary="Changer mon propre mot de passe")
+@moi.put("/changer-mot-de-passe", summary="Changer mon propre mot de passe")
 def changer_mon_mot_de_passe(
     data: ChangePasswordRequest,
     current_user: dict = Depends(get_current_user),
@@ -497,11 +555,7 @@ def changer_mon_mot_de_passe(
     route ne touche que le compte du jeton présenté et exige l'ancien mot de
     passe, comme l'équivalent déjà en place pour les enseignants
     (`portail_enseignant.py::changer_mot_de_passe`)."""
-    if current_user.get("type") != "admin":
-        raise HTTPException(403, "Réservé aux comptes du personnel")
-    p = db.query(Utilisateur).filter(Utilisateur.utilisateur_id == int(current_user["sub"])).first()
-    if not p:
-        raise HTTPException(404, "Compte introuvable")
+    p = _mon_compte(current_user, db)
 
     if p.mot_de_passe:
         if not data.ancien_mdp:

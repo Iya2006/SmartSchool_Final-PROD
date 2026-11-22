@@ -42,7 +42,7 @@ from app.api.devoirs import router as devoirs_router
 from app.api.photos import router as photos_router
 from app.api.fournitures import router as fournitures_router
 from app.api.comptabilite import router as comptabilite_router
-from app.api.personnel import router as personnel_router
+from app.api.personnel import moi as personnel_moi_router, router as personnel_router
 from app.api.presence_agent import router as presence_agent_router
 from app.api.cartes import router as cartes_router
 from app.api.securite import router as securite_router
@@ -505,6 +505,9 @@ app.include_router(examens_router, dependencies=[Depends(require_roles(*EXAMENS_
 app.include_router(devoirs_router, dependencies=[Depends(get_current_user)])
 app.include_router(photos_router, dependencies=[Depends(get_current_user)])
 app.include_router(fournitures_router, dependencies=[Depends(get_current_user)])
+# « Mon compte » (sa fiche, son mot de passe) : ouvert à tout le personnel
+# connecté, AVANT le routeur du personnel (voir app/api/personnel.py, `moi`).
+app.include_router(personnel_moi_router)
 app.include_router(personnel_router, dependencies=[Depends(require_roles(*PERSONNEL_ROLES))])
 # Présences agents : même sensibilité que le module Personnel (historique de
 # présence RH) — trouvé non restreint (get_current_user seul, comme
