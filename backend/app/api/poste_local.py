@@ -11,7 +11,6 @@ refusée : on ne remplace jamais en silence les données d'un poste en service.
 Ensuite, le poste se synchronise seul en arrière-plan (app/sync/service.py) ;
 l'interface en lit l'état et peut demander un échange immédiat.
 """
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -23,6 +22,7 @@ from app.core.mode import CLOUD_URL, DOSSIER_POSTE
 from app.core.version import VERSION
 from app.sync.identifiants import activer_le_poste
 from app.sync.installation import Installateur, lire_appareil, lire_marqueur
+from app.sync.relais import vers_le_cloud
 from app.sync.service import Synchroniseur, poste_retire
 from app.sync.verrou import MESSAGE_RETIRE, verrou_pour
 
@@ -97,22 +97,9 @@ def synchroniser_maintenant():
 
 relais = APIRouter(prefix="/api/sync/conflits", tags=["Synchronisation — à vérifier"])
 
-HORS_LIGNE = "Ces décisions se prennent avec internet : reconnectez ce poste, puis réessayez."
-
 
 def _vers_le_cloud(methode: str, chemin: str, **options):
-    jeton = _jeton_du_poste()
-    if not jeton:
-        raise HTTPException(409, "Ce poste n'est pas encore installé.")
-    try:
-        with httpx.Client(base_url=CLOUD_URL, timeout=30) as client:
-            rep = client.request(methode, chemin, headers={"Authorization": f"Appareil {jeton}"}, **options)
-    except httpx.TransportError:
-        raise HTTPException(503, HORS_LIGNE)
-    if rep.status_code >= 400:
-        detail = rep.json().get("detail") if rep.headers.get("content-type", "").startswith("application/json") else None
-        raise HTTPException(rep.status_code, detail or "Le serveur a refusé la demande.")
-    return rep.json()
+    return vers_le_cloud(CLOUD_URL, _jeton_du_poste(), methode, chemin, **options)
 
 
 @relais.get("", dependencies=[Depends(get_current_user)])

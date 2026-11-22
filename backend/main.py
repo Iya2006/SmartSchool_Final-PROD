@@ -275,7 +275,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
-    expose_headers=["X-Total-Count", "X-Meilleure-Moyenne", "X-Plus-Faible-Moyenne", "X-Moyenne-Classe"],
+    # X-SmartSchool-Hors-Ligne : réponse d'un poste dont le cloud est
+    # injoignable (app/sync/relais.py), que l'interface ne doit pas réessayer.
+    expose_headers=["X-Total-Count", "X-Meilleure-Moyenne", "X-Plus-Faible-Moyenne", "X-Moyenne-Classe",
+                    "X-SmartSchool-Hors-Ligne"],
 )
 
 

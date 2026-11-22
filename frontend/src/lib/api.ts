@@ -206,6 +206,7 @@ const MESSAGE_ECRITURE_HORS_LIGNE =
 // que la panne ne vient pas de lui, et savoir s'il doit réessayer. Le détail
 // technique n'est pas perdu pour autant — il part en console (voir plus bas).
 const MESSAGE_INDISPONIBLE = 'Serveur indisponible. Réessayez dans un instant.';
+const MESSAGE_CLOUD_INJOIGNABLE = 'Cette action demande internet : reconnectez ce poste, puis réessayez.';
 const MESSAGE_TROP_LENT = 'Le serveur met trop de temps à répondre. Réessayez dans un instant.';
 const MESSAGE_PANNE_SERVEUR = 'Le serveur a rencontré un problème. Réessayez dans un instant.';
 
@@ -259,8 +260,19 @@ function estDelaiDepasse(error: any): boolean {
     return error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT';
 }
 
+/**
+ * Réponse d'un poste dont le cloud est injoignable (backend
+ * app/sync/relais.py) : le poste a bien répondu, c'est internet qui manque.
+ * Ce n'est pas une coupure passagère : la réessayer faisait tourner l'écran
+ * « À vérifier » sans fin. Son message dit quoi faire.
+ */
+function cloudInjoignableDepuisLePoste(error: any): boolean {
+    return Boolean(error?.response?.headers?.['x-smartschool-hors-ligne']);
+}
+
 /** Panne qui a de bonnes chances de disparaître d'elle-même. */
 function estPanneTransitoire(error: any): boolean {
+    if (cloudInjoignableDepuisLePoste(error)) return false;
     if (estDelaiDepasse(error)) return true;
     if (estErreurReseau(error)) return true;
     if (!error?.response) return true;
@@ -335,6 +347,7 @@ async function reprendreSiPossible(error: any): Promise<any | null> {
  * message-là vient du serveur, il aide l'utilisateur, on ne l'écrase jamais.
  */
 function messageDePanne(error: any): string | undefined {
+    if (cloudInjoignableDepuisLePoste(error)) return error.response?.data?.detail || MESSAGE_CLOUD_INJOIGNABLE;
     // Le dépassement de délai arrive sans réponse : à tester avant le cas
     // général « pas de réponse », sinon il serait annoncé comme une panne.
     if (error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT') return MESSAGE_TROP_LENT;

@@ -167,6 +167,24 @@ describe('lib/api — reprise automatique', () => {
         expect(rejouer).not.toHaveBeenCalled();
     });
 
+    it('ne rejoue pas un poste qui dit que le cloud est injoignable, et garde son message', async () => {
+        // Le poste a répondu : c'est internet qui manque, pas une coupure
+        // passagère. Insister faisait tourner l'écran « À vérifier » sans fin.
+        const rejouer = vi.spyOn(api, 'request');
+        const erreur = Object.assign(new Error('Request failed with status code 503'), {
+            config: { method: 'get', url: '/api/sync/conflits' },
+            response: {
+                status: 503,
+                headers: { 'x-smartschool-hors-ligne': '1' },
+                data: { detail: 'Ces décisions se prennent avec internet : reconnectez ce poste, puis réessayez.' },
+            },
+        });
+
+        await expect(getRejectedHandler()(erreur)).rejects.toThrow(/avec internet/);
+
+        expect(rejouer).not.toHaveBeenCalled();
+    });
+
     it('n’insiste pas quand l’appareil se sait hors-ligne : insister ne sert à rien', async () => {
         enLigne(false);
         const rejouer = vi.spyOn(api, 'request');
