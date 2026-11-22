@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.models.academique import Utilisateur
-from tests.test_acces_dashboard_et_personnel_direction import _compte, _ecole, _headers
+from tests.test_acces_dashboard_et_personnel_direction import _compte, _ecole, _headers, _uid
 
 
 def test_le_directeur_de_niveau_gere_son_propre_compte(client: TestClient, db: Session):
@@ -22,11 +22,12 @@ def test_le_directeur_de_niveau_gere_son_propre_compte(client: TestClient, db: S
     assert fiche.status_code == 200, fiche.text
     assert fiche.json()["utilisateur_id"] == dn.utilisateur_id
 
-    rep = client.put("/api/personnel/me", headers=entetes, json={"prenom": "Mariama", "telephone": "620111222"})
+    telephone = f"6209{_uid():05d}"  # unique : la suite partage sa base
+    rep = client.put("/api/personnel/me", headers=entetes, json={"prenom": "Mariama", "telephone": telephone})
     assert rep.status_code == 200, rep.text
     db.expire_all()
     assert (db.get(Utilisateur, dn.utilisateur_id).prenom, db.get(Utilisateur, dn.utilisateur_id).telephone) == (
-        "Mariama", "620111222")
+        "Mariama", telephone)
 
     rep = client.put("/api/personnel/me/changer-mot-de-passe", headers=entetes,
                      json={"ancien_mdp": "motdepasse123", "nouveau_mdp": "nouveau-secret-42"})

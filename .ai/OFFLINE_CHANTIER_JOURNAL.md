@@ -257,3 +257,44 @@ réinstallation. **Rien n'est publié.** Le dépôt public des installeurs sera
 créé avec la fusion, avec l'accord du fondateur.
 
 Détail, pièges et limites : `.ai/CORRECTIFS_01_11_2026_RAPPORT.md`.
+
+## 02 au 22/11/2026 — Phase D : tout SmartSchool, prouvé hors-ligne
+
+- **D1** : le moteur et l'interface se relancent seuls.
+- **D2** : les polices sont servies par l'application.
+- Également corrigés : l'impression et les PDF dans l'application de bureau.
+- **D3** : le poste et le cloud rendent les mêmes réponses, route par route.
+  Il a fallu corriger :
+  - la recherche accentuée ;
+  - les rangs à égalité ;
+  - une soixantaine de tris ;
+  - l'ordre alphabétique (imité de PostgreSQL en_US) ;
+  - les anciennes lignes sans école.
+- **D4** : chaque rôle et chaque page, sur l'application installée, internet
+  coupé pour de bon :
+  - 13 rôles, 371 pages, parcours complets ;
+  - aucune requête sortie de l'ordinateur.
+- **D5** : plusieurs postes et le web en même temps :
+  - « une journée », 12 vérifications sur 12 ;
+  - longue absence : 10 292 changements remontés en 457 s ;
+  - les postes sont identiques au cloud, 73 tables sur 73.
+  - Corrigé : les **faux conflits** (dates relues au format brut de SQLite).
+- **D6** :
+  - démarrage à 4 processus sous verrou ;
+  - migration BIGINT mesurée à environ 1 s pour 20 Mo ;
+  - mode d'emploi de mise en production : `.ai/MISE_EN_PRODUCTION_HORS_LIGNE.md`.
+- **À la demande du fondateur**, les défauts déjà présents en ligne, révélés
+  par le balayage, sont corrigés aussi :
+  - l'année n° 1 interrogée au démarrage ;
+  - des écrans vidés par un refus (activités, portail opérateur, inscription
+    par le directeur de niveau) ;
+  - « Mon compte » pour chacun ;
+  - les données de finance demandées à des rôles qui ne l'ont pas.
+- **En production**, la limite de connexion était commune à toute la
+  plateforme : l'adresse réelle n'arrive pas jusqu'à l'API. Le blocage est
+  levé par le compteur par compte ; le réglage du serveur est proposé à Sams.
+
+**Rien n'est publié, rien n'est fusionné** dans `IYA` ni dans `main` : D7 attend
+l'accord du fondateur. Deux décisions de droits d'accès lui sont soumises.
+
+Détail : `.ai/CORRECTIFS_22_11_2026_RAPPORT.md`.
