@@ -1139,7 +1139,7 @@ def etat_promotion_annee(annee_id: int, db: Session = Depends(get_db), etablisse
     classes = db.query(Classe).filter(
         Classe.annee_id == annee_id, Classe.statut == "ACTIVE",
         Classe.etablissement_id == etablissement_id,
-    ).all()
+    ).order_by(Classe.classe_id).all()
 
     detail = []
     total = {"eleves": 0, "calcules": 0, "valides": 0, "sans_classe_cible": 0, "en_attente_filiere": 0}

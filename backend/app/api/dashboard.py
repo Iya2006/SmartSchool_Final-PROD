@@ -170,7 +170,7 @@ def get_dashboard(
     paiements_mobile_money = sum([1 for r in db.query(Paiement.paiement_id).filter(Paiement.mode_paiement.in_(["ORANGE_MONEY", "MTN_MONEY"])).all()])
 
     # ==== TAUX DE RÉUSSITE RÉEL PAR CYCLE ET DÉTAIL PAR CLASSE ====
-    cycles_raw = db.query(Cycle).filter(Cycle.etablissement_id == etablissement_id).order_by(Cycle.ordre).all()
+    cycles_raw = db.query(Cycle).filter(Cycle.etablissement_id == etablissement_id).order_by(Cycle.ordre, Cycle.cycle_id).all()
 
     taux_reussite_par_cycle = []
     total_evaluations_bulletins = 0
@@ -219,7 +219,7 @@ def get_dashboard(
             classes_c = db.query(Classe).filter(
                 Classe.etablissement_id == etablissement_id,
                 Classe.annee_id == annee_id
-            ).all()
+            ).order_by(Classe.classe_id).all()
             
             matching_classes = [c for c in classes_c if any(k in c.code.upper() or k in c.libelle.upper() for k in keywords)]
             classes_details = []
@@ -250,7 +250,7 @@ def get_dashboard(
                 Classe.etablissement_id == etablissement_id,
                 Classe.annee_id == annee_id,
                 Classe.niveau_id.in_(niveau_ids) if niveau_ids else True
-            ).all()
+            ).order_by(Classe.classe_id).all()
 
             classes_details = []
             c_b_cnt = 0

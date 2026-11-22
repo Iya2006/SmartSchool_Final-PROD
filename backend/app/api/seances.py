@@ -205,7 +205,7 @@ def get_seance_detail(
     db: Session = Depends(get_db),
 ):
     s = _seance_teacher_ou_404(db, seance_id, enseignant_id, _auth)
-    presences = db.query(Presence).filter(Presence.seance_id == seance_id).all()
+    presences = db.query(Presence).filter(Presence.seance_id == seance_id).order_by(Presence.inscription_id).all()
     insc_ids = [p.inscription_id for p in presences]
     inscriptions = {i.inscription_id: i for i in db.query(Inscription).filter(Inscription.inscription_id.in_(insc_ids)).all()}
     eleve_ids = [i.eleve_id for i in inscriptions.values()]
@@ -610,7 +610,7 @@ def get_seance_admin_detail(
     etablissement_id: int = Depends(require_etablissement),
 ):
     s = _seance_admin_ou_404(db, seance_id, etablissement_id)
-    presences = db.query(Presence).filter(Presence.seance_id == seance_id).all()
+    presences = db.query(Presence).filter(Presence.seance_id == seance_id).order_by(Presence.inscription_id).all()
     insc_ids = [p.inscription_id for p in presences]
     inscriptions = {i.inscription_id: i for i in db.query(Inscription).filter(Inscription.inscription_id.in_(insc_ids)).all()}
     eleve_ids = [i.eleve_id for i in inscriptions.values()]
@@ -774,6 +774,7 @@ def _presences_journee(db: Session, classe_id: int, jour: date_type, dj: str):
             Presence.demi_journee == dj,
             Presence.seance_id.is_(None),
         )
+        .order_by(Presence.inscription_id)
         .all()
     )
 
