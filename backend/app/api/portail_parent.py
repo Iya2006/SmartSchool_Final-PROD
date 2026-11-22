@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.core.security import verify_password
 from app.core.auth import create_access_token, get_current_user
-from app.core.rate_limit import limiter
+from app.core.rate_limit import cle_de_connexion, limiter
 from app.core.annee_lock import get_active_trimestre_id
 from app.core.messagerie import sous_requete_messages_masques, masquer_message
 from app.models.academique import (
@@ -112,7 +112,7 @@ class LoginParentRequest(BaseModel):
 # IDENTIFICATION PARENT (POST sécurisé + rate limited)
 # ================================================================
 @router.post("/login")
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", key_func=cle_de_connexion)
 def login_parent(request: Request, data: LoginParentRequest, db: Session = Depends(get_db)):
     """Identification par numéro de téléphone + mot de passe (POST sécurisé)."""
     parent = db.query(Parent).filter(

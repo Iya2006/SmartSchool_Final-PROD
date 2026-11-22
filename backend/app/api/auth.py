@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from app.core.database import get_db
 from app.core.security import compte_sans_mot_de_passe, verify_password
 from app.core.auth import ROLES_ATTRIBUABLES, create_access_token, get_current_user
-from app.core.rate_limit import limiter, _DEFAULT_LIMIT
+from app.core.rate_limit import cle_de_connexion, limiter, _DEFAULT_LIMIT
 from app.models.academique import (
     Eleve, EleveParent, Enseignant, Etablissement, Parent, Role, Utilisateur,
 )
@@ -154,7 +154,7 @@ class LoginResponse(BaseModel):
 # LOGIN UNIFIÉ — Rate limited: 5 tentatives/minute max
 # ════════════════════════════════════════════════════════════
 @router.post("/login", response_model=LoginResponse)
-@limiter.limit(_DEFAULT_LIMIT)
+@limiter.limit(_DEFAULT_LIMIT, key_func=cle_de_connexion)
 def unified_login(request: Request, data: LoginRequest, db: Session = Depends(get_db)):
     """
     Connexion unifiée. Cherche l'utilisateur dans l'ordre :

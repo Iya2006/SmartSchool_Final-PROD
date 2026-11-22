@@ -68,6 +68,29 @@ limiter = Limiter(
 )
 
 
+def cle_de_connexion(request: Request) -> str:
+    """Clé des tentatives de connexion : l'adresse ET le compte visé.
+
+    Par adresse seule, tous les utilisateurs d'un poste hors-ligne (toujours
+    127.0.0.1) partageaient les mêmes 5 tentatives par minute : une personne
+    qui se trompait de mot de passe bloquait tout l'ordinateur — constaté en
+    validant le poste rôle par rôle. En ligne, tous ceux qu'un relais présente
+    sous la même adresse (réseau d'une école, proxy) étaient dans le même cas.
+    Par adresse et compte, chacun a ses tentatives, et chaque compte reste
+    protégé contre les essais répétés.
+
+    FastAPI a déjà lu le corps JSON quand la limite est vérifiée, et le garde
+    sur la requête ; à défaut, l'adresse seule, comme avant."""
+    adresse = get_remote_address(request)
+    corps = getattr(request, "_json", None)
+    if isinstance(corps, dict):
+        compte = next((str(corps[champ]).strip().lower() for champ in ("identifiant", "matricule", "telephone")
+                       if corps.get(champ)), "")
+        if compte:
+            return f"{adresse}|{compte}"
+    return adresse
+
+
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
     """Handler personnalisé pour les dépassements de limite."""
     return JSONResponse(
