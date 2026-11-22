@@ -22,7 +22,7 @@ from app.core.mode import CLOUD_URL, DOSSIER_POSTE
 from app.core.version import VERSION
 from app.sync.identifiants import activer_le_poste
 from app.sync.installation import Installateur, lire_appareil, lire_marqueur
-from app.sync.relais import vers_le_cloud
+from app.sync.relais import conflits_du_cloud, vers_le_cloud
 from app.sync.service import Synchroniseur, poste_retire
 from app.sync.verrou import MESSAGE_RETIRE, verrou_pour
 
@@ -104,7 +104,7 @@ def _vers_le_cloud(methode: str, chemin: str, **options):
 
 @relais.get("", dependencies=[Depends(get_current_user)])
 def conflits(tous: bool = False):
-    return _vers_le_cloud("GET", "/api/sync/appareil/conflits", params={"tous": tous})
+    return conflits_du_cloud(CLOUD_URL, _jeton_du_poste(), tous)
 
 
 @relais.post("/{conflit_id}/resoudre")

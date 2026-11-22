@@ -15,7 +15,22 @@ from fastapi import HTTPException
 
 ENTETE_HORS_LIGNE = "X-SmartSchool-Hors-Ligne"
 HORS_LIGNE = "Ces décisions se prennent avec internet : reconnectez ce poste, puis réessayez."
+LISTE_HORS_LIGNE = ("La liste « À vérifier » se consulte avec internet : "
+                    "elle s'affichera dès que ce poste sera reconnecté.")
 DELAIS = httpx.Timeout(30.0, connect=5.0)
+
+
+def conflits_du_cloud(cloud_url: str, jeton: str | None, tous: bool) -> dict:
+    """La liste « À vérifier », lue au cloud. Sans internet, ce n'est pas une
+    erreur mais un état du poste : une réponse normale le dit, et l'écran
+    l'affiche, sans erreur dans le navigateur. Les décisions, elles, restent
+    refusées (503 marqué) : elles ne peuvent pas se prendre hors-ligne."""
+    try:
+        return vers_le_cloud(cloud_url, jeton, "GET", "/api/sync/appareil/conflits", params={"tous": tous})
+    except HTTPException as refus:
+        if (refus.headers or {}).get(ENTETE_HORS_LIGNE):
+            return {"conflits": [], "hors_ligne": True, "message": LISTE_HORS_LIGNE}
+        raise
 
 
 def vers_le_cloud(cloud_url: str, jeton: str | None, methode: str, chemin: str, **options):

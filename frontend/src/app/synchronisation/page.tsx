@@ -81,6 +81,7 @@ export default function SynchronisationPage() {
     const [historique, setHistorique] = useState(false);
     const [chargement, setChargement] = useState(true);
     const [erreur, setErreur] = useState<string | null>(null);
+    const [horsLigne, setHorsLigne] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
     const [enCours, setEnCours] = useState<number | null>(null);
 
@@ -90,7 +91,11 @@ export default function SynchronisationPage() {
         try {
             const res = await api.get(`/api/sync/conflits${historique ? '?tous=true' : ''}`);
             setConflits(res.data?.conflits ?? []);
+            // Poste sans internet : la liste vit au cloud. Ce n'est pas une
+            // erreur, et surtout pas « Rien à vérifier ».
+            setHorsLigne(res.data?.hors_ligne ? (res.data.message || 'La liste « À vérifier » se consulte avec internet.') : null);
         } catch (err) {
+            setHorsLigne(null);
             setConflits([]);
             setErreur(messageErreur(err, 'Impossible de charger les points à vérifier.'));
         }
@@ -213,6 +218,8 @@ export default function SynchronisationPage() {
                     <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
                         <Loader2 size={26} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
                     </div>
+                ) : horsLigne ? (
+                    <Bandeau ton="info"><CloudOff size={16} /> {horsLigne}</Bandeau>
                 ) : conflits.length === 0 ? (
                     !erreur && (
                         <div style={{ ...carte, textAlign: 'center', padding: '44px 24px' }}>
@@ -280,13 +287,16 @@ export default function SynchronisationPage() {
     );
 }
 
-function Bandeau({ ton, children }: { ton: 'ok' | 'ko'; children: React.ReactNode }) {
-    const ok = ton === 'ok';
+function Bandeau({ ton, children }: { ton: 'ok' | 'ko' | 'info'; children: React.ReactNode }) {
+    const [fond, bord, texte] = {
+        ok: ['#f0fdf4', '#bbf7d0', '#15803d'],
+        ko: ['#fef2f2', '#fecaca', '#b91c1c'],
+        info: ['#f1f5f9', '#cbd5e1', '#334155'],
+    }[ton];
     return (
-        <div role={ok ? 'status' : 'alert'} style={{
+        <div role={ton === 'ko' ? 'alert' : 'status'} style={{
             display: 'flex', gap: 10, alignItems: 'center', padding: '12px 15px', borderRadius: 12, fontSize: 13,
-            background: ok ? '#f0fdf4' : '#fef2f2', border: `1px solid ${ok ? '#bbf7d0' : '#fecaca'}`,
-            color: ok ? '#15803d' : '#b91c1c',
+            background: fond, border: `1px solid ${bord}`, color: texte,
         }}>{children}</div>
     );
 }

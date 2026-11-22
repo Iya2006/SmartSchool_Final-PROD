@@ -11,7 +11,7 @@ import time
 import pytest
 from fastapi import HTTPException
 
-from app.sync.relais import DELAIS, ENTETE_HORS_LIGNE, vers_le_cloud
+from app.sync.relais import DELAIS, ENTETE_HORS_LIGNE, LISTE_HORS_LIGNE, conflits_du_cloud, vers_le_cloud
 
 CLOUD_INJOIGNABLE = "http://127.0.0.1:9"
 
@@ -24,6 +24,12 @@ def test_cloud_injoignable_une_reponse_rapide_et_marquee():
     assert refus.value.headers == {ENTETE_HORS_LIGNE: "1"}
     assert "internet" in refus.value.detail
     assert time.monotonic() - debut < 6
+
+
+def test_la_liste_a_verifier_hors_ligne_est_un_etat_pas_une_erreur():
+    # L'écran l'affiche comme une information ; aucune erreur dans le navigateur.
+    assert conflits_du_cloud(CLOUD_INJOIGNABLE, "jeton-du-poste", tous=False) == {
+        "conflits": [], "hors_ligne": True, "message": LISTE_HORS_LIGNE}
 
 
 def test_joindre_le_cloud_ne_prend_jamais_plus_de_5_secondes():

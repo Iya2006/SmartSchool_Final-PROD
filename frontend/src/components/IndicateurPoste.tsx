@@ -90,6 +90,20 @@ const TONS = {
     gris: { fond: '#f1f5f9', texte: '#475569' },
 };
 
+/**
+ * Le dernier état lu est partagé avec le reste de l'interface (le voyant
+ * « en ligne » du menu latéral) par un événement, sans seconde interrogation
+ * du moteur. Sur un poste, « en ligne » veut dire « le cloud répond », et non
+ * « Windows a du réseau » : un poste coupé du cloud s'affichait « En ligne ».
+ */
+export const EVENEMENT_ETAT_POSTE = 'smartschool:etat-poste';
+let dernierEtat: EtatSynchro | null = null;
+
+/** Le cloud était-il joignable à la dernière lecture ? null tant qu'on ne sait pas. */
+export function posteEnLigne(etat: Pick<EtatSynchro, 'statut'> | null = dernierEtat): boolean | null {
+    return etat ? etat.statut !== 'HORS_LIGNE' : null;
+}
+
 export default function IndicateurPoste() {
     const { user } = useAuth();
     const [etat, setEtat] = useState<EtatSynchro | null>(null);
@@ -98,7 +112,10 @@ export default function IndicateurPoste() {
 
     const lire = useCallback(async () => {
         try {
-            setEtat((await api.get('/api/poste/synchronisation')).data);
+            const lu: EtatSynchro = (await api.get('/api/poste/synchronisation')).data;
+            setEtat(lu);
+            dernierEtat = lu;
+            window.dispatchEvent(new CustomEvent(EVENEMENT_ETAT_POSTE, { detail: lu }));
         } catch {
             // Session expirée ou moteur en redémarrage : l'indicateur attend.
         }
