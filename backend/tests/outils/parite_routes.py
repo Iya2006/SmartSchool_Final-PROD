@@ -155,10 +155,17 @@ def nature_et_ecart(a, b):
 def texte_du_pdf(contenu: bytes) -> str:
     """Le texte d'un PDF, page par page : deux PDF identiques à l'écran ne le
     sont pas à l'octet près (date de création, identifiant du fichier)."""
+    import hashlib
     import io
 
     from pypdf import PdfReader
-    return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(contenu)).pages)
+    from pypdf.errors import PdfReadError
+    try:
+        return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(contenu)).pages)
+    except PdfReadError:
+        # PDF déposé tel quel (emploi du temps, sujet) : le même fichier des
+        # deux côtés, à l'octet près.
+        return f"pdf illisible, empreinte {hashlib.sha256(contenu).hexdigest()}"
 
 
 def appeler(base, chemin, requete, entetes):
