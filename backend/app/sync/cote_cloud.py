@@ -27,6 +27,7 @@ qu'elle est maintenant, ou sa suppression.
 import json
 from collections import defaultdict
 from datetime import datetime
+from functools import lru_cache
 from typing import Optional
 
 from sqlalchemy import delete, func, or_, select, text
@@ -40,7 +41,7 @@ from app.sync.instantane import ligne_pour_le_poste
 from app.sync.journal import TABLES_REMONTANTES, ecrire_au_nom_de, tables_journalisees_poste
 from app.sync.perimetre import colonne_cle, filtre_ecole, table
 from app.sync.recalculs import CHAMPS_CALCULES, cibles, fusionner, recalculer
-from app.sync.serialisation import ligne_depuis_json, ligne_vers_json
+from app.sync.serialisation import decoder, ligne_depuis_json, ligne_vers_json
 
 LOT_MAX = 1000
 PAGE_RECEPTION_MAX = 2000
@@ -124,6 +125,36 @@ def _libelles(champs: list[str]) -> str:
     return ", ".join(lisibles)
 
 
+def _valeur(colonne, v):
+    """La donnée elle-même, pas son écriture : « 12 » et « 12.00 », ou
+    « 2026-11-22 03:17:56 » et « 2026-11-22T03:17:56 », sont la même donnée.
+    Le poste et le cloud n'écrivent pas toujours une valeur de la même façon."""
+    try:
+        return decoder(colonne, v)
+    except (ValueError, TypeError, ArithmeticError):
+        return v
+
+
+@lru_cache(maxsize=None)
+def _dates_automatiques(nom: str) -> frozenset:
+    """Les colonnes « modifié le » que l'application remet à jour à chaque
+    écriture (`onupdate`), sur le poste comme sur le serveur. Qu'elles
+    diffèrent ne veut pas dire qu'une donnée a été modifiée des deux côtés :
+    elles ne sont jamais une raison de conflit."""
+    return frozenset(c.name for c in table(nom).columns if c.onupdate is not None)
+
+
+def _plus_recente(colonne, poste, serveur) -> bool:
+    if poste is None:
+        return False
+    if serveur is None:
+        return True
+    try:
+        return _valeur(colonne, poste) > _valeur(colonne, serveur)
+    except TypeError:
+        return False
+
+
 class Conflit:
     """Champ modifié des deux côtés : tranché ou laissé à la direction."""
 
@@ -166,6 +197,7 @@ def _appliquer(db: Session, appareil: Appareil, changement: dict) -> tuple[dict,
     cle = int(changement["cle"])
     etab = appareil.etablissement_id
     calcules = CHAMPS_CALCULES.get(nom, frozenset())
+    dates_auto = _dates_automatiques(nom)
 
     ligne = db.execute(select(t).where(k == cle)).mappings().first()
     courant = ligne_vers_json(t, ligne) if ligne else None
@@ -174,9 +206,12 @@ def _appliquer(db: Session, appareil: Appareil, changement: dict) -> tuple[dict,
     avant = changement.get("avant")
     conflits: list[Conflit] = []
 
+    def differe(c: str, x, y) -> bool:
+        return _valeur(t.c[c], x) != _valeur(t.c[c], y)
+
     def modifies(version: dict) -> set:
-        return {c for c in version if avant is not None and c in avant and c not in calcules
-                and version[c] != avant[c]}
+        return {c for c in version if avant is not None and c in avant and c in t.c
+                and c not in calcules and c not in dates_auto and differe(c, version[c], avant[c])}
 
     if changement.get("operation") == "D":
         if courant is None:
@@ -208,7 +243,11 @@ def _appliquer(db: Session, appareil: Appareil, changement: dict) -> tuple[dict,
             version = dict(courant)
             for c in cote_poste:
                 version[c] = donnees[c]
-            des_deux_cotes = sorted(c for c in cote_poste & cote_serveur if donnees[c] != courant[c])
+            # « Modifié le » : la plus récente des deux écritures.
+            for c in dates_auto:
+                if _plus_recente(t.c[c], donnees.get(c), courant.get(c)):
+                    version[c] = donnees[c]
+            des_deux_cotes = sorted(c for c in cote_poste & cote_serveur if differe(c, donnees[c], courant[c]))
             if des_deux_cotes:
                 champs = _libelles(des_deux_cotes)
                 if nom in TABLES_SENSIBLES:
@@ -234,7 +273,7 @@ def _appliquer(db: Session, appareil: Appareil, changement: dict) -> tuple[dict,
     if not _appartient(db, nom, cle, etab):
         raise Refus("Cette donnée n'appartient pas à l'école de ce poste.")
     # Le poste doit recevoir le résultat si la fusion a gardé des champs du serveur.
-    renvoyer = any(version.get(c) != donnees.get(c) for c in version if c not in calcules)
+    renvoyer = any(c in t.c and differe(c, version.get(c), donnees.get(c)) for c in version if c not in calcules)
     return cibles(nom, courant, donnees), renvoyer, conflits
 
 

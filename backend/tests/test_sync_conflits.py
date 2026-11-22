@@ -9,13 +9,20 @@ change à deux endroits pendant que les postes sont hors-ligne.
 - Les totaux (montant payé d'une facture...) ne sont jamais fusionnés : ils
   sont recalculés depuis leur source.
 """
-from datetime import date
+from datetime import date, datetime, time
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models.academique import Eleve, Evenement, Facture, Inscription, Paiement, SyncConflit, SyncJournal
+from app.models.academique import (
+    Eleve, Evaluation, Evenement, Facture, Inscription, Matiere, Note, Paiement, PresenceAgent, SyncConflit,
+    SyncJournal, Trimestre, TypeEvaluation,
+)
+from app.sync.cote_poste import construire_lot
+from app.sync.perimetre import table
+from app.sync.serialisation import ligne_vers_json
 from app.sync.tables_poste import journal_local
 from tests.test_isolation_multi_ecole import Ecole, _headers, _uid
 from tests.test_sync_echanges import Poste, sans_attente  # noqa: F401 (fixture)
@@ -29,6 +36,131 @@ def _facture(db: Session, ecole: Ecole, eleve: Eleve, montant: int = 300000) -> 
     db.add(facture)
     db.commit()
     return facture
+
+
+def _note_vide(db: Session, ecole: Ecole, eleve: Eleve, valeur=None) -> Note:
+    """Une épreuve créée en ligne avec ses notes vides, comme « initialiser »."""
+    uid = _uid()
+    matiere = Matiere(cycle_id=ecole.cycle.cycle_id, code=f"MAT{uid}", libelle="Mathématiques")
+    trimestre = Trimestre(annee_id=ecole.annee.annee_id, code=f"T{uid}", libelle="1er trimestre", numero=1,
+                          date_debut=date(2025, 10, 1), date_fin=date(2025, 12, 20), statut="EN_COURS")
+    type_eval = TypeEvaluation(etablissement_id=ecole.etab.etablissement_id, code=f"IN{uid}",
+                               libelle="Interrogation", coefficient=1, statut="ACTIF")
+    db.add_all([matiere, trimestre, type_eval])
+    db.flush()
+    evaluation = Evaluation(classe_id=ecole.classe.classe_id, matiere_id=matiere.matiere_id,
+                            trimestre_id=trimestre.trimestre_id, type_eval_id=type_eval.type_eval_id,
+                            enseignant_id=ecole.enseignant.enseignant_id, libelle="Interrogation écrite",
+                            date_evaluation=date(2025, 10, 15), note_sur=20, statut="PLANIFIEE")
+    db.add(evaluation)
+    db.flush()
+    inscription = db.query(Inscription).filter(Inscription.eleve_id == eleve.eleve_id).one()
+    # Écrite en ligne par PostgreSQL : au millionième de seconde.
+    note = Note(evaluation_id=evaluation.evaluation_id, inscription_id=inscription.inscription_id,
+                valeur=valeur, est_absent="N", updated_at=datetime(2026, 11, 2, 8, 0, 0, 350333))
+    db.add(note)
+    db.commit()
+    return note
+
+
+def test_l_etat_d_avant_est_ecrit_comme_le_cloud_l_ecrit(client: TestClient, db: Session, tmp_path):
+    """Le cloud compare l'état d'avant, relu dans le journal du poste, à sa
+    propre ligne, champ par champ. Dates, heures et montants doivent y être
+    écrits exactement comme le cloud les écrit : sinon le cloud croit qu'ils
+    ont changé chez lui."""
+    a = Ecole(db, "A")
+    note = _note_vide(db, a, a.eleve(db), valeur=Decimal("12.50"))
+    pointage = PresenceAgent(etablissement_id=a.etab.etablissement_id, type_agent="ENSEIGNANT",
+                             agent_id=a.enseignant.enseignant_id, date_presence=date(2026, 11, 2),
+                             heure_arrivee=time(7, 45), statut="PRESENT")
+    db.add(pointage)
+    db.commit()
+    cloud = {}
+    for nom, cle in (("ss_notes", note.note_id), ("ss_presences_agents", pointage.presence_id)):
+        t = table(nom)
+        ligne = db.execute(select(t).where(t.primary_key.columns[0] == cle)).mappings().one()
+        cloud[(nom, cle)] = ligne_vers_json(t, ligne)
+    poste = Poste(client, a, tmp_path)
+
+    with poste.session() as s:
+        s.get(Note, note.note_id).valeur = 14
+        s.get(PresenceAgent, pointage.presence_id).heure_depart = time(16, 30)
+        s.commit()
+
+    lot, _ = construire_lot(poste.moteur)
+    avants = {(c["table"], c["cle"]): c["avant"] for c in lot}
+    for ligne, attendu in cloud.items():
+        assert avants[ligne] == attendu, ligne
+
+
+def test_une_note_creee_en_ligne_puis_saisie_sur_un_poste_n_est_pas_un_conflit(
+        client: TestClient, db: Session, tmp_path):
+    """Le cas de tous les jours : l'épreuve est créée en ligne, avec ses notes
+    vides ; l'enseignant les saisit sur un poste, hors-ligne. Personne d'autre
+    n'y a touché : rien à vérifier pour la direction."""
+    a = Ecole(db, "A")
+    note = _note_vide(db, a, a.eleve(db))
+    poste = Poste(client, a, tmp_path)
+
+    with poste.session() as s:
+        s.get(Note, note.note_id).valeur = 14
+        s.commit()
+    poste.synchroniser()
+
+    db.expire_all()
+    assert float(db.get(Note, note.note_id).valeur) == 14
+    assert db.query(SyncConflit).filter(SyncConflit.appareil_id == poste.numero).count() == 0
+
+
+def test_une_note_supprimee_hors_ligne_et_intacte_ailleurs_disparait_du_cloud(
+        client: TestClient, db: Session, tmp_path):
+    """Supprimer une épreuve sur un poste supprime ses notes. Personne ne les a
+    modifiées ailleurs : le cloud les supprime aussi, sans « À vérifier »."""
+    a = Ecole(db, "A")
+    note = _note_vide(db, a, a.eleve(db), valeur=Decimal("11"))
+    note_id = note.note_id
+    poste = Poste(client, a, tmp_path)
+
+    with poste.session() as s:
+        s.delete(s.get(Note, note_id))
+        s.commit()
+    poste.synchroniser()
+
+    db.expire_all()
+    assert db.get(Note, note_id) is None
+    assert db.query(SyncConflit).filter(SyncConflit.appareil_id == poste.numero).count() == 0
+
+
+def test_deux_champs_d_une_note_sur_deux_postes_sans_conflit(client: TestClient, db: Session, tmp_path):
+    """Chaque écriture remet à jour la date « modifié le », des deux côtés : ce
+    n'est pas une modification concurrente. La valeur saisie sur un poste et
+    l'observation saisie sur l'autre sont gardées toutes les deux, et la date
+    retenue est la plus récente."""
+    a = Ecole(db, "A")
+    note = _note_vide(db, a, a.eleve(db))
+    p1, p2 = Poste(client, a, tmp_path / "p1"), Poste(client, a, tmp_path / "p2")
+
+    with p1.session() as s:
+        locale = s.get(Note, note.note_id)
+        locale.valeur, locale.updated_at = 14, datetime(2026, 11, 22, 9, 0)
+        s.commit()
+    with p2.session() as s:
+        locale = s.get(Note, note.note_id)
+        locale.observation, locale.updated_at = "Copie rendue en retard", datetime(2026, 11, 22, 10, 0)
+        s.commit()
+    p1.synchroniser()
+    p2.synchroniser()
+    p1.synchroniser()
+
+    db.expire_all()
+    cloud = db.get(Note, note.note_id)
+    assert (float(cloud.valeur), cloud.observation) == (14, "Copie rendue en retard")
+    assert cloud.updated_at == datetime(2026, 11, 22, 10, 0)
+    for poste in (p1, p2):
+        with poste.session() as s:
+            locale = s.get(Note, note.note_id)
+            assert (float(locale.valeur), locale.observation) == (14, "Copie rendue en retard"), poste.numero
+    assert db.query(SyncConflit).filter(SyncConflit.appareil_id.in_([p1.numero, p2.numero])).count() == 0
 
 
 def test_deux_encaissements_hors_ligne_sur_la_meme_facture(client: TestClient, db: Session, tmp_path):

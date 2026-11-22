@@ -22,6 +22,7 @@ Une ligne qui a encore un changement local en attente n'est pas écrasée :
 la version du poste part au prochain envoi, et le cloud tranche.
 """
 import json
+from functools import lru_cache
 from typing import Optional
 
 from sqlalchemy import delete, func, select
@@ -62,6 +63,15 @@ def mis_de_cote(moteur: Engine) -> int:
 _DIALECTE = sqlite.dialect()
 
 
+@lru_cache(maxsize=None)
+def _conversion(colonne):
+    """La lecture d'une valeur brute de SQLite, celle du type tel que SQLite
+    le stocke. Le type générique (`DateTime`) n'en a pas : il laisserait la
+    date en texte, « 2026-11-22 03:17:56 », là où `ligne_vers_json` écrit
+    « 2026-11-22T03:17:56 »."""
+    return colonne.type.dialect_impl(_DIALECTE).result_processor(_DIALECTE, None)
+
+
 def _avant_en_json(t, brut: Optional[str]) -> Optional[dict]:
     """La ligne d'avant, notée par le déclencheur (valeurs brutes de SQLite),
     remise dans le format exact de `ligne_vers_json` : le cloud compare les
@@ -74,7 +84,7 @@ def _avant_en_json(t, brut: Optional[str]) -> Optional[dict]:
         if c.name not in valeurs:
             continue
         valeur = valeurs[c.name]
-        traitement = c.type.result_processor(_DIALECTE, None)
+        traitement = _conversion(c)
         if traitement is not None and valeur is not None:
             valeur = traitement(valeur)
         resultat[c.name] = encoder(c, valeur)
