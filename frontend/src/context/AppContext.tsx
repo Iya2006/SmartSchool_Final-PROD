@@ -229,8 +229,17 @@ const AppContext = createContext<AppContextType>({
     setCarteConfigEnseignant: () => {},
 });
 
+/** L'année courante de la dernière liste connue du compte connecté, ou null. */
+function anneeCouranteMemorisee(): number | null {
+    if (typeof window === 'undefined') return null;
+    const annees = lireMemo()?.annees as AnneeScolaire[] | undefined;
+    if (!Array.isArray(annees) || annees.length === 0) return null;
+    const active = annees.find((a) => a.est_courante === 'O') || annees[0];
+    return typeof active?.annee_id === 'number' ? active.annee_id : null;
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
-    const { isAuthenticated, user } = useAuth();
+    const { isAuthenticated, user, sessionLue } = useAuth();
     // Établissement affiché. Vaut 1 UNIQUEMENT tant qu'aucun compte n'est
     // connecté (page de login : un visiteur anonyme n'a pas encore d'école).
     // Dès la connexion, l'effet ci-dessous le remplace par l'établissement
@@ -243,11 +252,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const [etablissementCachet, setEtablissementCachet] = useState<string | null>(null);
     const [etablissementSignature, setEtablissementSignature] = useState<string | null>(null);
     const [etablissementDirecteur, setEtablissementDirecteur] = useState<string | null>(null);
-    const [anneeId, setAnneeId] = useState<number>(1);
+    // Dernière année courante connue de CE compte (lib/memoHorsLigne.ts) : un
+    // rechargement de page démarre sur la bonne année. Avec la valeur
+    // d'attente 1 (l'année d'une autre école), les pages l'interrogeaient le
+    // temps que la liste arrive : 404, listes vides, puis second appel.
+    const [anneeId, setAnneeId] = useState<number>(() => anneeCouranteMemorisee() ?? 1);
     const [anneeLibelle, setAnneeLibelle] = useState<string>('');
-    const [anneeCouranteId, setAnneeCouranteId] = useState<number>(1);
+    const [anneeCouranteId, setAnneeCouranteId] = useState<number>(() => anneeCouranteMemorisee() ?? 1);
     const [annees, setAnnees] = useState<AnneeScolaire[]>([]);
     const [loading, setLoading] = useState(true);
+    const sessionOuverte = useRef(false);
     const [theme, setTheme] = useState<ThemeConfig>(DEFAULT_THEME);
 
     // Initialize from localStorage cache for instant availability before API responds
@@ -478,17 +492,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
         fetchEtablissement();
         fetchTheme();
 
+        // Au premier rendu, AuthContext n'a pas encore relu la session
+        // enregistrée : `isAuthenticated` vaut false même pour un utilisateur
+        // connecté. On reste « en chargement » jusqu'à le savoir. Sinon les
+        // pages qui attendent `loading` partaient avec l'année d'attente (1),
+        // celle d'une autre école.
+        if (!sessionLue) return;
+
         if (!isAuthenticated) {
+            sessionOuverte.current = false;
             setLoading(false);
             setAnneeLibelle('2024-2025');
             return;
         }
 
+        // Juste après une connexion, `loading` valait déjà false (écran de
+        // connexion) : la page d'arrivée doit attendre l'année elle aussi.
+        // Une fois la session ouverte, les relances de cet effet (école
+        // confirmée par le compte) ne repassent pas par « en chargement » :
+        // les pages ne rechargent pas pour rien.
+        if (!sessionOuverte.current) {
+            sessionOuverte.current = true;
+            setLoading(true);
+        }
         fetchAnnee().finally(() => setLoading(false));
         // `fetchEtablissement` et `fetchTheme` dépendent de `etablissementId` :
         // les inclure ici est ce qui déclenche le rechargement de l'identité et
         // du thème quand le login révèle enfin l'école du compte.
-    }, [fetchEtablissement, fetchTheme, fetchAnnee, isAuthenticated]);
+    }, [fetchEtablissement, fetchTheme, fetchAnnee, isAuthenticated, sessionLue]);
 
     // Titre et icône de l'onglet.
     //

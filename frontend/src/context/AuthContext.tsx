@@ -38,6 +38,9 @@ export interface AuthContextType {
     user: UserInfo | null;
     token: string | null;
     isAuthenticated: boolean;
+    /** La session enregistrée a été relue (vraie dès le premier effet). Avant,
+     * `isAuthenticated` vaut false même pour un utilisateur connecté. */
+    sessionLue: boolean;
     login: (token: string, user: UserInfo) => void;
     logout: () => void;
     /** Vrai juste après un login réussi (pas après un simple rechargement de
@@ -51,6 +54,7 @@ export const AuthContext = createContext<AuthContextType>({
     user: null,
     token: null,
     isAuthenticated: false,
+    sessionLue: false,
     login: () => {},
     logout: () => {},
     showPostLoginSplash: false,
@@ -195,7 +199,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     return (
-        <AuthContext.Provider value={{ user, token, isAuthenticated: !!token, login, logout, showPostLoginSplash, setShowPostLoginSplash }}>
+        <AuthContext.Provider value={{ user, token, isAuthenticated: !!token, sessionLue: checked, login, logout, showPostLoginSplash, setShowPostLoginSplash }}>
             {children}
         </AuthContext.Provider>
     );

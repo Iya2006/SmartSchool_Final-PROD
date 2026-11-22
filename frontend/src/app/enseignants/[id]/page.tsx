@@ -12,6 +12,8 @@ import {
     UserCheck, Scan, MessageSquare
 } from 'lucide-react';
 import api from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
+import { voitFinance } from '@/lib/roleAccess';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
 import { QRCodeSVG } from 'qrcode.react';
@@ -74,7 +76,10 @@ export default function ProfilEnseignant() {
     const [affectations, setAffectations] = useState<Affectation[]>([]);
     const [creneaux, setCreneaux] = useState<Creneau[]>([]);
     const [stats, setStats] = useState<DashStats | null>(null);
-    const { etablissementId, anneeId, anneeLibelle } = useApp();
+    const { etablissementId, anneeId, anneeLibelle, loading: chargementApp } = useApp();
+    const { user } = useAuth();
+    const peutVoirFinance = voitFinance(user);
+    const compteConnu = !!user;
     const [loading, setLoading] = useState(true);
     const [badgeEns, setBadgeEns] = useState<any>(null);
     const [qrEns, setQrEns] = useState<any>(null);
@@ -90,7 +95,8 @@ export default function ProfilEnseignant() {
     const [avis, setAvis] = useState<{ texte: string; ok: boolean } | null>(null);
 
     const loadAll = useCallback(async () => {
-        if (!id) return;
+        // Compte et année pas encore connus : ni les droits ni l'année ne sont sûrs.
+        if (!id || !compteConnu || chargementApp) return;
         try {
             const [eRes, aRes, edtRes, sRes] = await Promise.all([
                 api.get(`/api/enseignants/${id}`),
@@ -100,13 +106,15 @@ export default function ProfilEnseignant() {
             ]);
             setEns(eRes.data); setAffectations(aRes.data); setCreneaux(edtRes.data); setStats(sRes.data);
         } catch (e) { console.error(e); } finally { setLoading(false); }
-        // La rémunération peut échouer seule (comptes sans accès finance) sans
-        // priver la page du reste : elle s'affiche alors simplement en moins.
+        // La rémunération relève de la finance (FINANCE_ROLES) : demandée
+        // seulement à qui l'a. Elle peut aussi échouer seule sans priver la
+        // page du reste : elle s'affiche alors simplement en moins.
+        if (!peutVoirFinance) { setRemu(null); return; }
         try {
             const r = await api.get(`/api/finance/remuneration/enseignant/${id}`);
             setRemu(r.data);
         } catch { setRemu(null); }
-    }, [id, anneeId]);
+    }, [id, anneeId, compteConnu, chargementApp, peutVoirFinance]);
 
     useEffect(() => { loadAll(); }, [loadAll]);
 

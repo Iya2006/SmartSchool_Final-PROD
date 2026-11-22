@@ -787,6 +787,10 @@ export default function CartesPage() {
                                             agent={mockAgent}
                                             carteConfig={config}
                                             id="preview-badge-carte"
+                                            // Personne d'exemple : le serveur ne la connaît pas
+                                            // (404 à chaque aperçu). Le QR de l'aperçu porte
+                                            // donc un texte d'exemple, sans appel réseau.
+                                            qrTexteOverride={`${mockAgent.prenom} ${mockAgent.nom} — ${mockAgent.matricule} (exemple)`}
                                         />
                                     </div>
                                 </div>

@@ -44,6 +44,15 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
+  // L'ancien espace enseignant n'est plus ouvert : il demandait le tableau
+  // de bord de la direction, interdit à l'enseignant, et ce refus le
+  // renvoyait au portail (lib/api.ts) après une salve de requêtes coupées.
+  // Le portail enseignant est l'espace de l'enseignant : on y va directement,
+  // avant tout affichage. Aucun lien de l'application ne mène à l'ancienne
+  // adresse ; elle reste valable pour un favori.
+  async redirects() {
+    return [{ source: "/teacher-dashboard", destination: "/portail-enseignant", permanent: false }];
+  },
 };
 
 // Permet à `next dev` d'accéder aux bindings Cloudflare en local (OpenNext).

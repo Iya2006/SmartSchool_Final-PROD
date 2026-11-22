@@ -269,6 +269,29 @@ export const canAccessPathForRole = (
     return config.allowedPrefixes.some((prefix) => pathname.startsWith(prefix));
 };
 
+type CompteConnecte = {
+    role?: string | null;
+    role_base?: string | null;
+    acces_comptabilite?: string | null;
+} | null | undefined;
+
+/**
+ * Le compte peut-il lire le tableau de bord ? Même règle que le serveur
+ * (backend/main.py, DASHBOARD_ROLES) : une page ouverte à d'autres rôles ne
+ * le demande qu'à ceux-là. Demandé sans droit, il répondait 403, et ce refus
+ * vidait des écrans entiers (activités, portail opérateur).
+ */
+export const voitTableauDeBord = (compte: CompteConnecte): boolean =>
+    canAccessPathForRole(compte?.role, '/dashboard', compte?.role_base, compte?.acces_comptabilite);
+
+/**
+ * Le compte peut-il lire la finance (frais, tarifs, rémunérations) ? Même
+ * règle que le serveur (backend/main.py, FINANCE_ROLES) et que l'écran
+ * Comptabilité. Le directeur de niveau, bras pédagogique, ne l'a pas.
+ */
+export const voitFinance = (compte: CompteConnecte): boolean =>
+    canAccessPathForRole(compte?.role, '/comptabilite', compte?.role_base, compte?.acces_comptabilite);
+
 export const isAdminSystemRole = (role?: string | null) => {
     return !!role && ADMIN_SYSTEM_ROLES.includes(role as typeof ADMIN_SYSTEM_ROLES[number]);
 };

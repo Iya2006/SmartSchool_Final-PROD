@@ -220,7 +220,7 @@ function getHealthStatus(data: DashboardData) {
 }
 
 export default function DashboardPage() {
-  const { etablissementId, anneeId, anneeLibelle } = useApp();
+  const { etablissementId, anneeId, anneeLibelle, loading: chargementApp } = useApp();
   const isMobile = useIsMobile();
   const [showImpayesModal, setShowImpayesModal] = useState<ImpayeModalState>(false);
   const [impayesSearch, setImpayesSearch] = useState('');
@@ -243,7 +243,9 @@ export default function DashboardPage() {
       const res = await api.get(`/api/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
       return res.data as DashboardData;
     },
-    enabled: !!etablissementId && !!anneeId,
+    // L'année n'est sûre qu'une fois la liste chargée (AppContext) : avant,
+    // la valeur d'attente désignait l'année d'une autre école (404).
+    enabled: !!etablissementId && !!anneeId && !chargementApp,
     // Rafraîchissement automatique toutes les 15 secondes pour les activités en temps réel
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
