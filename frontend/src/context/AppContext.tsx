@@ -488,16 +488,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
             if (cachedLogo) setEtablissementLogo(cachedLogo);
         }
 
-        // Toujours charger l'établissement et le thème (routes publiques)
-        fetchEtablissement();
-        fetchTheme();
-
         // Au premier rendu, AuthContext n'a pas encore relu la session
         // enregistrée : `isAuthenticated` vaut false même pour un utilisateur
         // connecté. On reste « en chargement » jusqu'à le savoir. Sinon les
         // pages qui attendent `loading` partaient avec l'année d'attente (1),
         // celle d'une autre école.
         if (!sessionLue) return;
+
+        // Compte d'une autre école que celle affichée (1, en attendant) :
+        // l'effet plus haut la remplace par la sienne, et celui-ci repart avec
+        // elle. Charger d'abord l'école n° 1 affichait un instant le nom d'une
+        // autre école, pour rien.
+        // Les pages attendent pendant ce temps : « en chargement », comme
+        // ci-dessous, sinon elles partiraient avec l'école et l'année d'attente.
+        if (isAuthenticated && typeof user?.etablissement_id === 'number'
+            && user.etablissement_id !== etablissementId) {
+            if (!sessionOuverte.current) {
+                sessionOuverte.current = true;
+                setLoading(true);
+            }
+            return;
+        }
+
+        // Toujours charger l'établissement et le thème (routes publiques), une
+        // fois la session relue. Lancés aussi au tout premier rendu, ils
+        // repartaient aussitôt la session relue : deux fois chacun, à chaque
+        // chargement de page.
+        fetchEtablissement();
+        fetchTheme();
 
         if (!isAuthenticated) {
             sessionOuverte.current = false;
@@ -519,7 +537,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // `fetchEtablissement` et `fetchTheme` dépendent de `etablissementId` :
         // les inclure ici est ce qui déclenche le rechargement de l'identité et
         // du thème quand le login révèle enfin l'école du compte.
-    }, [fetchEtablissement, fetchTheme, fetchAnnee, isAuthenticated, sessionLue]);
+    }, [fetchEtablissement, fetchTheme, fetchAnnee, isAuthenticated, sessionLue, user?.etablissement_id, etablissementId]);
 
     // Titre et icône de l'onglet.
     //
