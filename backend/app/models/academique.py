@@ -60,8 +60,12 @@ class Utilisateur(Base):
     rib = Column(String(100), nullable=True)
     mode_paiement_salaire = Column(String(50), default="ESPECES")
     date_naissance = Column(Date, nullable=True)
-    lieu_naissance = Column(String(100), nullable=True)
-    adresse = Column(String(255), nullable=True)
+    # 150 et 300 : les longueurs de la base PostgreSQL (vérifiées sur la copie
+    # de la base le 28/11/2026), plus larges que l'ancien code. Un poste
+    # applique ces longueurs avant d'écrire (app/core/valeurs_refusees.py) :
+    # plus étroites ici, il refuserait ce que le cloud accepte.
+    lieu_naissance = Column(String(150), nullable=True)
+    adresse = Column(String(300), nullable=True)
     numero_cni = Column(String(50), nullable=True)
     # Le directeur général voit-il la comptabilité ? Le fondateur tranche à la
     # création. « O » par défaut : les comptes existants gardent leur accès, et
@@ -423,8 +427,9 @@ class Enseignant(Base):
     heures_hebdo = Column(Integer, default=0)
     rib = Column(String(100), nullable=True)
     mode_paiement_salaire = Column(String(50), default="ESPECES")
-    lieu_naissance = Column(String(100), nullable=True)
-    adresse = Column(String(255), nullable=True)
+    # Longueurs de la base PostgreSQL, comme pour le personnel (ci-dessus).
+    lieu_naissance = Column(String(150), nullable=True)
+    adresse = Column(String(300), nullable=True)
     numero_cni = Column(String(50), nullable=True)
     
     est_admin = Column(String(1), default="N", nullable=False)  # O = admin, N = enseignant simple

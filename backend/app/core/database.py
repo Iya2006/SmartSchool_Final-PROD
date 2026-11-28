@@ -308,6 +308,16 @@ if EST_SQLITE:
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Même principe pour la longueur des textes : SQLite l'ignore, PostgreSQL la
+# refuse. Un texte trop long saisi sur un poste bloquait ensuite tout son envoi
+# au cloud (app/core/valeurs_refusees.py). Vérifié avant chaque écriture de
+# l'ORM sur une base SQLite ; sans effet sur PostgreSQL, qui l'applique déjà.
+from sqlalchemy.orm import Session as _Session  # noqa: E402
+from app.core.valeurs_refusees import verifier_longueurs  # noqa: E402
+
+if not event.contains(_Session, "before_flush", verifier_longueurs):
+    event.listen(_Session, "before_flush", verifier_longueurs)
+
 Base = declarative_base()
 
 def get_db():

@@ -32,9 +32,10 @@ from typing import Optional
 
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects import postgresql, sqlite
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.valeurs_refusees import est_valeur_refusee, raison as raison_valeur_refusee
 from app.models.academique import Appareil, SyncConflit, SyncJournal
 from app.sync.identifiants import appareil_de, est_naturel
 from app.sync.instantane import ligne_pour_le_poste
@@ -319,6 +320,15 @@ def appliquer_lot(db: Session, appareil: Appareil, changements: list[dict]) -> d
                 refuses.append((changement, _raison(erreur)))
             else:
                 a_reprendre.append(changement)
+        except DBAPIError as erreur:
+            # Valeur que le serveur refuse — typiquement un texte trop long,
+            # que SQLite avait accepté sur le poste. La renvoyer échouerait
+            # toujours : elle est mise de côté, et le reste du lot passe. Avant,
+            # tout le lot échouait, à chaque cycle : le poste était bloqué.
+            if not est_valeur_refusee(erreur):
+                raise
+            refuses.append((changement, raison_valeur_refusee(erreur)
+                            + " Gardez la version du serveur, puis ressaisissez la donnée en la corrigeant."))
 
     for changement in changements:
         empreinte = (int(changement["seq"]), changement.get("table"), int(changement["cle"]))
@@ -427,6 +437,11 @@ def resoudre_conflit(db: Session, conflit: SyncConflit, choix: str, auteur: str)
             except IntegrityError as erreur:
                 raise ResolutionImpossible(
                     _raison(erreur) + " Corrigez d'abord la donnée en double, puis recommencez.")
+            except DBAPIError as erreur:
+                if not est_valeur_refusee(erreur):
+                    raise
+                raise ResolutionImpossible(raison_valeur_refusee(erreur)
+                                           + " Gardez la version du serveur, puis ressaisissez la donnée en la corrigeant.")
             recalculer(db.connection(), cibles(conflit.nom_table, json.loads(conflit.donnees)))
     else:
         # Republier la ligne telle qu'elle est (ou son absence) : le poste,

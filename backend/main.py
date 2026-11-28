@@ -476,6 +476,31 @@ async def enregistrer_incident(request: Request, exc: Exception):
         },
     )
 
+
+# ── Valeur refusée par la base (texte trop long, nombre trop grand…) ──
+# Ce n'est pas une panne mais une saisie à corriger : une réponse 400 qui dit
+# quoi corriger, au lieu de l'erreur 500 ci-dessus. Sur un poste (SQLite), la
+# même règle s'applique avant l'écriture : TexteTropLong
+# (app/core/valeurs_refusees.py).
+from sqlalchemy.exc import DBAPIError as _DBAPIError  # noqa: E402
+from app.core.valeurs_refusees import (  # noqa: E402
+    TexteTropLong, est_valeur_refusee, raison as _raison_valeur_refusee,
+)
+
+
+@app.exception_handler(TexteTropLong)
+async def texte_trop_long(request: Request, exc: TexteTropLong):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(_DBAPIError)
+async def valeur_refusee(request: Request, exc: _DBAPIError):
+    if est_valeur_refusee(exc):
+        return JSONResponse(status_code=400, content={
+            "detail": _raison_valeur_refusee(exc) + " Corrigez la saisie, puis enregistrez à nouveau."})
+    # Toute autre erreur de la base reste un incident, traité comme avant.
+    raise exc
+
 app.include_router(dashboard_router, dependencies=[Depends(exige_acces_dashboard)])
 app.include_router(cartes_router, dependencies=[Depends(get_current_user)])
 app.include_router(eleves_router, dependencies=[Depends(get_current_user), Depends(_MOD_ELEVES)])
