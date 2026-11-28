@@ -298,3 +298,31 @@ Détail, pièges et limites : `.ai/CORRECTIFS_01_11_2026_RAPPORT.md`.
 l'accord du fondateur. Deux décisions de droits d'accès lui sont soumises.
 
 Détail : `.ai/CORRECTIFS_22_11_2026_RAPPORT.md`.
+
+## 22 au 28/11/2026 — Les deux décisions du fondateur, et ce qu'elles ont mis au jour
+
+- **Fiche d'une famille** : le directeur de niveau la lit et la corrige comme
+  la direction (« le directeur doit avoir tout »). Le reste du portail parent,
+  dont les paiements, lui reste fermé (`b2fda07`).
+- **Messages aux familles** : le comptable écrit aux parents et lit leurs
+  réponses, messages « Paiement » seulement, depuis un nouvel écran de son
+  menu (`b2fda07`).
+- **Relance des impayés** :
+  - le texte de l'école n'était jamais utilisé, et son enregistrement
+    échouait toujours ;
+  - destinataire fixé : le responsable financier ;
+  - 6 s → 0,3 s sur la copie (`b2fda07`).
+- **Synchronisation** : un seul texte trop long saisi hors-ligne bloquait tout
+  l'envoi d'un poste, à chaque cycle (SQLite l'accepte, PostgreSQL le refuse).
+  - Désormais refusé dès la saisie sur le poste ; mis de côté par le cloud
+    sans bloquer le reste.
+  - Vérifié sur la copie PostgreSQL (`9b520d3`).
+- Également : « Signaler mon enfant » en erreur 500 (`c8b9d06`), réglages de
+  l'école chargés deux fois (`f1fec79`).
+- **Piège** : la suite de tests tourne sur SQLite. Le comportement de
+  PostgreSQL se vérifie sur la copie `smartschool_essai_sync`.
+
+**Rien n'est publié, rien n'est fusionné** dans `IYA` ni dans `main` : D7 attend
+l'accord du fondateur.
+
+Détail : `.ai/CORRECTIFS_28_11_2026_RAPPORT.md`.
