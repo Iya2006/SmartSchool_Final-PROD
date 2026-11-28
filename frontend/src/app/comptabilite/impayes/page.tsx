@@ -10,6 +10,7 @@ import {
     ArrowUpDown, ArrowUp, ArrowDown
 } from 'lucide-react';
 import api from '@/lib/api';
+import { texteErreur } from '@/lib/texteErreur';
 import Link from 'next/link';
 import Pagination from '@/components/Pagination';
 import AnneeFilter from '@/components/AnneeFilter';
@@ -208,8 +209,8 @@ export default function ImpayesPage() {
             const params = new URLSearchParams({ etablissement_id: String(etablissementId), annee_id: String(filterAnnee) });
             if (filterClasse) params.set('classe_id', String(filterClasse));
             const res = await api.post(`/api/finance/communication/notifier-impayes?${params}`);
-            showMsg(`${res.data.nb_notifies} notification(s) envoyée(s) aux parents`, 'success');
-        } catch { showMsg('Erreur lors de l\'envoi', 'error'); }
+            showMsg(res.data.message || `${res.data.nb_notifies} rappel(s) envoyé(s) aux parents.`, 'success');
+        } catch (err) { showMsg(texteErreur(err, "Les rappels n'ont pas pu être envoyés."), 'error'); }
         setNotifying(false);
     };
 

@@ -3,15 +3,15 @@ SMARTSCHOOL API — Communication & Demandes d'Emploi du Temps
 Système de messagerie Admin <-> Enseignants + Collecte de disponibilités
 + Génération automatique d'emplois du temps basée sur les disponibilités validées
 """
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_, func
+from sqlalchemy import and_, desc, or_, func
 from typing import Dict, Optional
 from datetime import datetime
 import json
 
 from app.core.database import get_db
-from app.core.auth import get_current_user, require_etablissement, require_roles, ADMIN_TIER_ROLES
+from app.core.auth import get_current_user, require_etablissement, require_roles, roles_du_compte, ADMIN_TIER_ROLES
 from app.core.annee_courante import resoudre_annee
 from app.core.messagerie import sous_requete_messages_masques, masquer_message
 from app.models.academique import (
@@ -38,9 +38,21 @@ OBJET_TYPES = ["EMPLOI", "DISCIPLINE", "GENERAL", "REUNION", "EXAMENS"]
 # avec vérification d'établissement + d'ownership.
 _require_admin = require_roles(*ADMIN_TIER_ROLES)
 
+# MESSAGES AUX FAMILLES : le comptable y écrit aussi — relancer un paiement,
+# répondre à une famille sur sa scolarité (décision du fondateur, 22/11/2026).
+# Il n'y lit et n'y écrit QUE des messages « Paiement » : les autres échanges
+# de la direction avec les familles (discipline, bulletins…) restent à la
+# direction, comme les demandes d'emploi du temps et la messagerie interne.
+OBJET_PAIEMENT = "PAIEMENT"
+_require_messagerie_familles = require_roles(*ADMIN_TIER_ROLES, "COMPTABLE")
+
 
 def _est_admin_tier(current_user: dict) -> bool:
-    return current_user.get("role") in ADMIN_TIER_ROLES
+    """La direction. Rôles secondaires et rôle de base d'un rôle personnalisé
+    compris (`roles_du_compte`), comme `require_roles` : sans eux, un compte
+    admis par `_require_admin` se voyait ensuite refuser la boîte de la
+    direction."""
+    return bool(roles_du_compte(current_user) & ADMIN_TIER_ROLES)
 
 
 # ============================================================================
@@ -850,7 +862,7 @@ def get_objet_types():
 # COMMUNICATION PARENTS — Admin side
 # ============================================================================
 
-@router.get("/parents-list", dependencies=[Depends(_require_admin)])
+@router.get("/parents-list", dependencies=[Depends(_require_messagerie_familles)])
 def get_parents_list(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
     """Liste les parents ayant au moins un enfant dans CET établissement,
     avec UNIQUEMENT leurs enfants de cet établissement.
@@ -931,9 +943,26 @@ def get_parents_list(db: Session = Depends(get_db), etablissement_id: int = Depe
     return result
 
 
-@router.get("/messages-parents", dependencies=[Depends(_require_admin)])
-def list_messages_parents(db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Liste les messages échangés avec les parents (pour l'admin).
+@router.get("/messages-parents", dependencies=[Depends(_require_messagerie_familles)])
+def list_messages_parents(
+    objet_type: Optional[str] = None,
+    parent_id: Optional[int] = None,
+    limit: int = Query(200, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """Liste les messages échangés avec les parents, les plus récents d'abord.
+
+    `objet_type` restreint à un type (« PAIEMENT » : l'écran Messages aux
+    familles de la comptabilité). Le comptable ne reçoit jamais que les
+    messages « Paiement », quel que soit le filtre demandé.
+
+    `parent_id` : les échanges d'UNE famille — ce qu'elle a écrit, ce qui lui
+    a été écrit, et ce qu'elle a reçu avec les parents de la classe de ses
+    enfants ou avec tous les parents. Sans ce filtre, une relance groupée
+    (un message par facture) repoussait vite hors de la liste les réponses
+    d'une famille.
 
     Préchargement par lot (parents + classes en 2 requêtes fixes) au lieu
     d'une requête par message dans la boucle — même correctif que
@@ -941,7 +970,10 @@ def list_messages_parents(db: Session = Depends(get_db), etablissement_id: int =
     """
     from app.models.academique import Parent, Classe
 
-    msgs = db.query(Message).filter(
+    if not _est_admin_tier(current_user):
+        objet_type = OBJET_PAIEMENT
+
+    q = db.query(Message).filter(
         Message.etablissement_id == etablissement_id,
         or_(
             Message.destinataire_type.in_(["PARENT", "TOUS_PARENTS", "CLASSE_PARENTS"]),
@@ -949,7 +981,25 @@ def list_messages_parents(db: Session = Depends(get_db), etablissement_id: int =
         ),
         # « Supprimer pour moi » : même boîte admin (partagée par établissement).
         Message.message_id.notin_(sous_requete_messages_masques(db, "ADMIN", etablissement_id)),
-    ).order_by(desc(Message.date_envoi), desc(Message.message_id)).limit(200).all()
+    )
+    if objet_type:
+        q = q.filter(Message.objet_type == objet_type)
+    if parent_id is not None:
+        classes_de_la_famille = (
+            db.query(Inscription.classe_id)
+            .join(EleveParent, EleveParent.eleve_id == Inscription.eleve_id)
+            .join(Eleve, Eleve.eleve_id == Inscription.eleve_id)
+            .filter(EleveParent.parent_id == parent_id, Inscription.statut == "ACTIVE",
+                    Eleve.etablissement_id == etablissement_id)
+        )
+        q = q.filter(or_(
+            and_(Message.destinataire_type == "PARENT", Message.destinataire_id == parent_id),
+            and_(Message.expediteur_type == "PARENT", Message.expediteur_id == parent_id),
+            and_(Message.destinataire_type == "CLASSE_PARENTS",
+                 Message.destinataire_id.in_(classes_de_la_famille)),
+            Message.destinataire_type == "TOUS_PARENTS",
+        ))
+    msgs = q.order_by(desc(Message.date_envoi), desc(Message.message_id)).limit(limit).all()
 
     parent_ids = {m.expediteur_id for m in msgs if m.expediteur_type == "PARENT" and m.expediteur_id}
     parent_ids |= {m.destinataire_id for m in msgs if m.destinataire_type == "PARENT" and m.destinataire_id}
@@ -962,23 +1012,27 @@ def list_messages_parents(db: Session = Depends(get_db), etablissement_id: int =
     if classe_ids:
         classes_par_id = {c.classe_id: c for c in db.query(Classe).filter(Classe.classe_id.in_(classe_ids)).all()}
 
+    # Fiche parent disparue (base remise à zéro, fiche supprimée) : le message
+    # reste dans l'historique de l'école, sous un nom qui le dit. Avant,
+    # « Parent ? » — et la réponse d'un tel parent s'affichait comme venant
+    # de « Administration ».
+    INTROUVABLE = "Parent introuvable"
     result = []
     for m in msgs:
         exp_name = "Administration"
-        if m.expediteur_type == "PARENT" and m.expediteur_id:
+        if m.expediteur_type == "PARENT":
             parent = parents_par_id.get(m.expediteur_id)
-            if parent:
-                exp_name = f"{parent.prenom} {parent.nom}"
+            exp_name = f"{parent.prenom} {parent.nom}" if parent else INTROUVABLE
 
         dest_name = "?"
         if m.destinataire_type == "TOUS_PARENTS":
             dest_name = "Tous les parents"
         elif m.destinataire_type == "CLASSE_PARENTS" and m.destinataire_id:
             cl = classes_par_id.get(m.destinataire_id)
-            dest_name = f"Parents de {cl.libelle}" if cl else "Classe ?"
-        elif m.destinataire_type == "PARENT" and m.destinataire_id:
+            dest_name = f"Parents de {cl.libelle}" if cl else "Classe introuvable"
+        elif m.destinataire_type == "PARENT":
             parent = parents_par_id.get(m.destinataire_id)
-            dest_name = f"{parent.prenom} {parent.nom}" if parent else "Parent ?"
+            dest_name = f"{parent.prenom} {parent.nom}" if parent else INTROUVABLE
         elif m.destinataire_type == "ADMIN":
             dest_name = "Administration"
 
@@ -1000,12 +1054,19 @@ def list_messages_parents(db: Session = Depends(get_db), etablissement_id: int =
     return result
 
 
-@router.post("/messages-parents", status_code=201, dependencies=[Depends(_require_admin)])
-def send_message_to_parents(data: dict, db: Session = Depends(get_db), etablissement_id: int = Depends(require_etablissement)):
-    """Admin envoie un message aux parents.
+@router.post("/messages-parents", status_code=201, dependencies=[Depends(_require_messagerie_familles)])
+def send_message_to_parents(
+    data: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    etablissement_id: int = Depends(require_etablissement),
+):
+    """L'école (direction ou comptable) envoie un message aux parents.
     data: { destinataire_type: PARENT|TOUS_PARENTS|CLASSE_PARENTS,
             destinataire_id: parent_id|classe_id|null,
             objet_type, sujet, contenu }
+
+    Le message d'un comptable est toujours classé « Paiement ».
 
     AVANT LE LOT 5 : "TOUS_PARENTS" partait vers TOUS les parents de TOUTE
     la plateforme (Message n'avait pas de colonne établissement). Un message
@@ -1017,6 +1078,13 @@ def send_message_to_parents(data: dict, db: Session = Depends(get_db), etablisse
     for f in required:
         if f not in data:
             raise HTTPException(400, f"Champ requis: {f}")
+    if not str(data.get("sujet") or "").strip():
+        raise HTTPException(400, "Le sujet du message est requis.")
+    # PostgreSQL refuse un sujet de plus de 300 caractères (ss_messages.sujet),
+    # SQLite l'accepterait sur un poste : sans ce contrôle, la synchronisation
+    # du poste buterait plus tard sur ce message.
+    if len(str(data["sujet"]).strip()) > 300:
+        raise HTTPException(400, "Le sujet ne peut pas dépasser 300 caractères.")
 
     dest_type = data["destinataire_type"]
     if dest_type not in ["PARENT", "TOUS_PARENTS", "CLASSE_PARENTS"]:
@@ -1041,14 +1109,18 @@ def send_message_to_parents(data: dict, db: Session = Depends(get_db), etablisse
         if not a_un_enfant_ici:
             raise HTTPException(404, "Parent introuvable pour cet établissement")
 
+    objet_type = data.get("objet_type") or "GENERAL"
+    if not _est_admin_tier(current_user):
+        objet_type = OBJET_PAIEMENT
+
     msg = Message(
         etablissement_id=etablissement_id,
         expediteur_type="ADMIN",
         expediteur_id=None,
         destinataire_type=dest_type,
         destinataire_id=destinataire_id,
-        objet_type=data.get("objet_type", "GENERAL"),
-        sujet=data["sujet"],
+        objet_type=objet_type,
+        sujet=str(data["sujet"]).strip(),
         contenu=data.get("contenu", ""),
     )
     db.add(msg)
