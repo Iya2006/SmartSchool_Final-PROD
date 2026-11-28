@@ -13,7 +13,10 @@ from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import (
     Enseignant, Affectation, CreneauEmploi, Classe, Matiere, Niveau, Cycle,
     Note, Evaluation, Inscription, Eleve, Presence, Trimestre, TypeEvaluation,
-    AnneeScolaire, RessourcePedagogique, ClasseMatiere, ParametreEtablissement
+    AnneeScolaire, RessourcePedagogique, ClasseMatiere, ParametreEtablissement,
+    # `Message` manquait : « Signaler mon enfant » finissait toujours en
+    # erreur 500 (NameError) — trouvé par analyse statique (pyflakes).
+    Message,
 )
 from app.core.annee_lock import verifier_annee_modifiable
 # Moteur de notation partagé avec evaluations.py — ne jamais redéfinir
