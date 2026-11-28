@@ -166,7 +166,7 @@ def liste_campagne_classe(classe_id: int, db: Session = Depends(get_db), etablis
     ).filter(
         Inscription.classe_cible_id == classe_id,
         Inscription.statut_reinscription.isnot(None),
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     eleve_ids = [e.eleve_id for _, e in rows]
     nouvelles_inscriptions: Dict[int, Inscription] = {}
@@ -226,7 +226,7 @@ def liste_en_attente_filiere(annee_source_id: int, db: Session = Depends(get_db)
         Inscription.classe_cible_id.is_(None),
         Inscription.statut_reinscription.isnot(None),
         Classe.etablissement_id == etablissement_id,
-    ).order_by(Eleve.nom, Eleve.prenom).all()
+    ).order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     return [
         {

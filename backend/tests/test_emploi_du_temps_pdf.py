@@ -43,12 +43,12 @@ def dossier_isole(tmp_path, monkeypatch):
     on polluait le dépôt de travail.
 
     Même parade que `test_photo_eleve_par_la_direction.py`, qui redirige déjà
-    son dossier d'upload vers un répertoire temporaire.
+    son dossier d'upload vers un répertoire temporaire. Les PDF sont rangés
+    avec les autres fichiers envoyés (`app.core.fichiers`), dans « emplois/ ».
     """
-    from app.api import emploi_du_temps
-    dossier = tmp_path / "emplois"
-    dossier.mkdir()
-    monkeypatch.setattr(emploi_du_temps, "DOSSIER_PDF", str(dossier))
+    from app.core import fichiers
+    monkeypatch.setattr(fichiers, "DOSSIER_FICHIERS", str(tmp_path))
+    return tmp_path
 
 
 @pytest.fixture
@@ -193,3 +193,82 @@ class TestDepotEmploiDuTempsPdf:
 
         assert _deposer(client, h, a_cl.classe_id).status_code == 404
         assert client.get(f"/api/emploi-du-temps/{a_cl.classe_id}/pdf", headers=h).status_code == 404
+
+
+class TestLePdfSuitLaSynchronisation:
+    """
+    Un poste et le cloud doivent voir le même emploi du temps. La classe cite
+    le PDF déposé (`Classe.emploi_pdf`) : elle voyage par la synchronisation,
+    et le fichier qu'elle cite la suit (app/sync/fichiers.py), qui n'écrase
+    jamais un fichier existant — d'où un nom nouveau à chaque dépôt.
+    """
+
+    def _classe(self, db, cid):
+        db.expire_all()
+        return db.get(Classe, cid)
+
+    def test_la_classe_cite_le_pdf_et_la_synchronisation_le_voit(self, client, db, ecole, dossier_isole):
+        from app.sync.fichiers import chemins_cites
+
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        cid = ecole["classe"].classe_id
+        assert _deposer(client, h, cid).status_code == 201
+
+        reference = self._classe(db, cid).emploi_pdf
+        assert reference.startswith(f"/uploads/emplois/classe_{cid}_")
+        relatif = reference[len("/uploads/"):]
+        assert (dossier_isole / relatif).read_bytes() == PDF_MINIMAL
+        ligne = {c.name: getattr(self._classe(db, cid), c.name) for c in Classe.__table__.columns}
+        assert chemins_cites("ss_classes", ligne) == {relatif}
+
+    def test_chaque_depot_porte_un_nom_nouveau(self, client, db, ecole, dossier_isole):
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        cid = ecole["classe"].classe_id
+        _deposer(client, h, cid)
+        premier = self._classe(db, cid).emploi_pdf
+        second = PDF_MINIMAL + b"\n% version deux"
+        _deposer(client, h, cid, second)
+        nouveau = self._classe(db, cid).emploi_pdf
+
+        assert nouveau != premier
+        assert client.get(f"/api/emploi-du-temps/{cid}/pdf", headers=h).content == second
+        # Ici, le précédent ne sert plus : retiré. Ailleurs, chacun suit la classe.
+        assert not (dossier_isole / premier[len("/uploads/"):]).exists()
+
+    def test_retirer_efface_la_reference(self, client, db, ecole):
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        cid = ecole["classe"].classe_id
+        _deposer(client, h, cid)
+        assert client.delete(f"/api/emploi-du-temps/{cid}/pdf", headers=h).status_code == 200
+        assert self._classe(db, cid).emploi_pdf is None
+        assert client.get(f"/api/emploi-du-temps/{cid}/pdf/existe", headers=h).json()["existe"] is False
+
+    def test_depose_ailleurs_et_pas_encore_arrive(self, client, db, ecole):
+        """Déposé sur un autre appareil : la classe est arrivée, le fichier pas
+        encore. On ne propose pas d'en déposer un autre, et on le dit."""
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        cid = ecole["classe"].classe_id
+        classe = self._classe(db, cid)
+        classe.emploi_pdf = f"/uploads/emplois/classe_{cid}_20261102083000_a1b2c3.pdf"
+        db.commit()
+
+        existe = client.get(f"/api/emploi-du-temps/{cid}/pdf/existe", headers=h).json()
+        assert existe == {"existe": True, "depose_le": "2026-11-02T08:30:00", "taille": None}
+        r = client.get(f"/api/emploi-du-temps/{cid}/pdf", headers=h)
+        assert r.status_code == 404 and "prochaine synchronisation" in r.json()["detail"]
+
+    def test_les_premiers_depots_sont_rattaches_a_leur_classe(self, client, db, ecole, dossier_isole):
+        """Déposés sous leur premier nom fixe, avant ce changement : toujours
+        lisibles, puis cités par leur classe au démarrage du cloud."""
+        from app.api.emploi_du_temps import rattacher_les_pdf_deposes
+
+        h = _headers(client, ecole["admin"].nom_utilisateur)
+        cid = ecole["classe"].classe_id
+        (dossier_isole / "emplois").mkdir(exist_ok=True)
+        (dossier_isole / "emplois" / f"classe_{cid}.pdf").write_bytes(PDF_MINIMAL)
+
+        assert client.get(f"/api/emploi-du-temps/{cid}/pdf", headers=h).content == PDF_MINIMAL
+        assert rattacher_les_pdf_deposes(db.get_bind()) >= 1
+        assert self._classe(db, cid).emploi_pdf == f"/uploads/emplois/classe_{cid}.pdf"
+        assert rattacher_les_pdf_deposes(db.get_bind()) == 0
+        assert client.get(f"/api/emploi-du-temps/{cid}/pdf", headers=h).content == PDF_MINIMAL

@@ -9,6 +9,8 @@ import {
     CheckCircle2, AlertCircle, ArrowLeft, BookOpen, Crown, Search, Star, AlertTriangle, School, GraduationCap, Coins
 } from 'lucide-react';
 import api from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
+import { voitFinance } from '@/lib/roleAccess';
 import Link from 'next/link';
 
 interface Enseignant {
@@ -65,6 +67,12 @@ export default function ConfigurerClassePage() {
     const [classe, setClasse] = useState<ClasseInfo | null>(null);
     const [enseignants, setEnseignants] = useState<Enseignant[]>([]);
     const { etablissementId, anneeId } = useApp();
+    // Les frais de la classe relèvent de la finance (backend/main.py,
+    // FINANCE_ROLES). Le directeur de niveau ne la voit pas : il recevait
+    // deux refus et une section « Aucun type de frais configuré », fausse.
+    const { user } = useAuth();
+    const peutVoirFinance = voitFinance(user);
+    const compteConnu = !!user;
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -88,11 +96,12 @@ export default function ConfigurerClassePage() {
     useEffect(() => {
         const fetchData = async () => {
             try {
+                const sansFinance = Promise.resolve({ data: [] });
                 const [classeRes, ensRes, tfRes, tarifsRes] = await Promise.all([
                     api.get(`/api/classes/${classeId}/profil`),
                     api.get(`/api/enseignants?etablissement_id=${etablissementId}&skip=0&limit=200`),
-                    api.get('/api/finance/types-frais').catch(() => ({ data: [] })),
-                    api.get(`/api/finance/tarifs-classe?classe_id=${classeId}`).catch(() => ({ data: [] })),
+                    peutVoirFinance ? api.get('/api/finance/types-frais').catch(() => ({ data: [] })) : sansFinance,
+                    peutVoirFinance ? api.get(`/api/finance/tarifs-classe?classe_id=${classeId}`).catch(() => ({ data: [] })) : sansFinance,
                 ]);
                 setClasse(classeRes.data);
                 setEnseignants(ensRes.data);
@@ -113,8 +122,9 @@ export default function ConfigurerClassePage() {
                 setLoading(false);
             }
         };
-        if (classeId) fetchData();
-    }, [classeId]);
+        // Compte pas encore lu : ses droits (la finance) ne sont pas connus.
+        if (classeId && compteConnu) fetchData();
+    }, [classeId, peutVoirFinance, compteConnu]);
 
     const handleSaveTarifs = async () => {
         setSavingTarifs(true);
@@ -268,6 +278,7 @@ export default function ConfigurerClassePage() {
             {/* ═══════════════════════════════════════════ */}
             {/* Section 0: Frais de Scolarité de la classe */}
             {/* ═══════════════════════════════════════════ */}
+            {peutVoirFinance && (
             <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
                 className="card" style={{ padding: '24px' }}>
                 <h3 style={{ fontSize: '17px', fontWeight: 700, margin: '0 0 6px', display: 'flex', alignItems: 'center', gap: '10px', color: 'var(--text-primary)' }}>
@@ -344,6 +355,7 @@ export default function ConfigurerClassePage() {
                     </button>
                 )}
             </motion.div>
+            )}
 
             {/* ═══════════════════════════════════════════ */}
             {/* Section 1: Professeur Principal — PRIMAIRE seulement */}

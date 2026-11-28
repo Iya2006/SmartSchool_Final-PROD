@@ -3,11 +3,16 @@ SMARTSCHOOL API — Emploi du Temps
 CRUD complet + Génération intelligente basée sur les matières attribuées
 """
 import os
+import re
+import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from sqlalchemy import update
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from app.core import fichiers as stockage
 from app.core.database import get_db
 from app.core.annee_lock import verifier_annee_modifiable
 from app.core.auth import require_etablissement
@@ -15,28 +20,69 @@ from app.models.academique import (
     CreneauEmploi, Classe, Matiere, Enseignant, ClasseMatiere, Niveau, Affectation, Cycle,
     ParametreEtablissement,
 )
+from app.sync.fichiers import PREFIXE, chemin_sur
 
 router = APIRouter(prefix="/api/emploi-du-temps", tags=["Emploi du Temps"])
 
-# Emplois du temps déposés en PDF. Même volume `uploads` que les sujets
-# d'examen et les photos : il est sauvegardé chaque nuit et survit aux
-# redéploiements (voir scripts/sauvegarde-uploads.sh).
-DOSSIER_PDF = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "uploads", "emplois",
-)
-os.makedirs(DOSSIER_PDF, exist_ok=True)
+# Emplois du temps déposés en PDF, rangés avec les autres fichiers envoyés
+# (app/core/fichiers.py) : en ligne, dans le volume `uploads`, sauvegardé
+# chaque nuit et qui survit aux redéploiements (scripts/sauvegarde-uploads.sh) ;
+# sur un poste, dans le dossier de données de l'utilisateur, jamais dans le
+# programme, que chaque mise à jour remplace.
+#
+# Chaque dépôt porte un nom NOUVEAU, cité par la classe (Classe.emploi_pdf) :
+# la classe voyage par la synchronisation et le fichier qu'elle cite la suit
+# (app/sync/fichiers.py), qui n'écrase jamais un fichier existant. Un nom fixe
+# par classe, remplacé à chaque dépôt, ne serait jamais arrivé sur les autres
+# postes, ni son remplacement.
+SOUS_DOSSIER_PDF = "emplois"
+_HORODATAGE_DU_NOM = re.compile(r"_(\d{14})_[0-9a-f]+\.pdf$")
 
 
-def _chemin_pdf(classe_id: int) -> str:
-    """Un seul PDF par classe : déposer remplace le précédent.
-
-    Le nom ne vient JAMAIS de celui envoyé par le navigateur — un nom de
+def _nouveau_nom_pdf(classe_id: int) -> str:
+    """Le nom ne vient JAMAIS de celui envoyé par le navigateur — un nom de
     fichier contrôlé par l'appelant peut contenir « ../ » et faire écrire
-    ailleurs sur le disque. On le fabrique à partir de l'identifiant, qui est
-    un entier validé.
-    """
-    return os.path.join(DOSSIER_PDF, f"classe_{int(classe_id)}.pdf")
+    ailleurs sur le disque. On le fabrique : l'identifiant (entier validé), la
+    date du dépôt, et un suffixe tiré au hasard pour deux dépôts faits dans la
+    même seconde sur deux appareils."""
+    return f"classe_{int(classe_id)}_{datetime.now():%Y%m%d%H%M%S}_{secrets.token_hex(3)}.pdf"
+
+
+def _ancien_chemin_pdf(classe_id: int) -> str:
+    """Nom fixe des premiers dépôts, avant qu'ils ne suivent la synchronisation
+    (voir rattacher_les_pdf_deposes)."""
+    return os.path.join(stockage.DOSSIER_FICHIERS, SOUS_DOSSIER_PDF, f"classe_{int(classe_id)}.pdf")
+
+
+def _pdf_de(classe: Classe) -> tuple[bool, Optional[str]]:
+    """(un PDF est-il déposé pour cette classe, son chemin s'il est déjà sur cet
+    appareil). Déposé ailleurs, il arrive à la synchronisation suivante."""
+    if classe.emploi_pdf and classe.emploi_pdf.startswith(PREFIXE):
+        chemin = chemin_sur(stockage.DOSSIER_FICHIERS, classe.emploi_pdf[len(PREFIXE):])
+        return True, chemin if chemin and os.path.isfile(chemin) else None
+    ancien = _ancien_chemin_pdf(classe.classe_id)
+    return (True, ancien) if os.path.isfile(ancien) else (False, None)
+
+
+def rattacher_les_pdf_deposes(moteur: Engine) -> int:
+    """Les premiers dépôts (nom fixe « classe_<id>.pdf ») sont désormais cités
+    par leur classe, pour suivre la synchronisation comme les suivants. Au
+    démarrage du cloud ; rend le nombre de classes rattachées. Idempotent, et
+    sans risque à plusieurs processus : une classe déjà rattachée n'est pas
+    touchée."""
+    dossier = os.path.join(stockage.DOSSIER_FICHIERS, SOUS_DOSSIER_PDF)
+    if not os.path.isdir(dossier):
+        return 0
+    deposes = [int(m.group(1)) for nom in os.listdir(dossier) if (m := re.fullmatch(r"classe_(\d+)\.pdf", nom))]
+    rattachees = 0
+    with moteur.begin() as cx:
+        for classe_id in deposes:
+            rattachees += cx.execute(
+                update(Classe.__table__)
+                .where(Classe.__table__.c.classe_id == classe_id, Classe.__table__.c.emploi_pdf.is_(None))
+                .values(emploi_pdf=f"{PREFIXE}{SOUS_DOSSIER_PDF}/classe_{classe_id}.pdf")
+            ).rowcount
+    return rattachees
 
 
 # ── Helpers d'isolation (Lot 9) ───────────────────────────────────────────
@@ -156,7 +202,7 @@ def get_emploi_du_temps(classe_id: int, db: Session = Depends(get_db), etablisse
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.classe_id == classe_id,
         CreneauEmploi.statut == "ACTIVE"
-    ).all()
+    ).order_by(CreneauEmploi.creneau_id).all()
 
     result = []
     for c in creneaux:
@@ -449,8 +495,24 @@ async def deposer_emploi_pdf(
     if contenu[:4] != b"%PDF":
         raise HTTPException(400, "Ce fichier n'est pas un PDF valide.")
 
-    with open(_chemin_pdf(classe_id), "wb") as f:
+    _, precedent = _pdf_de(classe)
+    nom = _nouveau_nom_pdf(classe_id)
+    chemin = os.path.join(stockage.dossier_fichiers(SOUS_DOSSIER_PDF), nom)
+    with open(chemin, "wb") as f:
         f.write(contenu)
+    try:
+        classe.emploi_pdf = f"{PREFIXE}{SOUS_DOSSIER_PDF}/{nom}"
+        db.commit()
+    except Exception:
+        db.rollback()
+        os.remove(chemin)
+        raise
+    # Le précédent ne sert plus ici ; les autres appareils suivent la classe.
+    if precedent and precedent != chemin:
+        try:
+            os.remove(precedent)
+        except OSError:
+            pass
 
     return {
         "message": f"Emploi du temps de {classe.libelle} déposé.",
@@ -467,9 +529,12 @@ def lire_emploi_pdf(
 ):
     """Renvoie l'emploi du temps déposé pour cette classe."""
     classe = _classe_ou_404(db, classe_id, etablissement_id)
-    chemin = _chemin_pdf(classe_id)
-    if not os.path.exists(chemin):
+    depose, chemin = _pdf_de(classe)
+    if not depose:
         raise HTTPException(404, "Aucun emploi du temps déposé pour cette classe.")
+    if not chemin:
+        raise HTTPException(404, "Cet emploi du temps a été déposé sur un autre appareil : il arrivera "
+                                 "ici à la prochaine synchronisation.")
 
     with open(chemin, "rb") as f:
         contenu = f.read()
@@ -492,15 +557,21 @@ def emploi_pdf_existe(
     Sert à l'écran pour afficher « consulter » plutôt que « déposer », sans
     avoir à télécharger le document entier juste pour le savoir.
     """
-    _classe_ou_404(db, classe_id, etablissement_id)
-    chemin = _chemin_pdf(classe_id)
-    if not os.path.exists(chemin):
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    depose, chemin = _pdf_de(classe)
+    if not depose:
         return {"existe": False, "depose_le": None, "taille": None}
-    stat = os.stat(chemin)
+    # La date du dépôt est dans le nom : celle du fichier serait, sur un autre
+    # appareil, la date à laquelle la synchronisation l'a apporté.
+    horodatage = _HORODATAGE_DU_NOM.search(classe.emploi_pdf or "")
+    if horodatage:
+        depose_le = datetime.strptime(horodatage.group(1), "%Y%m%d%H%M%S").isoformat(timespec="seconds")
+    else:
+        depose_le = datetime.fromtimestamp(os.stat(chemin).st_mtime).isoformat(timespec="seconds") if chemin else None
     return {
         "existe": True,
-        "depose_le": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
-        "taille": stat.st_size,
+        "depose_le": depose_le,
+        "taille": os.stat(chemin).st_size if chemin else None,
     }
 
 
@@ -511,9 +582,13 @@ def supprimer_emploi_pdf(
     etablissement_id: int = Depends(require_etablissement),
 ):
     """Retire l'emploi du temps déposé pour cette classe."""
-    _classe_ou_404(db, classe_id, etablissement_id)
-    chemin = _chemin_pdf(classe_id)
-    if not os.path.exists(chemin):
+    classe = _classe_ou_404(db, classe_id, etablissement_id)
+    depose, chemin = _pdf_de(classe)
+    if not depose:
         raise HTTPException(404, "Aucun emploi du temps déposé pour cette classe.")
-    os.remove(chemin)
+    # La classe ne le cite plus : les autres appareils ne le proposent plus.
+    classe.emploi_pdf = None
+    db.commit()
+    if chemin:
+        os.remove(chemin)
     return {"message": "Emploi du temps retiré."}

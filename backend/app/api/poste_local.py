@@ -1,0 +1,122 @@
+"""
+SMARTSCHOOL API — Poste local : installation et synchronisation (monté
+seulement en mode poste).
+
+Au premier lancement de l'application installée, la base locale est vide :
+personne ne peut s'y connecter. L'écran d'installation appelle ces routes pour
+télécharger l'établissement depuis le cloud avec un compte de direction
+(app/sync/installation.py). Une fois le poste installé, l'installation est
+refusée : on ne remplace jamais en silence les données d'un poste en service.
+
+Ensuite, le poste se synchronise seul en arrière-plan (app/sync/service.py) ;
+l'interface en lit l'état et peut demander un échange immédiat.
+"""
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from app.api.poste import exige_installation_poste
+from app.core.auth import get_current_user
+from app.core.database import engine
+from app.core.fichiers import DOSSIER_FICHIERS
+from app.core.mode import CLOUD_URL, DOSSIER_POSTE
+from app.core.version import VERSION
+from app.sync.identifiants import activer_le_poste
+from app.sync.installation import Installateur, lire_appareil, lire_marqueur
+from app.sync.relais import conflits_du_cloud, vers_le_cloud
+from app.sync.service import Synchroniseur, poste_retire
+from app.sync.verrou import MESSAGE_RETIRE, verrou_pour
+
+router = APIRouter(prefix="/api/poste", tags=["Poste local (hors-ligne)"])
+
+
+def _jeton_du_poste():
+    if not lire_marqueur(DOSSIER_POSTE):
+        return None
+    appareil = lire_appareil(engine, DOSSIER_POSTE)
+    return appareil.get("jeton") if appareil else None
+
+
+synchroniseur = Synchroniseur(engine, _jeton_du_poste, CLOUD_URL, dossier_fichiers=DOSSIER_FICHIERS)
+installateur = Installateur(DOSSIER_POSTE, CLOUD_URL, engine, dossier_fichiers=DOSSIER_FICHIERS,
+                            apres_installation=synchroniseur.demarrer)
+
+# Poste déjà installé : il reprend sa plage d'identifiants, son rang et la clé
+# de ses reçus dès le démarrage, puis se synchronise. Sinon, toute création
+# reste refusée jusqu'à la fin de l'installation.
+if lire_marqueur(DOSSIER_POSTE):
+    _appareil = lire_appareil(engine, DOSSIER_POSTE)
+    activer_le_poste(engine, _appareil["appareil_id"], _appareil["rang"], _appareil["cle_signature"])
+    synchroniseur.demarrer()
+
+
+# Poste retiré par la direction : plus personne ne s'y connecte (app/sync/verrou.py).
+verrou_poste_retire = verrou_pour(engine)
+
+
+class DemandeInstallation(BaseModel):
+    identifiant: str
+    mot_de_passe: str
+
+
+@router.get("/etat")
+def etat_du_poste():
+    """Sans authentification : avant l'installation, aucun compte n'existe sur
+    le poste. Ne révèle que l'état de l'installation, le nom de l'école et, le
+    cas échéant, que le poste a été retiré (l'écran de connexion le dit)."""
+    retire = poste_retire(engine)
+    return {"mode": "poste", **installateur.etat(), "retire": MESSAGE_RETIRE if retire else None,
+            "version": VERSION}
+
+
+@router.post("/installer", status_code=202)
+def installer_le_poste(demande: DemandeInstallation):
+    if not installateur.demarrer(demande.identifiant, demande.mot_de_passe):
+        statut = installateur.progression.statut
+        if statut == "INSTALLE":
+            raise HTTPException(409, "Ce poste est déjà installé.")
+        raise HTTPException(409, "Une installation est déjà en cours.")
+    return {"mode": "poste", **installateur.etat()}
+
+
+@router.get("/synchronisation", dependencies=[Depends(get_current_user)])
+def etat_de_la_synchronisation():
+    """Synchronisé, en cours, hors ligne depuis..., changements en attente."""
+    return synchroniseur.etat()
+
+
+@router.post("/synchroniser", status_code=202, dependencies=[Depends(get_current_user)])
+def synchroniser_maintenant():
+    synchroniseur.synchroniser_maintenant()
+    return synchroniseur.etat()
+
+
+# ── « À vérifier », relayé vers le cloud ──────────────────────────────────
+# Mêmes chemins que sur le cloud (app/api/sync_conflits.py) : l'interface ne
+# change pas. Le poste vérifie lui-même que l'utilisateur fait partie de la
+# direction, puis s'adresse au cloud avec son jeton d'appareil.
+
+relais = APIRouter(prefix="/api/sync/conflits", tags=["Synchronisation — à vérifier"])
+
+
+def _vers_le_cloud(methode: str, chemin: str, **options):
+    return vers_le_cloud(CLOUD_URL, _jeton_du_poste(), methode, chemin, **options)
+
+
+@relais.get("", dependencies=[Depends(get_current_user)])
+def conflits(tous: bool = False):
+    hors_ligne = synchroniseur.etat().get("statut") == "HORS_LIGNE"
+    if hors_ligne:
+        # Un nouvel essai part aussitôt, en arrière-plan : au retour
+        # d'internet, la liste s'affiche dès l'ouverture suivante.
+        synchroniseur.synchroniser_maintenant()
+    return conflits_du_cloud(CLOUD_URL, _jeton_du_poste(), tous, hors_ligne_connu=hors_ligne)
+
+
+@relais.post("/{conflit_id}/resoudre")
+def resoudre(conflit_id: int, choix: dict, current_user: dict = Depends(exige_installation_poste)):
+    resultat = _vers_le_cloud("POST", f"/api/sync/appareil/conflits/{conflit_id}/resoudre", json={
+        "choix": choix.get("choix"), "auteur": str(current_user.get("nom") or current_user.get("sub") or ""),
+    })
+    # Le choix revient par la synchronisation : autant la lancer tout de suite.
+    synchroniseur.synchroniser_maintenant()
+    return resultat

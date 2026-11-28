@@ -15,10 +15,11 @@ from typing import Optional
 from app.core.database import get_db
 from app.core.auth import ADMIN_TIER_ROLES, require_etablissement, require_roles
 import os, shutil, uuid
+from app.core.fichiers import dossier_fichiers
 
 router = APIRouter(prefix="/api/photos", tags=["Photos"])
 
-UPLOAD_BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "photos")
+UPLOAD_BASE = dossier_fichiers("photos")
 
 ENTITY_MAP = {
     "eleve": {"table": "ss_eleves", "pk": "eleve_id", "folder": "eleves"},
@@ -183,7 +184,7 @@ def get_galerie_tab(
         elif filter_photo == "without":
             query = query.filter(Enseignant.photo_url.is_(None))
         response.headers["X-Total-Count"] = str(query.count())
-        rows = query.order_by(Enseignant.nom, Enseignant.prenom).offset(skip).limit(limit).all()
+        rows = query.order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id).offset(skip).limit(limit).all()
         return [{
             "enseignant_id": e.enseignant_id, "nom": e.nom, "prenom": e.prenom, "sexe": e.sexe,
             "matricule": e.matricule, "photo_url": e.photo_url, "specialite": e.specialite, "statut": e.statut,
@@ -202,7 +203,7 @@ def get_galerie_tab(
         elif filter_photo == "without":
             query = query.filter(Parent.photo_url.is_(None))
         response.headers["X-Total-Count"] = str(query.count())
-        rows = query.order_by(Parent.nom, Parent.prenom).offset(skip).limit(limit).all()
+        rows = query.order_by(Parent.nom, Parent.prenom, Parent.parent_id).offset(skip).limit(limit).all()
         return [{
             "parent_id": p.parent_id, "nom": p.nom, "prenom": p.prenom, "sexe": p.sexe,
             "telephone_1": p.telephone_1, "photo_url": p.photo_url, "profession": p.profession, "statut": p.statut,
@@ -324,10 +325,14 @@ async def upload_photo(
 
     # ss_messages.etablissement_id est NOT NULL depuis le Lot 5 : la
     # notification est rattachée à l'établissement du compte appelant.
-    db.execute(text("""
-        INSERT INTO ss_messages (etablissement_id, expediteur_type, expediteur_id, destinataire_type, destinataire_id, objet_type, sujet, contenu, statut)
-        VALUES (:etab, 'SYSTEME', NULL, 'ADMIN', NULL, 'GENERAL', :sujet, :contenu, 'ENVOYE')
-    """), {"etab": etablissement_id, "sujet": sujet, "contenu": contenu})
+    # Par l'ORM et non en SQL brut : sur un poste hors-ligne, l'identifiant
+    # du message doit venir de la plage du poste (app/sync/identifiants.py).
+    from app.models.academique import Message
+    db.add(Message(
+        etablissement_id=etablissement_id, expediteur_type="SYSTEME", expediteur_id=None,
+        destinataire_type="ADMIN", destinataire_id=None, objet_type="GENERAL",
+        sujet=sujet, contenu=contenu, statut="ENVOYE",
+    ))
 
     db.commit()
     return {"photo_url": photo_url, "message": "Photo envoyée et en attente de validation par l'administration."}
@@ -486,10 +491,13 @@ async def parent_upload_photo(
 
     contenu = f"{contenu_base}\n---PHOTO_META---\nentity_id={entity_id}\nentity_type={entity_type}\ntarget_name={target_name}"
 
-    db.execute(text("""
-        INSERT INTO ss_messages (etablissement_id, expediteur_type, expediteur_id, destinataire_type, destinataire_id, objet_type, sujet, contenu, statut)
-        VALUES (:etab, 'PARENT', :parent_id, 'ADMIN', NULL, 'GENERAL', :sujet, :contenu, 'ENVOYE')
-    """), {"etab": etablissement_id, "parent_id": parent_id, "sujet": sujet, "contenu": contenu})
+    # Par l'ORM, pas en SQL brut : voir la notification de l'upload élève.
+    from app.models.academique import Message
+    db.add(Message(
+        etablissement_id=etablissement_id, expediteur_type="PARENT", expediteur_id=parent_id,
+        destinataire_type="ADMIN", destinataire_id=None, objet_type="GENERAL",
+        sujet=sujet, contenu=contenu, statut="ENVOYE",
+    ))
 
     db.commit()
     return {"photo_url": photo_url, "message": "Photo envoyée et en attente de validation par l'administration."}

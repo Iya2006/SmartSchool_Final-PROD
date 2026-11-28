@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.auth import get_current_user, require_etablissement
 from app.models.academique import Ouvrage, Exemplaire, Emprunt, Eleve, Enseignant
+from app.sync.identifiants import segment_du_poste
 from app.schemas.schemas import (
     OuvrageCreate,
     OuvrageUpdate,
@@ -183,8 +184,12 @@ def create_ouvrage(
     db.add(ouvrage)
     db.flush()
 
+    # Sur un poste hors-ligne, le code porte le rang du poste (« -P2- ») : le
+    # code d'exemplaire est unique sur toute la plateforme, et deux postes
+    # numérotent chacun de leur côté.
+    segment = segment_du_poste(db)
     for index in range(nb_initial):
-        code = f"{data.code_interne}-{index + 1:03d}"
+        code = f"{data.code_interne}-{segment}{index + 1:03d}"
         db.add(Exemplaire(
             ouvrage_id=ouvrage.ouvrage_id,
             code_exemplaire=code,
@@ -228,7 +233,9 @@ def create_exemplaire(
 ):
     _require_write(current_user)
     ouvrage = _ouvrage_ou_404(db, data.ouvrage_id, etablissement_id)
-    code = data.code_exemplaire or f"{ouvrage.code_interne}-{(ouvrage.nb_exemplaires or 0) + 1:03d}"
+    code = data.code_exemplaire or (
+        f"{ouvrage.code_interne}-{segment_du_poste(db)}{(ouvrage.nb_exemplaires or 0) + 1:03d}"
+    )
     if db.query(Exemplaire).filter(Exemplaire.code_exemplaire == code).first():
         raise HTTPException(status_code=400, detail="Ce code exemplaire existe déjà")
     ex = Exemplaire(**data.model_dump(exclude={"code_exemplaire"}), code_exemplaire=code, created_by=current_user.get("nom", current_user.get("sub", "SYSTEM")))

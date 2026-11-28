@@ -132,3 +132,197 @@ candidat déjà identifié (élèves — nécessite d'auditer `PUT /api/eleves/{
 en détail avant toute activation, voir `lib/offlinePolicy.ts`). Finance,
 authentification et sécurité restent hors-périmètre par décision actée,
 pas par oubli.
+
+> **Correction du 26/10/2026** : l'affirmation de cette entrée (« le Service
+> Worker met déjà en cache toutes les lectures de l'API ») était **fausse en
+> production**. La règle exigeait `sameOrigin`, or le frontend et l'API sont
+> sur deux domaines différents : aucune lecture n'était mise en cache. Voir
+> l'entrée du 26/10/2026 ci-dessous.
+
+---
+
+## 26/10/2026 — Phase 0 : tout le logiciel démarre et se consulte hors-ligne
+
+Nouvelle demande : « tout le logiciel doit être utilisable avec ou sans la
+connexion ». Le plan en 5 phases a été approuvé. La décision de rendre
+**lisibles** hors-ligne la finance et la sécurité est actée. Leur écriture
+reste en ligne jusqu'à leurs phases.
+
+Détail complet, fichiers touchés et vérifications : voir
+`.ai/CORRECTIFS_26_10_2026_RAPPORT.md`. En résumé :
+- Le cache API du Service Worker fonctionne enfin entre les deux origines. Il
+  est cloisonné par compte (`lib/offlineCacheKey.ts`).
+- Démarrage hors-ligne sur la bonne année (`lib/memoHorsLigne.ts`).
+- Cache React Query déplacé dans IndexedDB, en base64, conservé 30 jours.
+- Un 401 ne détruit plus les données locales : la purge n'a lieu que si un
+  autre compte se connecte.
+- File offline cloisonnée par compte, mise en pause sur 401.
+- Préparation du poste : écrans, lectures mémorisées et visite en coulisse
+  hebdomadaire de chaque écran (`lib/preparationHorsLigne.ts`).
+- `reloadOnOnline: false` : le rechargement automatique au retour du réseau
+  annulait les navigations.
+
+Prochaine étape (Phase 1) : pipeline d'écriture générique, avec
+idempotence serveur, identifiants provisoires et conflits, en commençant par
+l'appel par séances des enseignants.
+
+---
+
+## 26-27/10/2026 — Changement d'architecture : moteur local sur chaque poste (Phase A)
+
+Le cahier des charges du fondateur exige une application **identique en
+ligne et hors-ligne** (reçus définitifs, calculs, comptabilité), avec les
+données dans une **base locale**. Un simple cache de navigateur (Phase 0) ne
+peut pas exécuter la logique métier, qui vit dans le serveur Python.
+
+Décision : chaque appareil fait tourner le même moteur SmartSchool
+(`SMARTSCHOOL_MODE=poste`, base SQLite) dans une application installée
+(Electron, `desktop/`). La Phase 0 reste utile pour la version web.
+
+Phase A faite : périmètre d'un établissement, installation du poste
+(données et fichiers), mode poste sans Redis, application de bureau.
+Vérifié de bout en bout, y compris relancé avec un cloud injoignable.
+
+Détail, fichiers touchés et limites : `.ai/CORRECTIFS_27_10_2026_RAPPORT.md`.
+
+Prochaine étape (Phase B) : synchronisation multi-appareils. Elle couvre
+l'envoi et la réception des changements, les identifiants et numéros sans
+collision, la clé de signature des reçus par appareil, et les conflits
+signalés.
+
+---
+
+## 27-29/10/2026 — Phase B, étapes B1 et B2 : identifiants et pièces par poste
+
+- **B1** : chaque poste a un numéro N et crée ses lignes à partir de
+  N × 2³². Les 232 colonnes d'identifiant passent en 64 bits ; la migration
+  du cloud est à lancer à la fusion. Le poste s'enregistre auprès du cloud à
+  l'installation (`ss_appareils`), et un garde refuse tout identifiant hors
+  plage.
+- **B2** : reçus, factures, matricules et codes d'exemplaire portent le rang
+  du poste (`-P2-`). La clé des reçus est dérivée par poste, et le cloud
+  vérifie les reçus émis hors-ligne. Correctif : le QR d'un reçu de poste
+  pointait vers 127.0.0.1.
+
+Détail, pièges trouvés par prototype et vérifications :
+`.ai/CORRECTIFS_29_10_2026_RAPPORT.md`.
+
+## 29/10/2026 — Phase B, étapes B3 à B5 : les échanges
+
+- **B3** : journal des changements tenu par des déclencheurs, sur le poste et
+  sur le cloud. Il note l'école concernée et l'appareil d'origine, et il est
+  publié sans trou possible.
+- **B4** : envoi et réception automatiques, contrôlés école par école. Rien
+  n'est écarté en silence, et une ligne refusée ne bloque jamais le reste.
+- **B5** :
+  - fusion champ par champ ;
+  - pour les données sensibles, c'est la direction qui tranche ;
+  - les totaux sont recalculés ;
+  - les identifiants sont dérivés de la clé naturelle pour les lignes
+    « cherchées ou créées » ;
+  - écran « Synchronisation » et indicateur du poste.
+
+Vérifié en réel : deux postes hors-ligne encaissent sur la même facture, puis
+reviennent en ligne. Tout converge seul, totaux justes, sans conflit. Même
+rapport.
+
+Reste en phase B : la synchronisation des fichiers (B6) et la vérification
+visuelle dans l'application installée. Les deux ont été faites dans le même
+commit (`3ff40b0`), même rapport.
+
+## 29/10 au 01/11/2026 — Phase C : installeur, mises à jour, chiffrement, retrait
+
+- **C1** : installeur Windows `SmartSchool-Setup.exe`, construit par
+  `desktop/scripts/empaqueter.mjs`.
+  - Il embarque un Python autonome et le moteur compilé, sans les sources.
+  - Ni `.env` ni `secrets/` : c'est contrôlé.
+  - La désinstallation garde les données.
+- **C2** : mises à jour automatiques (electron-updater).
+  - Le cloud refuse un poste trop ancien (426), qui affiche « Mise à jour
+    nécessaire ».
+  - Le schéma local se met à niveau sous SQLite aussi.
+  - La base est sauvegardée avant chaque nouvelle version.
+- **C3** : base du poste chiffrée (SQLCipher).
+  - La clé est protégée par Windows (DPAPI).
+  - Les secrets de synchronisation sont rangés dans la base chiffrée.
+- **C4** : « Retirer ce poste » sur l'écran Synchronisation. Le poste retiré
+  refuse toute connexion.
+- **C5** : section « Télécharger » sur la vitrine. Elle part avec la fusion.
+- Corrigé aussi : une fenêtre d'erreur à la fermeture de l'application
+  (journal des services fermé trop tôt).
+
+Tout est vérifié sur l'application réellement installée : premier lancement,
+mise à jour 0.3.0 → 0.3.1, retrait depuis le vrai bouton, désinstallation puis
+réinstallation. **Rien n'est publié.** Le dépôt public des installeurs sera
+créé avec la fusion, avec l'accord du fondateur.
+
+Détail, pièges et limites : `.ai/CORRECTIFS_01_11_2026_RAPPORT.md`.
+
+## 02 au 22/11/2026 — Phase D : tout SmartSchool, prouvé hors-ligne
+
+- **D1** : le moteur et l'interface se relancent seuls.
+- **D2** : les polices sont servies par l'application.
+- Également corrigés : l'impression et les PDF dans l'application de bureau.
+- **D3** : le poste et le cloud rendent les mêmes réponses, route par route.
+  Il a fallu corriger :
+  - la recherche accentuée ;
+  - les rangs à égalité ;
+  - une soixantaine de tris ;
+  - l'ordre alphabétique (imité de PostgreSQL en_US) ;
+  - les anciennes lignes sans école.
+- **D4** : chaque rôle et chaque page, sur l'application installée, internet
+  coupé pour de bon :
+  - 13 rôles, 371 pages, parcours complets ;
+  - aucune requête sortie de l'ordinateur.
+- **D5** : plusieurs postes et le web en même temps :
+  - « une journée », 12 vérifications sur 12 ;
+  - longue absence : 10 292 changements remontés en 457 s ;
+  - les postes sont identiques au cloud, 73 tables sur 73.
+  - Corrigé : les **faux conflits** (dates relues au format brut de SQLite).
+- **D6** :
+  - démarrage à 4 processus sous verrou ;
+  - migration BIGINT mesurée à environ 1 s pour 20 Mo ;
+  - mode d'emploi de mise en production : `.ai/MISE_EN_PRODUCTION_HORS_LIGNE.md`.
+- **À la demande du fondateur**, les défauts déjà présents en ligne, révélés
+  par le balayage, sont corrigés aussi :
+  - l'année n° 1 interrogée au démarrage ;
+  - des écrans vidés par un refus (activités, portail opérateur, inscription
+    par le directeur de niveau) ;
+  - « Mon compte » pour chacun ;
+  - les données de finance demandées à des rôles qui ne l'ont pas.
+- **En production**, la limite de connexion était commune à toute la
+  plateforme : l'adresse réelle n'arrive pas jusqu'à l'API. Le blocage est
+  levé par le compteur par compte ; le réglage du serveur est proposé à Sams.
+
+**Rien n'est publié, rien n'est fusionné** dans `IYA` ni dans `main` : D7 attend
+l'accord du fondateur. Deux décisions de droits d'accès lui sont soumises.
+
+Détail : `.ai/CORRECTIFS_22_11_2026_RAPPORT.md`.
+
+## 22 au 28/11/2026 — Les deux décisions du fondateur, et ce qu'elles ont mis au jour
+
+- **Fiche d'une famille** : le directeur de niveau la lit et la corrige comme
+  la direction (« le directeur doit avoir tout »). Le reste du portail parent,
+  dont les paiements, lui reste fermé (`b2fda07`).
+- **Messages aux familles** : le comptable écrit aux parents et lit leurs
+  réponses, messages « Paiement » seulement, depuis un nouvel écran de son
+  menu (`b2fda07`).
+- **Relance des impayés** :
+  - le texte de l'école n'était jamais utilisé, et son enregistrement
+    échouait toujours ;
+  - destinataire fixé : le responsable financier ;
+  - 6 s → 0,3 s sur la copie (`b2fda07`).
+- **Synchronisation** : un seul texte trop long saisi hors-ligne bloquait tout
+  l'envoi d'un poste, à chaque cycle (SQLite l'accepte, PostgreSQL le refuse).
+  - Désormais refusé dès la saisie sur le poste ; mis de côté par le cloud
+    sans bloquer le reste.
+  - Vérifié sur la copie PostgreSQL (`9b520d3`).
+- Également : « Signaler mon enfant » en erreur 500 (`c8b9d06`), réglages de
+  l'école chargés deux fois (`f1fec79`).
+- **Piège** : la suite de tests tourne sur SQLite. Le comportement de
+  PostgreSQL se vérifie sur la copie `smartschool_essai_sync`.
+
+**Rien n'est publié, rien n'est fusionné** dans `IYA` ni dans `main` : D7 attend
+l'accord du fondateur.
+
+Détail : `.ai/CORRECTIFS_28_11_2026_RAPPORT.md`.

@@ -18,7 +18,7 @@ const SIDEBAR_LINKS = [
     { id: 'calendrier', title: "Calendrier", icon: Calendar, href: '/parametres/calendrier' },
     { id: 'documents', title: "Documents", icon: FileText, href: '/parametres/documents' },
     { id: 'securite', title: "Sécurité", icon: Shield, href: '/parametres/securite' },
-    { id: 'notifications', title: "Communication", icon: Bell, href: '/parametres/notifications' },
+    { id: 'notifications', title: "Communication", icon: Bell, href: '/parametres/notifications', aVenir: true },
     { id: 'horaires', title: "Horaires", icon: Clock, href: '/parametres/horaires' },
     { id: 'data', title: "Import / Export", icon: Database, href: '/parametres/import-export' },
 ];
@@ -43,6 +43,24 @@ export default function SettingsLayout({ children, title, subtitle }: { children
             <nav className={styles.navMenu}>
                 {SIDEBAR_LINKS.map(link => {
                     const isActive = pathname.startsWith(link.href);
+                    // Section pas encore construite : comme sa tuile sur
+                    // /parametres, l'onglet ne mène nulle part. En lien, il
+                    // tombait sur un 404, et le préchargement de Next.js le
+                    // redemandait sur chaque page de réglages.
+                    if (link.aVenir) {
+                        return (
+                            <span
+                                key={link.id}
+                                className={styles.navItem}
+                                title="Cette section n'est pas encore disponible"
+                                aria-disabled="true"
+                                style={{ opacity: 0.55, cursor: 'not-allowed' }}
+                            >
+                                <link.icon size={16} className={styles.navIcon} />
+                                <span>{link.title}</span>
+                            </span>
+                        );
+                    }
                     return (
                         <Link
                             key={link.id}

@@ -4,17 +4,17 @@ import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import type { PersistedClient } from '@tanstack/query-persist-client-core';
-import { queryClient, TWENTY_FOUR_HOURS } from '@/lib/queryClient';
-import { encryptValue, decryptValue, type EncryptedPayload } from '@/lib/localEncryption';
-
-const STORAGE_KEY = 'smartschool-query-cache';
+import { queryClient, TRENTE_JOURS } from '@/lib/queryClient';
+import { chiffrerEnTexte, dechiffrerTexte } from '@/lib/localEncryption';
+import { CLE_CACHE_REQUETES, stockageCacheRequetes } from '@/lib/cacheRequetesLocal';
+import { estFenetrePreparation } from '@/lib/fenetrePreparation';
 
 // `createSyncStoragePersister` (utilisé avant ce correctif) est deprecie et,
 // surtout, n'accepte que des serialize/deserialize SYNCHRONES — incompatible
 // avec le chiffrement (Web Crypto est async). `createAsyncStoragePersister`
 // est le variant officiel de la meme famille tanstack qui accepte des
-// hooks async ; c'est le seul changement necessaire, le stockage reste
-// `window.localStorage`.
+// hooks async. Depuis le 26/10/2026, le stockage est IndexedDB et le
+// contenu chiffré est encodé en base64 (voir lib/cacheRequetesLocal.ts).
 //
 // Chiffrement reutilise tel quel depuis lib/localEncryption.ts (deja
 // construit et valide pour le pilote useElevesDeltaCache, jamais branche
@@ -26,33 +26,40 @@ const STORAGE_KEY = 'smartschool-query-cache';
 // silencieusement (voir node_modules/@tanstack/query-async-storage-persister,
 // trySave catch), donc pas de crash, juste rien de persiste ce cycle-la.
 export async function serialize(client: PersistedClient): Promise<string> {
-    const encrypted = await encryptValue(client);
+    const encrypted = await chiffrerEnTexte(client);
     if (!encrypted) throw new Error('Pas de session active : cache non persiste (evite l\'ecriture en clair).');
-    return JSON.stringify(encrypted);
+    return encrypted;
 }
 
 export async function deserialize(cached: string): Promise<PersistedClient> {
-    const payload = JSON.parse(cached) as EncryptedPayload;
-    const client = await decryptValue<PersistedClient>(payload);
+    const client = await dechiffrerTexte<PersistedClient>(cached);
     if (!client) throw new Error('Cache local illisible (session differente ou corrompu) : ecarte, resynchronisation complete.');
     return client;
 }
 
-// `createAsyncStoragePersister` a besoin de `window.localStorage`, qui
-// n'existe pas côté serveur (SSR/Next.js). On protège donc sa création.
+// Le stockage vit dans IndexedDB (lib/cacheRequetesLocal.ts), qui n'existe
+// pas côté serveur (SSR/Next.js) : création protégée.
 const persister = typeof window !== 'undefined'
     ? createAsyncStoragePersister({
-        storage: window.localStorage,
-        key: STORAGE_KEY,
+        storage: stockageCacheRequetes,
+        key: CLE_CACHE_REQUETES,
         serialize,
         deserialize,
     })
     : null;
 
+// Ancienne copie en localStorage (versions précédentes) : elle n'est plus lue,
+// on libère la place qu'elle occupe.
+if (typeof window !== 'undefined') {
+    try { localStorage.removeItem(CLE_CACHE_REQUETES); } catch { /* indisponible */ }
+}
+
 export default function QueryProvider({ children }: { children: React.ReactNode }) {
     // Pas de persistance possible côté serveur : on retombe sur un simple
-    // QueryClientProvider pour que le rendu SSR fonctionne quand même.
-    if (!persister) {
+    // QueryClientProvider pour que le rendu SSR fonctionne quand même. Idem dans
+    // la fenêtre invisible de préparation hors-ligne : elle partage le même
+    // stockage et écraserait le cache de la fenêtre principale.
+    if (!persister || estFenetrePreparation()) {
         return (
             <QueryClientProvider client={queryClient}>
                 {children}
@@ -63,7 +70,7 @@ export default function QueryProvider({ children }: { children: React.ReactNode 
     return (
         <PersistQueryClientProvider
             client={queryClient}
-            persistOptions={{ persister, maxAge: TWENTY_FOUR_HOURS }}
+            persistOptions={{ persister, maxAge: TRENTE_JOURS }}
         >
             {children}
         </PersistQueryClientProvider>

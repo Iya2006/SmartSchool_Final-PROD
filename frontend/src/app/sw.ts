@@ -21,7 +21,7 @@
  * vient de lib/offlinePolicy.ts (registre formel, seule source de vérité),
  * vérifiée par src/tests/offlinePolicy.test.ts.
  */
-import type { PrecacheEntry, RuntimeCaching, SerwistGlobalConfig } from "serwist";
+import type { PrecacheEntry, RuntimeCaching, SerwistGlobalConfig, SerwistPlugin } from "serwist";
 import {
     CacheableResponsePlugin,
     CacheFirst,
@@ -32,6 +32,7 @@ import {
     StaleWhileRevalidate,
 } from "serwist";
 import { isOnlineOnlyPath } from "../lib/offlinePolicy";
+import { cleDeCacheApi, estRequeteApi } from "../lib/offlineCacheKey";
 
 declare global {
     interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -41,28 +42,41 @@ declare global {
 
 declare const self: ServiceWorkerGlobalScope;
 
+// Voir lib/offlineCacheKey.ts : sans `_t`, et cloisonné par compte.
+const cleCloisonneeParCompte: SerwistPlugin = {
+    cacheKeyWillBeUsed: async ({ request }) => cleDeCacheApi(request.url, request.headers.get("Authorization")),
+};
+
 const runtimeCaching: RuntimeCaching[] = [
     {
         // Jamais de cache, lecture ou écriture, sur les routes ONLINE_ONLY
         // (voir lib/offlinePolicy.ts).
-        matcher: ({ url, sameOrigin }) => sameOrigin && isOnlineOnlyPath(url.pathname),
+        //
+        // L'API vit sur un autre domaine que le frontend en production
+        // (api.trxsmartschool.com) : ces deux règles ne testent donc PAS
+        // `sameOrigin`. Avec ce test, elles ne se déclenchaient jamais et
+        // aucune lecture n'était mise en cache.
+        matcher: ({ url }) => estRequeteApi(url) && isOnlineOnlyPath(url.pathname),
         handler: new NetworkOnly(),
     },
     {
-        // Lectures API : réseau prioritaire (données à jour), bascule sur le
-        // cache si le serveur ne répond pas sous 3s ou pas du tout — permet à
-        // une page déjà visitée de continuer à afficher les dernières données
-        // connues hors-ligne. N'intercepte que les GET — les écritures
-        // (POST/PUT/DELETE) ne passent jamais par ce cache, elles sont gérées
-        // par la file offline (lib/offlineQueue.ts + lib/syncEngine.ts).
-        matcher: ({ url, sameOrigin }) => sameOrigin && url.pathname.startsWith("/api/"),
+        // Lectures API : toujours le réseau d'abord, le cache seulement quand
+        // le réseau échoue. Pas de délai de bascule : en ligne, une connexion
+        // lente doit attendre la vraie réponse plutôt que d'afficher une liste
+        // périmée juste après un enregistrement. Les écritures ne passent
+        // jamais ici (file offline : lib/offlineQueue.ts + lib/syncEngine.ts).
+        matcher: ({ url }) => estRequeteApi(url),
         method: "GET",
         handler: new NetworkFirst({
             cacheName: "smartschool-api-cache",
-            networkTimeoutSeconds: 3,
+            // La clé de cache est une URL reconstruite, sans l'en-tête Origin
+            // de la requête d'origine : sans ignoreVary, le `Vary: Origin`
+            // posé par le CORS de l'API empêcherait toute correspondance.
+            matchOptions: { ignoreVary: true },
             plugins: [
-                new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 24 * 60 * 60 }),
-                new CacheableResponsePlugin({ statuses: [0, 200] }),
+                cleCloisonneeParCompte,
+                new ExpirationPlugin({ maxEntries: 3000, maxAgeSeconds: 30 * 24 * 60 * 60 }),
+                new CacheableResponsePlugin({ statuses: [200] }),
             ],
         }),
     },

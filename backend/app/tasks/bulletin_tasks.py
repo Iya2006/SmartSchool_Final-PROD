@@ -14,6 +14,7 @@ import os
 
 from app.core.database import SessionLocal
 from app.models.academique import Bulletin, Inscription, Classe
+from app.core.fichiers import dossier_fichiers
 
 
 def generate_bulletin_pdf_task(bulletin_id: int, etablissement_id: int) -> dict:
@@ -58,10 +59,7 @@ def generate_bulletin_pdf_task(bulletin_id: int, etablissement_id: int) -> dict:
 
         pdf_bytes, nom_fichier = _build_bulletin_pdf_bytes(bulletin_id, db)
 
-        # backend/app/tasks/bulletin_tasks.py -> backend/uploads/bulletins/
-        backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        upload_dir = os.path.join(backend_root, "uploads", "bulletins")
-        os.makedirs(upload_dir, exist_ok=True)
+        upload_dir = dossier_fichiers("bulletins")
         file_path = os.path.join(upload_dir, nom_fichier)
         with open(file_path, "wb") as f:
             f.write(pdf_bytes)

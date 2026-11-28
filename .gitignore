@@ -37,6 +37,12 @@ smartschool.db
 # Node.js / Next.js
 node_modules/
 .next/
+# Interface compilée pour l'application installée (desktop/scripts/construire-interface.mjs)
+.next-poste/
+# Empaquetage de l'application installée (desktop/scripts/empaqueter.mjs) :
+# Python embarqué, moteur compilé, installeur. Reconstruits à chaque fois.
+desktop/empaquetage/
+desktop/.cache-empaquetage/
 out/
 .nuxt/
 .output/
@@ -68,12 +74,15 @@ yarn-error.log*
 backend/uploads/photos/eleves/*
 backend/uploads/photos/enseignants/*
 backend/uploads/photos/parents/*
+backend/uploads/photos/personnel/*
 !backend/uploads/photos/eleves/.gitkeep
 !backend/uploads/photos/enseignants/.gitkeep
 !backend/uploads/photos/parents/.gitkeep
 backend/uploads/etablissements/*
 backend/uploads/devoirs/*
 backend/uploads/sujets/*
+backend/uploads/emplois/*
+backend/uploads/depenses/*
 !backend/uploads/etablissements/.gitkeep
 !backend/uploads/devoirs/.gitkeep
 !backend/uploads/sujets/.gitkeep

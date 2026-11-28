@@ -67,17 +67,73 @@ def _cle_secrete() -> bytes:
     return cle.encode("utf-8")
 
 
-def code_verification(paiement: Paiement) -> str:
-    """Code court, stable et infalsifiable sans la clé du serveur.
+def cle_signature_appareil(numero_appareil: int) -> str:
+    """Clé qui signe les reçus émis par le poste hors-ligne `numero_appareil`.
 
-    Il couvre le numéro, le montant, la date et la facture : modifier l'un
-    d'eux sur un reçu imprimé le rend invalide à la vérification."""
-    montant = f"{float(paiement.montant or 0):.2f}"
-    jour = str(paiement.date_paiement or "")
-    message = f"recu|{paiement.paiement_id}|{paiement.numero_recu}|{montant}|{jour}|{paiement.facture_id}"
-    empreinte = hmac.new(_cle_secrete(), message.encode("utf-8"), hashlib.sha256).digest()
+    Dérivée de la clé du cloud : le cloud la recalcule pour vérifier un reçu
+    de ce poste, sans la stocker nulle part. Le poste la reçoit une seule
+    fois, à son enregistrement (app/api/poste.py), et ne connaît jamais la clé
+    du cloud : un poste volé ne peut signer que des reçus de sa propre plage
+    d'identifiants, jamais ceux du cloud ni d'un autre poste."""
+    return hmac.new(
+        _cle_secrete(), f"appareil|{int(numero_appareil)}".encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def _code(cle: bytes, paiement_id, numero_recu, montant, date_paiement, facture_id) -> str:
+    montant = f"{float(montant or 0):.2f}"
+    jour = str(date_paiement or "")
+    message = f"recu|{paiement_id}|{numero_recu}|{montant}|{jour}|{facture_id}"
+    empreinte = hmac.new(cle, message.encode("utf-8"), hashlib.sha256).digest()
     brut = base64.b32encode(empreinte).decode("ascii")[:12]
     return f"{brut[0:4]}-{brut[4:8]}-{brut[8:12]}"
+
+
+def _cle_cloud_pour(paiement_id) -> bytes:
+    """Sur le cloud : la clé de l'appareil qui a émis le reçu, lue dans son
+    identifiant (0 = le cloud lui-même, sinon un poste hors-ligne)."""
+    from app.sync.identifiants import appareil_de
+
+    numero = appareil_de(paiement_id)
+    return _cle_secrete() if numero == 0 else cle_signature_appareil(numero).encode("utf-8")
+
+
+def _cle_du_paiement(paiement: Paiement) -> Optional[bytes]:
+    """Clé qui a signé ce reçu, ou None si on est sur un poste qui ne l'a pas
+    (reçu émis par le cloud ou par un autre poste)."""
+    from sqlalchemy.orm import object_session
+
+    from app.core.database import engine
+    from app.sync.identifiants import appareil_de, poste_de
+
+    session = object_session(paiement)
+    poste = poste_de(session.get_bind() if session is not None else engine)
+    if poste is None:
+        return _cle_cloud_pour(paiement.paiement_id)
+    if appareil_de(paiement.paiement_id) == poste.numero:
+        return poste.cle_signature.encode("utf-8")
+    return None
+
+
+def code_verification(paiement: Paiement) -> str:
+    """Code court, stable et infalsifiable sans la clé de l'appareil émetteur.
+
+    Il couvre le numéro, le montant, la date et la facture : modifier l'un
+    d'eux sur un reçu imprimé le rend invalide à la vérification. Le cloud le
+    recalcule toujours (il dérive la clé de chaque poste) ; un poste qui
+    réimprime le reçu d'un autre appareil relit le code figé à l'émission."""
+    cle = _cle_du_paiement(paiement)
+    if cle is None:
+        return paiement.code_verification or ""
+    return _code(cle, paiement.paiement_id, paiement.numero_recu, paiement.montant,
+                 paiement.date_paiement, paiement.facture_id)
+
+
+def code_verification_cloud(ligne) -> str:
+    """Le code d'une ligne de paiement lue par le cloud (mapping), pour le
+    joindre aux reçus qu'il envoie aux postes (app/sync/instantane.py)."""
+    return _code(_cle_cloud_pour(ligne["paiement_id"]), ligne["paiement_id"], ligne["numero_recu"],
+                 ligne["montant"], ligne["date_paiement"], ligne["facture_id"])
 
 
 # Tirets Unicode (traits d'union, tirets demi-cadratin / cadratin, signe
@@ -120,12 +176,19 @@ def base_url_publique(request=None) -> str:
     1. FRONTEND_PUBLIC_URL si l'hébergeur la fournit ;
     2. sinon l'origine du site qui a demandé le reçu, seulement si elle fait
        partie des origines autorisées (CORS) — pas d'adresse arbitraire ;
-    3. sinon la première origine autorisée qui n'est pas locale."""
+    3. sinon la première origine autorisée qui n'est pas locale.
+
+    Sur un poste hors-ligne, l'interface est servie par l'ordinateur lui-même
+    (127.0.0.1) : un QR vers cette adresse ne mènerait nulle part chez le
+    parent qui le scanne. L'étape 2 y est donc sautée, et le QR va au site
+    public, où le reçu se vérifie dès la synchronisation."""
+    from app.core.mode import MODE_POSTE
+
     explicite = (os.getenv("FRONTEND_PUBLIC_URL") or "").strip().rstrip("/")
     if explicite:
         return explicite
     autorisees = [o for o in (_origine_valide(x) for x in os.getenv("CORS_ORIGINS", "").split(",")) if o]
-    if request is not None:
+    if request is not None and not MODE_POSTE:
         for entete in ("origin", "referer"):
             valeur = request.headers.get(entete)
             if not valeur:

@@ -40,7 +40,7 @@ import {
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
-import { getRoleAccessConfig } from '@/lib/roleAccess';
+import { getRoleAccessConfig, voitTableauDeBord } from '@/lib/roleAccess';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import PointageEnseignants from '@/components/PointageEnseignants';
 
@@ -2401,8 +2401,12 @@ function SurveillantPortal() {
 function OperateurPortal() {
     const { user, logout } = useAuth();
     const isMobile = useIsMobile();
-    const { etablissementId, anneeId } = useApp();
+    const { etablissementId, anneeId, anneeLibelle, loading: chargementApp } = useApp();
     const roleConfig = useMemo(() => getRoleAccessConfig(user?.role), [user?.role]);
+    // Le tableau de bord est réservé à la direction (main.py, DASHBOARD_ROLES) :
+    // l'opérateur ne le demande pas, et sa carte « Présence globale » n'est
+    // affichée qu'à ceux qui y ont droit.
+    const peutVoirTableauDeBord = voitTableauDeBord(user);
     const [dashboard, setDashboard] = useState<DashboardLite>({});
     const [eleveStats, setEleveStats] = useState<CountStats>({});
     const [enseignantStats, setEnseignantStats] = useState<CountStats>({});
@@ -2414,27 +2418,33 @@ function OperateurPortal() {
     const [error, setError] = useState<string | null>(null);
 
     const loadOperations = useCallback(async () => {
+        // Année pas encore confirmée (AppContext) : rien à demander encore.
+        if (chargementApp) return;
         setLoading(true);
         setError(null);
-        try {
-            const [dashboardRes, eleveCountRes, enseignantCountRes, classesRes, elevesRes] = await Promise.all([
-                api.get<DashboardLite>(`/api/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
-                api.get<CountStats>(`/api/eleves/count?etablissement_id=${etablissementId}`),
-                api.get<CountStats>(`/api/enseignants/count?etablissement_id=${etablissementId}`),
-                api.get<ClasseItem[]>(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}&limit=120`),
-                api.get<EleveOption[]>(`/api/eleves?etablissement_id=${etablissementId}&annee_id=${anneeId}&statut=ACTIF&limit=12`),
-            ]);
-            setDashboard(dashboardRes.data || {});
-            setEleveStats(eleveCountRes.data || {});
-            setEnseignantStats(enseignantCountRes.data || {});
-            setClasses(classesRes.data || []);
-            setEleves(elevesRes.data || []);
-        } catch (err) {
-            setError(getErrorMessage(err));
-        } finally {
-            setLoading(false);
-        }
-    }, [anneeId, etablissementId]);
+        // Chaque bloc se charge à part. Avec un seul Promise.all, le refus du
+        // tableau de bord (403) vidait tout le portail : 0 dossier, 0 classe,
+        // 0 enseignant, et « Accès refusé » en tête de page.
+        const lire = async <T,>(requete: Promise<{ data: T }>, defaut: T): Promise<T> => (await requete).data ?? defaut;
+        const [dashboardRes, eleveCountRes, enseignantCountRes, classesRes, elevesRes] = await Promise.allSettled([
+            peutVoirTableauDeBord
+                ? lire(api.get<DashboardLite>(`/api/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`), {})
+                : Promise.resolve<DashboardLite>({}),
+            lire(api.get<CountStats>(`/api/eleves/count?etablissement_id=${etablissementId}`), {}),
+            lire(api.get<CountStats>(`/api/enseignants/count?etablissement_id=${etablissementId}`), {}),
+            lire(api.get<ClasseItem[]>(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}&limit=120`), []),
+            lire(api.get<EleveOption[]>(`/api/eleves?etablissement_id=${etablissementId}&annee_id=${anneeId}&statut=ACTIF&limit=12`), []),
+        ]);
+        if (dashboardRes.status === 'fulfilled') setDashboard(dashboardRes.value);
+        if (eleveCountRes.status === 'fulfilled') setEleveStats(eleveCountRes.value);
+        if (enseignantCountRes.status === 'fulfilled') setEnseignantStats(enseignantCountRes.value);
+        if (classesRes.status === 'fulfilled') setClasses(classesRes.value);
+        if (elevesRes.status === 'fulfilled') setEleves(elevesRes.value);
+        const refus = [dashboardRes, eleveCountRes, enseignantCountRes, classesRes, elevesRes]
+            .find((r): r is PromiseRejectedResult => r.status === 'rejected');
+        setError(refus ? getErrorMessage(refus.reason) : null);
+        setLoading(false);
+    }, [anneeId, etablissementId, chargementApp, peutVoirTableauDeBord]);
 
     useEffect(() => {
         loadOperations();
@@ -2459,7 +2469,9 @@ function OperateurPortal() {
         { label: 'Dossiers élèves', value: eleveStats.actifs ?? dashboard.kpi?.nb_eleves ?? 0, note: `${eleveStats.inactifs ?? 0} dossier(s) inactif(s)`, icon: FolderKanban, color: '#475569' },
         { label: 'Classes actives', value: classes.length || dashboard.kpi?.nb_classes || 0, note: 'structures à orienter et suivre', icon: Layers3, color: '#2563eb' },
         { label: 'Enseignants actifs', value: enseignantStats.actifs ?? dashboard.kpi?.nb_enseignants ?? 0, note: 'annuaire pédagogique', icon: Users, color: '#7c3aed' },
-        { label: 'Présence globale', value: `${dashboard.kpi?.taux_presence ?? 0}%`, note: `${dashboard.kpi?.incidents_mois ?? 0} incident(s) ce mois`, icon: Activity, color: '#16a34a' },
+        ...(peutVoirTableauDeBord ? [
+            { label: 'Présence globale', value: `${dashboard.kpi?.taux_presence ?? 0}%`, note: `${dashboard.kpi?.incidents_mois ?? 0} incident(s) ce mois`, icon: Activity, color: '#16a34a' },
+        ] : []),
     ];
 
     const topClasses = classes.slice(0, 6);
@@ -2498,7 +2510,7 @@ function OperateurPortal() {
                                 {[
                                     { label: 'Rôle', value: roleConfig?.label || user?.role || 'Opérateur' },
                                     { label: 'Mission PDF', value: 'Inscriptions / dossiers' },
-                                    { label: 'Année', value: `#${anneeId}` },
+                                    { label: 'Année', value: anneeLibelle || '—' },
                                 ].map((item) => (
                                     <div key={item.label} style={{ padding: '12px 14px', borderRadius: '16px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
                                         <p style={{ margin: 0, fontSize: '11px', textTransform: 'uppercase', color: '#64748b', fontWeight: 900 }}>{item.label}</p>

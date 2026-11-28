@@ -114,7 +114,7 @@ def list_roles(
     titulaires: dict = {}
     for u in db.query(Utilisateur).filter(
         Utilisateur.etablissement_id == etablissement_id
-    ).order_by(Utilisateur.nom, Utilisateur.prenom).all():
+    ).order_by(Utilisateur.nom, Utilisateur.prenom, Utilisateur.utilisateur_id).all():
         titulaires.setdefault(u.role, []).append({
             "utilisateur_id": u.utilisateur_id,
             "nom": u.nom,

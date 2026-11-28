@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import api from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { lireMemo, ecrireMemo } from '@/lib/memoHorsLigne';
 
 /* ─── TypeScript Interfaces ─── */
 interface AnneeScolaire {
@@ -228,8 +229,17 @@ const AppContext = createContext<AppContextType>({
     setCarteConfigEnseignant: () => {},
 });
 
+/** L'année courante de la dernière liste connue du compte connecté, ou null. */
+function anneeCouranteMemorisee(): number | null {
+    if (typeof window === 'undefined') return null;
+    const annees = lireMemo()?.annees as AnneeScolaire[] | undefined;
+    if (!Array.isArray(annees) || annees.length === 0) return null;
+    const active = annees.find((a) => a.est_courante === 'O') || annees[0];
+    return typeof active?.annee_id === 'number' ? active.annee_id : null;
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
-    const { isAuthenticated, user } = useAuth();
+    const { isAuthenticated, user, sessionLue } = useAuth();
     // Établissement affiché. Vaut 1 UNIQUEMENT tant qu'aucun compte n'est
     // connecté (page de login : un visiteur anonyme n'a pas encore d'école).
     // Dès la connexion, l'effet ci-dessous le remplace par l'établissement
@@ -242,11 +252,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const [etablissementCachet, setEtablissementCachet] = useState<string | null>(null);
     const [etablissementSignature, setEtablissementSignature] = useState<string | null>(null);
     const [etablissementDirecteur, setEtablissementDirecteur] = useState<string | null>(null);
-    const [anneeId, setAnneeId] = useState<number>(1);
+    // Dernière année courante connue de CE compte (lib/memoHorsLigne.ts) : un
+    // rechargement de page démarre sur la bonne année. Avec la valeur
+    // d'attente 1 (l'année d'une autre école), les pages l'interrogeaient le
+    // temps que la liste arrive : 404, listes vides, puis second appel.
+    const [anneeId, setAnneeId] = useState<number>(() => anneeCouranteMemorisee() ?? 1);
     const [anneeLibelle, setAnneeLibelle] = useState<string>('');
-    const [anneeCouranteId, setAnneeCouranteId] = useState<number>(1);
+    const [anneeCouranteId, setAnneeCouranteId] = useState<number>(() => anneeCouranteMemorisee() ?? 1);
     const [annees, setAnnees] = useState<AnneeScolaire[]>([]);
     const [loading, setLoading] = useState(true);
+    const sessionOuverte = useRef(false);
     const [theme, setTheme] = useState<ThemeConfig>(DEFAULT_THEME);
 
     // Initialize from localStorage cache for instant availability before API responds
@@ -284,36 +299,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }, [isAuthenticated, user?.etablissement_id]);
 
     const fetchEtablissement = useCallback(() => {
+        const appliquerEtablissement = (data: Record<string, any>) => {
+            const nom = data.nom || 'SmartSchool';
+            const logo = data.logo_url || null;
+            setEtablissementNom(nom);
+            setEtablissementLogo(logo);
+            setEtablissementCachet(data.cachet_url || null);
+            setEtablissementSignature(data.signature_url || null);
+            setEtablissementDirecteur(data.directeur || null);
+
+            if (typeof window !== 'undefined') {
+                localStorage.setItem('etablissement_nom', nom);
+                if (logo) {
+                    localStorage.setItem('etablissement_logo', logo);
+                } else {
+                    localStorage.removeItem('etablissement_logo');
+                }
+            }
+        };
+
         // Route publique — pas besoin de token
         api.get(`/api/parametrage/etablissements/${etablissementId}?_t=${Date.now()}`)
             .then(res => {
-                const nom = res.data.nom || 'SmartSchool';
-                const logo = res.data.logo_url || null;
-                setEtablissementNom(nom);
-                setEtablissementLogo(logo);
-                setEtablissementCachet(res.data.cachet_url || null);
-                setEtablissementSignature(res.data.signature_url || null);
-                setEtablissementDirecteur(res.data.directeur || null);
-                
-                if (typeof window !== 'undefined') {
-                    localStorage.setItem('etablissement_nom', nom);
-                    if (logo) {
-                        localStorage.setItem('etablissement_logo', logo);
-                    } else {
-                        localStorage.removeItem('etablissement_logo');
-                    }
-                }
+                appliquerEtablissement(res.data);
+                ecrireMemo({ etablissement: res.data });
             })
-            .catch(() => {});
+            .catch(() => {
+                // Hors-ligne : cachet, signature et directeur servent aux
+                // documents imprimés, on les reprend de la dernière visite.
+                const memo = lireMemo()?.etablissement;
+                if (memo && Number(memo.etablissement_id) === etablissementId) appliquerEtablissement(memo);
+            });
     }, [etablissementId]);
 
     const fetchTheme = useCallback(() => {
         // Route publique — pas besoin de token. Pour un appelant authentifié le
         // backend ignore ce paramètre et sert les réglages de SON établissement
         // (Lot 10) ; il ne sert donc qu'au visiteur anonyme de la page de login.
-        api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&_t=${Date.now()}`)
-            .then(res => {
-                const settings = res.data;
+        const appliquerReglages = (settings: any[]) => {
                 const get = (cle: string, fb: string) =>
                     settings.find((s: any) => s.cle === cle)?.valeur ?? fb;
 
@@ -393,8 +416,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 if (typeof window !== 'undefined') {
                     localStorage.setItem('carte_config_enseignant', JSON.stringify(loadedCarteConfigEnseignant));
                 }
+        };
+
+        api.get(`/api/parametrage/settings?etablissement_id=${etablissementId}&_t=${Date.now()}`)
+            .then(res => {
+                appliquerReglages(res.data);
+                ecrireMemo({ reglages: res.data });
             })
-            .catch(() => {});
+            .catch(() => {
+                const memo = lireMemo()?.reglages;
+                if (Array.isArray(memo)) appliquerReglages(memo);
+            });
     }, [etablissementId]);
 
     // Recharge la liste des années + l'année courante depuis le backend.
@@ -404,21 +436,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // page Classes...) sans that l'utilisateur ait à recharger la page —
     // AppContext ne se chargeait auparavant qu'une seule fois au montage.
     const fetchAnnee = useCallback(() => {
+        const appliquerAnnees = (data: AnneeScolaire[]) => {
+            setAnnees(data);
+            const active = data.find((a) => a.est_courante === 'O') || data[0];
+            if (active) {
+                setAnneeId(active.annee_id);
+                setAnneeLibelle(active.libelle);
+                setAnneeCouranteId(active.annee_id);
+            }
+        };
+
         return api.get('/api/parametrage/annees')
             .then(res => {
                 const data = res.data;
                 if (Array.isArray(data) && data.length > 0) {
-                    setAnnees(data);
-                    const active = data.find((a: any) => a.est_courante === 'O') || data[0];
-                    if (active) {
-                        setAnneeId(active.annee_id);
-                        setAnneeLibelle(active.libelle);
-                        setAnneeCouranteId(active.annee_id);
-                    }
+                    appliquerAnnees(data);
+                    ecrireMemo({ annees: data });
                 }
             })
             .catch(() => {
-                setAnneeLibelle('2024-2025');
+                // Hors-ligne : sans la dernière liste connue, toutes les pages
+                // interrogeaient l'année n°1 — celle d'une autre école.
+                const memo = lireMemo()?.annees as AnneeScolaire[] | undefined;
+                if (Array.isArray(memo) && memo.length > 0) {
+                    appliquerAnnees(memo);
+                } else {
+                    setAnneeLibelle('2024-2025');
+                }
             });
     }, []);
 
@@ -444,21 +488,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
             if (cachedLogo) setEtablissementLogo(cachedLogo);
         }
 
-        // Toujours charger l'établissement et le thème (routes publiques)
+        // Au premier rendu, AuthContext n'a pas encore relu la session
+        // enregistrée : `isAuthenticated` vaut false même pour un utilisateur
+        // connecté. On reste « en chargement » jusqu'à le savoir. Sinon les
+        // pages qui attendent `loading` partaient avec l'année d'attente (1),
+        // celle d'une autre école.
+        if (!sessionLue) return;
+
+        // Compte d'une autre école que celle affichée (1, en attendant) :
+        // l'effet plus haut la remplace par la sienne, et celui-ci repart avec
+        // elle. Charger d'abord l'école n° 1 affichait un instant le nom d'une
+        // autre école, pour rien.
+        // Les pages attendent pendant ce temps : « en chargement », comme
+        // ci-dessous, sinon elles partiraient avec l'école et l'année d'attente.
+        if (isAuthenticated && typeof user?.etablissement_id === 'number'
+            && user.etablissement_id !== etablissementId) {
+            if (!sessionOuverte.current) {
+                sessionOuverte.current = true;
+                setLoading(true);
+            }
+            return;
+        }
+
+        // Toujours charger l'établissement et le thème (routes publiques), une
+        // fois la session relue. Lancés aussi au tout premier rendu, ils
+        // repartaient aussitôt la session relue : deux fois chacun, à chaque
+        // chargement de page.
         fetchEtablissement();
         fetchTheme();
 
         if (!isAuthenticated) {
+            sessionOuverte.current = false;
             setLoading(false);
             setAnneeLibelle('2024-2025');
             return;
         }
 
+        // Juste après une connexion, `loading` valait déjà false (écran de
+        // connexion) : la page d'arrivée doit attendre l'année elle aussi.
+        // Une fois la session ouverte, les relances de cet effet (école
+        // confirmée par le compte) ne repassent pas par « en chargement » :
+        // les pages ne rechargent pas pour rien.
+        if (!sessionOuverte.current) {
+            sessionOuverte.current = true;
+            setLoading(true);
+        }
         fetchAnnee().finally(() => setLoading(false));
         // `fetchEtablissement` et `fetchTheme` dépendent de `etablissementId` :
         // les inclure ici est ce qui déclenche le rechargement de l'identité et
         // du thème quand le login révèle enfin l'école du compte.
-    }, [fetchEtablissement, fetchTheme, fetchAnnee, isAuthenticated]);
+    }, [fetchEtablissement, fetchTheme, fetchAnnee, isAuthenticated, sessionLue, user?.etablissement_id, etablissementId]);
 
     // Titre et icône de l'onglet.
     //

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import api from '@/lib/api';
+import { reglesDesPolices } from '@/lib/polices';
 import Pagination from '@/components/Pagination';
 
 
@@ -276,7 +277,7 @@ function BulletinsContent() {
         const printWindow = window.open('', '_blank');
         if (!printWindow) return;
         printWindow.document.write(`<!DOCTYPE html><html><head><title>Bulletin de Notes - SMARTSCHOOL</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+        <style>${reglesDesPolices()}</style>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body { font-family: 'Inter', sans-serif; background: white; }
@@ -288,7 +289,9 @@ function BulletinsContent() {
             }
         </style></head><body>${content}</body></html>`);
         printWindow.document.close();
-        setTimeout(() => printWindow.print(), 500);
+        // Imprimer une fois les polices chargées, sinon la première page
+        // part avec la police de secours.
+        setTimeout(() => { void printWindow.document.fonts.ready.then(() => printWindow.print()); }, 500);
     };
 
     return (

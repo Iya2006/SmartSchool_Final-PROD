@@ -11,6 +11,7 @@ import os, uuid, shutil
 
 from app.core.database import get_db
 from app.core.auth import get_current_user, require_etablissement, ADMIN_TIER_ROLES
+from app.core.fichiers import dossier_fichiers
 from app.models.academique import (
     Devoir, Enseignant, Classe, Matiere, Affectation,
     EleveParent, Inscription, Cycle, Eleve
@@ -18,8 +19,7 @@ from app.models.academique import (
 
 router = APIRouter(prefix="/api/devoirs", tags=["Devoirs"])
 
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "devoirs")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = dossier_fichiers("devoirs")
 
 
 # ── Helpers d'isolation / ownership (Lot 9) ───────────────────────────────

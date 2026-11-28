@@ -1,9 +1,16 @@
 import os
+import unicodedata
+from functools import lru_cache
+
 from dotenv import load_dotenv
 load_dotenv()
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
+from sqlalchemy.dialects.sqlite.base import SQLiteCompiler
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.sql import operators, sqltypes
+from sqlalchemy.sql.compiler import OPERATORS
+from sqlalchemy.sql.elements import UnaryExpression
 
 # Configure la base de données PostgreSQL
 # À partir du docker-compose : postgres / admin / admin / mydb / 15433 (port hôte)
@@ -93,8 +100,223 @@ if not SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
     # mieux le dire tout de suite que de laisser la file s'allonger.
     _pool_kwargs["pool_timeout"] = _entier_env("DB_POOL_TIMEOUT", 10)
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL, **_pool_kwargs)
+EST_SQLITE = SQLALCHEMY_DATABASE_URL.startswith("sqlite")
+if EST_SQLITE:
+    # Poste local (offline-first) et tests. Les routes s'exécutent dans un pool
+    # de fils : la connexion doit pouvoir changer de fil, et une écriture
+    # attend son tour (30 s) au lieu d'échouer en « database is locked ».
+    _pool_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 30}
+
+
+# ── Base chiffrée d'un poste installé ──────────────────────────────────────
+# Un ordinateur volé ne doit pas livrer l'école. Sur un poste, l'application
+# installée fournit une clé de 256 bits (SMARTSCHOOL_CLE_BASE, protégée par le
+# compte Windows, voir desktop/main.js) : la base est chiffrée par SQLCipher,
+# illisible sans elle. Sans clé (tests, développement), rien ne change.
+
+def _chemin_sqlite(url: str) -> str:
+    return url.split(":///", 1)[1] if ":///" in url else url
+
+
+def connexion_chiffree(chemin: str, cle_hex: str):
+    """Ouvre la base chiffrée. La clé brute (64 caractères hexadécimaux) est
+    passée telle quelle : pas de dérivation à chaque ouverture."""
+    import sqlcipher3.dbapi2 as sqlcipher
+
+    connexion = sqlcipher.connect(chemin, check_same_thread=False, timeout=30)
+    connexion.execute(f"PRAGMA key = \"x'{cle_hex}'\"")
+    return connexion
+
+
+def moteur_chiffre(chemin: str, cle_hex: str, **options):
+    """Moteur SQLAlchemy sur une base SQLCipher. Le module de SQLCipher est
+    déclaré comme pilote : sans cela, ses erreurs (doublon, clé étrangère) ne
+    seraient pas reconnues comme telles par SQLAlchemy.
+
+    Le pool est imposé (QueuePool, comme pour un fichier SQLite ordinaire) :
+    avec l'adresse « sqlite:// », SQLAlchemy croirait à une base en mémoire et
+    prendrait un SingletonThreadPool, qui ne garde que cinq fils et ferme la
+    connexion des autres pendant qu'ils s'en servent. Le moteur en sert
+    quarante à la fois : le poste s'arrêtait net, sans aucune trace, au premier
+    afflux de requêtes (constaté sur l'application installée)."""
+    import sqlcipher3.dbapi2 as sqlcipher
+    from sqlalchemy.pool import QueuePool
+
+    options.setdefault("poolclass", QueuePool)
+    options.setdefault("pool_size", DB_POOL_SIZE)
+    options.setdefault("max_overflow", DB_MAX_OVERFLOW)
+    return create_engine("sqlite://", creator=lambda: connexion_chiffree(chemin, cle_hex),
+                         module=sqlcipher, **options)
+
+
+def chiffrer_base_en_clair(chemin: str, cle_hex: str) -> bool:
+    """Convertit, une seule fois, une base de poste encore en clair (installée
+    avant le chiffrement). Rend True si une conversion a eu lieu. Le fichier
+    n'est remplacé qu'une fois la copie chiffrée complète."""
+    import sqlcipher3.dbapi2 as sqlcipher
+
+    if not os.path.exists(chemin):
+        return False
+    with open(chemin, "rb") as f:
+        if f.read(16) != b"SQLite format 3\x00":
+            return False  # déjà chiffrée (ou vide)
+    provisoire = chemin + ".chiffrement"
+    if os.path.exists(provisoire):
+        os.remove(provisoire)
+    en_clair = sqlcipher.connect(chemin)
+    try:
+        en_clair.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        chemin_sql = provisoire.replace("'", "''")
+        en_clair.execute(f"ATTACH DATABASE '{chemin_sql}' AS chiffree KEY \"x'{cle_hex}'\"")
+        en_clair.execute("SELECT sqlcipher_export('chiffree')")
+        en_clair.execute("DETACH DATABASE chiffree")
+    finally:
+        en_clair.close()
+    for suffixe in ("-wal", "-shm"):
+        if os.path.exists(chemin + suffixe):
+            os.remove(chemin + suffixe)
+    os.replace(provisoire, chemin)
+    return True
+
+
+CLE_BASE = (os.getenv("SMARTSCHOOL_CLE_BASE") or "").strip()
+if EST_SQLITE and CLE_BASE:
+    _chemin_base = _chemin_sqlite(SQLALCHEMY_DATABASE_URL)
+    chiffrer_base_en_clair(_chemin_base, CLE_BASE)
+    _pool_kwargs.pop("connect_args", None)
+    engine = moteur_chiffre(_chemin_base, CLE_BASE, **_pool_kwargs)
+else:
+    engine = create_engine(SQLALCHEMY_DATABASE_URL, **_pool_kwargs)
+
+
+def _minuscules(texte):
+    return texte.lower() if isinstance(texte, str) else texte
+
+
+def _majuscules(texte):
+    return texte.upper() if isinstance(texte, str) else texte
+
+
+# ── L'ordre alphabétique d'un poste, identique à celui du cloud ────────────
+# PostgreSQL (en ligne, collation en_US.UTF-8) trie selon la langue :
+# « Éducation physique » avec les E, « Aïcha » avant « Aissata ». SQLite (poste)
+# trie octet par octet : « Éducation physique » après « Zoologie ». Une même
+# liste ne sortait donc pas dans le même ordre sur le poste et en ligne.
+#
+# Sur un poste, chaque tri sur une colonne de texte passe par la collation
+# ci-dessous (CompilateurPoste). Sa clé imite la collation du cloud : d'abord
+# les lettres et chiffres sans accent ni casse (espaces et ponctuation
+# ignorés), puis les accents, puis la casse (minuscule d'abord), enfin les
+# octets — l'ordre est total : deux textes ne sont égaux que s'ils sont
+# identiques. Vérifié contre PostgreSQL sur toutes les valeurs triées de l'école
+# de test (noms, prénoms, libellés, codes, clés de paramètres) : même ordre.
+COLLATION_ALPHABETIQUE = "alphabetique"
+_LIGATURES = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
+
+
+@lru_cache(maxsize=200_000)
+def cle_alphabetique(texte: str) -> tuple:
+    texte = texte.translate(_LIGATURES)
+    signes = [c for c in texte if c.isalnum()]
+    lettres = "".join(
+        c for c in unicodedata.normalize("NFD", "".join(signes)) if not unicodedata.combining(c)
+    ).casefold()
+    accents = tuple(unicodedata.normalize("NFD", c)[1:] for c in signes)
+    casse = tuple(0 if c.islower() else 1 for c in signes)
+    return (lettres, accents, casse, texte)
+
+
+def _comparer_alphabetiquement(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    return -1 if cle_alphabetique(a) < cle_alphabetique(b) else 1
+
+
+_MODIFICATEURS_DE_TRI = frozenset({operators.asc_op, operators.desc_op,
+                                   operators.nulls_first_op, operators.nulls_last_op})
+
+
+def _trier_alphabetiquement(clause):
+    """`clause` triée selon la collation alphabétique si c'est un texte."""
+    if isinstance(clause, UnaryExpression) and clause.modifier in _MODIFICATEURS_DE_TRI:
+        return UnaryExpression(_trier_alphabetiquement(clause.element), modifier=clause.modifier,
+                               wraps_column_expression=False)
+    if isinstance(getattr(clause, "type", None), sqltypes.String):
+        return clause.collate(COLLATION_ALPHABETIQUE)
+    return clause
+
+
+class CompilateurPoste(SQLiteCompiler):
+    """SQLite, avec les tris de texte dans l'ordre alphabétique du cloud. Seul
+    l'ORDER BY change : ni les tables, ni les index, ni les comparaisons."""
+
+    def order_by_clause(self, select, **kw):
+        tri = self._generate_delimited_list(
+            [_trier_alphabetiquement(c) for c in select._order_by_clauses], OPERATORS[operators.comma_op], **kw
+        )
+        return " ORDER BY " + tri if tri else ""
+
+
+def mettre_a_jour_les_statistiques(moteur) -> None:
+    """Statistiques de SQLite sur la base du poste (ANALYZE).
+
+    PostgreSQL entretient les siennes tout seul ; SQLite n'en a aucune tant
+    qu'on ne les lui demande pas, et choisit alors mal ses index. La liste des
+    élèves parcourait, pour CHAQUE élève, toutes les inscriptions de l'année :
+    1,8 s sur un poste contre 0,3 s en ligne ; 4 ms une fois les statistiques
+    calculées. À faire quand les données changent beaucoup — fin d'installation
+    — puis à chaque démarrage. `analysis_limit` borne le coût sur une grosse
+    base : les statistiques sont estimées sur un échantillon."""
+    with moteur.connect() as cx:
+        cx.exec_driver_sql("PRAGMA analysis_limit=1000")
+        cx.exec_driver_sql("ANALYZE")
+        cx.commit()
+
+
+def regler_sqlite(moteur) -> None:
+    """Réglages d'un moteur SQLite de poste : ceux de chaque connexion
+    (_reglages_sqlite) et l'ordre alphabétique de ses tris."""
+    event.listen(moteur, "connect", _reglages_sqlite)
+    moteur.dialect.statement_compiler = CompilateurPoste
+
+
+def _reglages_sqlite(connexion_dbapi, _enregistrement):
+    """Réglages de chaque connexion SQLite, en clair ou chiffrée."""
+    # Comme PostgreSQL : lower() et upper() traitent toutes les lettres. Celles
+    # de SQLite ne connaissent que l'ASCII — lower('TRAORÉ') y vaut 'traorÉ' —
+    # et la recherche sans accents (app/core/recherche.py) ratait, sur un poste
+    # seulement, les noms saisis en majuscules accentuées.
+    connexion_dbapi.create_function("lower", 1, _minuscules, deterministic=True)
+    connexion_dbapi.create_function("upper", 1, _majuscules, deterministic=True)
+    connexion_dbapi.create_collation(COLLATION_ALPHABETIQUE, _comparer_alphabetiquement)
+    curseur = connexion_dbapi.cursor()
+    # LIKE distingue majuscules et minuscules, comme sous PostgreSQL (ILIKE,
+    # traduit en lower(...) LIKE lower(...), reste insensible à la casse).
+    curseur.execute("PRAGMA case_sensitive_like=ON")
+    # WAL : on peut lire pendant qu'une écriture est en cours.
+    curseur.execute("PRAGMA journal_mode=WAL")
+    curseur.execute("PRAGMA synchronous=NORMAL")
+    # SQLite n'applique pas les clés étrangères par défaut, PostgreSQL si :
+    # sans ce réglage, le poste accepterait hors-ligne une donnée que le
+    # cloud refuserait ensuite à la synchronisation.
+    curseur.execute("PRAGMA foreign_keys=ON")
+    curseur.close()
+
+
+if EST_SQLITE:
+    regler_sqlite(engine)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Même principe pour la longueur des textes : SQLite l'ignore, PostgreSQL la
+# refuse. Un texte trop long saisi sur un poste bloquait ensuite tout son envoi
+# au cloud (app/core/valeurs_refusees.py). Vérifié avant chaque écriture de
+# l'ORM sur une base SQLite ; sans effet sur PostgreSQL, qui l'applique déjà.
+from sqlalchemy.orm import Session as _Session  # noqa: E402
+from app.core.valeurs_refusees import verifier_longueurs  # noqa: E402
+
+if not event.contains(_Session, "before_flush", verifier_longueurs):
+    event.listen(_Session, "before_flush", verifier_longueurs)
 
 Base = declarative_base()
 

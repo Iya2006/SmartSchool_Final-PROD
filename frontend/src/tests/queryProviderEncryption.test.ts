@@ -59,7 +59,10 @@ describe('QueryProvider — chiffrement du cache persisté', () => {
         const cached = await serialize(fakeClient());
 
         expect(cached).not.toContain('Quartier X');
-        expect(cached).not.toContain('O+');
+        // Le fragment JSON entier, pas « O+ » seul : « O » et « + » font partie
+        // de l'alphabet base64, et le chiffré les contenait parfois côte à côte
+        // par pur hasard (le test échouait environ une fois sur trois).
+        expect(cached).not.toContain('"groupe_sanguin":"O+"');
         expect(cached).not.toContain('Diallo');
         expect(cached).not.toContain('eleve_id');
     });
@@ -75,6 +78,22 @@ describe('QueryProvider — chiffrement du cache persisté', () => {
 
         localStorage.setItem('smartschool_token', 'token-utilisateur-B');
         await expect(deserialize(cached)).rejects.toThrow();
+    });
+
+    it('le format base64 est bien plus compact que l’ancien tableau de nombres', async () => {
+        localStorage.setItem('smartschool_token', 'token-utilisateur-A');
+        const client = fakeClient({ notes: 'x'.repeat(5000) });
+        const nouveau = await serialize(client);
+        const { encryptValue } = await import('@/lib/localEncryption');
+        const ancien = JSON.stringify(await encryptValue(client));
+        expect(nouveau.length).toBeLessThan(ancien.length / 2);
+    });
+
+    it("deserialize() rejette proprement un cache de l'ancien format (tableau de nombres)", async () => {
+        localStorage.setItem('smartschool_token', 'token-utilisateur-A');
+        const { encryptValue } = await import('@/lib/localEncryption');
+        const ancienFormat = JSON.stringify(await encryptValue(fakeClient()));
+        await expect(deserialize(ancienFormat)).rejects.toThrow();
     });
 
     it("deserialize() rejette proprement sur un ancien cache non chiffré (avant ce correctif)", async () => {

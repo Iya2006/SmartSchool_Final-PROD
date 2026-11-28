@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { voitFinance } from '@/lib/roleAccess';
 import { useApp } from '@/context/AppContext';
 import {
     User, Mail, Building, Edit2, Loader2, Save, X,
@@ -16,6 +17,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8300';
 
 export default function ProfilPage() {
     const { user, logout } = useAuth();
+    const peutVoirFinance = voitFinance(user);
     const { etablissementNom } = useApp();
     const isMobile = useIsMobile();
     const [loading, setLoading] = useState(true);
@@ -52,7 +54,10 @@ export default function ProfilPage() {
         const loadProfileData = async () => {
             if (!user?.id) { setLoading(false); return; }
             try {
-                const res = await api.get(`/api/personnel/${user.id}`);
+                // « Mon compte » : sa propre fiche, quel que soit son rôle. Par
+                // /api/personnel/{id}, réservé à la gestion du personnel, le
+                // directeur de niveau ne lisait ni ne corrigeait la sienne.
+                const res = await api.get('/api/personnel/me');
                 const p = res.data;
                 setNom(p.nom || '');
                 setPrenom(p.prenom || '');
@@ -80,10 +85,13 @@ export default function ProfilPage() {
     }, [user]);
 
     useEffect(() => {
+        // Le PIN protège la comptabilité : il ne concerne que ceux qui l'ont
+        // (le directeur de niveau recevait un refus à chaque ouverture).
+        if (!peutVoirFinance) return;
         api.get('/api/comptabilite/pin/status')
             .then(res => setPinConfigured(!!res.data?.configured))
             .catch(() => setPinConfigured(null));
-    }, []);
+    }, [peutVoirFinance]);
 
     const handleSaveProfile = async () => {
         if (!user?.id) return;
@@ -91,7 +99,7 @@ export default function ProfilPage() {
         try {
             // Jamais role/statut dans ce payload : un admin ne doit pas
             // pouvoir s'auto-attribuer un rôle supérieur via son propre profil.
-            await api.put(`/api/personnel/${user.id}`, { nom, prenom, email, telephone });
+            await api.put('/api/personnel/me', { nom, prenom, email, telephone });
             toast.success("Profil mis à jour avec succès !");
             setEditMode(false);
         } catch (err: any) {
@@ -322,12 +330,14 @@ export default function ProfilPage() {
                             <Shield size={16} color="#818cf8" /> Accès Total (Niveau 1)
                         </div>
                     </div>
+                    {peutVoirFinance && (
                     <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '14px', padding: '14px 18px' }}>
                         <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '4px' }}>Code PIN Comptabilité</div>
                         <div style={{ fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <Lock size={16} color="#34d399" /> {pinConfigured === false ? 'Non configuré' : 'Configuré'}
                         </div>
                     </div>
+                    )}
                     <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '14px', padding: '14px 18px' }}>
                         <div style={{ fontSize: '12px', opacity: 0.7, marginBottom: '4px' }}>Session Actuelle</div>
                         <div style={{ fontSize: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -549,7 +559,8 @@ export default function ProfilPage() {
                         </form>
                     </div>
 
-                    {/* Code PIN & Sécurité renforcée */}
+                    {/* Code PIN & Sécurité renforcée — seulement pour qui a la comptabilité */}
+                    {peutVoirFinance && (
                     <div style={{ background: 'white', borderRadius: '20px', padding: isMobile ? '20px' : '32px', border: '1px solid #f1f5f9', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
                         <h2 style={{ fontSize: '20px', fontWeight: 700, margin: '0 0 8px 0', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <Lock color="#10b981" size={22} /> Code PIN de Sécurité (Comptabilité)
@@ -617,6 +628,7 @@ export default function ProfilPage() {
                             </button>
                         </div>
                     </div>
+                    )}
                 </div>
             )}
 

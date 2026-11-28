@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import verify_password, hash_password
 from app.core.auth import create_access_token, get_current_user
-from app.core.rate_limit import limiter
+from app.core.rate_limit import cle_de_connexion, limiter
 from app.core.messagerie import sous_requete_messages_masques, masquer_message
 from app.models.academique import (
     Eleve, Inscription, Classe, Matiere,
@@ -85,7 +85,7 @@ class LoginEleveRequest(BaseModel):
 # IDENTIFICATION ÉLÈVE (POST sécurisé + rate limited)
 # ================================================================
 @router.post("/login")
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", key_func=cle_de_connexion)
 def login_eleve(request: Request, data: LoginEleveRequest, db: Session = Depends(get_db)):
     """Connexion par matricule + mot de passe (défaut: smartschool)."""
     eleve = db.query(Eleve).filter(Eleve.matricule == data.matricule).first()
@@ -385,7 +385,7 @@ def get_edt_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db: Session
         .filter(
             CreneauEmploi.classe_id == inscription.classe_id,
             CreneauEmploi.statut == "ACTIVE"
-        ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut).all()
+        ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut, CreneauEmploi.creneau_id).all()
 
     result = []
     for c, mat, ens in creneaux:
@@ -680,7 +680,7 @@ def get_enseignants_eleve(eleve_id: int, _auth: dict = Depends(_eleve_auth), db:
         Matiere, Affectation.matiere_id == Matiere.matiere_id
     ).filter(
         Affectation.classe_id == insc.classe_id
-    ).all()
+    ).order_by(Matiere.libelle, Matiere.matiere_id, Affectation.affectation_id).all()
 
     result = []
     seen = set()

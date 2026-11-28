@@ -2,7 +2,7 @@
 SMARTSCHOOL API — Routes Dashboard
 GET /api/dashboard → KPIs + stats réelles (taux de réussite par cycle & détail par classe, événements, activités)
 """
-from datetime import date as date_type
+from datetime import date as date_type, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
@@ -93,7 +93,7 @@ def get_dashboard(
         .join(Classe, Inscription.classe_id == Classe.classe_id)
         .filter(
             Classe.etablissement_id == etablissement_id,
-            Presence.date_presence >= func.current_date() - 30,
+            Presence.date_presence >= (date_type.today() - timedelta(days=30)),
             Presence.seance_id.isnot(None),
         )
         .group_by(Presence.statut_presence)
@@ -122,7 +122,7 @@ def get_dashboard(
         Classe, Inscription.classe_id == Classe.classe_id
     ).filter(
         Classe.etablissement_id == etablissement_id,
-        Presence.date_presence >= func.current_date() - 30,
+        Presence.date_presence >= (date_type.today() - timedelta(days=30)),
         Presence.seance_id.isnot(None),
     ).first()
     nb_classes_couvertes = (couverture_row[0] or 0) if couverture_row else 0
@@ -131,7 +131,7 @@ def get_dashboard(
     # KPI 6: Incidents du mois
     incidents_mois = db.query(func.count(Incident.incident_id)).filter(
         Incident.etablissement_id == etablissement_id,
-        Incident.date_incident >= func.current_date() - 30
+        Incident.date_incident >= (date_type.today() - timedelta(days=30))
     ).scalar() or 0
 
     # KPI 7: Évaluations prévues
@@ -170,7 +170,7 @@ def get_dashboard(
     paiements_mobile_money = sum([1 for r in db.query(Paiement.paiement_id).filter(Paiement.mode_paiement.in_(["ORANGE_MONEY", "MTN_MONEY"])).all()])
 
     # ==== TAUX DE RÉUSSITE RÉEL PAR CYCLE ET DÉTAIL PAR CLASSE ====
-    cycles_raw = db.query(Cycle).filter(Cycle.etablissement_id == etablissement_id).order_by(Cycle.ordre).all()
+    cycles_raw = db.query(Cycle).filter(Cycle.etablissement_id == etablissement_id).order_by(Cycle.ordre, Cycle.cycle_id).all()
 
     taux_reussite_par_cycle = []
     total_evaluations_bulletins = 0
@@ -219,7 +219,7 @@ def get_dashboard(
             classes_c = db.query(Classe).filter(
                 Classe.etablissement_id == etablissement_id,
                 Classe.annee_id == annee_id
-            ).all()
+            ).order_by(Classe.classe_id).all()
             
             matching_classes = [c for c in classes_c if any(k in c.code.upper() or k in c.libelle.upper() for k in keywords)]
             classes_details = []
@@ -250,7 +250,7 @@ def get_dashboard(
                 Classe.etablissement_id == etablissement_id,
                 Classe.annee_id == annee_id,
                 Classe.niveau_id.in_(niveau_ids) if niveau_ids else True
-            ).all()
+            ).order_by(Classe.classe_id).all()
 
             classes_details = []
             c_b_cnt = 0
@@ -331,7 +331,7 @@ def get_dashboard(
     # ==== VIE SCOLAIRE / DISCIPLINE (vie_scolaire.py:/incidents/stats, 90j) ====
     incidents_90j = db.query(Incident).filter(
         Incident.etablissement_id == etablissement_id,
-        Incident.date_incident >= func.current_date() - 90
+        Incident.date_incident >= (date_type.today() - timedelta(days=90))
     )
     total_incidents_90j = incidents_90j.count()
     incidents_graves = incidents_90j.filter(Incident.gravite == "GRAVE").count()
@@ -376,7 +376,7 @@ def get_dashboard(
         Classe, Inscription.classe_id == Classe.classe_id
     ).filter(
         Classe.etablissement_id == etablissement_id
-    ).order_by(Paiement.date_paiement.desc()).limit(8).all()
+    ).order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc()).limit(8).all()
 
     # ==== IMPAYÉS EN ATTENTE ====
     impayes_en_attente = db.query(
@@ -395,7 +395,7 @@ def get_dashboard(
     ).filter(
         Classe.etablissement_id == etablissement_id,
         Facture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"])
-    ).order_by(Facture.montant_restant.desc()).all()
+    ).order_by(Facture.montant_restant.desc(), Facture.facture_id).all()
 
     # ==== ÉVÉNEMENTS À VENIR (Publiés) ====
     evenements_a_venir_raw = db.query(Evenement).filter(

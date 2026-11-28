@@ -9,8 +9,8 @@ from typing import Optional
 from pydantic import BaseModel
 from app.core.database import get_db
 from app.core.security import verify_password
-from app.core.auth import create_access_token, get_current_user
-from app.core.rate_limit import limiter
+from app.core.auth import create_access_token, get_current_user, roles_du_compte
+from app.core.rate_limit import cle_de_connexion, limiter
 from app.core.annee_lock import get_active_trimestre_id
 from app.core.messagerie import sous_requete_messages_masques, masquer_message
 from app.models.academique import (
@@ -37,13 +37,18 @@ def _parse_ids(valeur: Optional[str]) -> Optional[list]:
 # Rôles qui peuvent consulter le portail d'un autre — dans leur école.
 ADMIN_PORTAIL_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "INFORMATICIEN"}
 
+# La FICHE d'un parent — identité, contacts, enfants et classes : ce que montre
+# l'écran Familles. Le directeur de niveau a cet écran, mais la fiche lui était
+# refusée (403) et restait vide. Il la lit et la corrige comme la direction.
+# Le reste du portail (paiements, notes, messages du parent) garde
+# ADMIN_PORTAIL_ROLES : la caisse ne se délègue pas avec le reste (main.py,
+# FINANCE_ROLES).
+FICHE_PARENT_ROLES = ADMIN_PORTAIL_ROLES | {"DIRECTEUR_NIVEAU"}
 
-async def _parent_auth(
-    parent_id: int,
-    current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> dict:
-    """Vérifie que le token JWT appartient à ce parent (ou à un admin DE SON ÉCOLE).
+
+def _verifier_acces_parent(parent_id: int, current_user: dict, db: Session, roles_ecole: set) -> dict:
+    """Vérifie que le token JWT appartient à ce parent (ou au personnel DE SON
+    ÉCOLE qui en a le droit, `roles_ecole`).
 
     Protège contre l'OWASP Broken Access Control sur le portail parent.
 
@@ -52,10 +57,13 @@ async def _parent_auth(
     de n'importe quel parent de la plateforme. Un parent relève d'une école
     par ses enfants (jamais par `.first()`) : l'admin ne peut le consulter que
     si l'un d'eux est scolarisé chez lui.
+
+    Les rôles secondaires et le rôle de base d'un rôle personnalisé comptent,
+    comme partout ailleurs (`roles_du_compte`) : un « censeur » bâti sur le
+    directeur de niveau voit la fiche que voit le directeur de niveau.
     """
-    role = current_user.get("role", "")
     token_type = current_user.get("type", "")
-    if role in ADMIN_PORTAIL_ROLES:
+    if roles_du_compte(current_user) & roles_ecole:
         etablissement_id = current_user.get("etablissement_id")
         if etablissement_id is None:
             raise HTTPException(
@@ -81,6 +89,25 @@ async def _parent_auth(
         status_code=403,
         detail="Accès refusé : vous ne pouvez consulter que vos propres données",
     )
+
+
+async def _parent_auth(
+    parent_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Le portail d'un parent : le parent lui-même, ou la direction de son école."""
+    return _verifier_acces_parent(parent_id, current_user, db, ADMIN_PORTAIL_ROLES)
+
+
+async def _fiche_parent_auth(
+    parent_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """La fiche d'un parent : le parent lui-même, ou le personnel de son école
+    qui a l'écran Familles (FICHE_PARENT_ROLES)."""
+    return _verifier_acces_parent(parent_id, current_user, db, FICHE_PARENT_ROLES)
 
 
 def _etablissement_du_parent(db: Session, parent_id: int) -> Optional[int]:
@@ -112,7 +139,7 @@ class LoginParentRequest(BaseModel):
 # IDENTIFICATION PARENT (POST sécurisé + rate limited)
 # ================================================================
 @router.post("/login")
-@limiter.limit("5/minute")
+@limiter.limit("5/minute", key_func=cle_de_connexion)
 def login_parent(request: Request, data: LoginParentRequest, db: Session = Depends(get_db)):
     """Identification par numéro de téléphone + mot de passe (POST sécurisé)."""
     parent = db.query(Parent).filter(
@@ -253,7 +280,7 @@ def parent_dashboard(parent_id: int, _auth: dict = Depends(_parent_auth), db: Se
                 # Fetch echeances for this facture
                 echeances_raw = db.query(EcheanceFacture).filter(
                     EcheanceFacture.facture_id == f.facture_id
-                ).order_by(EcheanceFacture.date_limite).all()
+                ).order_by(EcheanceFacture.date_limite, EcheanceFacture.echeance_id).all()
 
                 # Fetch type_frais label
                 tf = db.query(TypeFrais).filter(TypeFrais.type_frais_id == f.type_frais_id).first() if f.type_frais_id else None
@@ -450,7 +477,7 @@ def get_edt_enfant(parent_id: int, eleve_id: int, _auth: dict = Depends(_parent_
     creneaux = db.query(CreneauEmploi).filter(
         CreneauEmploi.classe_id == inscription.classe_id,
         CreneauEmploi.statut == "ACTIVE"
-    ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut).all()
+    ).order_by(CreneauEmploi.jour, CreneauEmploi.heure_debut, CreneauEmploi.creneau_id).all()
     
     result = []
     for c in creneaux:
@@ -984,7 +1011,7 @@ def get_enseignants_du_parent(parent_id: int, _auth: dict = Depends(_parent_auth
         .join(C, C.classe_id == Affectation.classe_id)
         .outerjoin(Matiere, Matiere.matiere_id == Affectation.matiere_id)
         .filter(Affectation.classe_id.in_(classe_ids), Affectation.statut == "ACTIVE")
-        .order_by(Enseignant.nom, Enseignant.prenom)
+        .order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id)
         .all()
     )
     # Un même prof peut enseigner plusieurs matières : on le liste une fois,
@@ -1061,13 +1088,22 @@ def envoyer_message_parent(parent_id: int, data: ParentMessageSend, _auth: dict 
 # PROFIL PARENT DÉTAILLÉ
 # ================================================================
 @router.get("/{parent_id}/profil")
-def get_profil_parent(parent_id: int, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
-    """Profil complet du parent avec enfants détaillés."""
+def get_profil_parent(parent_id: int, _auth: dict = Depends(_fiche_parent_auth), db: Session = Depends(get_db)):
+    """Profil complet du parent avec enfants détaillés.
+
+    Vue par le personnel d'une école, la fiche ne montre que les enfants
+    scolarisés DANS CETTE ÉCOLE, comme l'annuaire (Cas B, communication.py) ;
+    le parent, lui, voit tous les siens."""
     parent = db.query(Parent).filter(Parent.parent_id == parent_id).first()
     if not parent:
         raise HTTPException(404, "Parent non trouvé")
 
-    liens = db.query(EleveParent).filter(EleveParent.parent_id == parent_id).all()
+    liens = db.query(EleveParent).filter(EleveParent.parent_id == parent_id)
+    if _auth.get("type") != "parent":
+        liens = liens.join(Eleve, Eleve.eleve_id == EleveParent.eleve_id).filter(
+            Eleve.etablissement_id == _auth.get("etablissement_id")
+        )
+    liens = liens.order_by(EleveParent.eleve_parent_id).all()
     enfants = []
     for lien in liens:
         eleve = db.query(Eleve).filter(Eleve.eleve_id == lien.eleve_id).first()
@@ -1164,19 +1200,39 @@ class UpdateParentRequest(BaseModel):
 
 
 @router.put("/{parent_id}/profil")
-def update_profil_parent(parent_id: int, data: UpdateParentRequest, _auth: dict = Depends(_parent_auth), db: Session = Depends(get_db)):
-    """Modifier les informations du parent."""
+def update_profil_parent(parent_id: int, data: UpdateParentRequest, _auth: dict = Depends(_fiche_parent_auth), db: Session = Depends(get_db)):
+    """Modifier les informations du parent — depuis sa fiche (écran Familles)
+    ou par le parent lui-même, depuis son portail."""
+    from app.core.identifiants import exiger_identifiants_libres
+
     parent = db.query(Parent).filter(Parent.parent_id == parent_id).first()
     if not parent:
         raise HTTPException(404, "Parent non trouvé")
 
-    if data.nom is not None: parent.nom = data.nom
-    if data.prenom is not None: parent.prenom = data.prenom
-    if data.telephone_1 is not None: parent.telephone_1 = data.telephone_1
-    if data.telephone_2 is not None: parent.telephone_2 = data.telephone_2
-    if data.email is not None: parent.email = data.email
-    if data.profession is not None: parent.profession = data.profession
-    if data.adresse is not None: parent.adresse = data.adresse
+    # Le formulaire renvoie tous les champs, vides compris.
+    obligatoires = {"nom": "Le nom", "prenom": "Le prénom", "telephone_1": "Le téléphone principal"}
+    valeurs = {}
+    for champ in ("nom", "prenom", "telephone_1", "telephone_2", "email", "profession", "adresse"):
+        valeur = getattr(data, champ)
+        if valeur is None:
+            continue  # champ absent : inchangé
+        valeur = valeur.strip()
+        if not valeur and champ in obligatoires:
+            raise HTTPException(400, f"{obligatoires[champ]} ne peut pas être vide.")
+        # Vide = non renseigné. Une chaîne vide gardée telle quelle se heurtait
+        # à l'unicité des e-mails dès le deuxième parent sans e-mail.
+        valeurs[champ] = valeur or None
+
+    # Le téléphone principal et l'e-mail servent à se connecter : un même
+    # identifiant pour deux comptes de l'école, et l'un des deux ne peut plus
+    # entrer (app/core/identifiants.py). Seule une valeur NOUVELLE est vérifiée :
+    # corriger le nom d'une fiche ancienne ne doit jamais être bloqué par elle.
+    nouveaux = [v for c, v in valeurs.items() if c in ("telephone_1", "email") and v != getattr(parent, c)]
+    exiger_identifiants_libres(db, nouveaux, ignorer=(Parent, parent.parent_id),
+                               etablissement_id=parent.etablissement_id)
+
+    for champ, valeur in valeurs.items():
+        setattr(parent, champ, valeur)
     if data.mot_de_passe is not None and data.mot_de_passe.strip():
         from app.core.security import hash_password
         parent.mot_de_passe = hash_password(data.mot_de_passe.strip())

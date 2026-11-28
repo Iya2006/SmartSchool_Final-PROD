@@ -288,7 +288,7 @@ def get_appel_du_jour(
     # Récupérer les classes de cet établissement
     classes = db.query(Classe).filter(
         Classe.statut == "ACTIVE", Classe.etablissement_id == etablissement_id
-    ).all()
+    ).order_by(Classe.code, Classe.classe_id).all()
 
     resultats = []
     for cls in classes:
@@ -297,7 +297,7 @@ def get_appel_du_jour(
             Affectation.classe_id == cls.classe_id,
             Affectation.statut == "ACTIVE",
             Affectation.est_principal == "O"
-        ).first()
+        ).order_by(Affectation.affectation_id).first()
 
         enseignant_nom = "—"
         if aff_principal:

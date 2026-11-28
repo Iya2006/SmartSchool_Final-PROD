@@ -16,6 +16,7 @@ from app.models.academique import (
     Etablissement, AnneeScolaire, Trimestre, Cycle, Niveau, Salle, Matiere,
     ParametreEtablissement
 )
+from app.core.fichiers import dossier_fichiers
 from app.schemas.schemas import (
     EtablissementCreate, EtablissementUpdate, EtablissementOut,
     AnneeScolaireCreate, AnneeScolaireUpdate, AnneeScolaireOut,
@@ -193,8 +194,7 @@ def update_etablissement(
 # ============================================================================
 # UPLOAD FICHIERS ÉTABLISSEMENT
 # ============================================================================
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "etablissements")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = dossier_fichiers("etablissements")
 
 @router.post("/etablissements/{id}/upload/{field}", dependencies=[Depends(_require_admin)])
 async def upload_etablissement_file(
@@ -689,7 +689,7 @@ def list_matieres(
     )
     if cycle_id:
         query = query.filter(Matiere.cycle_id == cycle_id)
-    return query.order_by(Matiere.libelle).all()
+    return query.order_by(Matiere.libelle, Matiere.matiere_id).all()
 
 @router.post("/matieres", response_model=MatiereOut, status_code=201, dependencies=[Depends(_require_admin)])
 def create_matiere(
@@ -905,7 +905,8 @@ def list_parametres_public(
         )
         if categorie:
             query = query.filter(ParametreEtablissement.categorie == categorie)
-        return query.all()
+        return query.order_by(ParametreEtablissement.categorie, ParametreEtablissement.cle,
+                              ParametreEtablissement.parametre_id).all()
 
     if categorie and categorie.upper() not in CATEGORIES_PUBLIQUES:
         raise HTTPException(401, "Authentification requise pour cette catégorie de paramètres")

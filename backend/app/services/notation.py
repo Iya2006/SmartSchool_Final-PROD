@@ -845,6 +845,18 @@ def _classes_du_niveau(db: Session, classe: Classe) -> List[int]:
     ]
 
 
+def ordre_de_classement(moyenne, inscription_id) -> tuple:
+    """Clé de tri du classement : moyenne décroissante (sans moyenne : en
+    dernier, comme 0), puis l'inscription.
+
+    Sans ce second critère, deux élèves à égalité — et tous ceux qui n'ont pas
+    encore de moyenne — gardaient l'ordre dans lequel la base les rendait. Il
+    n'est pas le même sous PostgreSQL (en ligne) et sous SQLite (poste
+    hors-ligne) : le 5e d'un bulletin imprimé sur le poste pouvait être le 6e
+    du même bulletin en ligne. L'inscription a le même identifiant partout."""
+    return (-(moyenne or 0), inscription_id)
+
+
 def _moyennes_persistees(
     db: Session, classe_ids: List[int], trimestre_id: Optional[int], type_bulletin: str,
 ) -> List[Tuple[int, float]]:
@@ -875,7 +887,7 @@ def appliquer_rangs(
     fur et à mesure que l'école calcule ses classes, ce qui est visible et
     réversible, plutôt que faux et silencieux.
     """
-    donnees.sort(key=lambda x: x["moyenne_generale"] or 0, reverse=True)
+    donnees.sort(key=lambda x: ordre_de_classement(x["moyenne_generale"], x["inscription_id"]))
     mode = get_rang_mode(db, etablissement_id)
 
     if mode != RANG_NIVEAU or classe is None:
@@ -895,7 +907,7 @@ def appliquer_rangs(
         (d["inscription_id"], d["moyenne_generale"])
         for d in donnees if d["moyenne_generale"] is not None
     ]
-    reference.sort(key=lambda x: x[1], reverse=True)
+    reference.sort(key=lambda x: ordre_de_classement(x[1], x[0]))
     rang_par_inscription = {
         insc: idx + 1 for idx, (insc, _) in enumerate(reference)
     }
@@ -924,7 +936,7 @@ def repercuter_rangs_niveau(
     lignes = _moyennes_persistees(db, classe_ids, trimestre_id, type_bulletin)
     if not lignes:
         return 0
-    lignes.sort(key=lambda x: x[1], reverse=True)
+    lignes.sort(key=lambda x: ordre_de_classement(x[1], x[0]))
     rangs = {insc: idx + 1 for idx, (insc, _) in enumerate(lignes)}
     effectif = len(lignes)
 

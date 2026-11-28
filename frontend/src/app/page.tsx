@@ -15,7 +15,7 @@
  */
 import Link from 'next/link';
 import {
-    ArrowRight, CalendarDays, CheckCircle2, ClipboardList, Coins,
+    ArrowRight, CalendarDays, CheckCircle2, ClipboardList, Coins, Download,
     FileText, GraduationCap, Landmark, LayoutGrid, Lock, Mail, MessageCircle,
     Phone, ShieldCheck, Target, Users, UserSquare2, Wallet,
 } from 'lucide-react';
@@ -26,6 +26,26 @@ import styles from './accueil.module.css';
 const TELEPHONE_1 = '627 17 13 97';
 const TELEPHONE_2 = '610 93 55 24';
 const EMAIL = 'trillionnx@gmail.com';
+
+/** Installeur de l'application de bureau (desktop/), publié sur le dépôt
+ * GitHub public des installeurs : « latest » pointe toujours sur la dernière
+ * version, et le nom du fichier ne change pas d'une version à l'autre. */
+const URL_INSTALLEUR = 'https://github.com/Iya2006/smartschool-installation/releases/latest/download/SmartSchool-Setup.exe';
+
+const ETAPES_POSTE = [
+    {
+        titre: 'Installez',
+        texte: 'Téléchargez SmartSchool et lancez l’installation sur l’ordinateur de l’école. Aucune autre installation n’est nécessaire.',
+    },
+    {
+        titre: 'Connectez l’école',
+        texte: 'Une seule fois, avec internet et un compte de direction : toute l’école est copiée sur l’ordinateur.',
+    },
+    {
+        titre: 'Travaillez',
+        texte: 'Encaissements, notes, présences : tout fonctionne, avec ou sans internet. La synchronisation se fait seule.',
+    },
+];
 
 const PROBLEMES = [
     {
@@ -309,6 +329,39 @@ export default function AccueilPage() {
                                 </ul>
                             </div>
                         ))}
+                    </div>
+                </div>
+            </section>
+
+            {/* ── SmartSchool sur l'ordinateur, avec ou sans internet ── */}
+            <section className={`${styles.section} ${styles.sectionClaire}`} id="telecharger">
+                <div className={styles.contenu}>
+                    <div className={styles.centre}>
+                        <span className={styles.surtitre}>Avec ou sans internet</span>
+                        <h2 className={styles.titre}>SmartSchool, installé sur l&apos;ordinateur de l&apos;école</h2>
+                        <p className={styles.intro}>
+                            Connexion coupée, zone mal couverte : la caisse, les notes et les présences continuent.
+                            Les données se synchronisent seules dès que la connexion revient.
+                        </p>
+                    </div>
+                    <div className={`${styles.grille} ${styles.grille3}`}>
+                        {ETAPES_POSTE.map((etape, i) => (
+                            <div key={etape.titre} className={styles.carte}>
+                                <h3 style={{ marginTop: 0 }}>
+                                    <span className={styles.iconeLigne}>{i + 1}</span>
+                                    {etape.titre}
+                                </h3>
+                                <p>{etape.texte}</p>
+                            </div>
+                        ))}
+                    </div>
+                    <div className={styles.centre} style={{ marginTop: '30px' }}>
+                        <a href={URL_INSTALLEUR} className={`${styles.bouton} ${styles.boutonPrincipal}`}>
+                            <Download size={18} /> Télécharger pour Windows
+                        </a>
+                        <p className={styles.intro} style={{ marginTop: '12px', fontSize: '13px' }}>
+                            Pour Windows 10 ou 11 (64 bits).
+                        </p>
                     </div>
                 </div>
             </section>

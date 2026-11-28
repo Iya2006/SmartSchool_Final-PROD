@@ -5,7 +5,7 @@ import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
     Banknote, AlertTriangle, FileText, Users, LogOut, Menu,
-    ChevronDown, ChevronRight, Receipt, UserCheck, Wallet, PlusCircle
+    ChevronDown, ChevronRight, Receipt, UserCheck, Wallet, PlusCircle, MessageCircle
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
@@ -62,6 +62,11 @@ const MODULES = [
         ]
     },
     { id: 'impayes', label: 'Impayés', icon: AlertTriangle, path: '/comptabilite/impayes' },
+    // Savoir qui doit combien, puis le lui écrire : relancer un paiement,
+    // répondre à une famille sur sa scolarité. Ajouté le 22/11/2026 à la
+    // demande du fondateur — messages « Paiement » seulement (le serveur
+    // l'impose), le reste des échanges avec les familles reste à la direction.
+    { id: 'messages-familles', label: 'Messages aux familles', icon: MessageCircle, path: '/comptabilite/communication' },
     { id: 'autres-entrees', label: 'Autres entrées', icon: PlusCircle, path: '/comptabilite/autres-entrees' },
     { id: 'reinscription', label: 'Réinscriptions', icon: UserCheck, path: '/comptabilite/reinscription' },
     { id: 'depenses', label: 'Dépenses', icon: Wallet, path: '/comptabilite/depenses' },

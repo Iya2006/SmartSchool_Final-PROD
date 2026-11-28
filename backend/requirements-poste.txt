@@ -1,0 +1,47 @@
+# ============================================================
+# SMARTSCHOOL — Dépendances du moteur embarqué dans l'application installée
+# (poste hors-ligne). Lu par desktop/scripts/empaqueter.mjs.
+#
+# Versions FIGÉES : celles avec lesquelles la suite de tests passe. Un poste
+# installé dans une école ne doit jamais recevoir une version de bibliothèque
+# que personne n'a essayée.
+#
+# Établie depuis les imports réels du moteur (app/, main.py, migrations/),
+# pas recopiée de requirements.txt. Absents volontairement : les outils de
+# test, alembic, et pg8000 (le poste n'utilise que SQLite).
+# ============================================================
+
+fastapi==0.135.1
+starlette==0.52.1
+uvicorn==0.41.0
+anyio==4.12.1
+
+SQLAlchemy==2.0.48
+# Base locale chiffrée (SQLCipher) : app/core/database.py
+sqlcipher3-wheels==0.5.7
+
+pydantic==2.12.5
+pydantic_core==2.41.5
+pydantic-settings==2.13.1
+
+PyJWT==2.12.1
+passlib==1.7.4
+bcrypt==3.2.2
+
+python-dotenv==1.2.2
+python-multipart==0.0.22
+
+slowapi==0.1.9
+limits==5.8.0
+
+# File de tâches : le poste utilise la sienne (app/core/task_queue.py), mais
+# le code importe rq et redis au chargement.
+redis==8.0.1
+rq==2.10.0
+
+# Synchronisation avec le cloud
+httpx==0.28.1
+
+# Reçus, bulletins, documents
+reportlab==5.0.0
+pillow==12.2.0

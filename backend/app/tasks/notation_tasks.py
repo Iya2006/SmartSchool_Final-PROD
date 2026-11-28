@@ -19,6 +19,7 @@ import os
 
 from app.core.database import SessionLocal
 from app.models.academique import AnneeScolaire, Bulletin, Classe, Inscription, Trimestre
+from app.core.fichiers import dossier_fichiers
 from app.services.notation import (
     calculer_resultats_annuels,
     calculer_resultats_periode,
@@ -134,9 +135,7 @@ def generer_bulletins_classe_task(
                 "Aucun bulletin à imprimer : calculez d'abord les moyennes de la période."
             )
 
-        backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        upload_dir = os.path.join(backend_root, "uploads", "bulletins")
-        os.makedirs(upload_dir, exist_ok=True)
+        upload_dir = dossier_fichiers("bulletins")
 
         fichiers, echecs = [], []
         for bulletin in bulletins:

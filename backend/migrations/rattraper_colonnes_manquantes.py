@@ -34,6 +34,16 @@ Règles de sûreté, dans cet ordre :
 Idempotente (`ADD COLUMN IF NOT EXISTS`), purement additive : aucune donnée
 n'est modifiée, aucune colonne supprimée.
 
+Deux bases
+----------
+PostgreSQL (le cloud) et SQLite (un poste installé, au démarrage qui suit une
+mise à jour). La structure réelle est lue par l'inspecteur de SQLAlchemy, qui
+interroge l'une comme l'autre ; `information_schema` n'existe que sous
+PostgreSQL, et c'est pour cela que ce rattrapage échouait sur un poste. Sous
+SQLite, `ADD COLUMN IF NOT EXISTS` n'existe pas (l'absence est vérifiée avant),
+et une colonne NOT NULL sans défaut ne peut pas être ajoutée, même à une table
+vide : elle l'est sans la contrainte, que le modèle fait respecter.
+
 Usage
 -----
     cd backend
@@ -78,27 +88,21 @@ def appliquer_colonnes_manquantes(engine, appliquer: bool = False):
     (main.py) pour synchroniser la base à chaque déploiement.
     """
     dialecte = engine.dialect
+    sous_sqlite = dialecte.name == "sqlite"
+    # SQLite n'a pas « IF NOT EXISTS » ici : l'absence est vérifiée juste avant.
+    si_absente = "" if sous_sqlite else " IF NOT EXISTS"
     ajoutees, ignorees = [], []
 
     with engine.begin() as conn:
-        tables_reelles = {
-            r[0] for r in conn.execute(sa.text("""
-                SELECT table_name FROM information_schema.tables
-                WHERE table_schema = 'public'
-            """)).fetchall()
-        }
+        inspecteur = sa.inspect(conn)
+        tables_reelles = set(inspecteur.get_table_names())
 
         for nom, table in sorted(Base.metadata.tables.items()):
             if nom not in tables_reelles:
                 print(f"[IGNORE] {nom} : table absente — create_all() la creera au demarrage.")
                 continue
 
-            reelles = {
-                r[0] for r in conn.execute(sa.text("""
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name = :t
-                """), {"t": nom}).fetchall()
-            }
+            reelles = {c["name"] for c in inspecteur.get_columns(nom)}
             manquantes = [c for c in table.columns if c.name not in reelles]
             if not manquantes:
                 continue
@@ -111,17 +115,18 @@ def appliquer_colonnes_manquantes(engine, appliquer: bool = False):
                 defaut = _defaut_sql(col)
 
                 if col.nullable:
-                    ddl = f"ALTER TABLE {nom} ADD COLUMN IF NOT EXISTS {col.name} {type_sql}"
+                    ddl = f"ALTER TABLE {nom} ADD COLUMN{si_absente} {col.name} {type_sql}"
                     if defaut is not None:
                         ddl += f" DEFAULT {defaut}"
                     etape2 = None
                 elif defaut is not None:
-                    ddl = (f"ALTER TABLE {nom} ADD COLUMN IF NOT EXISTS {col.name} {type_sql} "
+                    ddl = (f"ALTER TABLE {nom} ADD COLUMN{si_absente} {col.name} {type_sql} "
                            f"NOT NULL DEFAULT {defaut}")
                     etape2 = None
                 elif lignes == 0:
-                    ddl = f"ALTER TABLE {nom} ADD COLUMN IF NOT EXISTS {col.name} {type_sql}"
-                    etape2 = f"ALTER TABLE {nom} ALTER COLUMN {col.name} SET NOT NULL"
+                    ddl = f"ALTER TABLE {nom} ADD COLUMN{si_absente} {col.name} {type_sql}"
+                    # SQLite ne sait pas poser NOT NULL après coup.
+                    etape2 = None if sous_sqlite else f"ALTER TABLE {nom} ALTER COLUMN {col.name} SET NOT NULL"
                 else:
                     ignorees.append((nom, col.name, lignes))
                     continue
@@ -138,6 +143,30 @@ def appliquer_colonnes_manquantes(engine, appliquer: bool = False):
             pass
 
     return ajoutees, ignorees
+
+
+def appliquer_index_manquants(engine) -> list[str]:
+    """Crée les index des modèles absents des tables existantes (`create_all`
+    ne crée les index qu'avec leur table). Réservé à un poste (SQLite) : sur le
+    cloud, créer un index au démarrage verrouillerait de grosses tables ; les
+    index y sont posés par des migrations dédiées (CONCURRENTLY)."""
+    if engine.dialect.name != "sqlite":
+        return []
+    crees = []
+    with engine.begin() as conn:
+        inspecteur = sa.inspect(conn)
+        tables_reelles = set(inspecteur.get_table_names())
+        for nom, table in sorted(Base.metadata.tables.items()):
+            if nom not in tables_reelles:
+                continue
+            existants = {i["name"] for i in inspecteur.get_indexes(nom)}
+            colonnes = {c["name"] for c in inspecteur.get_columns(nom)}
+            for index in table.indexes:
+                if index.name in existants or not all(c.name in colonnes for c in index.columns):
+                    continue
+                index.create(conn, checkfirst=True)
+                crees.append(index.name)
+    return crees
 
 
 def main() -> int:

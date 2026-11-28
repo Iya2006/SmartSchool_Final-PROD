@@ -88,7 +88,7 @@ const PAGE_SIZE = 25;
 const MENTIONS_ORDRE = ['TRÈS BIEN', 'BIEN', 'ASSEZ BIEN', 'PASSABLE', 'INSUFFISANT'];
 
 export default function ResultatsAnnuelsPage() {
-    const { etablissementId, anneeId } = useApp();
+    const { etablissementId, anneeId, loading: chargementApp } = useApp();
     const isMobile = useIsMobile();
 
     const [classes, setClasses] = useState<any[]>([]);
@@ -131,6 +131,8 @@ export default function ResultatsAnnuelsPage() {
     const fichierMoyennesRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
+        // Année pas encore confirmée (AppContext) : rien à demander encore.
+        if (chargementApp) return;
         // Filtré par année : sinon le sélecteur de classe mélangeait les années
         // (ex. la « 3ème année » de l'an prochain apparaissait en consultant une
         // année passée).
@@ -142,7 +144,7 @@ export default function ResultatsAnnuelsPage() {
         api.get(`/api/parametrage/trimestres?annee_id=${anneeId}`)
             .then(r => setPeriodesAnnee(r.data || []))
             .catch(() => setPeriodesAnnee([]));
-    }, [etablissementId, anneeId]);
+    }, [etablissementId, anneeId, chargementApp]);
 
     const charger = useCallback(async () => {
         if (!selectedClasse) return;

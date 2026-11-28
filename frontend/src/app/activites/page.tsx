@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
+import { useAuth } from '@/context/AuthContext';
+import { voitTableauDeBord } from '@/lib/roleAccess';
 import Link from 'next/link';
 
 interface ActivityItem {
@@ -44,7 +46,9 @@ const ICONES_OPTIONS = [
 ];
 
 export default function ActivitesPage() {
-  const { etablissementId, anneeId } = useApp();
+  const { etablissementId, anneeId, loading: chargementApp } = useApp();
+  const { user } = useAuth();
+  const peutVoirTableauDeBord = voitTableauDeBord(user);
   const [activites, setActivites] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQ, setSearchQ] = useState('');
@@ -71,6 +75,9 @@ export default function ActivitesPage() {
   const [dateActivite, setDateActivite] = useState('');
 
   const loadActivites = useCallback(async () => {
+    // Année pas encore connue : l'interroger avec la valeur d'attente (1)
+    // demandait l'année d'une autre école (404).
+    if (chargementApp) return;
     setLoading(true);
     try {
       // 1. Manually added activities from /api/activites
@@ -89,19 +96,27 @@ export default function ActivitesPage() {
         date_activite: m.date_activite
       }));
 
-      // 2. Dashboard activities (includes automatic logs)
-      const resDash = await api.get(`/api/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
-      const dashActs: ActivityItem[] = resDash.data?.activites_du_jour || [];
-
-      // Merge avoiding duplicates
-      const autoActs = dashActs.filter(a => !a.est_manuel);
+      // 2. Les activités automatiques viennent du tableau de bord, fermé à
+      // certains rôles (directeur de niveau, DG sans comptabilité). Son refus
+      // faisait tout échouer : même les activités saisies à la main
+      // n'apparaissaient plus. Il n'est donc demandé qu'à ceux qui y ont droit,
+      // et son échec ne masque jamais les activités saisies.
+      let autoActs: ActivityItem[] = [];
+      if (peutVoirTableauDeBord) {
+        try {
+          const resDash = await api.get(`/api/dashboard?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
+          autoActs = ((resDash.data?.activites_du_jour || []) as ActivityItem[]).filter(a => !a.est_manuel);
+        } catch (e) {
+          console.error(e);
+        }
+      }
       setActivites([...manualActs, ...autoActs]);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
-  }, [etablissementId, anneeId]);
+  }, [etablissementId, anneeId, chargementApp, peutVoirTableauDeBord]);
 
   useEffect(() => {
     loadActivites();

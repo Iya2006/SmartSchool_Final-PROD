@@ -64,7 +64,17 @@ def _check_redis_and_queue():
     fabriquée (des compteurs à zéro laisseraient croire à une file vide
     plutôt qu'à une infrastructure injoignable)."""
     from app.core.cache import redis_is_reachable
+    from app.core.mode import MODE_POSTE
     from app.core.task_queue import get_queue, get_redis_connection
+
+    if MODE_POSTE:
+        # Poste local : pas de Redis par conception, la file tourne dans le
+        # moteur (app/core/task_queue.py::FileLocale). Rien d'anormal à signaler.
+        compteurs = get_queue().compteurs()
+        occupes = compteurs["started"]
+        return None, {"name": "moteur local", **compteurs}, {
+            "total": 2, "idle": max(0, 2 - occupes), "busy": occupes, "names": ["moteur local"],
+        }
 
     if not redis_is_reachable():
         return False, None, None
@@ -106,7 +116,8 @@ def get_monitoring_status():
 
     database = _check_database()
     redis_ok, queue_info, workers_info = _check_redis_and_queue()
-    redis_status = "up" if redis_ok else "down"
+    # `None` : poste local, où Redis n'existe pas (voir _check_redis_and_queue).
+    redis_status = "non_utilise" if redis_ok is None else ("up" if redis_ok else "down")
 
     status = "OK"
 

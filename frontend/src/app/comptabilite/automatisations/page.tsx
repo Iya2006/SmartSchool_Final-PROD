@@ -8,6 +8,7 @@ import {
     Save, MessageSquare, AlertCircle
 } from 'lucide-react';
 import api from '@/lib/api';
+import { texteErreur } from '@/lib/texteErreur';
 import Link from 'next/link';
 
 export default function AutomatisationsPage() {
@@ -90,8 +91,8 @@ export default function AutomatisationsPage() {
         setNotifying(true); setShowConfirmNotif(false);
         try {
             const res = await api.post(`/api/finance/communication/notifier-impayes?etablissement_id=${etablissementId}&annee_id=${anneeId}`);
-            showMsg(`${res.data.nb_notifies} notifications envoyées !`, 'success');
-        } catch { showMsg('Erreur lors de l\'envoi', 'error'); }
+            showMsg(res.data.message || `${res.data.nb_notifies} rappel(s) envoyé(s) aux parents.`, 'success');
+        } catch (err) { showMsg(texteErreur(err, "Les rappels n'ont pas pu être envoyés."), 'error'); }
         setNotifying(false);
     };
 

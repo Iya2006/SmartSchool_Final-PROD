@@ -28,6 +28,13 @@
  */
 import api from './api';
 import { listPending, listBlocked, markInProgress, markSynced, markFailed, countBlocked, retry as retryItem } from './offlineQueue';
+import { compteDuJeton } from './offlineCacheKey';
+
+function compteConnecte(): string | null {
+    if (typeof window === 'undefined') return null;
+    const jeton = localStorage.getItem('smartschool_token');
+    return jeton ? compteDuJeton(`Bearer ${jeton}`) : null;
+}
 
 export interface SyncConflict {
     note_id?: number;
@@ -80,10 +87,9 @@ function isNetworkError(err: unknown): boolean {
 
 // Refus qui ne se résoudra PAS en rejouant le même payload — retenter serait
 // pure perte de temps (et cacherait le vrai problème à l'utilisateur plus
-// longtemps). 401 inclus par prudence : l'intercepteur global (lib/api.ts)
-// déconnecte déjà l'utilisateur sur un 401, donc un nouveau essai automatique
-// n'aurait de toute façon aucune chance d'aboutir avant une reconnexion.
-const DEFINITIVE_HTTP_STATUSES = new Set([401, 403, 404, 422]);
+// longtemps). Le 401 n'en fait pas partie : une session expirée n'est pas un
+// refus de la saisie, elle met seulement le rejeu en pause (voir flushQueueUnsafe).
+const DEFINITIVE_HTTP_STATUSES = new Set([403, 404, 422]);
 
 function isDefinitiveServerError(err: unknown): boolean {
     const status = (err as { response?: { status?: number } })?.response?.status;
@@ -135,7 +141,10 @@ export async function flushQueue(): Promise<void> {
 }
 
 async function flushQueueUnsafe(): Promise<void> {
-    const pending = await listPending();
+    // Seuls les éléments du compte connecté partent (voir OfflineQueueItem.compte) :
+    // ceux d'un autre compte attendent qu'il se reconnecte sur ce poste.
+    const compte = compteConnecte();
+    const pending = (await listPending()).filter((i) => !i.compte || i.compte === compte);
     if (pending.length === 0) {
         state = { ...state, pendingCount: 0 };
         emit();
@@ -174,6 +183,16 @@ async function flushQueueUnsafe(): Promise<void> {
                 // cet item et les suivants resteront EN_ATTENTE pour la
                 // prochaine tentative.
                 state = { ...state, syncing: false, lastError: 'Connexion perdue pendant la synchronisation.' };
+                emit();
+                await refreshPendingCount();
+                return;
+            }
+            if ((err as { response?: { status?: number } })?.response?.status === 401) {
+                // Session expirée (fréquent après une journée hors-ligne) : la
+                // saisie n'y est pour rien. Elle repasse en attente, sans
+                // tentative comptée, et partira après la reconnexion.
+                await retryItem(item.id);
+                state = { ...state, syncing: false, lastError: 'Session expirée : reconnectez-vous pour synchroniser.' };
                 emit();
                 await refreshPendingCount();
                 return;

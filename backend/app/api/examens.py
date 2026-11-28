@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from app.core.database import get_db
 from app.core.auth import get_current_user, require_etablissement
+from app.core.fichiers import dossier_fichiers
 from app.models.academique import (
     SujetExamen, EmploiExamen, CreneauExamen, DemandeEmploi,
     Message, Enseignant, Matiere, Classe, Cycle, ClasseMatiere, Affectation,
@@ -27,8 +28,7 @@ from app.models.academique import (
 router = APIRouter(prefix="/api/examens", tags=["Examens"])
 
 # Upload directory
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "sujets")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOAD_DIR = dossier_fichiers("sujets")
 
 
 ADMIN_TIER_ROLES = {"SUPER_ADMIN", "ADMIN", "FONDATEUR", "DG", "DIRECTEUR_NIVEAU"}

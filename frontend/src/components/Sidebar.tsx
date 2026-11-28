@@ -11,11 +11,13 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle, UserX } from 'lucide-react';
+import { PieChart, Users, GraduationCap, Building, Book, PencilLine, FileText, BookUser, Calendar, MessageCircle, Award, Shield, Briefcase, Heart, Camera, ShoppingBag, Banknote, ScanLine, Archive, Activity, LogOut, Clock, Trophy, Building2, AlertTriangle, UserX, RefreshCw } from 'lucide-react';
 import api from '@/lib/api';
 import { useApp } from '@/context/AppContext';
 import { useAuth } from '@/context/AuthContext';
 import { canAccessPathForRole } from '@/lib/roleAccess';
+import { EST_POSTE } from '@/lib/poste';
+import { EVENEMENT_ETAT_POSTE, posteEnLigne } from '@/components/IndicateurPoste';
 import { useUI } from '@/context/UIContext';
 import styles from './Sidebar.module.css';
 
@@ -26,8 +28,15 @@ export default function Sidebar() {
     const { sidebarCollapsed, mobileSidebarOpen, closeMobileSidebar } = useUI();
     const [unreadCount, setUnreadCount] = useState(0);
     // Statut « en ligne » affiché dans la carte profil du menu latéral.
-    const [online, setOnline] = useState(true);
+    // Sur un poste : le cloud répond-il (état lu par IndicateurPoste) ? null
+    // tant qu'on ne le sait pas, plutôt qu'un « En ligne » faux au démarrage.
+    const [online, setOnline] = useState<boolean | null>(() => (EST_POSTE ? posteEnLigne() : true));
     useEffect(() => {
+        if (EST_POSTE) {
+            const ecouter = (ev: Event) => setOnline(posteEnLigne((ev as CustomEvent).detail));
+            window.addEventListener(EVENEMENT_ETAT_POSTE, ecouter);
+            return () => window.removeEventListener(EVENEMENT_ETAT_POSTE, ecouter);
+        }
         setOnline(typeof navigator !== 'undefined' ? navigator.onLine : true);
         const on = () => setOnline(true);
         const off = () => setOnline(false);
@@ -274,6 +283,16 @@ export default function Sidebar() {
                             <span className={styles.menuText}>Archive Scolaire</span>
                         </Link>
                     </li>
+                    {/* Postes hors-ligne de l'école et décisions « à vérifier » :
+                        réservé à la direction (contrôle réel côté serveur). */}
+                    {canAccessPathForRole(user?.role, '/synchronisation', user?.role_base) && (
+                        <li className={pathname.startsWith('/synchronisation') ? styles.currentPage : ''}>
+                            <Link href="/synchronisation">
+                                <RefreshCw size={18} className={styles.menuIcon} />
+                                <span className={styles.menuText}>Synchronisation</span>
+                            </Link>
+                        </li>
+                    )}
 
                     {/* La comptabilité n'apparaît que pour qui y a droit : le
                         directeur de niveau (comme d'autres postes) n'y accède
@@ -335,7 +354,7 @@ export default function Sidebar() {
                     <div className={styles.userCardAvatar} style={{ position: 'relative' }}>
                         {initials}
                         <span
-                            title={online ? 'En ligne' : 'Hors ligne'}
+                            title={online === null ? undefined : online ? 'En ligne' : 'Hors ligne'}
                             style={{
                                 position: 'absolute', bottom: '-2px', right: '-2px',
                                 width: '11px', height: '11px', borderRadius: '50%',
@@ -350,10 +369,12 @@ export default function Sidebar() {
                     <div className={styles.userCardInfo}>
                         <p className={styles.userCardName}>{displayName}</p>
                         <p className={styles.userCardRole}>{displayRole}</p>
+                        {online !== null && (
                         <p style={{ margin: '2px 0 0', fontSize: '11px', fontWeight: 700, color: online ? '#34d399' : '#94a3b8', display: 'flex', alignItems: 'center', gap: '5px' }}>
                             <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: online ? '#22c55e' : '#94a3b8', display: 'inline-block' }} />
                             {online ? 'En ligne' : 'Hors ligne'}
                         </p>
+                        )}
                     </div>
                 </Link>
                 {/* Actions rapides */}

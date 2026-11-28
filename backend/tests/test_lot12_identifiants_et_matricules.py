@@ -369,9 +369,13 @@ class TestParentPasDePriseDeControle:
 
 def test_matricule_reste_court_pour_une_ecole_a_code_long(db: Session):
     """Une école au code très long ne déborde pas de la colonne matricule
-    (String(30)) : le code est nettoyé (alphanumérique) et tronqué à 12."""
+    (String(30)) : le code est nettoyé (alphanumérique) et tronqué à 12.
+
+    Le code fait 20 caractères, le maximum de sa colonne : l'ancien code de
+    42 caractères ne passait que sur SQLite, PostgreSQL l'aurait refusé
+    (app/core/valeurs_refusees.py)."""
     etab = Etablissement(
-        code="GROUPE-SCOLAIRE-EXCELLENCE-DE-CONAKRY-2026",
+        code="GROUPE-SCOLAIRE-EXCE",
         nom="Groupe Scolaire Excellence de Conakry", type_etablissement="COMPLEXE",
     )
     db.add(etab); db.commit(); db.refresh(etab)

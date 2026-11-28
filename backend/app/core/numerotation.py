@@ -145,15 +145,29 @@ def _plus_haut_numero_existant(db: Session, colonne, motif: str) -> int:
     return plus_haut
 
 
+def _segment_et_suffixe(db: Session) -> tuple[str, str]:
+    """Sur un poste hors-ligne : « P2- » dans le numéro et « @P2 » dans la clé
+    du compteur. Chaque poste numérote ainsi ses pièces de son côté sans
+    jamais rejoindre les numéros d'un autre (``REC-3-2025-P2-00107``). Le
+    suffixe s'ajoute APRÈS la troncature à 20 caractères de la clé : il ne
+    doit jamais être coupé, sinon deux postes partageraient un compteur."""
+    from app.sync.identifiants import segment_du_poste
+
+    segment = segment_du_poste(db)
+    return segment, (f"@{segment[:-1]}" if segment else "")
+
+
 def generer_numero_facture(
     db: Session, etablissement_id: int, annee_id: Optional[int]
 ) -> str:
-    """``FAC-{école}-{année}-{NNNNN}`` — propre à l'école et à l'année."""
+    """``FAC-{école}-{année}-{NNNNN}`` — propre à l'école et à l'année
+    (``FAC-{école}-{année}-P{rang}-{NNNNN}`` sur un poste hors-ligne)."""
     from app.models.academique import Facture
 
+    segment, suffixe = _segment_et_suffixe(db)
     an = annee_civile(db, annee_id)
-    motif = f"{PREFIXE_FACTURE}-{etablissement_id}-{an}-"
-    cle = f"{PREFIXE_FACTURE}{annee_id or 0}"[:20]
+    motif = f"{PREFIXE_FACTURE}-{etablissement_id}-{an}-{segment}"
+    cle = f"{PREFIXE_FACTURE}{annee_id or 0}"[:20] + suffixe
     depart = _plus_haut_numero_existant(db, Facture.numero_facture, motif)
     numero = _numero_suivant(db, etablissement_id, cle, depart)
     return f"{motif}{numero:0{_LARGEUR}d}"
@@ -172,10 +186,11 @@ def generer_numero_recu(
     """
     from app.models.academique import Paiement
 
+    segment, suffixe = _segment_et_suffixe(db)
     prefixe = (prefixe or PREFIXE_RECU).strip().upper()[:8] or PREFIXE_RECU
     an = annee_civile(db, annee_id)
-    motif = f"{prefixe}-{etablissement_id}-{an}-"
-    cle = f"{PREFIXE_RECU}{annee_id or 0}"[:20]
+    motif = f"{prefixe}-{etablissement_id}-{an}-{segment}"
+    cle = f"{PREFIXE_RECU}{annee_id or 0}"[:20] + suffixe
     depart = _plus_haut_numero_existant(db, Paiement.numero_recu, motif)
     numero = _numero_suivant(db, etablissement_id, cle, depart)
     return f"{motif}{numero:0{_LARGEUR}d}"

@@ -1,6 +1,9 @@
 """
 SMARTSCHOOL API — Routes Finance (TypesFrais, Factures, Échéanciers, Paiements, Dépenses)
 """
+# `json` manquait : enregistrer les réglages des rappels (Automatisations)
+# finissait toujours en erreur 500 (NameError), et leur relecture aussi.
+import json
 import os
 import uuid
 import shutil
@@ -36,6 +39,7 @@ from app.schemas.schemas import (
 # facture/paiement/dépense/salaire réel génère une écriture équilibrée,
 # dans la même transaction, pour que Balance/Grand Livre/Auxiliaire soient
 # toujours synchronisés avec les opérations financières réelles.
+from app.core.fichiers import dossier_fichiers
 from app.api.comptabilite import (
     generer_ecriture_auto, compte_tresorerie_pour_mode, compte_charge_pour_categorie,
     COMPTE_ELEVES, COMPTE_PRODUITS_SCOLARITE, COMPTE_BANQUE,
@@ -100,8 +104,7 @@ from app.core.annee_lock import get_active_annee_id as _get_active_annee_id
 from app.core.annee_lock import ANNEE_VERROUILLEE
 
 
-UPLOAD_DIR_DEPENSES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "uploads", "depenses")
-os.makedirs(UPLOAD_DIR_DEPENSES, exist_ok=True)
+UPLOAD_DIR_DEPENSES = dossier_fichiers("depenses")
 
 
 @router.post("/upload-justificatif")
@@ -1074,7 +1077,7 @@ def list_factures(
     total = query.count()
     response.headers["X-Total-Count"] = str(total)
 
-    results = query.order_by(Facture.date_facture.desc()).offset(skip).limit(limit).all()
+    results = query.order_by(Facture.date_facture.desc(), Facture.facture_id.desc()).offset(skip).limit(limit).all()
 
     factures = []
     for facture, eleve, classe, type_frais in results:
@@ -1495,7 +1498,7 @@ def list_paiements(
 
     results = (
         query
-        .order_by(Paiement.date_paiement.desc())
+        .order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc())
         .offset(skip).limit(limit).all()
     )
 
@@ -1699,6 +1702,13 @@ def create_paiement(data: PaiementCreate, db: Session = Depends(get_db), etablis
         jour=data.date_paiement,
     )
 
+    # Le code du QR est figé à l'émission, avec la clé de l'appareil qui
+    # encaisse : un autre poste qui réimprimera ce reçu n'a pas cette clé, il
+    # relira ce code (app/core/recu_paiement.py).
+    from app.core.recu_paiement import code_verification
+    db.flush()
+    paiement.code_verification = code_verification(paiement)
+
     db.commit()
     db.refresh(paiement)
     _invalidate_dashboard_cache(etablissement_id, facture.annee_id)
@@ -1743,7 +1753,7 @@ def situation_encaissement_classe(
             Inscription.annee_id == annee_id,
             Inscription.statut == "ACTIVE",
         )
-        .order_by(Eleve.nom, Eleve.prenom)
+        .order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id)
         .all()
     )
     if not inscriptions:
@@ -2089,7 +2099,7 @@ def stats_depenses(annee_id: Optional[int] = None, db: Session = Depends(get_db)
         Depense.categorie,
         func.sum(Depense.montant).label("total"),
         func.count(Depense.depense_id).label("nb"),
-    ).group_by(Depense.categorie).order_by(func.sum(Depense.montant).desc()).all()
+    ).group_by(Depense.categorie).order_by(func.sum(Depense.montant).desc(), Depense.categorie).all()
 
     total_valide = query_base.filter(Depense.statut == "VALIDE").with_entities(
         func.coalesce(func.sum(Depense.montant), 0)
@@ -2180,7 +2190,7 @@ def list_impayes(
         echeances = db.query(EcheanceFacture).filter(
             EcheanceFacture.facture_id == facture.facture_id,
             EcheanceFacture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"])
-        ).order_by(EcheanceFacture.date_limite).all()
+        ).order_by(EcheanceFacture.date_limite, EcheanceFacture.echeance_id).all()
 
         # Calculer les jours de retard depuis l'échéance la plus ancienne ;
         # à défaut d'échéancier (facture à paiement unique, sans EcheanceFacture),
@@ -2276,7 +2286,7 @@ def list_retards(
     if niveau_id:
         query = query.filter(Classe.niveau_id == niveau_id)
 
-    results = query.order_by(EcheanceFacture.date_limite).offset(skip).limit(limit).all()
+    results = query.order_by(EcheanceFacture.date_limite, EcheanceFacture.echeance_id).offset(skip).limit(limit).all()
 
     retards = []
     for echeance, facture, eleve, classe in results:
@@ -2338,7 +2348,7 @@ def tableau_solvabilite(
     if classe_id:
         query = query.filter(Classe.classe_id == classe_id)
 
-    results = query.order_by(Eleve.nom, Eleve.prenom).all()
+    results = query.order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
 
     # Précharge TOUTES les factures des inscriptions concernées en une seule
     # requête plutôt qu'une par élève dans la boucle ci-dessous — à l'échelle
@@ -2446,7 +2456,7 @@ def solde_eleve(eleve_id: int, annee_id: Optional[int] = None, db: Session = Dep
             paiements = db.query(Paiement).filter(
                 Paiement.facture_id == facture.facture_id,
                 Paiement.statut == "VALIDE"
-            ).order_by(Paiement.date_paiement.desc()).all()
+            ).order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc()).all()
 
             echeances = db.query(EcheanceFacture).filter(
                 EcheanceFacture.facture_id == facture.facture_id
@@ -3217,6 +3227,23 @@ def configurer_rappels(
     return {"message": "Configuration des rappels mise à jour", "config": fusionnee}
 
 
+class _VariablesDuRappel(dict):
+    """Une variable inconnue du modèle (« {classe} ») reste écrite telle quelle,
+    au lieu de faire échouer tout l'envoi."""
+
+    def __missing__(self, cle):
+        return "{" + cle + "}"
+
+
+def _rediger_rappel(modele: str, **variables) -> str:
+    try:
+        return modele.format_map(_VariablesDuRappel(variables))
+    except (ValueError, IndexError, AttributeError, KeyError):
+        # Accolade isolée, « {0} » : le texte de l'école n'est pas un modèle
+        # utilisable. Le rappel part quand même, avec le texte par défaut.
+        return _rappels_config["message_template"].format(**variables)
+
+
 @router.post("/communication/notifier-impayes")
 def notifier_impayes(
     annee_id: Optional[int] = None,
@@ -3225,90 +3252,132 @@ def notifier_impayes(
     etablissement_id: int = Depends(require_etablissement),
 ):
     """
-    Déclenche l'envoi de notifications groupées aux parents des élèves en retard.
-    Prépare les messages (canal SYSTEME pour l'instant, extensible SMS/Email).
+    Envoie un rappel de paiement aux parents des élèves qui doivent encore :
+    un message « Paiement » par facture non soldée, dans la messagerie du
+    parent (canal SYSTEME ; SMS et e-mail demanderaient une passerelle
+    opérateur). Le comptable les retrouve dans Messages aux familles.
 
     `classe_id` restreint l'envoi aux parents d'UNE classe : c'est ce qui permet
     de relancer, depuis l'écran filtré par classe, uniquement les familles de la
     classe qui n'a pas soldé sa scolarité.
+
+    Le texte est celui que l'école a réglé (Automatisations). Avant, c'était
+    toujours le texte par défaut : le réglage, enregistré par école, n'était
+    jamais relu ici. L'interrupteur « Actif » de ces réglages concerne les
+    rappels AUTOMATIQUES ; cet envoi-ci est demandé à la main, il n'en dépend pas.
+
+    Le rappel va au parent responsable financier de l'élève, à défaut au
+    contact principal, à défaut au premier parent rattaché — un compte actif
+    d'abord. Avant, `.first()` sans ordre : le destinataire pouvait changer
+    d'un envoi à l'autre, et différer entre le cloud et un poste.
+
+    Requêtes en nombre fixe : deux par facture auparavant, soit des milliers
+    pour une grande école.
     """
     # Sans annee precisee, celle EN COURS DE CETTE ECOLE — et non
     # l'annee n°1, qui appartient a la premiere ecole inscrite.
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
     from app.models.academique import Parent, EleveParent, Message
-    from datetime import date as today_type
+    from app.core.recu_paiement import formater_montant
 
-    if not _rappels_config.get("actif", True):
-        raise HTTPException(
-            status_code=400,
-            detail="Les rappels automatiques sont désactivés dans la configuration. Activez-les avant d'envoyer."
-        )
+    modele = _lire_rappels(db, etablissement_id).get("message_template") or _rappels_config["message_template"]
 
-    today = today_type.today()
-    template = _rappels_config.get("message_template") or (
-        "Cher(e) {parent_nom}, le paiement de {montant} GNF pour {eleve_nom} est attendu le {date_limite}. Merci de régulariser."
-    )
+    filtres = [
+        Classe.etablissement_id == etablissement_id,
+        Inscription.annee_id == annee_id,
+        Facture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE", "EN_RETARD"]),
+    ]
+    if classe_id:
+        filtres.append(Inscription.classe_id == classe_id)
 
-    # Récupérer tous les impayés actifs
     impayes = (
-        db.query(Facture, Eleve, Classe)
+        db.query(Facture, Eleve)
         .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
         .join(Eleve, Inscription.eleve_id == Eleve.eleve_id)
         .join(Classe, Inscription.classe_id == Classe.classe_id)
-        .filter(
-            Classe.etablissement_id == etablissement_id,
-            Inscription.annee_id == annee_id,
-            Facture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE", "EN_RETARD"])
-        )
+        .filter(*filtres)
+        .order_by(Facture.facture_id)
+        .all()
     )
-    if classe_id:
-        impayes = impayes.filter(Inscription.classe_id == classe_id)
-    impayes = impayes.all()
+    if not impayes:
+        return {"message": "Aucun impayé : aucun rappel à envoyer.", "nb_notifies": 0,
+                "nb_impayes": 0, "nb_sans_parent": 0}
 
-    notifies = 0
-    for facture, eleve, classe in impayes:
-        lien = (
-            db.query(EleveParent, Parent)
-            .join(Parent, EleveParent.parent_id == Parent.parent_id)
-            .filter(EleveParent.eleve_id == eleve.eleve_id)
-            .first()
-        )
-        if lien:
-            _, parent = lien
-            echeance = (
-                db.query(EcheanceFacture)
-                .filter(EcheanceFacture.facture_id == facture.facture_id, EcheanceFacture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"]))
-                .order_by(EcheanceFacture.date_limite)
-                .first()
-            )
-            date_limite = str(echeance.date_limite) if echeance and echeance.date_limite else str(today)
-            contenu = template.format(
+    factures_concernees = (
+        db.query(Facture.facture_id)
+        .join(Inscription, Facture.inscription_id == Inscription.inscription_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(*filtres)
+    )
+    eleves_concernes = (
+        db.query(Inscription.eleve_id)
+        .join(Facture, Facture.inscription_id == Inscription.inscription_id)
+        .join(Classe, Inscription.classe_id == Classe.classe_id)
+        .filter(*filtres)
+    )
+
+    def priorite(lien, parent):
+        return (parent.statut != "ACTIF", lien.est_responsable_financier != "O",
+                lien.est_contact_principal != "O", lien.eleve_parent_id)
+
+    parent_de = {}
+    for lien, parent in (
+        db.query(EleveParent, Parent)
+        .join(Parent, EleveParent.parent_id == Parent.parent_id)
+        .filter(EleveParent.eleve_id.in_(eleves_concernes))
+        .all()
+    ):
+        actuel = parent_de.get(lien.eleve_id)
+        if actuel is None or priorite(lien, parent) < actuel[0]:
+            parent_de[lien.eleve_id] = (priorite(lien, parent), parent)
+
+    prochaine_echeance = {}
+    for e in (
+        db.query(EcheanceFacture)
+        .filter(EcheanceFacture.facture_id.in_(factures_concernees),
+                EcheanceFacture.statut.in_(["EN_ATTENTE", "PARTIELLEMENT_PAYEE"]))
+        .order_by(EcheanceFacture.facture_id, EcheanceFacture.date_limite, EcheanceFacture.echeance_id)
+        .all()
+    ):
+        prochaine_echeance.setdefault(e.facture_id, e)
+
+    aujourd_hui = date_type.today()
+    notifies, sans_parent = 0, set()
+    for facture, eleve in impayes:
+        choix = parent_de.get(eleve.eleve_id)
+        if choix is None:
+            sans_parent.add(eleve.eleve_id)
+            continue
+        parent = choix[1]
+        echeance = prochaine_echeance.get(facture.facture_id)
+        limite = echeance.date_limite if echeance and echeance.date_limite else aujourd_hui
+        db.add(Message(
+            etablissement_id=etablissement_id,
+            expediteur_type="ADMIN",
+            destinataire_type="PARENT",
+            destinataire_id=parent.parent_id,
+            objet_type="PAIEMENT",
+            sujet=f"Rappel de paiement — {eleve.prenom} {eleve.nom}"[:300],
+            contenu=_rediger_rappel(
+                modele,
                 parent_nom=f"{parent.prenom} {parent.nom}",
-                montant=f"{float(facture.montant_restant or 0):,.0f}",
+                montant=formater_montant(facture.montant_restant or 0),
                 eleve_nom=f"{eleve.prenom} {eleve.nom}",
-                date_limite=date_limite,
-            )
-            # Créer un message de notification dans le système (seul canal réellement
-            # implémenté pour l'instant ; SMS/Email nécessiteraient une intégration
-            # opérateur dédiée, hors périmètre de cette correction)
-            message = Message(
-                etablissement_id=etablissement_id,
-                expediteur_type="ADMIN",
-                destinataire_type="PARENT",
-                destinataire_id=parent.parent_id,
-                objet_type="PAIEMENT",
-                sujet=f"Rappel de paiement — {eleve.prenom} {eleve.nom}",
-                contenu=contenu,
-                statut="ENVOYE",
-            )
-            db.add(message)
-            notifies += 1
+                date_limite=limite.strftime("%d/%m/%Y"),
+            ),
+            statut="ENVOYE",
+        ))
+        notifies += 1
 
     db.commit()
+    message = f"{notifies} rappel(s) envoyé(s) aux parents."
+    if sans_parent:
+        message += f" {len(sans_parent)} élève(s) sans parent rattaché n'ont pas pu être relancé(s)."
     return {
-        "message": f"{notifies} notification(s) envoyée(s) aux parents",
+        "message": message,
         "nb_notifies": notifies,
-        "nb_impayes": len(impayes)
+        "nb_impayes": len(impayes),
+        "nb_sans_parent": len(sans_parent),
     }
 
 
@@ -3347,7 +3416,7 @@ def get_recu(paiement_id: int, request: Request = None, db: Session = Depends(ge
     historique = (
         db.query(Paiement)
         .filter(Paiement.facture_id == facture.facture_id, Paiement.statut == "VALIDE")
-        .order_by(Paiement.date_paiement.desc())
+        .order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc())
         .all()
     )
     # Clés historiques conservées (recu, facture.type_frais, historique_paiements)
@@ -3531,7 +3600,7 @@ def list_fournisseurs(
             Depense.fournisseur != ""
         )
         .group_by(Depense.fournisseur)
-        .order_by(func.sum(Depense.montant).desc())
+        .order_by(func.sum(Depense.montant).desc(), Depense.fournisseur)
         .all()
     )
 
@@ -3722,7 +3791,7 @@ def list_decaissements(
     response.headers["X-Total-Count"] = str(total)
 
     # Récupérer les transactions
-    transactions = query.order_by(Depense.date_depense.desc()).offset(skip).limit(limit).all()
+    transactions = query.order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).offset(skip).limit(limit).all()
 
     # Calculer les totaux par catégorie (sur la même base filtrée, sans pagination)
     query_totaux = db.query(
@@ -3740,7 +3809,7 @@ def list_decaissements(
     if categorie:
         query_totaux = query_totaux.filter(Depense.categorie == categorie)
 
-    totaux_par_categorie = query_totaux.group_by(Depense.categorie).all()
+    totaux_par_categorie = query_totaux.group_by(Depense.categorie).order_by(Depense.categorie).all()
 
     # Total général
     total_general = sum(float(r.total) for r in totaux_par_categorie)
@@ -3771,11 +3840,16 @@ def list_decaissements(
 # ANNULATION DE PAIEMENT — Annuler un paiement et reverser les montants
 # ============================================================================
 
-def _paiement_de_l_ecole(db: Session, paiement_id: int, etablissement_id: int) -> Paiement:
+def _paiement_seul_de_l_ecole(db: Session, paiement_id: int, etablissement_id: int) -> Paiement:
     """Le paiement, ou 404 — jamais celui d'une autre école.
 
     Avant le Lot 2, n'importe quel `paiement_id` deviné pouvait être annulé,
     avec reversement des montants, depuis n'importe quelle école.
+
+    Nom distinct de `_paiement_de_l_ecole` (plus haut), qui rend le paiement
+    AVEC sa facture, son inscription, son élève et sa classe pour les reçus :
+    sous le même nom, cette définition remplaçait l'autre, et l'affichage
+    comme l'impression des reçus tombaient en erreur.
     """
     paiement = db.query(Paiement).filter(Paiement.paiement_id == paiement_id).first()
     if not paiement:
@@ -3872,7 +3946,7 @@ def annuler_paiement(
     if not motif:
         raise HTTPException(status_code=400, detail="Le motif d'annulation est obligatoire")
 
-    paiement = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+    paiement = _paiement_seul_de_l_ecole(db, paiement_id, etablissement_id)
 
     if paiement.statut == "ANNULE":
         raise HTTPException(status_code=400, detail="Ce paiement est déjà annulé")
@@ -4037,7 +4111,7 @@ def annuler_paiements_en_lot(
     annules = []
     total = 0.0
     for paiement_id in ids:
-        paiement = _paiement_de_l_ecole(db, paiement_id, etablissement_id)
+        paiement = _paiement_seul_de_l_ecole(db, paiement_id, etablissement_id)
         if paiement.statut == "ANNULE":
             # Refus explicite plutôt que silence : si un reçu est déjà annulé,
             # l'écran de l'école n'est plus à jour et le reste de sa sélection
@@ -4270,7 +4344,7 @@ def list_acomptes(
 
     results = (
         query
-        .order_by(Paiement.date_paiement.desc())
+        .order_by(Paiement.date_paiement.desc(), Paiement.paiement_id.desc())
         .offset(skip).limit(limit)
         .all()
     )
@@ -4539,7 +4613,7 @@ def list_employes_salaires(
         )
         if _debut_annee is not None:
             _q_ens = _q_ens.filter(Depense.date_depense >= _debut_annee)
-        depenses = _q_ens.order_by(Depense.date_depense.desc()).limit(12).all()
+        depenses = _q_ens.order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).limit(12).all()
 
         historique = []
         for dep in depenses:
@@ -4597,7 +4671,7 @@ def list_employes_salaires(
         )
         if _debut_annee is not None:
             _q_pers = _q_pers.filter(Depense.date_depense >= _debut_annee)
-        depenses = _q_pers.order_by(Depense.date_depense.desc()).limit(12).all()
+        depenses = _q_pers.order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).limit(12).all()
 
         historique = []
         for dep in depenses:
@@ -5075,13 +5149,13 @@ def _lister_employes_actifs(db: Session, etablissement_id: int):
     refs = []
     for ens in db.query(Enseignant).filter(
         Enseignant.etablissement_id == etablissement_id, Enseignant.statut == "ACTIF"
-    ).all():
+    ).order_by(Enseignant.enseignant_id).all():
         refs.append(f"ENS_{ens.enseignant_id}")
     for pers in db.query(Utilisateur).filter(
         Utilisateur.etablissement_id == etablissement_id,
         Utilisateur.statut == "ACTIF",
         Utilisateur.role != "SUPER_ADMIN",
-    ).all():
+    ).order_by(Utilisateur.utilisateur_id).all():
         refs.append(f"PERS_{pers.utilisateur_id}")
     return refs
 
@@ -5682,7 +5756,7 @@ def historique_salaire_endpoint(employe_id: str, db: Session = Depends(get_db), 
         Depense.categorie == "SALAIRES",
         Depense.statut == "VALIDE",
         Depense.etablissement_id == etablissement_id,
-    ).order_by(Depense.date_depense.desc()).all()
+    ).order_by(Depense.date_depense.desc(), Depense.depense_id.desc()).all()
     
     return [
         {
@@ -5787,7 +5861,16 @@ def bulletin_detail_endpoint(depense_id: int, db: Session = Depends(get_db), eta
     if bulletin:
         employe_id = bulletin.employe_id
         primes = db.query(Prime).filter(Prime.employe_id == employe_id, Prime.mois_concerne == bulletin.mois_concerne).all()
-        absences = db.query(AbsencePersonnel).filter(AbsencePersonnel.employe_id == employe_id, func.to_char(AbsencePersonnel.date_absence, 'YYYY-MM') == bulletin.mois_concerne).all()
+        # Intervalle de dates plutôt que `to_char` (propre à PostgreSQL) : la
+        # même requête tourne sur la base locale SQLite d'un poste hors-ligne.
+        annee_mois, mois_mois = (int(x) for x in bulletin.mois_concerne.split("-")[:2])
+        debut_mois = date_type(annee_mois, mois_mois, 1)
+        fin_mois = date_type(annee_mois + (mois_mois == 12), mois_mois % 12 + 1, 1)
+        absences = db.query(AbsencePersonnel).filter(
+            AbsencePersonnel.employe_id == employe_id,
+            AbsencePersonnel.date_absence >= debut_mois,
+            AbsencePersonnel.date_absence < fin_mois,
+        ).all()
         
         return {
             "bulletin": {
@@ -6101,7 +6184,7 @@ def preparer_la_paie(
     enseignants = db.query(Enseignant).filter(
         Enseignant.etablissement_id == etablissement_id,
         Enseignant.statut == "ACTIF",
-    ).order_by(Enseignant.nom, Enseignant.prenom).all()
+    ).order_by(Enseignant.nom, Enseignant.prenom, Enseignant.enseignant_id).all()
 
     # Un appel pour tout le monde, pas un par personne : la version en boucle
     # lancait quatre requetes par enseignant, soit plus de deux cents sur un
@@ -6133,7 +6216,7 @@ def preparer_la_paie(
         Utilisateur.etablissement_id == etablissement_id,
         Utilisateur.statut == "ACTIF",
         Utilisateur.role != "SUPER_ADMIN",
-    ).order_by(Utilisateur.nom, Utilisateur.prenom).all():
+    ).order_by(Utilisateur.nom, Utilisateur.prenom, Utilisateur.utilisateur_id).all():
         r = _paie.salaire_personnel(db, u.utilisateur_id)
         lignes.append({
             "type": "PERSONNEL",

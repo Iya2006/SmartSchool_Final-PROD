@@ -8,6 +8,7 @@ import {
     AlertCircle, Calendar, Hash, UserCheck, Filter, UserPlus, Home, Lock, KeyRound, ArrowLeft, Camera, ClipboardList
 } from 'lucide-react';
 import api from '@/lib/api';
+import { texteErreur } from '@/lib/texteErreur';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Pagination from '@/components/Pagination';
@@ -42,6 +43,7 @@ export default function FamillesPage() {
     const [editParent, setEditParent] = useState<ParentItem | null>(null);
     const [editForm, setEditForm] = useState<any>({});
     const [saving, setSaving] = useState(false);
+    const [editError, setEditError] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
     const [total, setTotal] = useState(0);
     const [stats, setStats] = useState({ total_parents: 0, total_enfants: 0, avec_password: 0, avec_email: 0 });
@@ -87,13 +89,16 @@ export default function FamillesPage() {
     const handleSave = async () => {
         if (!editParent) return;
         setSaving(true);
+        setEditError('');
         try {
             await api.put(`/api/portail-parent/${editParent.parent_id}/profil`, editForm);
             setSuccessMsg('Profil mis à jour avec succès !');
             setTimeout(() => setSuccessMsg(''), 3000);
             setEditParent(null);
             loadParents();
-        } catch { }
+        } catch (err) {
+            setEditError(texteErreur(err, "La modification n'a pas pu être enregistrée."));
+        }
         finally { setSaving(false); }
     };
 
@@ -104,6 +109,7 @@ export default function FamillesPage() {
             email: p.email || '', profession: p.profession || '', adresse: p.adresse || '',
             mot_de_passe: '',
         });
+        setEditError('');
         setEditParent(p);
     };
 
@@ -516,6 +522,12 @@ export default function FamillesPage() {
                                         </div>
                                     </div>
                                 </div>
+
+                                {editError && (
+                                    <div role="alert" style={{ marginTop: '20px', padding: '12px 16px', borderRadius: '10px', background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: '13px', fontWeight: 600 }}>
+                                        {editError}
+                                    </div>
+                                )}
 
                                 {/* Footer */}
                                 <div style={{ borderTop: '1px solid var(--border-light)', marginTop: '24px', paddingTop: '24px', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>

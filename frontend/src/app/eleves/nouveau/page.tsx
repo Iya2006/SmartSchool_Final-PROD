@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Save, UserPlus, CheckCircle2, Loader2, BookOpen, Users, Phone, Mail, Shield, Eye, EyeOff, Briefcase, MapPin, Banknote, Receipt, FileText, AlertTriangle, GraduationCap, Smartphone, Lock, Info, X, Search, UserCheck, Camera, ImagePlus } from 'lucide-react';
 import api from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
+import { voitFinance } from '@/lib/roleAccess';
 import Link from 'next/link';
 import BadgeCarte from '@/components/BadgeCarte';
 import { preparerPhoto, formatPhotoAccepte, MESSAGE_FORMAT_REFUSE } from '@/lib/preparerPhoto';
@@ -41,7 +43,10 @@ const estFraisInscription = (cat?: string) => {
 
 export default function NouveauEleve() {
     const router = useRouter();
-    const { etablissementId, anneeId, lectureSeule } = useApp();
+    const { etablissementId, anneeId, lectureSeule, loading: chargementApp } = useApp();
+    const { user } = useAuth();
+    const peutVoirFinance = voitFinance(user);
+    const compteConnu = !!user;
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -133,11 +138,20 @@ export default function NouveauEleve() {
     const [tarifsLoading, setTarifsLoading] = useState(false);
 
     useEffect(() => {
+        // Compte et année pas encore connus : ni les droits (la finance) ni
+        // l'année des classes ne sont sûrs.
+        if (!compteConnu || chargementApp) return;
         const fetchData = async () => {
             try {
+                // Les frais relèvent de la finance (FINANCE_ROLES). Demandés
+                // sans droit, leur refus faisait échouer tout le chargement :
+                // le directeur de niveau n'avait plus aucune classe à choisir,
+                // donc plus d'inscription possible.
                 const [classesRes, fraisRes] = await Promise.all([
                     api.get(`/api/classes?etablissement_id=${etablissementId}&annee_id=${anneeId}`),
-                    api.get('/api/finance/types-frais')
+                    peutVoirFinance
+                        ? api.get('/api/finance/types-frais').catch(() => ({ data: [] }))
+                        : Promise.resolve({ data: [] }),
                 ]);
                 setClasses(classesRes.data);
                 
@@ -158,7 +172,7 @@ export default function NouveauEleve() {
             finally { setInitialLoading(false); }
         };
         fetchData();
-    }, []);
+    }, [compteConnu, chargementApp, peutVoirFinance, etablissementId, anneeId]);
 
     // Charger les parents déjà enregistrés (mode « Parent existant »), avec un
     // petit délai anti-rebond sur la recherche pour ne pas requêter à chaque
@@ -206,7 +220,8 @@ export default function NouveauEleve() {
     // n'est choisie, on n'affiche aucun montant : on ne sait pas encore.
     useEffect(() => {
         const classeId = formData.classe_id ? parseInt(formData.classe_id) : null;
-        if (!classeId) { setTarifsClasse(null); return; }
+        // Sans la finance, pas de grille à montrer (et un refus à chaque choix).
+        if (!classeId || !peutVoirFinance) { setTarifsClasse(null); return; }
 
         let annule = false;
         setTarifsLoading(true);
@@ -233,7 +248,7 @@ export default function NouveauEleve() {
             .finally(() => { if (!annule) setTarifsLoading(false); });
 
         return () => { annule = true; };
-    }, [formData.classe_id]);
+    }, [formData.classe_id, peutVoirFinance]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -895,7 +910,8 @@ export default function NouveauEleve() {
                     </div>
                 )}
 
-                {/* ═══ SECTION 3: FACTURATION ═══ */}
+                {/* ═══ SECTION 3: FACTURATION — pour qui a la finance ═══ */}
+                {peutVoirFinance && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="card" style={{ overflow: 'visible' }}>
                     <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-light)', display: 'flex', alignItems: 'center', gap: '12px', background: 'linear-gradient(135deg, #f0fdf4, #dcfce7)', borderRadius: '12px 12px 0 0' }}>
                         <div style={{ padding: '10px', background: 'linear-gradient(135deg, #10b981, #059669)', color: 'white', borderRadius: '12px' }}>
@@ -1027,6 +1043,7 @@ export default function NouveauEleve() {
                         </div>
                     </div>
                 </motion.div>
+                )}
 
                 {/* ═══ SUBMIT BUTTONS ═══ */}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginBottom: '40px' }}>

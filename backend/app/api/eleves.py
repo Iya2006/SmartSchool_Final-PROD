@@ -121,7 +121,7 @@ def list_eleves(
     # réinscrire), ce qui l'affichait en double avec le même matricule.
     query = query.group_by(Eleve.eleve_id)
 
-    results = query.order_by(Eleve.nom, Eleve.prenom).offset(skip).limit(limit).all()
+    results = query.order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).offset(skip).limit(limit).all()
     out = []
     for r in results:
         # À activer = pré-placé (classe cible dans l'année) et pas encore
@@ -167,6 +167,12 @@ def delta_eleves(
     Limite assumée (voir le plan) : détecte les modifications du dossier
     élève lui-même (Eleve.modified_date), PAS un changement de classe seul
     — Inscription n'a pas encore de suivi de modification dans ce pilote.
+
+    À reprendre avant de brancher ce pilote sur un poste hors-ligne : une
+    ligne reçue par la synchronisation garde la date de modification de
+    l'appareil qui l'a modifiée, souvent antérieure au dernier `since` du
+    navigateur ; elle échapperait au filtre `modified_date > since`. Sous
+    SQLite, `func.now()` est en outre à la seconde près (CURRENT_TIMESTAMP).
     """
     annee_id = resoudre_annee(db, etablissement_id, annee_id)
     sync_at = db.query(func.now()).scalar()
@@ -199,7 +205,7 @@ def delta_eleves(
     if since is not None:
         query = query.filter(Eleve.modified_date > since)
 
-    results = query.order_by(Eleve.nom, Eleve.prenom).all()
+    results = query.order_by(Eleve.nom, Eleve.prenom, Eleve.eleve_id).all()
     items = [EleveListOut(
         eleve_id=r.eleve_id, matricule=r.matricule, nom=r.nom,
         prenom=r.prenom, sexe=r.sexe, date_naissance=r.date_naissance,
@@ -642,7 +648,7 @@ def parents_existants(
             Parent.telephone_1.ilike(like),
             Parent.telephone_2.ilike(like),
         ))
-    parents = q.order_by(Parent.nom, Parent.prenom).limit(min(limit, 100)).all()
+    parents = q.order_by(Parent.nom, Parent.prenom, Parent.parent_id).limit(min(limit, 100)).all()
     if not parents:
         return []
 

@@ -42,7 +42,7 @@ from app.api.devoirs import router as devoirs_router
 from app.api.photos import router as photos_router
 from app.api.fournitures import router as fournitures_router
 from app.api.comptabilite import router as comptabilite_router
-from app.api.personnel import router as personnel_router
+from app.api.personnel import moi as personnel_moi_router, router as personnel_router
 from app.api.presence_agent import router as presence_agent_router
 from app.api.cartes import router as cartes_router
 from app.api.securite import router as securite_router
@@ -56,6 +56,31 @@ from app.api.annee_scolaire import router as annee_scolaire_router
 from app.api.reinscription import router as reinscription_router
 from app.api.tasks import router as tasks_router
 from app.api.monitoring import router as monitoring_router
+from app.api.poste import router as poste_router
+from app.core.mode import MODE_POSTE
+
+# Poste hors-ligne : chaque ligne créée prend son identifiant dans la plage du
+# poste. À brancher AVANT toute écriture, l'ORM mettant ses insertions en cache
+# (voir app/sync/identifiants.py).
+if MODE_POSTE:
+    from app.sync.identifiants import brancher_generateur, generateur_de
+    brancher_generateur()
+    generateur_de(engine)  # sans numéro tant que le poste n'est pas installé
+
+
+# Poste : au premier démarrage d'une nouvelle version, copie de la base AVANT
+# toute mise à niveau du schéma. Les changements faits hors-ligne et pas encore
+# synchronisés n'existent que sur ce poste (app/sync/sauvegarde.py).
+if MODE_POSTE:
+    from app.core.mode import DOSSIER_POSTE
+    from app.core.version import VERSION
+    from app.sync.sauvegarde import noter_version, sauvegarder_si_nouvelle_version
+    try:
+        _copie = sauvegarder_si_nouvelle_version(engine, DOSSIER_POSTE, VERSION)
+        if _copie:
+            print(f"[POSTE] Base sauvegardée avant la mise à niveau : {_copie}")
+    except Exception as _e:  # noqa: BLE001 — signalé ; la mise à niveau reste additive
+        print(f"[POSTE] Sauvegarde avant mise à niveau impossible : {_e}")
 
 
 # Création des tables au démarrage
@@ -80,6 +105,26 @@ try:
 except Exception as _e:  # noqa: BLE001 — le démarrage prime sur la migration
     print(f"[SCHEMA] Mise à niveau auto du schéma ignorée : {_e}")
 
+# Poste : les index ajoutés aux modèles depuis l'installation (create_all ne
+# les crée qu'avec leur table), puis la version est notée comme appliquée.
+if MODE_POSTE:
+    try:
+        from migrations.rattraper_colonnes_manquantes import appliquer_index_manquants
+        _index = appliquer_index_manquants(engine)
+        if _index:
+            print(f"[SCHEMA] {len(_index)} index ajouté(s) sur ce poste.")
+        noter_version(DOSSIER_POSTE, VERSION)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[SCHEMA] Index du poste non complétés : {_e}")
+    # Statistiques de SQLite, pour qu'il choisisse ses index comme PostgreSQL
+    # (app/core/database.py) : les données ont pu beaucoup changer depuis le
+    # dernier démarrage (synchronisation, saisies).
+    try:
+        from app.core.database import mettre_a_jour_les_statistiques
+        mettre_a_jour_les_statistiques(engine)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[SCHEMA] Statistiques du poste non mises à jour : {_e}")
+
 # Colonnes rendues OPTIONNELLES après coup (le modèle passe nullable=True mais la
 # base garde son ancienne contrainte NOT NULL). `create_all` ne touche jamais une
 # colonne existante : on lève donc explicitement la contrainte, de façon
@@ -93,6 +138,54 @@ try:
         print("[SCHEMA] ss_eleves.date_naissance : contrainte NOT NULL levée (optionnelle).")
 except Exception as _e:  # noqa: BLE001
     print(f"[SCHEMA] Assouplissement date_naissance ignoré : {_e}")
+
+# Journal des changements lu par les postes hors-ligne (app/sync/journal.py).
+# Posé seulement une fois la migration des identifiants passée : c'est elle qui
+# ouvre le cloud aux postes, rien ne change avant. Idempotent, tout ou rien ;
+# un échec n'empêche jamais le démarrage, il rend seulement la synchronisation
+# indisponible.
+if not MODE_POSTE:
+    try:
+        from app.sync.schema import schema_identifiants_a_jour
+        _schema_synchro_pret = schema_identifiants_a_jour(engine)
+    except Exception as _e:  # noqa: BLE001
+        _schema_synchro_pret = False
+        print(f"[SYNCHRO] Schéma des identifiants illisible : {_e}")
+    if _schema_synchro_pret:
+        # Identifiants dérivés de la clé naturelle (séance, présence, note,
+        # journal comptable...) : les mêmes que ceux des postes, pour que deux
+        # créations de la même ligne se rejoignent. Au-delà de 2³¹, d'où la
+        # condition sur la migration. Avant toute écriture, et quoi qu'il
+        # advienne du journal ci-dessous : un processus sans eux créerait des
+        # doublons de ce que les postes créent.
+        from app.sync.identifiants import brancher_generateur
+        brancher_generateur(seulement_cles_naturelles=True)
+        try:
+            from app.sync.journal import installer_journal_cloud
+            installer_journal_cloud(engine)
+            print("[SYNCHRO] Journal des changements en place pour les postes hors-ligne.")
+        except Exception as _e:  # noqa: BLE001
+            print(f"[SYNCHRO] Journal des changements non posé : {_e}")
+
+# Emplois du temps déposés en PDF sous leur premier nom (« classe_<id>.pdf ») :
+# leur classe les cite désormais, pour qu'ils suivent la synchronisation. Puis
+# les anciennes présences d'agents et pointages d'élèves sans école, rattachés
+# à l'école de leur agent ou de leur élève (app/sync/rattrapage.py). Après le
+# journal, pour que les postes l'apprennent.
+if not MODE_POSTE:
+    try:
+        from app.api.emploi_du_temps import rattacher_les_pdf_deposes
+        _rattachees = rattacher_les_pdf_deposes(engine)
+        if _rattachees:
+            print(f"[FICHIERS] {_rattachees} emploi(s) du temps PDF rattaché(s) à leur classe.")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[FICHIERS] Emplois du temps PDF non rattachés : {_e}")
+    try:
+        from app.sync.rattrapage import rattacher_les_lignes_sans_ecole
+        for _nom, _n in rattacher_les_lignes_sans_ecole(engine).items():
+            print(f"[SYNCHRO] {_n} ligne(s) ancienne(s) de {_nom} rattachée(s) à leur école.")
+    except Exception as _e:  # noqa: BLE001
+        print(f"[SYNCHRO] Lignes anciennes sans école non rattachées : {_e}")
 
 
 app = FastAPI(
@@ -182,7 +275,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "Accept"],
-    expose_headers=["X-Total-Count", "X-Meilleure-Moyenne", "X-Plus-Faible-Moyenne", "X-Moyenne-Classe"],
+    # X-SmartSchool-Hors-Ligne : réponse d'un poste dont le cloud est
+    # injoignable (app/sync/relais.py), que l'interface ne doit pas réessayer.
+    expose_headers=["X-Total-Count", "X-Meilleure-Moyenne", "X-Plus-Faible-Moyenne", "X-Moyenne-Classe",
+                    "X-SmartSchool-Hors-Ligne"],
 )
 
 
@@ -380,6 +476,31 @@ async def enregistrer_incident(request: Request, exc: Exception):
         },
     )
 
+
+# ── Valeur refusée par la base (texte trop long, nombre trop grand…) ──
+# Ce n'est pas une panne mais une saisie à corriger : une réponse 400 qui dit
+# quoi corriger, au lieu de l'erreur 500 ci-dessus. Sur un poste (SQLite), la
+# même règle s'applique avant l'écriture : TexteTropLong
+# (app/core/valeurs_refusees.py).
+from sqlalchemy.exc import DBAPIError as _DBAPIError  # noqa: E402
+from app.core.valeurs_refusees import (  # noqa: E402
+    TexteTropLong, est_valeur_refusee, raison as _raison_valeur_refusee,
+)
+
+
+@app.exception_handler(TexteTropLong)
+async def texte_trop_long(request: Request, exc: TexteTropLong):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(_DBAPIError)
+async def valeur_refusee(request: Request, exc: _DBAPIError):
+    if est_valeur_refusee(exc):
+        return JSONResponse(status_code=400, content={
+            "detail": _raison_valeur_refusee(exc) + " Corrigez la saisie, puis enregistrez à nouveau."})
+    # Toute autre erreur de la base reste un incident, traité comme avant.
+    raise exc
+
 app.include_router(dashboard_router, dependencies=[Depends(exige_acces_dashboard)])
 app.include_router(cartes_router, dependencies=[Depends(get_current_user)])
 app.include_router(eleves_router, dependencies=[Depends(get_current_user), Depends(_MOD_ELEVES)])
@@ -409,6 +530,9 @@ app.include_router(examens_router, dependencies=[Depends(require_roles(*EXAMENS_
 app.include_router(devoirs_router, dependencies=[Depends(get_current_user)])
 app.include_router(photos_router, dependencies=[Depends(get_current_user)])
 app.include_router(fournitures_router, dependencies=[Depends(get_current_user)])
+# « Mon compte » (sa fiche, son mot de passe) : ouvert à tout le personnel
+# connecté, AVANT le routeur du personnel (voir app/api/personnel.py, `moi`).
+app.include_router(personnel_moi_router)
 app.include_router(personnel_router, dependencies=[Depends(require_roles(*PERSONNEL_ROLES))])
 # Présences agents : même sensibilité que le module Personnel (historique de
 # présence RH) — trouvé non restreint (get_current_user seul, comme
@@ -435,6 +559,28 @@ app.include_router(tasks_router, dependencies=[Depends(get_current_user)])
 # différence de /health, volontairement minimal et sans authentification
 # pour rester utilisable par le HEALTHCHECK Docker).
 app.include_router(monitoring_router, dependencies=[Depends(require_roles(*ADMIN_TIER_ROLES))])
+# Installation d'un poste local (offline-first) : chaque route exige la
+# direction via exige_installation_poste (app/api/poste.py).
+app.include_router(poste_router)
+
+# Sur le poste lui-même (application installée) : état et lancement de
+# l'installation, avant qu'aucun compte n'existe localement. Sur le cloud :
+# les échanges avec les postes, authentifiés par leur jeton d'appareil.
+if MODE_POSTE:
+    from app.api.poste_local import relais as relais_conflits_router
+    from app.api.poste_local import router as poste_local_router
+    from app.api.poste_local import verrou_poste_retire
+    app.include_router(poste_local_router)
+    app.include_router(relais_conflits_router)
+    # Un poste retiré par la direction refuse toute connexion.
+    app.middleware("http")(verrou_poste_retire)
+else:
+    from app.api.sync_appareil import router as sync_appareil_router
+    from app.api.sync_conflits import postes_router as sync_postes_router
+    from app.api.sync_conflits import router as sync_conflits_router
+    app.include_router(sync_appareil_router)
+    app.include_router(sync_conflits_router)
+    app.include_router(sync_postes_router)
 
 # ── Routes PUBLIQUES (gèrent leur propre authentification) ──
 app.include_router(auth_router)           # Login admin → retourne le JWT
@@ -470,11 +616,14 @@ class CORSStaticFiles(StaticFiles):
         response.headers["Access-Control-Allow-Headers"] = "*"
         return response
 
-uploads_dir = os.path.join(os.path.dirname(__file__), "uploads")
-os.makedirs(uploads_dir, exist_ok=True)
-os.makedirs(os.path.join(uploads_dir, "photos", "eleves"), exist_ok=True)
-os.makedirs(os.path.join(uploads_dir, "photos", "enseignants"), exist_ok=True)
-os.makedirs(os.path.join(uploads_dir, "photos", "parents"), exist_ok=True)
+from app.core.fichiers import dossier_fichiers
+
+# Même dossier que celui où les modules écrivent (app/core/fichiers.py) : en
+# ligne `backend/uploads`, sur un poste local le dossier de données indiqué
+# par l'application installée.
+uploads_dir = dossier_fichiers()
+for _sous in ("eleves", "enseignants", "parents"):
+    dossier_fichiers("photos", _sous)
 app.mount("/uploads", CORSStaticFiles(directory=uploads_dir), name="uploads")
 
 

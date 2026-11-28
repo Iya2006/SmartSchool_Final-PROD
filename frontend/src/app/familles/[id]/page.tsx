@@ -9,6 +9,7 @@ import {
     ChevronRight, Eye, Star, TrendingUp, Award, BookOpen, MessageSquare
 } from 'lucide-react';
 import api from '@/lib/api';
+import { texteErreur } from '@/lib/texteErreur';
 import Link from 'next/link';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
@@ -43,19 +44,28 @@ export default function ProfilParent() {
     const isMobile = useIsMobile();
     const [parent, setParent] = useState<ParentProfil | null>(null);
     const [loading, setLoading] = useState(true);
+    // Échec du chargement autre que « ce parent n'existe pas ici » (hors
+    // ligne, serveur indisponible) : on le dit, au lieu de « Parent non trouvé ».
+    const [erreurChargement, setErreurChargement] = useState<string | null>(null);
 
     // Edit modal
     const [editMode, setEditMode] = useState(false);
     const [editForm, setEditForm] = useState<any>({});
     const [saving, setSaving] = useState(false);
+    const [editError, setEditError] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
 
     const loadParent = useCallback(async () => {
         if (!id) return;
+        setErreurChargement(null);
         try {
             const res = await api.get(`/api/portail-parent/${id}/profil`);
             setParent(res.data);
-        } catch { }
+        } catch (err: any) {
+            if (err?.response?.status !== 404) {
+                setErreurChargement(texteErreur(err, "La fiche de ce parent n'a pas pu être chargée."));
+            }
+        }
         finally { setLoading(false); }
     }, [id]);
 
@@ -70,19 +80,23 @@ export default function ProfilParent() {
             email: parent.email || '', profession: parent.profession || '',
             adresse: parent.adresse || '', mot_de_passe: '',
         });
+        setEditError('');
         setEditMode(true);
     };
 
     const handleSave = async () => {
         if (!parent) return;
         setSaving(true);
+        setEditError('');
         try {
             await api.put(`/api/portail-parent/${parent.parent_id}/profil`, editForm);
             setSuccessMsg('Profil mis à jour avec succès !');
             setTimeout(() => setSuccessMsg(''), 3000);
             setEditMode(false);
             loadParent();
-        } catch { }
+        } catch (err) {
+            setEditError(texteErreur(err, "La modification n'a pas pu être enregistrée."));
+        }
         finally { setSaving(false); }
     };
 
@@ -94,8 +108,16 @@ export default function ProfilParent() {
 
     if (!parent) return (
         <div style={{ textAlign: 'center', marginTop: '60px' }}>
-            <h3>Parent non trouvé</h3>
-            <Link href="/familles" className="btn btn-outline" style={{ marginTop: '16px' }}>Retour</Link>
+            <h3>{erreurChargement ? 'Fiche indisponible' : 'Parent non trouvé'}</h3>
+            {erreurChargement && (
+                <p style={{ color: 'var(--text-muted)', fontSize: '14px', maxWidth: '460px', margin: '8px auto 0' }}>{erreurChargement}</p>
+            )}
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '16px' }}>
+                {erreurChargement && (
+                    <button onClick={() => { setLoading(true); loadParent(); }} className="btn btn-primary">Réessayer</button>
+                )}
+                <Link href="/familles" className="btn btn-outline">Retour</Link>
+            </div>
         </div>
     );
 
@@ -504,6 +526,12 @@ export default function ProfilParent() {
                                         </div>
                                     </div>
                                 </div>
+
+                                {editError && (
+                                    <div role="alert" style={{ marginTop: '20px', padding: '12px 16px', borderRadius: '10px', background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: '13px', fontWeight: 600 }}>
+                                        {editError}
+                                    </div>
+                                )}
 
                                 {/* Footer */}
                                 <div style={{ borderTop: '1px solid var(--border-light)', marginTop: '24px', paddingTop: '24px', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
